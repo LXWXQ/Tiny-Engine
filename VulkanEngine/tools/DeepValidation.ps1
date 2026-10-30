@@ -30,6 +30,17 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
+
+# Start-Process -ArgumentList joins an array with spaces and does NOT quote the
+# elements. This repo may live in a path containing spaces ("Vs code Demo"), so
+# any argument that is a path has to be quoted explicitly here, otherwise the
+# child process receives it split into several arguments.
+function Quote-NativeArg([string]$Value) {
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
+}
 if (-not [string]::IsNullOrWhiteSpace($VulkanSdk)) { $env:VULKAN_SDK = $VulkanSdk }
 
 $exe = Join-Path $repoRoot (Join-Path $BuildDir (Join-Path $Config "VulkanEngine.exe"))
@@ -52,8 +63,10 @@ foreach ($mode in $modeList) {
     $stdout = Join-Path $outDir "$mode.stdout.log"
     $stderr = Join-Path $outDir "$mode.stderr.log"
     Write-Host "[deep] mode=$mode frames=$Frames"
+    $deepArgs = @("--selftest", "$Frames", "--validation-features", $mode, "--validation-jsonl", $jl)
+    $deepArgLine = ($deepArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
     $p = Start-Process -FilePath $exe `
-        -ArgumentList @("--selftest", "$Frames", "--validation-features", $mode, "--validation-jsonl", $jl) `
+        -ArgumentList $deepArgLine `
         -WorkingDirectory $repoRoot -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -NoNewWindow
     $stderrBytes = (Get-Item -LiteralPath $stderr).Length
     $outText = [string](Get-Content -LiteralPath $stdout -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)

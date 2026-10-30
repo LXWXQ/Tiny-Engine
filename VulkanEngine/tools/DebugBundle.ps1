@@ -38,6 +38,17 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
+
+# Start-Process -ArgumentList joins an array with spaces and does NOT quote the
+# elements. This repo may live in a path containing spaces ("Vs code Demo"), so
+# any argument that is a path has to be quoted explicitly here, otherwise the
+# child process receives it split into several arguments.
+function Quote-NativeArg([string]$Value) {
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
+}
 if (-not [string]::IsNullOrWhiteSpace($VulkanSdk)) { $env:VULKAN_SDK = $VulkanSdk }
 
 $buildRoot = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repoRoot $BuildDir }
@@ -71,7 +82,7 @@ function Add-Step([string]$name, [string]$status, [string]$detail) {
 # ---------------- 1) build info ----------------
 $biLog = Join-Path $bundleDir "build_info.txt"
 $biErr = Join-Path $bundleDir "build_info.err.log"
-$p = Start-Process -FilePath $exe -ArgumentList @("--build-info") -WorkingDirectory $repoRoot `
+$p = Start-Process -FilePath $exe -ArgumentList "--build-info" -WorkingDirectory $repoRoot `
     -RedirectStandardOutput $biLog -RedirectStandardError $biErr -Wait -PassThru -NoNewWindow
 if ($p.ExitCode -eq 0) { Add-Step "build_info" "ok" "build_info.txt" }
 else { Add-Step "build_info" "fail" "exit=$($p.ExitCode)" }
@@ -112,7 +123,8 @@ if (-not $SkipScreenshot) {
 $engineArgs += @("--gpu-timing", "--gpu-timing-csv", $csv, "--validation-jsonl", $valJsonl)
 
 Write-Host "[bundle] running: VulkanEngine.exe $($engineArgs -join ' ')"
-$p = Start-Process -FilePath $exe -ArgumentList $engineArgs -WorkingDirectory $repoRoot `
+$argLine = ($engineArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
+$p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $repoRoot `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -NoNewWindow
 $stderrBytes = (Get-Item -LiteralPath $stderr).Length
 $outText = [string](Get-Content -LiteralPath $stdout -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)

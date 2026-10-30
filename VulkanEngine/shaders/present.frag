@@ -1,4 +1,4 @@
-﻿#version 450
+#version 450
 
 // Final post-process:
 // HDR + Bloom -> camera motion blur -> exposure -> ACES -> gamma -> swapchain.

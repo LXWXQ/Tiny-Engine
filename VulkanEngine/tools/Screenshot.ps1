@@ -22,6 +22,17 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
+
+# Start-Process -ArgumentList joins an array with spaces and does NOT quote the
+# elements. This repo may live in a path containing spaces ("Vs code Demo"), so
+# any argument that is a path has to be quoted explicitly here, otherwise the
+# child process receives it split into several arguments.
+function Quote-NativeArg([string]$Value) {
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
+}
 if (-not [string]::IsNullOrWhiteSpace($VulkanSdk)) { $env:VULKAN_SDK = $VulkanSdk }
 
 $exe = Join-Path $repoRoot (Join-Path $BuildDir (Join-Path $Config "VulkanEngine.exe"))
@@ -39,7 +50,9 @@ $stderr = [IO.Path]::ChangeExtension($Out, ".stderr.log")
 $frames = [Math]::Max($Frame + 5, 20)
 
 Write-Host "[screenshot] running: --selftest $frames --screenshot --screenshot-frame $Frame"
-$p = Start-Process -FilePath $exe -ArgumentList @("--selftest", "$frames", "--screenshot", $Out, "--screenshot-frame", "$Frame") `
+$shotArgs = @("--selftest", "$frames", "--screenshot", $Out, "--screenshot-frame", "$Frame")
+$shotArgLine = ($shotArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
+$p = Start-Process -FilePath $exe -ArgumentList $shotArgLine `
      -WorkingDirectory $repoRoot -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -NoNewWindow
 
 $stderrBytes = (Get-Item -LiteralPath $stderr).Length

@@ -11,6 +11,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# MSBuild keeps background worker nodes alive by default. With -Wait on a
+# redirected process that can block the caller until the reused node exits,
+# which shows up as "the validation script hangs after the build step".
+# Disabling node reuse makes every build a self-contained process.
+$env:MSBUILDDISABLENODEREUSE = "1"
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 
@@ -88,6 +95,19 @@ if ($straySpv.Count -gt 0) {
     throw "TD-08: source shader directory contains .spv build artifacts: $($straySpv.Name -join ', ')"
 }
 Write-Host "[validate] TD-08 dead-file guard PASS"
+
+# DocCheck: the documentation system is a verified artifact (docs/00-meta/doc-rules.md).
+# A new conversation has to reconstruct project state from a limited context window,
+# so stale/missing docs cost more than a failed build.
+Write-Host "[validate] DocCheck"
+$docCheck = Invoke-Native -FilePath "powershell" -LogStem "doccheck" -Arguments @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "DocCheck.ps1")
+)
+if ($docCheck.ExitCode -ne 0) {
+    Get-Content -LiteralPath $docCheck.StdoutPath -Tail 40
+    throw "DocCheck failed with exit code $($docCheck.ExitCode). See $($docCheck.StdoutPath)"
+}
+Write-Host "[validate] DocCheck PASS"
 
 Write-Host "[validate] Configure ($Config)"
 $configureArgs = @(
@@ -230,10 +250,12 @@ Write-Host "[validate] Test: p3-baseline-diff"
 $baselineScript = Join-Path $PSScriptRoot "Baseline.ps1"
 $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $baselineScript)
 $scriptArgs = @("-Name", "_selftest", "-BuildDir", $BuildDir, "-Config", $Config, "-Frames", "60")
-$save = Start-Process -FilePath "powershell" -ArgumentList ($psArgs + @("-Action", "Save") + $scriptArgs) `
+$saveArgs = (($psArgs + @("-Action", "Save") + $scriptArgs) | ForEach-Object { Quote-NativeArg $_ }) -join " "
+$save = Start-Process -FilePath "powershell" -ArgumentList $saveArgs `
     -WorkingDirectory $repoRoot -RedirectStandardOutput (Join-Path $logDir "p3-baseline-save.log") `
     -RedirectStandardError (Join-Path $logDir "p3-baseline-save.err") -Wait -PassThru -NoNewWindow
-$diff = Start-Process -FilePath "powershell" -ArgumentList ($psArgs + @("-Action", "Diff") + $scriptArgs) `
+$diffArgs = (($psArgs + @("-Action", "Diff") + $scriptArgs) | ForEach-Object { Quote-NativeArg $_ }) -join " "
+$diff = Start-Process -FilePath "powershell" -ArgumentList $diffArgs `
     -WorkingDirectory $repoRoot -RedirectStandardOutput (Join-Path $logDir "p3-baseline-diff.log") `
     -RedirectStandardError (Join-Path $logDir "p3-baseline-diff.err") -Wait -PassThru -NoNewWindow
 if ($save.ExitCode -ne 0) { $failed += "p3-baseline-diff: Save exited $($save.ExitCode)" }
@@ -246,7 +268,8 @@ $bundleScript = Join-Path $PSScriptRoot "DebugBundle.ps1"
 $bundleArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $bundleScript,
                 "-Name", "_selftest", "-BuildDir", $BuildDir, "-Config", $Config,
                 "-Frames", "40", "-SkipDeepValidation", "-SkipBaselineDiff")
-$bundle = Start-Process -FilePath "powershell" -ArgumentList $bundleArgs `
+$bundleArgsQuoted = ($bundleArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
+$bundle = Start-Process -FilePath "powershell" -ArgumentList $bundleArgsQuoted `
     -WorkingDirectory $repoRoot -RedirectStandardOutput (Join-Path $logDir "p3-debug-bundle.log") `
     -RedirectStandardError (Join-Path $logDir "p3-debug-bundle.err") -Wait -PassThru -NoNewWindow
 if ($bundle.ExitCode -ne 0) { $failed += "p3-debug-bundle: exited $($bundle.ExitCode)" }

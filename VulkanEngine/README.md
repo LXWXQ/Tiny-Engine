@@ -1,64 +1,27 @@
 # Sentinel Vulkan Engine
 
-一个面向学习与工程验证的 Vulkan 1.3 渲染器。项目重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
+一个面向**学习与工程验证**的 Vulkan 1.3 渲染器（Windows x64 / C++17 / MSVC）。
+重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
 
-当前已完成：
+- 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> Bloom -> Present(ACES+gamma+ImGui)`
+- 一条命令完成：依赖准备 -> 全新 configure/build -> 20 项回归
+- 验收基线：**退出码 0** + **stderr 0 字节** + `[Validation] errors=0 warnings=0`
 
-- 线性 RenderGraph：自动 image/buffer barrier、动态渲染、子资源语义校验
-- Bindless 材质：4 个纹理数组 + push constant 材质索引
-- 2 帧在飞 + graphics/compute 双队列 + timeline semaphore
-- compute/graphics 跨队列 producer-consumer 单向依赖调度
-- HDR + Bloom + ACES tonemap + present 后效链
-- IBL：irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙
-- EnTT ECS + Transform 层级 + 均匀网格空间索引
-- JobSystem CPU worker pool
-- 窗口缩放、swapchain 重建、动态分辨率
-- 版本化配置（v0 -> v1 -> v2 迁移、备份、损坏配置保护）
-- 一条命令完成依赖准备、构建与全部回归
+> 本文件是仓库根目录**唯一**的文档。所有细节在 [`docs/`](docs/README.md) 下，按类型分层。
+> 需要先了解"文档怎么读/怎么维护"，直接看 [`docs/README.md`](docs/README.md)。
 
-> 技术债 TD-01 ~ TD-09 已全部完成。深度手册见 [AI_Readme.md](AI_Readme.md)，设计取舍见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+---
 
-## 环境要求
-
-| 项 | 要求 |
-|---|---|
-| 系统 | Windows 10/11 x64 |
-| GPU | 支持 Vulkan 1.3 |
-| GPU 特性 | dynamicRendering、synchronization2、timelineSemaphore、descriptorIndexing、fragmentStoresAndAtomics |
-| Vulkan SDK | 1.3+，包含 `glslangValidator` |
-| CMake | 3.15+，推荐 3.21+ |
-| 编译器 | Visual Studio 2022 |
-| PowerShell | Windows PowerShell 5.1+ |
-
-Vulkan SDK 默认通过 `find_package(Vulkan REQUIRED)` 查找。找不到时设置：
+## 1. 快速开始
 
 ```powershell
-$env:VULKAN_SDK = "D:\work\vulkan"
-```
-
-## 快速开始
-
-从仓库根目录执行：
-
-```powershell
+# 一条命令：准备依赖 + 全新构建 + 全部回归
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/Validate.ps1
 ```
 
-脚本会：
+日志落在 `build/validation/<timestamp>/`。
 
-1. 检查/下载固定版本的第三方依赖；
-2. 检查 TD-08 dead-file guard；
-3. 删除旧 `build/` 并执行全新 configure + Debug build；
-4. 运行 jobtest、配置迁移、渲染自检和各项技术债回归；
-5. 检查每个测试的退出码、stderr 字节数和关键 stdout 标记。
-
-日志位于：
-
-```text
-build/validation/<timestamp>/
-```
-
-### 手动构建
+手动构建：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/SetupDependencies.ps1
@@ -69,128 +32,122 @@ cmake --build build --config Debug
 .\build\Debug\VulkanEngine.exe
 ```
 
-### 依赖与资源说明
+**环境要求**
 
-- `3rdParty/` 和 `Resources/` 不入库。
-- `tools/SetupDependencies.ps1` 可以下载固定版本的第三方依赖。
-- `Resources/` 中的模型和贴图需要单独准备；本项目当前使用 Sponza、DamagedHelmet 和 HDR 环境贴图。
-- 第三方依赖版本与缓存说明见 [tools/README.md](tools/README.md)。
+| 项 | 要求 |
+|---|---|
+| 系统 | Windows 10/11 x64 |
+| GPU | Vulkan 1.3：dynamicRendering / synchronization2 / timelineSemaphore / descriptorIndexing / maintenance4 |
+| Vulkan SDK | 1.3+（含 `glslangValidator`、`spirv-val`） |
+| CMake | 3.15+（推荐 3.21+） |
+| 编译器 | Visual Studio 2022 |
+| PowerShell | Windows PowerShell 5.1+ |
 
-## 命令行入口
+`find_package(Vulkan REQUIRED)` 自动定位 SDK；找不到时设置环境变量 **`VULKAN_SDK` 为 SDK 根目录**（例如 `D:\work\vulkan`，不是 `.../Bin`）。
+
+> 详细依赖版本、目录布局与常见故障见 [`docs/40-build/`](docs/40-build/README.md)。
+
+---
+
+## 2. 特性一览
+
+| 能力 | 说明 | 文档 |
+|---|---|---|
+| 线性 RenderGraph | 访问声明驱动自动 image/buffer barrier；动态渲染；无 `VkRenderPass` | [rendergraph](docs/10-architecture/rendergraph.md) |
+| 子资源语义校验 | 按 mip/layer 跟踪布局；buffer 按 offset/size 区间；写覆盖校验 | [rendergraph](docs/10-architecture/rendergraph.md) |
+| 瞬时资源"必须有人写"硬校验 | 下游读的图本帧没人写 -> `endFrame` 直接抛异常并点名 | [rendergraph](docs/10-architecture/rendergraph.md) |
+| 2 帧在飞 + timeline semaphore | 命令缓冲 / UBO / 瞬时图 / 描述符集按 frame slot 隔离 | [synchronization](docs/10-architecture/synchronization.md) |
+| 异步 compute 双队列 | graphics/compute 独立队列与 timeline；跨队列单向依赖推导 + 环检测 | [synchronization](docs/10-architecture/synchronization.md) |
+| Bindless 材质 | 1 个 set 4 个纹理数组 + push constant 索引；`desc binds` 104 -> 1 | [descriptors](docs/10-architecture/descriptors.md) |
+| HDR + Bloom + ACES | 光照输出线性 HDR，tonemap 独立成 PresentPass；Bloom 关闭时真跳过 7 个 pass | [pass-order](docs/20-pipeline/pass-order.md) |
+| IBL split-sum | irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙 | [ibl](docs/20-pipeline/ibl.md) |
+| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播 | [scene-ecs](docs/30-systems/scene-ecs.md) |
+| 空间索引 + 视锥剔除 | 均匀网格 broad phase + frustum-AABB | [scene-ecs](docs/30-systems/scene-ecs.md) |
+| CPU JobSystem | worker pool + `submit()`/`parallelFor()` + 异常传播 | [jobsystem](docs/30-systems/jobsystem.md) |
+| 窗口缩放 + 动态分辨率 | swapchain 原地重建；中间目标按 renderScale 缩放 | [synchronization](docs/10-architecture/synchronization.md) |
+| 版本化配置 v2 | 显式 v0->v1->v2 迁移、备份、损坏/未来版本保护 | [config](docs/30-systems/config.md) |
+| 调试剖析基础设施 | `--build-info` / `--gpu-timing` / `--screenshot` / 验证层增强 / RenderDoc / Tracy | [debug](docs/60-debug-profiling/README.md) |
+
+**已知边界**：无阴影 / SSR / 自动曝光 / 动画 / 音频 / 编辑器；跨队列资源走 `CONCURRENT` sharing；
+glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`docs/70-status/known-limits.md`](docs/70-status/known-limits.md)。
+
+---
+
+## 3. 命令行
 
 | 参数 | 用途 |
 |---|---|
-| 无参数 | 正常打开窗口运行 |
+| 无参数 | 正常窗口运行 |
 | `--selftest N` | 无交互跑 N 帧后退出 |
-| `--no-bloom` | 关闭 Bloom（自检与普通运行均可） |
-| `--no-ssao` | 关闭 SSAO（自检与普通运行均可） |
-| `--render-scale F` | 中间渲染目标倍率，范围 0.25~1.0 |
-| `--resize-test` | 自检中连续缩放窗口、切换动态分辨率、最小化/恢复 |
-| `--jobtest` | 只测试 CPU JobSystem，不创建 Vulkan 窗口 |
-| `--compute-test` | 启用 D-5 compute probe 的 GPU 写 + CPU 读回回归 |
-| `--subresource-test` | 启用 TD-05 mip/layer + buffer 区间正向探针 |
-| `--subresource-error-test` | 期望 RenderGraph 拒绝写 mip0 后读 mip1 |
-| `--material-stress` | 自检中反复分配/延迟归还材质槽位 |
-| `--config-test` | 配置版本迁移、备份与损坏文件保护测试，不需要创建窗口 |
+| `--no-bloom` / `--no-ssao` | 关闭对应 Pass（自检与普通运行均可） |
+| `--render-scale F` | 中间目标倍率 0.25~1.0 |
+| `--resize-test` | 连续缩放 / 动态分辨率 / 最小化恢复 |
+| `--jobtest` | 只测 CPU JobSystem（不建窗口） |
+| `--compute-test` | compute probe 的 GPU 写 + CPU 读回回归 |
+| `--cross-queue-test` | 跨队列双方向探针 |
+| `--subresource-test` / `--subresource-error-test` | 子资源正例 / 反例 |
+| `--material-stress` | 材质槽位延迟回收压测 |
+| `--config-test` | 配置迁移 / 损坏保护自检 |
+| `--build-info` | 打印编译进 & 本次开启的调试能力后退出 |
+| `--gpu-timing [--gpu-timing-csv P]` | 每 pass GPU 计时 |
+| `--validation-features bp,sync,printf,gpuav` | 验证层增强 |
+| `--validation-jsonl P` | 验证层消息落 JSONL（默认不落盘、不写 stderr） |
+| `--screenshot P [--screenshot-frame N]` | 无头截图 |
+| `--capture-frame N` | RenderDoc in-app 抓帧（需注入） |
+| `--device-fault-test` | `VK_EXT_device_fault` 能力自检 |
 
-示例：
+完整说明与组合示例见 [`docs/50-validation/cli-reference.md`](docs/50-validation/cli-reference.md)。
+
+---
+
+## 4. 文档索引
+
+> 文档系统本身怎么组织、怎么写、改动后要同步什么，全部在 [`docs/README.md`](docs/README.md)。
+
+| 目录 | 内容 | 什么时候读 |
+|---|---|---|
+| [`docs/00-meta/`](docs/00-meta/README.md) | 文档规则、代码↔文档反查表、任务导向阅读路径 | **每次都建议先扫一眼 reading-paths** |
+| [`docs/10-architecture/`](docs/10-architecture/README.md) | 分层、渲染图、资源生命周期、同步、描述符、设计决策 | 改 `src/RHI/` 或同步相关逻辑 |
+| [`docs/20-pipeline/`](docs/20-pipeline/README.md) | Pass 顺序、G-Buffer/中间目标、IBL、Shader 清单 | 改 `src/Render/` 或 `shaders/` |
+| [`docs/30-systems/`](docs/30-systems/README.md) | ECS/场景、JobSystem、配置、ImGui | 改 `src/Scene/`、`src/Core/` 对应模块 |
+| [`docs/40-build/`](docs/40-build/README.md) | 依赖版本、构建运行、排障 | 构建失败 / 换机器 |
+| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、20 项回归矩阵、验收标准 | 加测试 / 定位回归 |
+| [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
+| [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
+| [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
+
+---
+
+## 5. 文档管理规则（摘要）
+
+完整规则见 [`docs/00-meta/doc-rules.md`](docs/00-meta/doc-rules.md)。三条硬规则：
+
+1. **根目录只允许存在 `README.md` 一个文档**。任何新文档都必须落到 `docs/<分类>/`，并在该分类的
+   `README.md` 与本文件第 4 节的索引里登记。
+2. **子文档改动必须回写父索引**。新增 / 重命名 / 删除 / 改变职责范围时，父目录 `README.md` 与
+   `docs/README.md` 的索引、以及根 `README.md` 第 4 节，必须在**同一次改动**里同步更新；
+   仅改内容而不改索引是可以的，但改了索引必须同时改根 `README.md`。
+3. **代码行为变更必须同步"登记过该行为的文档"**。`docs/00-meta/doc-map.md` 是代码↔文档的反查表，
+   改代码前先查它；改完按表回写。校验用：
 
 ```powershell
-# 正常窗口
-.\build\Debug\VulkanEngine.exe
-
-# 跑 120 帧自检
-.\build\Debug\VulkanEngine.exe --selftest 120
-
-# 关闭 Bloom + 动态分辨率 0.5
-.\build\Debug\VulkanEngine.exe --selftest 120 --no-bloom --render-scale 0.5
-
-# 独立 compute 回归
-.\build\Debug\VulkanEngine.exe --selftest 20 --compute-test
-
-# 配置迁移回归
-.\build\Debug\VulkanEngine.exe --config-test
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 ```
 
-## 目录结构
+`DocCheck.ps1` 会检查：根目录文档数量、每个 `.md` 的 front-matter 完整性、父子索引覆盖、
+相对链接是否可达、单文档体量是否超限。它已接入 `tools/Validate.ps1` 作为回归项。
 
-```text
-.
-├── CMakeLists.txt
-├── main.cpp
-├── config/
-│   └── engine.json              # 版本化运行时配置
-├── shaders/                     # GLSL 源码
-├── src/
-│   ├── Core/                    # Application / Config / JobSystem / ImGui / 描述符管理
-│   ├── Render/                  # RenderGraph 各 Pass、IBL、后效链
-│   ├── RHI/                     # Device / Renderer / Swapchain / Pipeline / Texture
-│   └── Scene/                   # ECS、相机、glTF/OBJ、空间索引
-├── tools/
-│   ├── SetupDependencies.ps1
-│   ├── Validate.ps1
-│   └── README.md
-├── AI_Readme.md                 # 深度开发手册
-├── ARCHITECTURE.md              # 架构与设计取舍
-├── HANDOFF.md                   # 交接状态
-├── TECH_DEBT.md                 # 技术债清单（已清空）
-└── FUTURE_PLAN.md               # 后续主功能路线
-```
+---
 
-## 已实现系统
+## 6. 当前基线（实测）
 
-### RenderGraph
+| 项 | 值 |
+|---|---|
+| 回归 | `tools/Validate.ps1`：**20 项全 PASS**，stderr 全 0 字节 |
+| 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |
+| 场景 | Sponza：103 子网格 + 天空盒，`draw calls 104` |
+| 绑定 | `desc binds 1`（bindless 生效） |
+| 帧率 | Debug / RTX 2070 约 500 FPS（仅作同机相对比较） |
 
-- 线性 pass 顺序，不做重排或自动剔除。
-- 根据资源访问声明自动插入 `VkImageMemoryBarrier2` / `VkBufferMemoryBarrier2`。
-- 瞬时资源每帧写覆盖校验。
-- mip/layer 级 `SubresourceRange` 状态跟踪。
-- buffer offset/size 区间覆盖校验。
-- graphics / compute 跨队列单向依赖推导，双向依赖明确报错。
-
-### 多帧与异步 compute
-
-- 2 个 frame-in-flight 槽位。
-- graphics / compute 各自指令缓冲和 timeline semaphore。
-- 需要跨队列依赖时根据方向决定 submit 顺序。
-- compute probe 默认关闭，`--compute-test` 可独立验证 GPU 写 + CPU 读回。
-
-### 材质
-
-- 单个 bindless 材质描述符 set。
-- 4 个纹理数组：albedo / normal / metallic / roughness。
-- 材质切换只改 push constant。
-- descriptor update-after-bind + graphics timeline 延迟槽位回收。
-
-### 后效链
-
-- G-Buffer -> SSAO -> Lighting HDR -> Bloom -> Present。
-- Bloom 开启时 1 个亮部提取 + 3 级 downsample + 3 级 upsample。
-- Bloom 关闭时完全跳过 7 个 Bloom pass，Present 使用单输入专用管线。
-- Present 执行 exposure -> ACES Filmic -> gamma，并叠加 ImGui。
-
-### 场景与工具
-
-- EnTT ECS。
-- Transform/WorldTransform 层级传播。
-- 空间均匀网格 broad-phase + frustum culling。
-- glTF / OBJ 加载与材质槽位分配。
-- CPU JobSystem worker pool。
-- 版本化配置与损坏文件保护。
-
-## 已知边界
-
-- 跨队列资源当前走 `VK_SHARING_MODE_CONCURRENT` 简单路径；尚未实现 EXCLUSIVE queue-family ownership transfer。
-- glTF 内部节点层级在导入时烘焙到世界空间，Sponza 内部节点不是独立动态 entity。
-- SpatialIndex 每帧重建，尚无 dirty / 增量更新。
-- 尚未实现阴影、SSR、自动曝光、动画、音频、编辑器。
-- ComputeProbe / CrossQueueProbe / SubresourceProbe 是测试探针，不是生产渲染任务。
-
-## 进一步阅读
-
-- [PROJECT_STATE.md](PROJECT_STATE.md)：给下一个对话的现状速览、验证入口和接手注意事项。
-- [AI_Readme.md](AI_Readme.md)：逐系统实现细节、常见坑、历史演进。
-- [ARCHITECTURE.md](ARCHITECTURE.md)：设计决策、资源生命周期、取舍。
-- [TECH_DEBT.md](TECH_DEBT.md)：当前技术债状态。
-- [FUTURE_PLAN.md](FUTURE_PLAN.md)：地形、体素、GPU-driven rendering 等后续路线。
-- [tools/README.md](tools/README.md)：依赖固定版本和验证脚本说明。
+> 这些数字随硬件与代码变化。**更新基线时请成对更新本表与
+> [`docs/70-status/milestones.md`](docs/70-status/milestones.md)。**

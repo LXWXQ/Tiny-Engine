@@ -319,6 +319,7 @@ void Device::createLogicalDevice()
     supported13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     VkPhysicalDeviceVulkan12Features supported12{};
     supported12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
     supported13.pNext = &supported12;      // 1.3 在前、1.2 挂后面
     VkPhysicalDeviceFeatures2 supportedFeatures{};
     supportedFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -359,6 +360,10 @@ void Device::createLogicalDevice()
     if (!supported12.timelineSemaphore)
         throw std::runtime_error("GPU 不支持 timelineSemaphore；D-4 多帧在飞无法安全实现。");
 
+    // SPIR-V 1.6 的 LocalSizeId 执行模式依赖 maintenance4；不支持就只能退回
+    // 旧的 WorkgroupSize 路径（对应把着色器编译目标降到 vulkan1.2）。
+    if (!supported13.maintenance4)
+        throw std::runtime_error("GPU 不支持 maintenance4；无法使用 SPIR-V 1.6 的 LocalSizeId 执行模式。");
     VkPhysicalDeviceVulkan12Features features12{};
     features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     features12.descriptorIndexing = VK_TRUE;
@@ -385,7 +390,13 @@ void Device::createLogicalDevice()
     // glslang lowers `discard` to OpDemoteToHelperInvocation for Vulkan 1.3.
     // Alpha-masked foliage needs discard, so enable the matching core feature.
     features13.shaderDemoteToHelperInvocation = VK_TRUE;
+    // maintenance4（Vulkan 1.3 核心特性）：着色器按 --target-env vulkan1.3 编译时
+    // 生成 SPIR-V 1.6，compute 阶段的 workgroup 尺寸改用 LocalSizeId 执行模式
+    // （SPIR-V 1.6 弃用了 WorkgroupSize 内建）。规范要求 LocalSizeId 必须搭配
+    // maintenance4，否则验证层报 VUID-RuntimeSpirv-LocalSizeId-06434。
+    features13.maintenance4 = VK_TRUE;
     features13.pNext = &features12;        // 1.3 -> 1.2 串起来
+
 
     // 注意：用 Features2 链传递特性时，pEnabledFeatures 必须为 null，
     // 否则两条路径同时启用特性是非法用法（VUID-VkDeviceCreateInfo-pNext-04748）。

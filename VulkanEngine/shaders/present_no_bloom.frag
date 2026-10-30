@@ -1,4 +1,4 @@
-﻿#version 450
+#version 450
 
 // Bloom-disabled present path. Motion blur is still applied before tonemap.
 

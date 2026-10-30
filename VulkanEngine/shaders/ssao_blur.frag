@@ -1,4 +1,4 @@
-﻿#version 450
+#version 450
 
 // SSAO is generated from a tiled 4x4 noise texture. This small Gaussian
 // post-filter removes the visible screen-space tiling/noise before Lighting

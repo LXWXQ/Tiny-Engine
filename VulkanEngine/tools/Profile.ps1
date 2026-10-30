@@ -18,7 +18,7 @@ param(
 #     run.stderr.log    stderr (must be 0 bytes)
 #     manifest.json     session metadata + per-pass average GPU time
 #
-# Switch model (DEBUG_PROFILE_PLAN.md section 1.5): every debug capability is
+# Switch model (docs/60-debug-profiling/zero-overhead.md): every debug capability is
 # opt-in via a flag; default off and zero overhead when off. This script only
 # composes those flags and never changes default engine behaviour.
 #
@@ -29,6 +29,17 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
+
+# Start-Process -ArgumentList joins an array with spaces and does NOT quote the
+# elements. This repo may live in a path containing spaces ("Vs code Demo"), so
+# any argument that is a path has to be quoted explicitly here, otherwise the
+# child process receives it split into several arguments.
+function Quote-NativeArg([string]$Value) {
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
+}
 
 if (-not [string]::IsNullOrWhiteSpace($VulkanSdk)) { $env:VULKAN_SDK = $VulkanSdk }
 
@@ -73,7 +84,8 @@ if ($ValidationSync) { $engineArgs += @("--validation-features", "sync") }
 $stdout = Join-Path $outDir "run.stdout.log"
 $stderr = Join-Path $outDir "run.stderr.log"
 Write-Host "[profile] running: VulkanEngine.exe $($engineArgs -join ' ')"
-$p = Start-Process -FilePath $exe -ArgumentList $engineArgs -WorkingDirectory $repoRoot `
+$argLine = ($engineArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
+$p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $repoRoot `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -NoNewWindow
 
 $stderrBytes = (Get-Item -LiteralPath $stderr).Length

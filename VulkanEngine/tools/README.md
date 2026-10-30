@@ -12,6 +12,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/Validate.ps1
 
 1. 运行 `tools/SetupDependencies.ps1`，检查/下载固定版本的第三方依赖；
 2. 执行 TD-08 dead-file guard（废弃 shader / Descriptor 旧系统 / 源目录 `.spv` 不得回归）；
+   `tools/DocCheck.ps1` 检查文档系统一致性（根目录只留 `README.md`、front-matter、父索引覆盖、相对链接、体量上限）。规则见 `docs/00-meta/doc-rules.md`；
 3. 删除旧 `build/`，执行全新 configure + Debug build；
 4. 跑 `--jobtest`；
 5. 跑 `--config-test`（TD-09 配置 v0->v2 迁移、备份、损坏/未来版本保护）；

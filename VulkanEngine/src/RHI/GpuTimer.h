@@ -7,7 +7,7 @@
 // ============================================================================
 // 每 pass 的 GPU 计时（P0-4）
 //
-// 开关模型（DEBUG_PROFILE_PLAN.md §1.5）：
+// 开关模型（docs/60-debug-profiling/zero-overhead.md）：
 //   * 编译期：SENTINEL_ENABLE_GPU_TIMING 关闭时，init() 直接不创建任何资源；
 //   * 运行期：只有 --gpu-timing 时才 init(enabled=true)；
 //   * 关闭时：queryPoolCount()==0，不分配、不写任何 GPU 命令。

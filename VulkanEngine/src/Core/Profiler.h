@@ -8,7 +8,7 @@
 //   * ON  -> 需要 3rdParty/tracy（public/tracy/Tracy.hpp + TracyClient.cpp），
 //            由 CMake 自动加入 include 目录与源文件。
 //
-// GPU 侧每 pass 的 zone 见 DEBUG_PROFILE_PLAN.md §5 P1-1；等 Tracy 就位后
+// GPU 侧每 pass 的 zone 见 docs/60-debug-profiling/diagnostics.md；等 Tracy 就位后
 // 在 RenderGraph 的 pass 循环里补 TracyVkZone（同样受该宏保护）。
 // ============================================================================
 #ifdef SENTINEL_ENABLE_TRACY
