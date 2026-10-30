@@ -33,6 +33,8 @@ updated: 2026-10-30
 | [serialization](serialization.md) | 改场景文件格式 / 加组件要存盘 |
 | [panels](panels.md) | 写新面板 / 改布局 |
 | [viewport](viewport.md) | 改视口尺寸/格式 / 画面拉伸或发暗 |
+| [gizmo](gizmo.md) | 点不中物体 / 拖拽方向不对 / 加新手柄 |
+| [materials](materials.md) | 新建物体显示成纯白 / 改 G-Buffer 着色 |
 
 ## 当前能力（D-8 / TD-09）
 
@@ -43,12 +45,29 @@ updated: 2026-10-30
 - 播放状态机：Editing / Playing / Paused，Stop 时恢复快照
 - 场景存读：`*.scene.json`
 - 离屏视口：3D 画面渲染到纹理，作为 ImGui 图片嵌在面板里（面板环绕而非覆盖）
+- 视口点选：AABB 粗筛 + 三角形精确求交，点空白处取消选中
+- 选中包围盒：3D 线段绘制，**带深度测试**（被墙挡住就看不见）
+- 占位材质：没有 albedo 贴图时画程序化棋盘格
+- 三轴手柄：平移 / 旋转 / 缩放（`W`/`E`/`R`），拖拽一次 = 一条可撤销命令
 - 资产面板：扫描 `Resources/Models`，双击即通过命令栈创建实体（可撤销）
 - 纯 3D 截图：`--screenshot-viewport` 读视口纹理，不含 UI
 
 ## 启动
 
+构建会产出**两个可执行文件**，都在 `build/<Config>/` 下：
+
+| 可执行文件 | 模式 | 说明 |
+|---|---|---|
+| `SentinelEditor.exe` | 编辑器 | 双击即进编辑器，等价于 `VulkanEngine.exe --editor` |
+| `VulkanEngine.exe` | 运行时 | 与引入编辑器之前行为完全一致 |
+
+两者共享同一份源码（OBJECT 库），只有 `main.cpp` 各编译一次，
+差异只在一个编译期宏 `SENTINEL_DEFAULT_EDITOR`。
+
 ```
-VulkanEngine.exe --editor
-VulkanEngine.exe --editor --selftest 70     # 无头验证编辑器 UI
+build\Debug\SentinelEditor.exe                    # 直接进编辑器
+build\Debug\SentinelEditor.exe --selftest 70      # 无头验证编辑器 UI
+build\Debug\VulkanEngine.exe                      # 运行时模式
 ```
+
+编辑器版仍接受全部命令行参数（`--screenshot-viewport` 等）。

@@ -64,4 +64,10 @@ struct RenderResources
     std::array<RenderGraph::TextureHandle, kFramesInFlight> editorViewport;
     VkExtent2D editorViewportExtent{ 0, 0 };
     bool editorViewportEnabled = false;
+
+    // 编辑器叠加层（包围盒线框）建管线时要用的附件格式。
+    // 由 Application 在创建离屏视口时填好；未启用编辑器时保持 UNDEFINED，
+    // EditorOverlayPass 看到 UNDEFINED 就不建管线（零开销）。
+    VkFormat editorViewportFormatHint = VK_FORMAT_UNDEFINED;
+    VkFormat depthFormatHint = VK_FORMAT_UNDEFINED;
 };

@@ -102,6 +102,7 @@ void InspectorPanel::drawTransform(EditorState& state, entt::entity entity)
             oldRotation, glm::radians(rotationDegrees),
             oldScale, scale));
         state.markDirty();
+        state.transformRefreshPending = true;
     }
 }
 

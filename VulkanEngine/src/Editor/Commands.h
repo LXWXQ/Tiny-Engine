@@ -115,8 +115,11 @@ class CreateEntityCommand : public Command
 public:
     // scene 用于 createMeshEntity（它需要 device / commandPool / 材质系统）。
     // 只在这里用 Scene* 而不是 registry：创建网格实体本质上需要引擎能力。
+    // spawnPosition 是**父节点局部空间**的落点。
+    // 编辑器传入"相机前方"的位置，避免新建的物体永远叠在世界原点。
     CreateEntityCommand(entt::registry& registry, Scene& scene,
-                        std::string meshPath, std::string name);
+                        std::string meshPath, std::string name,
+                        const glm::vec3& spawnPosition = glm::vec3(0.0f));
 
     void apply() override;
     void revert() override;
@@ -130,6 +133,7 @@ private:
     Scene* scene;
     std::string meshPath;
     std::string entityName;
+    glm::vec3 spawnPosition{ 0.0f };
 
     entt::entity entity = entt::null;
 

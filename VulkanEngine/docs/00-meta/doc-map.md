@@ -97,6 +97,8 @@ updated: 2026-10-30
 | `tools/DocCheck.ps1` | 本文档系统的自动校验 | [doc-rules](doc-rules.md) | doc-rules |
 | `tools/Baseline.ps1` / `DebugBundle.ps1` / `DeepValidation.ps1` / `Screenshot.ps1` / `Capture.ps1` / `Profile.ps1` | 剖析与证据收集 | [tools](../60-debug-profiling/tools.md) | tools |
 | `config/engine.json` | 运行时配置（version 2） | [config](../30-systems/config.md) | config |
+| `CMakeLists.txt` | 两个可执行目标（`VulkanEngine` / `SentinelEditor`）+ `sentinel_core` 对象库 + `SentinelShaders` | [build](../40-build/build.md) | build |
+| `main.cpp` | 唯一被编译两次的文件；`SENTINEL_DEFAULT_EDITOR` 决定默认模式 | [build](../40-build/build.md)、[editor](../90-editor/README.md) | build、editor |
 
 ## 6.5 编辑器层（`src/Editor/`）
 
@@ -113,7 +115,10 @@ updated: 2026-10-30
 | `panels/HierarchyPanel.*` | 实体树、拖拽重挂、右键删除 | [editor/panels](../90-editor/panels.md) | panels |
 | `panels/InspectorPanel.*` | 组件编辑，变换走命令栈 | [editor/panels](../90-editor/panels.md)、[editor/commands](../90-editor/commands.md) | panels、commands |
 | `panels/ConsolePanel.*` | 日志过滤 | [editor/panels](../90-editor/panels.md) | panels |
-| `panels/ViewportPanel.*` | 3D 视口：把离屏纹理当 ImGui 图片画出来 | [editor/viewport](../90-editor/viewport.md) | viewport |
+| `panels/ViewportPanel.*` | 3D 视口：离屏纹理 + 射线拾取 | [editor/viewport](../90-editor/viewport.md)、[editor/gizmo](../90-editor/gizmo.md) | viewport、gizmo |
+| `Gizmo.h/.cpp` | 三轴手柄：投影、命中测试、拖拽换算 | [editor/gizmo](../90-editor/gizmo.md) | gizmo |
+| `src/Render/EditorOverlayPass.*` | 选中包围盒的 3D 线框（复用 G-Buffer 深度做遮挡） | [editor/gizmo](../90-editor/gizmo.md) | gizmo |
+| `shaders/mrt.frag` 棋盘格 | 无 albedo 贴图时的占位着色 + UV 退化回退 | [editor/materials](../90-editor/materials.md) | materials |
 | `panels/AssetBrowserPanel.*` | 扫描 Models 目录，双击创建实体（走命令栈） | [editor/panels](../90-editor/panels.md) | panels |
 
 配套的引擎侧改动（改这些要同时看编辑器文档）：

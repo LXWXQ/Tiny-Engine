@@ -20,6 +20,7 @@
 #include "Render/BloomPass.h"
 #include "Render/PresentPass.h"
 #include "Render/UiCompositePass.h"
+#include "Render/EditorOverlayPass.h"
 #include "Render/SSAOPass.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
@@ -115,7 +116,9 @@ FirstApp::FirstApp(const diag::Options& options)
 		[this] { return renderer->getLastSubmittedGraphicsFrame(); });
 
 	scene = std::make_unique<Scene>();
-	scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager);
+	// 编辑器模式默认不加载 Sponza（见 Scene::init）。--empty-scene 对运行时构建仍有效。
+const bool loadDefaultScene = !diagnosticsOptions.emptyScene && !diagnosticsOptions.editorMode;
+scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager, loadDefaultScene);
 	scene->getCameraController().registerCallbacks(window);
 
 	// W1：把配置应用到场景。顺序很重要 —— Scene::init 里会摆好默认相机位姿，
@@ -154,6 +157,7 @@ FirstApp::FirstApp(const diag::Options& options)
 
 	// TD-09：编辑器模式下最后一步是「只画 ImGui」的合成 Pass。
 	// 它在非编辑器模式下不会往渲染图里注册任何东西（见 addToGraph 的早退）。
+	auto editorOverlay = std::make_unique<EditorOverlayPass>(*vulkanDevice, *renderGraph, *renderResources);
 	auto uiComposite = std::make_unique<UiCompositePass>(*vulkanDevice, *renderGraph, *renderResources);
 
 	auto computeProbePass = std::make_unique<ComputeProbePass>(*vulkanDevice, *renderGraph,
@@ -164,6 +168,7 @@ FirstApp::FirstApp(const diag::Options& options)
 
 	presentPassPtr = presentPass.get();
 	uiCompositePassPtr = uiComposite.get();
+	editorOverlayPassPtr = editorOverlay.get();
 	ssaoPassPtr = ssaoPass.get();
 	computeProbePassPtr = computeProbePass.get();
 	crossQueueProbePassPtr = crossQueueProbePass.get();
@@ -174,6 +179,8 @@ FirstApp::FirstApp(const diag::Options& options)
 	renderPipeline.addPass(std::move(lightPass));
 	renderPipeline.addPass(std::move(bloomPass));
 	renderPipeline.addPass(std::move(presentPass));
+	// TD-15：带深度测试的包围盒线框，必须在 Present 之后、UiComposite 之前。
+	renderPipeline.addPass(std::move(editorOverlay));
 	renderPipeline.addPass(std::move(uiComposite));
 	renderPipeline.addPass(std::move(crossQueueProbePass));
 	renderPipeline.addPass(std::move(subresourceProbePass));
@@ -973,6 +980,16 @@ renderResources->editorViewportExtent = extent;
 renderResources->editorViewportEnabled = true;
 editorViewportTexturesCreated = true;
 
+// 叠加层建管线要用的附件格式：颜色 = 视口纹理格式，深度 = G-Buffer 深度格式。
+// 第一次进入编辑器时补调一次 init()（构造期 initAll 时编辑器还没启用）。
+renderResources->editorViewportFormatHint = vulkanSwapchain->getSwapChainImageFormat();
+renderResources->depthFormatHint = gBuffers[0]->getDepth().format;
+if (editorOverlayPassPtr != nullptr && !editorOverlayInitialized)
+{
+editorOverlayPassPtr->init();
+editorOverlayInitialized = true;
+}
+
 std::cout << "[TD09] Editor viewport " << extent.width << "x" << extent.height
 << " (offscreen, " << kFramesInFlight << " slots)\n";
 }
@@ -1158,7 +1175,26 @@ void FirstApp::update(float dt)
 		aspect = renderResources->editorViewportExtent.width /
 			(float)renderResources->editorViewportExtent.height;
 	}
-	scene->update(dt, window, aspect);
+	// 相机输入门控：
+//   * 编辑器模式下，只有鼠标位于 3D 视口内才允许相机响应键鼠；
+//   * 正在输入文字（例如资产面板的过滤框）时一律屏蔽 ——
+//     CameraController 直接读 GLFW，不知道 ImGui 正在吃键盘，
+//     不屏蔽的话在过滤框里敲 "wasd" 相机会跟着跑。
+bool allowCameraInput = true;
+if (editorLayer)
+{
+const editor::EditorState& editorState = editorLayer->getState();
+// 鼠标在视口内、或者已经按住右键/中键在看了 —— 后者很重要：
+// 拖拽视角时鼠标可能移出视口矩形，只按 hover 判断会让视角"拖一半就停"。
+const bool looking = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ||
+                     glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+allowCameraInput = (editorState.viewportHovered || looking) && !ImGui::GetIO().WantTextInput;
+// 拖 gizmo 时也不能让相机跟着转
+if (editorState.gizmo.isDragging())
+allowCameraInput = false;
+}
+
+scene->update(dt, window, aspect, allowCameraInput);
 }
 
 void FirstApp::render(float dt)
@@ -1212,7 +1248,11 @@ void FirstApp::render(float dt)
 			&scene->getCameraController()
 		};
 
-		// W1：把配置存取交给 UI 层。用回调而不是让 ImGuiSystem 持有 FirstApp，
+		// 编辑器选中项交给渲染侧（画包围盒用）
+if (editorLayer)
+frameInfo.editorSelection = editorLayer->getState().selection.primary();
+
+// W1：把配置存取交给 UI 层。用回调而不是让 ImGuiSystem 持有 FirstApp，
 		// 保持"UI 不依赖引擎总控"这条边界。
 		frameInfo.onSaveConfig = [this] { saveConfig(); };
 		frameInfo.onLoadConfig = [this] { loadConfig(); };

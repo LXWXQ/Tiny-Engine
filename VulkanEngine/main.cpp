@@ -27,6 +27,11 @@
 //   --render-scale <0.25..1.0>    动态分辨率初始倍率（需配合 --selftest）
 //   --editor                      以场景编辑器模式启动（默认关闭，行为与运行时一致）
 //   --screenshot-viewport         截图拍编辑器离屏视口（纯 3D，不含 UI）；需配合 --editor
+//   --empty-scene                 不加载 Sponza / 天空盒，只留相机（编辑器调试单物体时用）
+//
+// 本文件被编译两次，产出两个可执行文件（见 CMakeLists.txt）：
+//   VulkanEngine.exe   运行时模式
+//   SentinelEditor.exe 编辑器模式（SENTINEL_DEFAULT_EDITOR=1，等价于 --editor）
 //
 //   ---- P0：调试 / 剖析能力（随用随开，默认关闭）----
 //   --build-info                  打印本二进制编译进的 & 本次开启的调试能力后退出
@@ -69,7 +74,14 @@ int main(int argc, char** argv)
     bool configTest = false;
     bool deviceFaultTest = false;
     bool diagTest = false;
+    // SentinelEditor.exe 用 SENTINEL_DEFAULT_EDITOR=1 编译，于是"打开就是编辑器"；
+    // VulkanEngine.exe 不带这个宏，行为与引入编辑器之前完全一致。
+    // 两个 exe 共用同一份 main.cpp，差异只在这一个宏上。
+#ifdef SENTINEL_DEFAULT_EDITOR
+    bool editorMode = true;
+#else
     bool editorMode = false;
+#endif
     std::string diagTestPath;
     float renderScale = 1.0f;
     int  selfTestFrames = 600;
@@ -111,6 +123,7 @@ int main(int argc, char** argv)
         }
         else if (arg == "--editor") editorMode = true;
         else if (arg == "--screenshot-viewport") diagOptions.screenshotViewport = true;
+        else if (arg == "--empty-scene") diagOptions.emptyScene = true;
         else if (arg == "--build-info") diagOptions.printBuildInfo = true;
         else if (arg == "--gpu-timing") diagOptions.gpuTiming = true;
         else if (arg == "--gpu-timing-csv" && i + 1 < argc)
@@ -176,6 +189,12 @@ int main(int argc, char** argv)
         }
 
         diag::configureValidationLog(diagOptions.validationJsonlPath);
+
+#ifdef SENTINEL_DEFAULT_EDITOR
+        std::cout << "[Sentinel] SentinelEditor build (editor mode on by default)\n";
+#endif
+        // 让引擎知道是否编辑器模式：编辑器默认不加载 Sponza
+        diagOptions.editorMode = editorMode;
 
         FirstApp app(diagOptions);
 

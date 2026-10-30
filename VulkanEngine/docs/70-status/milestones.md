@@ -97,3 +97,104 @@ updated: 2026-10-30
   - `--editor --selftest 40`：`[Editor] scene selfTest PASS | create/undo/redo via command stack`
   - `--editor --screenshot-viewport`：`[Validation] errors=0 warnings=0`
   - `tools/Validate.ps1`：20/20 PASS，stderr 0 字节
+
+## D-10：视口交互（点选 + 三轴手柄）
+
+- **点选**：屏幕 → 世界射线，与 `WorldBoundsComponent` 做 ray-AABB，取最近命中。
+  天空盒跳过（相机跟随巨球会吞掉所有射线）。点空白处取消选中。
+- **三轴手柄**：`W`/`E`/`R` 切换平移/旋转/缩放；平移用世界轴，旋转/缩放用局部轴。
+  手柄屏幕尺寸恒定 ~90px；拖拽一次经命令栈合并成**一条**可撤销命令。
+- **实测**：三种模式截图确认手柄正确绘制；`[Editor] selfTest PASS` 含
+  Gizmo 数学往返（投影→反投影、射线-轴最近点、射线-平面求交）。
+- **抓到的真 bug**：Vulkan 投影矩阵 `m[1][1]` 为负，导致 `tanHalfFov` 为负、
+  手柄长度被钳到 1e-4，三个箭头叠成一点。见 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 26。
+
+## D-11：视口交互修正
+
+用户反馈四个问题，逐条修：
+
+1. **"为什么我可以拖动视角"** —— `CameraController` 直接读 GLFW，不知道 ImGui
+   在捕获键鼠。在资产过滤框里敲 "wasd" 相机会跑。已加 `allowCameraInput` 门控
+   （鼠标在视口内 / 正在按住右键看 / 未在输入文字 / 未在拖 gizmo）。
+2. **"双击球没生成在视角正前方"** —— 新建实体落点从世界原点改为
+   `相机位置 + 前向 * 4`。
+3. **"点球却选中 Sponza"** —— 实体级 AABB 被相机包住，入射距离恒为 0。
+   改为 AABB 粗筛 + Möller-Trumbore 三角形精确求交。
+   见 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 27。
+4. **"应该有白色包围盒线框 / 手柄要对齐包围盒中心"** —— 新增选中实体世界 AABB
+   白色 12 边线框；gizmo 中心改用 `WorldBoundsComponent.world.center()`。
+
+- **自检**：`selfTestWithScene()` 新增"射线必须命中近侧物体"断言
+  （距离 6 处的立方体，命中应 < 6）。这条断言正是靠它发现了
+  `sphere.obj` 其实是半径 1000 的天空盒球。
+
+## D-12：视口交互修复（第二轮反馈）
+
+1. **"拖动时把视口拖动了"** —— `Viewport` 窗口缺 `NoMove`/`NoResize`，
+   在视口里按住左键拖拽会把整块面板拖走，位置还会被 `imgui.ini` 记住。
+   已补三个标志，布局改用 `ImGuiCond_Always`。
+2. **"拖动时包围盒和物体不在一起"** —— UI 在 `render()` 构建，而
+   `Scene::update()` 早已跑完，`WorldBoundsComponent` 落后一帧。
+   改为拖拽提交后**立刻**刷新世界变换并当场重算手柄锚点与局部轴。
+   回归守卫：`selfTestWithScene()` 断言"平移 3 单位后包围盒中心也移动 3 单位"。
+
+## D-13：包围盒跟随（第三轮反馈）
+
+用户反馈"拖动时球体和包围盒还是分离"。上一轮只修了一半：
+
+1. **刷新时机**（D-12 已修）：改完 transform 立刻 `refreshTransformsAndVisibility()`。
+2. **绘制顺序**（本轮修，更隐蔽）：包围盒原本在 `gizmo.manipulate()` **之前**
+   就画完了，而 gizmo 是在同一帧稍后才改 transform 的 —— 所以框永远用旧数据。
+   把 gizmo 拆成 `interact()` / `draw()`，调用方按
+   **交互 → 画框 → 画手柄** 的顺序走。
+
+同时按用户建议新增 `--empty-scene`：不加载 Sponza / 天空盒，只留相机，
+方便单独观察交互（Sponza 的巨大包围盒会干扰判断）。
+
+- **验证**：`--empty-scene` + 程序化放置一个球，截图确认球 / 白框 / 手柄三者同心。
+- **回归**：`tools/Validate.ps1` 20/20 PASS，stderr 0 字节。
+
+## D-14：屏幕坐标 Y 方向修正（第四轮反馈）
+
+用户反馈"拖动时物体和包围盒的移动方向像相反"。
+
+**根因**：`VulkanCamera::setPerspectiveProjection` 里有 `projectionMatrix[1][1] *= -1`
+（Vulkan 的 NDC Y 向下）。而 `projectToScreen` / `screenToRay` 都按"NDC Y 向上"
+写的，于是投影与反投影一起多翻了一次 —— 两者互相抵消，所以：
+
+- 包围盒/手柄相对真实渲染**垂直镜像**（物体上移、框下移）；
+- 拾取射线也镜像（点 A 选中 B）；
+- **往返自检照样通过**（两次翻转抵消），只有"世界 +Y 必须投影到更小屏幕 y"
+  这类**方向不变量**才能抓到。
+
+修了四处：`Gizmo::projectToScreen`、`Gizmo::screenToRay`、
+`ViewportPanel::projectPoint`、`ViewportPanel::screenToRay`。
+
+自检也补强了：投影矩阵改成和引擎一致（含 `[1][1] *= -1`），
+并新增上下/左右方向断言。
+
+- **验证**：`--empty-scene` 放一个偏离中心的球，截图确认球与白框同侧、
+  绿色 Y 轴指向上方。
+- **回归**：`tools/Validate.ps1` 20/20 PASS，stderr 0 字节。
+
+## D-15：包围盒深度测试 + 占位材质棋盘格
+
+用户反馈两条：
+
+1. **"包围盒没被深度测试，始终画在最前面"** —— ImGui 的 draw list 是纯 2D 叠加，
+   没有深度概念。新增 `EditorOverlayPass`：`LINE_LIST` 拓扑、世界空间顶点、
+   深度附件复用 G-Buffer 深度图（`LOAD_OP_LOAD` + `depthWriteEnable = FALSE`，
+   只测不写），颜色目标 `editorViewport`（`LOAD_OP_LOAD` 保住画面）。
+   顺序在 Present 之后、UiComposite 之前。手柄仍用 ImGui 画在最前面（刻意，
+   否则物体被挡住时抓不到手柄）。
+2. **"没有有效材质时应该是黑白棋盘格"** —— `mrt.frag` 加程序化棋盘格，
+   两种情况启用：完全没材质（`material.y == 0`）、有材质但没 albedo 贴图
+   （`push.albedoFallback`）。后者由 `GeometrySystem` 判断，且**只认实体自己的
+   材质** —— glTF 的材质在子网格槽位里，误判会让 Sponza 整片变格子。
+
+附带修了一个 UV 退化问题：`debug_cube.obj` 没有有效 UV，棋盘格会退化成纯色。
+用 `dFdx/dFdy` 判断 UV 是否退化，退化时改用世界坐标按法线主轴投影。
+
+- **验证**：空场景放"遮挡方块(3m) + 被选中的球(8m)"，截图确认包围盒被完全挡住、
+  手柄仍可见；遮挡方块显示棋盘格。
+- **回归**：`tools/Validate.ps1` 20/20 PASS，stderr 0 字节。

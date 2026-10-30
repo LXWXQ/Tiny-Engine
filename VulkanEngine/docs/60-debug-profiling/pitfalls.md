@@ -278,3 +278,86 @@ vec2 sampleSphericalMap(vec3 v) {
 - **判据**：只要崩溃点正好在第一次 `AddTexture` 之后、且没有任何 Vulkan 报错，
   先怀疑描述符池/堆容量，而不是纹理本身。
 - **相关**：编辑器离屏视口每帧槽注册一张，见 [editor/viewport](../90-editor/viewport.md)。
+
+## 26. Vulkan 投影矩阵 Y 轴翻转：`projection[1][1]` 是负数
+
+- **现象**：编辑器三轴手柄的三个箭头全部**叠在中心一个点上**，看不到轴线。
+  没有任何运行时错误，验证层也不说话。
+- **原因**：Vulkan 的 NDC 是 Y 向下（与 OpenGL 相反），所以透视投影矩阵的
+  `m[1][1]` 是**负值**。用它反推视锥时：
+  ```cpp
+  const float tanHalfFov = 1.0f / projection[1][1];   // 得到 -0.577
+  const float worldPerPixel = 2.0f * tanHalfFov * distance / viewportHeight;  // 负数
+  const float handleLength = std::max(kHandlePixels * worldPerPixel, 1e-4f);  // 被钳成 1e-4
+  ```
+  手柄长度退化成万分之一世界单位，三个轴缩到同一个像素上。
+- **修法**：取绝对值。
+  ```cpp
+  const float tanHalfFov = std::abs(1.0f / projection[1][1]);
+  ```
+- **为什么值得记**：这类"数值悄悄变成负的、又被 `std::max` 兜住"的 bug
+  不会崩溃、不会报错，只会让画面"看起来不对"。唯一的发现途径是**看截图**。
+  定位手段是把手柄长度、相机距离、`tanHalfFov` 打出来 —— 一打就看见负号。
+- **通用教训**：凡是"从投影矩阵反推视锥参数"的地方，都要检查符号约定；
+  同时不要用 `std::max` 掩盖异常值，必要时加断言。
+
+## 27. 实体级 AABB 拾取在"相机位于物体内部"时完全失效
+
+- **现象**：视口里点任何东西都选中同一个实体（本项目是 Sponza），
+  连点在它前面的小球也一样。
+- **原因**：Sponza 整栋是**一个实体**，它的世界 AABB 把相机包在里面。
+  射线与 AABB 的入射参数 `tMin` 从 0 开始（起点就在盒内），
+  于是它的命中距离恒为 0，永远排第一。
+- **这不是阈值问题**：调小拾取半径、加距离上限都没用 ——
+  AABB 表达不了"这堵墙在 5 米外、那个球在 3 米外"。
+- **修法**：AABB 只做粗筛，真正判定用三角形求交（Möller-Trumbore）。
+  ```cpp
+  // 1. AABB 粗筛：连包围盒都没碰到就不可能命中
+  if (!rayAabb(origin, dir, bounds.world, aabbT)) continue;
+  if (aabbT > bestDistance) continue;          // 比当前最近还远，跳过
+  // 2. 精确求交
+  if (!mesh.model->intersectRay(worldTransform->matrix, origin, dir, distance)) continue;
+  ```
+- **性能取舍**：把**射线**变换到模型局部空间（一次逆矩阵），
+  而不是把几十万顶点变换到世界空间。CPU 侧只保留位置 + 索引
+  （Sponza 约 10MB），点选是低频操作，暴力遍历 27 万三角形约几毫秒，可接受。
+- **通用教训**：任何"用包围盒做精确判定"的地方，都要问一句
+  "如果相机在盒子里面会怎样"。拾取、剔除、碰撞都有这个陷阱。
+
+## 28. 屏幕↔NDC 的 Y 方向：投影矩阵已经翻过一次了
+
+- **现象**：编辑器里拖动物体时，**物体和白包围盒朝相反方向移动**；
+  更早的表现是"点球却选中了别的东西"。
+- **原因**：`VulkanCamera::setPerspectiveProjection` 里有
+  ```cpp
+  projectionMatrix[1][1] *= -1;   // Vulkan 的 NDC Y 向下
+  ```
+  所以 NDC 的 +Y 指向**屏幕下方**。而屏幕坐标 → 射线的换算如果还按
+  "NDC +Y 向上"写，就多做了一次翻转：
+  ```cpp
+  // 错的
+  ndcY = 1.0f - ((screen.y - rectMin.y) / height) * 2.0f;
+  outScreen.y = rectMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * height;
+  ```
+- **为什么难查**：
+  1. 不崩溃、不报错，验证层完全不参与（纯 CPU 数学）；
+  2. **投影和反投影一起错时，往返测试仍然通过** —— 两次翻转互相抵消。
+     我原来的 `Gizmo::selfTest()` 就是这么"通过"的。
+  3. 物体在画面**正中心**时框也是对的（镜像不改变中心点），
+     所以只有把物体移开中心才能看出来。
+- **修法**：两处都必须直接用 `ndc*0.5+0.5`，不要再翻：
+  ```cpp
+  ndcY = ((screen.y - rectMin.y) / height) * 2.0f - 1.0f;
+  outScreen.y = rectMin.y + (ndc.y * 0.5f + 0.5f) * height;
+  ```
+- **正确的自检**：不要只做往返，要断言**方向不变量**：
+  ```cpp
+  // 世界 +Y 更高的点必须投影到更小的屏幕 y（更靠上）
+  if (!(higher.y < lower.y)) fail;
+  // 世界 +X 更大的点必须投影到更大的屏幕 x
+  if (!(right.x > left.x)) fail;
+  ```
+  并且自检用的投影矩阵必须**和引擎一致**（也做 `[1][1] *= -1`），
+  否则测的是一个真实渲染里不存在的约定。
+- **旁证**：修之前截图中手柄的**绿色 Y 轴指向屏幕下方** ——
+  这是最直观的破绽，只是当时没注意。

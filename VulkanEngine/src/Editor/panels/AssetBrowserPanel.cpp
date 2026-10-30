@@ -2,11 +2,13 @@
 #include "Editor/EditorState.h"
 #include "Editor/Commands.h"
 #include "Scene/Scene.h"
+#include <glm/glm.hpp>
 #include "AssetPaths.h"
 
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -26,6 +28,20 @@ std::string toLower(std::string s)
 bool isModelExtension(const std::string& ext)
 {
     return ext == ".obj" || ext == ".gltf" || ext == ".glb";
+}
+
+// 相机前向。必须与 CameraController::cameraForward 用同一个公式：
+// 这套相机的投影把 view-space +Z 当作前方，所以世界前向是 +w 而不是 -w。
+glm::vec3 cameraForward(const glm::vec3& rotation)
+{
+    const float yaw = rotation.y;
+    const float pitch = rotation.x;
+    const float cosPitch = std::cos(pitch);
+    return glm::vec3{
+        std::sin(yaw) * cosPitch,
+        -std::sin(pitch),
+        std::cos(yaw) * cosPitch
+    };
 }
 
 // 文件名（不含扩展名）作为默认实体名。
@@ -125,9 +141,17 @@ void AssetBrowserPanel::draw(EditorState& state)
                 // 双击 = 加入场景。走命令栈，所以 Ctrl+Z 能撤销。
                 if (state.services.scene != nullptr)
                 {
+                    // 生成在相机前方 4 个单位处，而不是世界原点。
+                    // 相机离原点可能很远，落在原点会让用户以为"没生成"。
+                    const TransformComponent& cameraTransform =
+                        state.services.scene->getCameraTransform();
+                    const glm::vec3 forward = cameraForward(cameraTransform.rotation);
+                    const glm::vec3 spawn = cameraTransform.translation + forward * 4.0f;
+
                     auto command = std::make_unique<CreateEntityCommand>(
                         *state.services.registry, *state.services.scene,
-                        asset.absolutePath, stemOf(std::filesystem::path(asset.absolutePath)));
+                        asset.absolutePath, stemOf(std::filesystem::path(asset.absolutePath)),
+                        spawn);
 
                     // 记下实体以便选中：命令 apply 之后才拿得到 entity。
                     CreateEntityCommand* raw = command.get();

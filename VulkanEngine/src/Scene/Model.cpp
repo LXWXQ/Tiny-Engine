@@ -1,4 +1,7 @@
 #include "Model.h"
+
+#include <glm/gtc/matrix_inverse.hpp>
+#include <limits>
 #include "RHI/Device.h"
 #include "RHI/CommandUtils.h"
 #include <stdexcept>
@@ -24,6 +27,13 @@ Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& bu
     createIndexBuffers(builder.indices, commandPool);
     computeBounds(builder.vertices);
     finalizeSubMeshes(builder.subMeshes);
+
+    // 保留一份 CPU 侧几何用于编辑器点选。
+    // 只拷位置：法线/UV 对射线求交没有意义，Sponza 那种规模能省下 2/3 内存。
+    pickingPositions.reserve(builder.vertices.size());
+    for (const Vertex& v : builder.vertices)
+        pickingPositions.push_back(v.position);
+    pickingIndices = builder.indices;
 }
 
 Model::~Model()
@@ -34,6 +44,78 @@ Model::~Model()
     {
         vmaDestroyBuffer(device.getVmaAllocator(), indexBuffer, indexAllocation);
     }
+}
+
+// ---------------------------------------------------------------------------
+// 射线与模型求交（Möller-Trumbore）
+//
+// 把射线变换到模型的**局部空间**再测，而不是把几十万个顶点变换到世界空间 ——
+// 后者每点一次要乘一遍矩阵，前者只乘一次。
+//
+// 注意：局部空间里的射线方向不再归一化（模型缩放会改变长度），
+// 所以最后要把参数 t 换算回世界空间的真实距离：
+//   worldDistance = t * |localDir| / |worldDir|
+// 调用方传进来的 worldDir 是归一化的，因此 worldDistance = t * |localDir|。
+// ---------------------------------------------------------------------------
+bool Model::intersectRay(const glm::mat4& worldMatrix,
+                         const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+                         float& outDistance) const
+{
+    if (pickingPositions.empty() || pickingIndices.size() < 3)
+        return false;
+
+    const glm::mat4 inverseWorld = glm::inverse(worldMatrix);
+    const glm::vec3 localOrigin = glm::vec3(inverseWorld * glm::vec4(rayOrigin, 1.0f));
+    const glm::vec3 localDir = glm::vec3(inverseWorld * glm::vec4(rayDir, 0.0f));
+
+    const float localDirLength = glm::length(localDir);
+    if (localDirLength < 1e-12f)
+        return false;
+
+    float nearest = std::numeric_limits<float>::max();
+
+    const size_t triangleCount = pickingIndices.size() / 3;
+    for (size_t tri = 0; tri < triangleCount; ++tri)
+    {
+        const uint32_t i0 = pickingIndices[tri * 3 + 0];
+        const uint32_t i1 = pickingIndices[tri * 3 + 1];
+        const uint32_t i2 = pickingIndices[tri * 3 + 2];
+        if (i0 >= pickingPositions.size() || i1 >= pickingPositions.size() || i2 >= pickingPositions.size())
+            continue;
+
+        const glm::vec3& v0 = pickingPositions[i0];
+        const glm::vec3& v1 = pickingPositions[i1];
+        const glm::vec3& v2 = pickingPositions[i2];
+
+        const glm::vec3 edge1 = v1 - v0;
+        const glm::vec3 edge2 = v2 - v0;
+        const glm::vec3 h = glm::cross(localDir, edge2);
+        const float a = glm::dot(edge1, h);
+        if (std::abs(a) < 1e-12f)
+            continue;      // 射线与三角形平行
+
+        const float f = 1.0f / a;
+        const glm::vec3 s = localOrigin - v0;
+        const float u = f * glm::dot(s, h);
+        if (u < 0.0f || u > 1.0f)
+            continue;
+
+        const glm::vec3 q = glm::cross(s, edge1);
+        const float v = f * glm::dot(localDir, q);
+        if (v < 0.0f || u + v > 1.0f)
+            continue;
+
+        const float t = f * glm::dot(edge2, q);
+        if (t > 1e-6f && t < nearest)
+            nearest = t;
+    }
+
+    if (nearest == std::numeric_limits<float>::max())
+        return false;
+
+    // 局部参数 t 乘以 |localDir| 得到世界空间距离（调用方传入的 worldDir 已归一化）
+    outDistance = nearest * localDirLength;
+    return true;
 }
 
 void Model::computeBounds(const std::vector<Vertex>& vertices)

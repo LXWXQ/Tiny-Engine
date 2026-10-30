@@ -93,6 +93,8 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | `--material-stress` | 材质槽位延迟回收压测 |
 | `--config-test` | 配置迁移 / 损坏保护自检 |
 | `--editor` | 以场景编辑器模式启动（默认关闭，运行时行为完全不变） |
+
+构建同时产出 `build/<Config>/SentinelEditor.exe`，双击即进编辑器，无需敲参数。
 | `--build-info` | 打印编译进 & 本次开启的调试能力后退出 |
 | `--gpu-timing [--gpu-timing-csv P]` | 每 pass GPU 计时 |
 | `--validation-features bp,sync,printf,gpuav` | 验证层增强 |

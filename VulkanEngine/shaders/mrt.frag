@@ -5,6 +5,7 @@ layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec3 fragPosWorld;
 layout(location = 2) in vec3 fragNormalWorld;
 layout(location = 3) in vec2 fragUV;
+layout(location = 4) in vec3 fragPosLocal;
 
 // 向 4 个 G-Buffer 颜色附件输出。
 // 编号是「输出槽位」而不是附件序号 —— 动态渲染下附件集合由 GeometryPass
@@ -39,7 +40,54 @@ layout(push_constant) uniform Push {
     uvec2 material;
     float alphaCutoff;
     uint alphaMasked;
+    // 1 = 材质没有 albedo 贴图，用程序化棋盘格代替
+    uint albedoFallback;
+    // 棋盘格密度（由 CPU 按模型包围盒算好）
+    float checkerScale;
 } push;
+
+// 程序化棋盘格（8x8 格）。
+//
+// 用途：没有有效材质 / 材质没有 albedo 贴图时，用它代替"默认白纹理"。
+// 纯白渲染会让物体变成一团没有细节的白块 —— 看不出形状、朝向、有没有在动。
+// 棋盘格能同时暴露：轮廓、UV 方向、物体的旋转。
+//
+// 用 fragUV 而不是屏幕坐标：贴图跟着物体走，转动物体时格子会跟着转。
+// 占位材质的棋盘格（三平面 + 盒式滤波抗锯齿）
+//
+// 【为什么不用 UV】
+//   1. 不同模型/不同面的 UV 尺度可能完全不一致 —— 同一个立方体六个面会显示
+//      出密度不同的格子，看起来像"贴图错了"；
+//   2. UV 频率一旦过高就会产生**摩尔纹**（远处的面糊成一片条纹）。
+//   改用**局部空间坐标**按法线主轴投影（三平面映射的单轴版）：
+//   六个面共用同一套尺度，且格子跟着物体旋转/移动。
+//
+// 【为什么必须做滤波】
+//   程序化棋盘格没有 mipmap，高频处必然走样。这里用 fwidth 估计
+//   一个像素覆盖多少格，做盒式滤波：
+//     - 格子足够大时 -> 接近清晰的黑白格
+//     - 格子小于一个像素时 -> 平滑收敛到平均灰度，不产生摩尔纹
+vec3 checkerboardTriplanar(vec3 localPos, vec3 worldNormal)
+{
+    // 按法线主轴选两个分量（与三平面映射同样的思路）
+    vec3 an = abs(normalize(worldNormal));
+    vec2 coord;
+    if (an.x >= an.y && an.x >= an.z)      coord = localPos.zy;
+    else if (an.y >= an.z)                 coord = localPos.xz;
+    else                                   coord = localPos.xy;
+
+    // 密度来自 CPU：保证"物体最大尺寸上大约 6 格"，
+    // 与模型自身的局部尺寸无关（debug_cube.obj 与 Quad-Sphere.obj 差上百倍）。
+    coord *= push.checkerScale;
+
+    // 盒式滤波：w = 一个像素在 coord 空间覆盖的宽度
+    vec2 w = fwidth(coord) * 0.5 + 1e-5;
+    vec2 i = 2.0 * (abs(fract((coord - w) * 0.5) - 0.5)
+                  - abs(fract((coord + w) * 0.5) - 0.5)) / w;
+    float pattern = 0.5 - 0.5 * i.x * i.y;   // 0/1 = 两色，0.5 = 平均
+
+    return mix(vec3(0.05), vec3(0.62), pattern);
+}
 
 // 你的偏导数法线计算魔法保留在这里！
 vec3 getNormalFromMap(uint matId) {
@@ -88,7 +136,8 @@ void main() {
     //（descriptorBindingPartiallyBound 允许数组尾部未绑定，采它就是未定义行为）。
     const uint matId = push.material.x;
     if (push.material.y == 0u) {
-        outAlbedo = vec4(fragColor, 1.0);
+        // 没有材质：画棋盘格而不是纯顶点色（顶点色通常是白的，看不出形状）
+        outAlbedo = vec4(checkerboardTriplanar(fragPosLocal, fragNormalWorld) * fragColor, 1.0);
         outPBR = vec4(0.0, 1.0, 0.0, 1.0);   // 金属度 0、粗糙度 1
         return;
     }
@@ -99,7 +148,11 @@ void main() {
     // 所以写入端**什么都不用做** —— 既不要 pow(2.2)（会双重伽马），
     // 也不要指望硬件帮你编码（浮点格式不做 sRGB 转换）。
     // 之所以换成浮点：天空盒借道这个通道写 >1.0 的线性 HDR，8bit 会在写入时截断。
-    vec4 albedoColor = texture(albedoMaps[nonuniformEXT(matId)], fragUV);
+    // 材质没有 albedo 贴图时，采样到的是"默认白纹理" —— 渲染出来是一团白。
+    // 改画棋盘格，让占位材质一眼可辨。
+    vec4 albedoColor = (push.albedoFallback != 0u)
+        ? vec4(checkerboardTriplanar(fragPosLocal, fragNormalWorld), 1.0)
+        : texture(albedoMaps[nonuniformEXT(matId)], fragUV);
     if (push.alphaMasked != 0u && albedoColor.a < push.alphaCutoff)
         discard;
     outAlbedo = vec4(albedoColor.rgb * fragColor, albedoColor.a);

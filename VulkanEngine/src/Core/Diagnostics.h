@@ -53,6 +53,15 @@ namespace diag
 // 交换链里含 ImGui（面板、菜单栏），视口纹理只有 3D 画面 ——
 // 写文档 / 做视觉回归时后者才是想要的。
 bool screenshotViewport = false;
+
+// --empty-scene：不加载 Sponza / 天空盒，只留相机。
+// 编辑器调试单个物体时用 —— Sponza 的包围盒包住整个场景，
+// 会干扰"点选/包围盒/手柄"这类交互的观察。
+bool emptyScene = false;
+
+// 是否以编辑器模式启动。编辑器默认不加载 Sponza（见 Scene::init 的说明），
+// 但 VulkanEngine.exe 的常规运行仍然加载，视觉回归基线不受影响。
+bool editorMode = false;
         int  captureFrame = -1;      // RenderDoc in-app 抓帧的帧号（P1-2）
     };
 

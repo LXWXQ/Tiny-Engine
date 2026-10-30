@@ -18,7 +18,7 @@ updated: 2026-10-30
 | Inspector | 选中实体的组件编辑（变换走命令栈） |
 | Console | 分级过滤的日志，自动滚动 |
 | Assets | 扫描 `Resources/Models`，双击创建实体（走命令栈，可撤销） |
-| Viewport | 把离屏纹理当 ImGui 图片画出来（见 [viewport](viewport.md)） |
+| Viewport | 离屏纹理 + 点选 + 三轴手柄（见 [viewport](viewport.md)、[gizmo](gizmo.md)） |
 
 ## 布局：为什么是手写的
 
@@ -35,6 +35,21 @@ updated: 2026-10-30
 ```
 
 菜单栏用 `BeginMainMenuBar()` 固定在顶部。
+
+## 视口窗口必须 NoMove / NoResize
+
+`Viewport` 是"计算出来的固定区域"，不是可拖动的浮动窗口。标志里少了这两个：
+
+```cpp
+ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings
+```
+
+后果是**在视口里按住左键拖拽会把整块视口拖走**（想转视角或拖手柄时最容易触发），
+而且位置会被 `imgui.ini` 记住，下次启动依然是错的。
+
+布局里视口用 `ImGuiCond_Always` 而不是 `FirstUseEver` —— 它是算出来的，
+不该被历史 ini 影响。其余面板（Hierarchy / Inspector / Assets / Console）
+仍然可自由拖动缩放。
 
 ## 坑：SetNextWindowPos 是单槽位的
 

@@ -47,6 +47,7 @@ updated: 2026-10-30
 | `--screenshot <path>` | 目标帧截图写 PNG | 0（不建 readback buffer） |
 | `--screenshot-frame <n>` | 指定帧号（隐含 `--screenshot`） | 同上 |
 | `--screenshot-viewport` | 截图拍编辑器离屏视口（纯 3D，不含 UI）；需配合 `--editor` | 0 |
+| `--empty-scene` | 不加载 Sponza / 天空盒，只留相机（调试单物体交互） | 0 |
 | `--capture-frame <n>` | RenderDoc 在第 n 帧抓帧（需注入） | 0（不调 `RENDERDOC_GetAPI`） |
 
 `--validation-features` 的取值：

@@ -9,6 +9,9 @@ layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec3 fragPosWorld;
 layout(location = 2) out vec3 fragNormalWorld;
 layout(location = 3) out vec2 fragUV;
+// 局部空间坐标：占位材质的棋盘格用它，保证六个面尺度一致、且跟着物体旋转。
+// 用局部坐标而不是世界坐标，是因为世界坐标的格子会在物体移动时"滑动"。
+layout(location = 4) out vec3 fragPosLocal;
 
 layout(set = 0, binding = 0) uniform GlobalUbo
 {
@@ -38,4 +41,5 @@ void main()
     fragPosWorld = positionWorld.xyz;
     fragColor = inColor;
     fragUV = inUV;
+    fragPosLocal = inPosition;
 }

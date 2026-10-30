@@ -176,7 +176,8 @@ namespace
     }
 }
 
-void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorManager& descriptorManagerArg)
+void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorManager& descriptorManagerArg,
+                 bool loadDefaultContent)
 {
     // 编辑器 / 场景重建需要这些依赖（创建网格实体、分配材质槽位）。
     // 存指针而不是让每个调用点都传参，是因为 Scene 已经是"场景所有者"，
@@ -199,8 +200,13 @@ void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorMana
     // "Entity 2" 这样的数字 ID，完全看不出哪个是相机、哪个是天空盒。
     registry.emplace<NameComponent>(cameraEntity, NameComponent{ "Camera" });
 
+    // loadDefaultContent=false 时跳过 Sponza / 兜底模型，只保留相机 + 天空盒。
+    // 编辑器默认走这条路径：Sponza 整栋是一个实体、包围盒包住整个场景，
+    // 会干扰"点选 / 包围盒 / 手柄"这类交互的观察。
+    //
+    // 天空盒仍然创建 —— 纯黑背景会让视口看起来像"没渲染出来"。
     std::shared_ptr<Model> heroModel;
-    if (kLoadSponza)
+    if (loadDefaultContent && kLoadSponza)
     {
         sentinel::GLTFLoadContext ctx;
         ctx.device = &device;
@@ -237,7 +243,7 @@ void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorMana
         cameraTransform.translation = { -4.6485233f, 5.2119632f, 0.0523994f };
         cameraTransform.rotation = { 0.3507974f, -17.3302765f, 0.0f };
     }
-    else
+    else if (loadDefaultContent)
     {
         const entt::entity helmet = createTransformEntity(registry);
         auto helmetModel = Model::createModelFromFile(device, commandPool,
@@ -322,9 +328,10 @@ void Scene::setParent(entt::entity child, entt::entity parent)
         registry.get_or_emplace<HierarchyComponent>(parent).children.push_back(child);
 }
 
-void Scene::update(float dt, GLFWwindow* window, float aspectRatio)
+void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCameraInput)
 {
     TransformComponent& cameraTransform = getCameraTransform();
+    cameraController.inputEnabled = allowCameraInput;
     cameraController.processPCInput(window, dt, cameraTransform);
 
     camera.setViewYXZ(cameraTransform.translation, cameraTransform.rotation);

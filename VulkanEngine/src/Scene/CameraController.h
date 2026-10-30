@@ -29,6 +29,13 @@ void setMode(Mode m);
 Mode getMode() const { return mode; }
 void setFocusPoint(const glm::vec3& point) { focusPoint = point; }
 
+// 编辑器用它来屏蔽相机输入。
+//
+// 为什么需要：这个控制器直接用 glfwGetKey / glfwGetMouseButton 读输入，
+// 完全不知道 ImGui 正在捕获键盘鼠标。不加这个开关的话，在编辑器的
+// 输入框里打字（比如资产过滤框里敲 "wasd"）相机会跟着跑。
+bool inputEnabled = true;
+
 float moveSpeed = 5.0f;
 float sprintMultiplier = 3.0f;
 float lookSensitivity = 0.01f;

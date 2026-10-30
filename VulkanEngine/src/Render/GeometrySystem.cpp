@@ -4,6 +4,7 @@
 #include "RHI/GBuffer.h"
 #include "AssetPaths.h"
 #include <iostream>
+#include <algorithm>
 #include <stdexcept>
 
 GeometrySystem::GeometrySystem(Device& device, VkFormat depthFormat,
@@ -117,6 +118,27 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         const bool objectUsesMaterial = !isSkybox && !isGrid;
         push.materialValid = objectUsesMaterial ? 1u : 0u;
         push.materialId = fallbackMatId;
+
+        // 只有"实体自己带材质、但那个材质没有 albedo 贴图"才算 fallback。
+        // glTF 实体的材质在子网格槽位里（materialComp 为空），不能误判成 fallback，
+        // 否则 Sponza 会整片变成棋盘格。
+        push.albedoFallback = (materialComp && materialComp->material &&
+                               !materialComp->material->albedoMap) ? 1u : 0u;
+
+        // 棋盘格密度：让"最大尺寸上约 6 格"。
+        // 不用固定常数是因为模型的局部尺寸差异极大（debug_cube 与 Quad-Sphere
+        // 相差上百倍），固定频率会让大模型糊成平均灰、小模型只有一格。
+        push.checkerScale = 1.0f;
+        if (const auto* bounds = frameInfo.registry.try_get<BoundsComponent>(entity))
+        {
+            if (bounds->local.valid)
+            {
+                const glm::vec3 extent = bounds->local.max - bounds->local.min;
+                const float maxExtent = std::max({ extent.x, extent.y, extent.z });
+                if (maxExtent > 1e-6f)
+                    push.checkerScale = 12.0f / maxExtent;   // 滤波公式周期为 2 -> 实际 6 格
+            }
+        }
 
         auto* pipe = &geometryPipeline;
         if (isSkybox)    pipe = &skyboxPipeline;

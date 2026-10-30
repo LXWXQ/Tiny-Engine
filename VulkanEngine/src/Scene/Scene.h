@@ -21,8 +21,12 @@ class Scene
 public:
     // DescriptorManager is required because glTF materials must reserve
     // bindless material slots while the scene is being loaded.
-    void init(Device& device, VkCommandPool commandPool, DescriptorManager& descriptorManager);
-    void update(float dt, GLFWwindow* window, float aspectRatio);
+    // loadDefaultContent=false 时只创建相机实体，不加载 Sponza / 天空盒。
+    void init(Device& device, VkCommandPool commandPool, DescriptorManager& descriptorManager,
+              bool loadDefaultContent = true);
+    // allowCameraInput=false 时相机不接受键鼠输入（编辑器在鼠标位于面板上、
+    // 正在输入文字、或正在拖 gizmo 时用）。仍然会把内部状态写回 transform。
+    void update(float dt, GLFWwindow* window, float aspectRatio, bool allowCameraInput = true);
     void cleanup();
 
     entt::entity createEntity();

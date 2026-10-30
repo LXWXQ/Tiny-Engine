@@ -26,6 +26,7 @@ class ComputeProbePass;
 class CrossQueueProbePass;
 class PresentPass;
 class UiCompositePass;
+class EditorOverlayPass;
 class SSAOPass;
 class SubresourceProbePass;
 
@@ -102,6 +103,8 @@ private:
 	SubresourceProbePass* subresourceProbePassPtr = nullptr;
 	PresentPass* presentPassPtr = nullptr;
 	UiCompositePass* uiCompositePassPtr = nullptr;
+	EditorOverlayPass* editorOverlayPassPtr = nullptr;
+	bool editorOverlayInitialized = false;
 	SSAOPass* ssaoPassPtr = nullptr;
 
 	RenderPipeline renderPipeline;

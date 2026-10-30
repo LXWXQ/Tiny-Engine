@@ -234,9 +234,11 @@ void DeleteEntityCommand::revert()
 // CreateEntityCommand
 // ---------------------------------------------------------------------------
 CreateEntityCommand::CreateEntityCommand(entt::registry& registry, Scene& scene,
-                                         std::string meshPath, std::string name)
+                                         std::string meshPath, std::string name,
+                                         const glm::vec3& spawnPosition)
     : registry(&registry), scene(&scene),
-      meshPath(std::move(meshPath)), entityName(std::move(name))
+      meshPath(std::move(meshPath)), entityName(std::move(name)),
+      spawnPosition(spawnPosition)
 {
 }
 
@@ -252,12 +254,20 @@ void CreateEntityCommand::apply()
             registry->emplace<MaterialComponent>(entity, *materialSnapshot);
         registry->emplace<NameComponent>(entity, NameComponent{ entityName });
         registry->emplace<RenderTagComponent>(entity);
+        if (auto* transform = registry->try_get<TransformComponent>(entity))
+            transform->translation = spawnPosition;
         return;
     }
 
     entity = scene->createMeshEntity(meshPath, entityName);
     if (entity == entt::null)
         return;
+
+    // 落到调用方指定的位置（通常是相机前方）。
+    // 不这样做的话，新建的物体会堆在世界原点 —— 而相机可能离原点很远，
+    // 用户会以为"没生成"。
+    if (auto* transform = registry->try_get<TransformComponent>(entity))
+        transform->translation = spawnPosition;
 
     // 快照：shared_ptr 拷贝，Model 的 GPU 缓冲因此活到命令被丢弃为止。
     if (const auto* mesh = registry->try_get<MeshComponent>(entity))

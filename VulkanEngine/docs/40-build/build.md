@@ -24,6 +24,26 @@ cmake --build build --config Debug
 .\\build\\Debug\\VulkanEngine.exe
 ```
 
+## 1.5 两个构建产物
+
+| 目标 | 产物 | 用途 |
+|---|---|---|
+| `VulkanEngine` | `build/<Config>/VulkanEngine.exe` | 运行时模式 |
+| `SentinelEditor` | `build/<Config>/SentinelEditor.exe` | 编辑器模式（默认等价于 `--editor`） |
+
+共享源码编进 `sentinel_core` 对象库，两个 exe 复用同一批 `.obj`，
+只有 `main.cpp` 各编一次 —— 构建时间不会翻倍。
+
+Shader 由 `SentinelShaders` 自定义目标统一编译一次。它用的是 **OUTPUT 依赖**
+而不是原来的 `PRE_BUILD`：后者每次构建都会重编全部 shader，前者只重编改动过的那个。
+
+只构建其中一个：
+
+```
+cmake --build build --config Debug --target SentinelEditor
+```
+
+
 ## 2. 构建期发生的事
 
 1. **依赖检查**：8 个必需文件逐个 `EXISTS` 判断。

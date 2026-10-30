@@ -14,6 +14,7 @@
 #include <imgui.h>
 #include "AssetPaths.h"
 #include <iostream>
+#include <cmath>
 #include <algorithm>
 #include <cstdio>
 
@@ -121,6 +122,18 @@ void EditorLayer::handleShortcuts()
     {
         openSceneDialog();
     }
+    else if (ImGui::IsKeyPressed(ImGuiKey_W, false))
+    {
+        state.gizmo.mode = GizmoMode::Translate;
+    }
+    else if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+    {
+        state.gizmo.mode = GizmoMode::Rotate;
+    }
+    else if (ImGui::IsKeyPressed(ImGuiKey_R, false))
+    {
+        state.gizmo.mode = GizmoMode::Scale;
+    }
     else if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
     {
         const entt::entity selected = state.selection.primary();
@@ -163,6 +176,15 @@ void EditorLayer::drawUI()
 
     drawPanels();
     layoutNeedsReset = false;
+
+    // 本帧有面板改过变换 -> 在提交渲染之前把世界变换与包围盒算准。
+    // 放在这里而不是各个面板里，是为了"多个面板同帧改动只刷新一次"。
+    if (state.transformRefreshPending)
+    {
+        state.transformRefreshPending = false;
+        if (state.services.scene)
+            state.services.scene->refreshTransformsAndVisibility();
+    }
 }
 
 void EditorLayer::drawMenuBar()
@@ -204,6 +226,13 @@ void EditorLayer::drawMenuBar()
         ImGui::TextDisabled("History: %d undo / %d redo",
                             static_cast<int>(state.commands.undoCount()),
                             static_cast<int>(state.commands.redoCount()));
+        ImGui::Separator();
+        if (ImGui::MenuItem("Move (W)", nullptr, state.gizmo.mode == GizmoMode::Translate))
+            state.gizmo.mode = GizmoMode::Translate;
+        if (ImGui::MenuItem("Rotate (E)", nullptr, state.gizmo.mode == GizmoMode::Rotate))
+            state.gizmo.mode = GizmoMode::Rotate;
+        if (ImGui::MenuItem("Scale (R)", nullptr, state.gizmo.mode == GizmoMode::Scale))
+            state.gizmo.mode = GizmoMode::Scale;
         ImGui::EndMenu();
     }
 
@@ -269,6 +298,10 @@ void EditorLayer::drawMenuBar()
 
     ImGui::SameLine();
     ImGui::TextDisabled("| undo %d", static_cast<int>(state.commands.undoCount()));
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("| %s", (state.gizmo.mode == GizmoMode::Translate) ? "move"
+                                 : (state.gizmo.mode == GizmoMode::Rotate) ? "rotate" : "scale");
 }
 
 void EditorLayer::drawPanels()
@@ -301,9 +334,13 @@ void EditorLayer::drawPanels()
         if (panelName == "Viewport")
         {
             // 中央区域：左右让给 Hierarchy / Inspector，底部让给 Console。
-            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + leftWidth, top), cond);
+            //
+            // 用 ImGuiCond_Always 而不是 cond：视口是"计算出来的固定区域"，
+            // 不应该被用户拖动或记住历史位置。如果沿用 FirstUseEver，
+            // 一旦 imgui.ini 里存了错误位置（比如误拖过），就会一直错下去。
+            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + leftWidth, top), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(availableWidth - leftWidth - rightWidth,
-                                            availableHeight - bottomHeight), cond);
+                                            availableHeight - bottomHeight), ImGuiCond_Always);
         }
         else if (panelName == "Assets")
         {
@@ -528,6 +565,10 @@ void EditorLayer::stopPlay()
 bool EditorLayer::selfTest()
 {
     entt::registry registry;
+
+    // ---- 0) Gizmo 数学：投影/反投影往返、射线-轴最近点、射线-平面求交 ----
+    if (!Gizmo::selfTest())
+        return false;
 
     // ---- 1) 命令栈：精确撤销 ----
     {
@@ -759,6 +800,105 @@ bool EditorLayer::selfTestWithScene()
 
     std::cout << "[Editor] scene selfTest PASS | create/undo/redo via command stack"
               << " (meshes=" << meshesBefore << ")\n";
+    // ---- 4) 精确拾取：射线必须命中"更近"的球，而不是把相机包在里面的 Sponza ----
+    // 这是 AABB 拾取失效的典型场景：Sponza 的 AABB 把相机包住，
+    // 射线与它的入射距离恒为 0，于是点任何东西都选中 Sponza。
+    if (state.services.scene && state.services.registry)
+    {
+        entt::registry& registry = *state.services.registry;
+        Scene& scene = *state.services.scene;
+
+        // 注意：不能用 sphere.obj —— 那是半径 1000 的天空盒球。
+        const std::string spherePath = std::string(SENTINEL_RESOURCE_DIR) + "Models/debug_cube.obj";
+        const entt::entity sphere = scene.createMeshEntity(spherePath, "PickTestCube");
+        if (sphere == entt::null)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: could not create test mesh\n";
+            return false;
+        }
+
+        // 把球放到相机前方 6 个单位
+        const TransformComponent& cameraTransform = scene.getCameraTransform();
+        const glm::vec3 forward = glm::vec3{
+            std::sin(cameraTransform.rotation.y) * std::cos(cameraTransform.rotation.x),
+            -std::sin(cameraTransform.rotation.x),
+            std::cos(cameraTransform.rotation.y) * std::cos(cameraTransform.rotation.x)
+        };
+        const glm::vec3 spherePos = cameraTransform.translation + forward * 6.0f;
+        registry.get<TransformComponent>(sphere).translation = spherePos;
+        registry.get<TransformComponent>(sphere).scale = glm::vec3(1.0f);
+
+        // 刷新世界变换与包围盒，否则测试读到的是上一帧的旧数据
+        scene.refreshTransformsAndVisibility();
+
+        // 从相机中心朝球心打一条射线
+        const glm::vec3 rayOrigin = cameraTransform.translation;
+        const glm::vec3 rayDir = glm::normalize(spherePos - rayOrigin);
+
+        float hitDistance = 0.0f;
+        const auto* worldTransform = registry.try_get<WorldTransformComponent>(sphere);
+        const auto* meshComp = registry.try_get<MeshComponent>(sphere);
+        if (!worldTransform || !meshComp || !meshComp->model)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: test mesh has no model\n";
+            return false;
+        }
+
+        if (!meshComp->model->intersectRay(worldTransform->matrix, rayOrigin, rayDir, hitDistance))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: ray missed the test mesh\n";
+            return false;
+        }
+
+        // 命中点必须在"物体中心之前"（近侧），否则说明射线穿过去命中了别的东西。
+        // 距离中心 6 个单位，所以近侧命中应 < 6。
+        if (hitDistance <= 0.0f || hitDistance >= 6.0f)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: hit distance="
+                      << hitDistance << " expected the near side (< 6)\n";
+            return false;
+        }
+
+        // ---- 5) 包围盒必须跟随变换（否则拖拽时白框会留在原地）----
+        // 这正是"拖动时包围盒和物体分开"的回归守卫：
+        // 改完 TransformComponent 后必须 refreshTransformsAndVisibility()，
+        // 否则 WorldBoundsComponent 停在上一帧。
+        {
+            auto* transform = registry.try_get<TransformComponent>(sphere);
+            const auto* boundsBefore = registry.try_get<WorldBoundsComponent>(sphere);
+            if (!transform || !boundsBefore || !boundsBefore->world.valid)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: sphere bounds missing\n";
+                return false;
+            }
+
+            const glm::vec3 centerBefore = boundsBefore->world.center();
+
+            // 模拟一次拖拽：沿世界 +Y 平移 3 个单位
+            const glm::vec3 delta{ 0.0f, 3.0f, 0.0f };
+            transform->translation += delta;
+            scene.refreshTransformsAndVisibility();
+
+            const auto* boundsAfter = registry.try_get<WorldBoundsComponent>(sphere);
+            if (!boundsAfter || !boundsAfter->world.valid)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: bounds missing after move\n";
+                return false;
+            }
+
+            const glm::vec3 centerAfter = boundsAfter->world.center();
+            if (glm::length((centerAfter - centerBefore) - delta) > 1e-3f)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: bounds did not follow transform (moved "
+                          << glm::length(centerAfter - centerBefore) << ", expected 3)\n";
+                return false;
+            }
+        }
+
+        registry.destroy(sphere);
+        scene.refreshTransformsAndVisibility();
+    }
+
     return true;
 }
 

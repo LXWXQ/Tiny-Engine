@@ -121,6 +121,20 @@ public:
     void draw(VkCommandBuffer commandBuffer) const;                                 // 画全部子网格
     void drawSubMesh(VkCommandBuffer commandBuffer, const SubMesh& subMesh) const;  // 只画一个子网格
 
+    // ---- CPU 侧拾取几何（编辑器点选用）----
+    //
+    // 只存位置 + 索引，不存法线/UV：点选只需要三角形位置。
+    // Sponza 这种规模大约多占 10MB 内存，换来的是"点一下立刻知道选中谁"。
+    //
+    // 为什么不用 GPU 拾取（渲染一张 ID buffer）：那要多一个 Pass + 一次读回，
+    // 读回还要等一帧；而点选是低频操作，CPU 侧保留一份几何反而更简单可靠。
+    //
+    // 为什么必须精确到三角形：实体级 AABB 对"相机在物体内部"的情况完全失效
+    // —— Sponza 整栋是一个实体，它的 AABB 包住相机，任何射线都以 t≈0 命中它。
+    bool intersectRay(const glm::mat4& worldMatrix,
+                      const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+                      float& outDistance) const;
+
     // 场景序列化需要知道这个模型来自哪个文件（编辑器保存 / 重载场景时用）。
     // 存的是 Model::createModelFromFile 收到的原始字符串（绝对路径），
     // 因为引擎本来就靠 AssetPaths.h 固化了资源根目录。
@@ -158,6 +172,10 @@ private:
 
     std::vector<SubMesh> subMeshes;
     std::string sourcePath;
+
+    // 拾取用的 CPU 侧几何
+    std::vector<glm::vec3> pickingPositions;
+    std::vector<uint32_t> pickingIndices;
 
     glm::vec3 boundsMin{ 0.0f };
     glm::vec3 boundsMax{ 0.0f };

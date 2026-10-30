@@ -13,6 +13,7 @@
 
 #include "Editor/CommandStack.h"
 #include "Editor/EditorContext.h"
+#include "Editor/Gizmo.h"
 #include "Scene/SceneDescription.h"
 
 #include <deque>
@@ -28,6 +29,11 @@ struct EditorState
 
     // ---- 选中 ----
     Selection selection;
+
+    // ---- 三轴操作手柄 ----
+    // 放在 EditorState 而不是 ViewportPanel 里，是因为"当前是平移还是旋转"
+    // 属于编辑器全局状态：菜单栏、快捷键、视口都要读写同一个值。
+    Gizmo gizmo;
 
     // ---- 撤销 / 重做 ----
     CommandStack commands;
@@ -74,6 +80,16 @@ struct EditorState
 
     // 供面板判断"这一帧是否应该处理快捷键"
     bool wantsKeyboard = false;
+
+    // 本帧有面板改过 TransformComponent，需要立刻重算世界变换与包围盒。
+    //
+    // 【为什么需要这个标志】UI 是在 render() 里构建的，而 Scene::update()
+    // （负责 updateWorldTransforms + rebuildSpatialIndex）在 update() 里已经跑完了。
+    // 所以拖拽 gizmo 改完 transform 后，WorldTransformComponent 与
+    // WorldBoundsComponent 还停在**上一帧**的值 —— 表现就是
+    // "拖动时白色包围盒和物体分开、手柄也跟着漂"。
+    // 置位后由 EditorLayer::drawUI() 在本帧结束前统一刷新一次。
+    bool transformRefreshPending = false;
 
     // 本帧对应的 frame-in-flight 槽位。视口纹理按槽位各一张，
     // ViewportPanel 需要用它挑出正确的那张。

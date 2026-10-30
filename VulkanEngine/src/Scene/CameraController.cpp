@@ -66,6 +66,26 @@ void CameraController::processPCInput(GLFWwindow* window, float dt, TransformCom
 {
 applyExternalTransformEdits(cameraTransform);
 
+// 输入被禁用时（鼠标在面板上 / 正在输入文字 / 正在拖 gizmo）：
+// 只做"把当前内部状态写回 transform"，不读任何键鼠。
+// 直接 return 是不行的 —— 那样相机会停在上一帧的平滑中间值上。
+if (!inputEnabled)
+{
+if (cursorCaptured)
+{
+glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+cursorCaptured = false;
+}
+firstMouse = true;
+
+cameraTransform.translation = smoothPosition;
+cameraTransform.rotation = { smoothPitch, smoothYaw, 0.0f };
+lastAppliedPosition = cameraTransform.translation;
+lastAppliedYaw = cameraTransform.rotation.y;
+lastAppliedPitch = cameraTransform.rotation.x;
+return;
+}
+
 const bool rightPressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 const bool middlePressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
 const bool lookDragging = rightPressed || middlePressed;

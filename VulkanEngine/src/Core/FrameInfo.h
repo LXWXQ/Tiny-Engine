@@ -75,6 +75,16 @@ struct SimplePushConstantData
 	float alphaCutoff = 0.5f;
 	uint32_t alphaMasked = 0;
 
+	// 1 = 材质没有 albedo 贴图，着色器改画程序化棋盘格。
+	// 为什么需要它：编辑器里新建的实体用的是占位材质（没有任何贴图），
+	// 采样默认白纹理会渲染成一团纯白，看不出形状与朝向。
+	uint32_t albedoFallback = 0;
+
+// 棋盘格密度：把局部坐标乘以它，使"最大尺寸上正好 N 格"。
+// 必须由 CPU 按模型包围盒算出来 —— 不同模型的局部尺寸能差上百倍，
+// 写死一个常数会导致大模型糊成一片灰、小模型只有一格。
+float checkerScale = 1.0f;
+
 	// 偏移必须在编译期钉死，否则"某个字段悄悄移位"会导致材质错乱，
 	// 而且这类错乱看起来像"贴图加载错了"，极难往回追。
 	static constexpr size_t kMaterialOffset = 2 * sizeof(glm::mat4);
@@ -85,7 +95,11 @@ static_assert(offsetof(SimplePushConstantData, alphaCutoff) == SimplePushConstan
 	"alphaCutoff must follow the material uvec2");
 static_assert(offsetof(SimplePushConstantData, alphaMasked) == SimplePushConstantData::kMaterialOffset + 12,
 	"alphaMasked must follow alphaCutoff");
-static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 16,
+static_assert(offsetof(SimplePushConstantData, albedoFallback) == SimplePushConstantData::kMaterialOffset + 16,
+	"albedoFallback must follow alphaMasked");
+static_assert(offsetof(SimplePushConstantData, checkerScale) == SimplePushConstantData::kMaterialOffset + 20,
+"checkerScale must follow albedoFallback");
+static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 24,
 	"push constant size must match GLSL layout");
 
 struct EngineSettings
@@ -205,4 +219,9 @@ VkCommandBuffer commandBuffer;
 	// 用回调而不是让 ImGuiSystem 认识 EditorLayer：保持 "Core 不依赖 Editor" 的边界。
 	std::function<void()> onBuildEditorUI;
 	std::function<bool()> isEditorMode;
+
+	// 编辑器当前选中的实体（entt::null = 没选）。渲染侧用它画"选中包围盒"。
+	// 【必须放在结构体末尾】FrameInfo 是聚合初始化（位置对应），
+	// 插在中间会让后面所有字段整体错位，编译期会报一堆莫名其妙的类型转换错误。
+	entt::entity editorSelection = entt::null;
 };

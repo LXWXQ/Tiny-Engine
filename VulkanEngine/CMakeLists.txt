@@ -59,8 +59,8 @@ set(GLM_INCLUDE_DIR "${GLM_DIR}")
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 
-list(APPEND SOURCES "main.cpp")
-
+# main.cpp 不进共享库：它是两个可执行文件的唯一差异所在，
+# 各自编译一次（几百行，代价可以忽略）。
 list(APPEND SOURCES 
     "${IMGUI_DIR}/imgui.cpp"
     "${IMGUI_DIR}/imgui_demo.cpp"
@@ -71,9 +71,28 @@ list(APPEND SOURCES
     "${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp"
 )
 
-add_executable(${PROJECT_NAME} ${SOURCES})
+# ---------------------------------------------------------------------------
+# 两个可执行文件，共享同一份引擎/编辑器源码
+#
+#   VulkanEngine   运行时模式（行为与引入编辑器之前完全一致）
+#   SentinelEditor 编辑器模式（等价于 VulkanEngine --editor）
+#
+# 为什么用 OBJECT 库而不是把源码列两遍：后者会让每个 .cpp 被编译两次，
+# 整个工程的构建时间直接翻倍。OBJECT 库让两个 exe 复用同一批 .obj，
+# 只有 main.cpp 各编一次。
+# ---------------------------------------------------------------------------
+add_library(sentinel_core OBJECT ${SOURCES})
 
-target_include_directories(${PROJECT_NAME} PRIVATE 
+add_executable(${PROJECT_NAME} main.cpp)
+target_link_libraries(${PROJECT_NAME} PRIVATE sentinel_core)
+
+# 编辑器版：同一个 main.cpp，只多一个编译期开关，让 --editor 变成默认值。
+# 运行时仍然可以显式传 --editor / --screenshot-viewport 等参数。
+add_executable(SentinelEditor main.cpp)
+target_link_libraries(SentinelEditor PRIVATE sentinel_core)
+target_compile_definitions(SentinelEditor PRIVATE SENTINEL_DEFAULT_EDITOR=1)
+
+target_include_directories(sentinel_core PUBLIC 
     ${Vulkan_INCLUDE_DIRS}
     ${GLM_INCLUDE_DIR}
     "${GLFW_DIR}/include"
@@ -106,13 +125,13 @@ configure_file(
     "${SENTINEL_GENERATED_DIR}/AssetPaths.h"
     @ONLY
 )
-target_include_directories(${PROJECT_NAME} PRIVATE "${SENTINEL_GENERATED_DIR}")
+target_include_directories(sentinel_core PUBLIC "${SENTINEL_GENERATED_DIR}")
 
 # tinygltf 内部默认会展开一份 stb_image 实现；
 # 而 Application.cpp 里已经定义了 STB_IMAGE_IMPLEMENTATION，两者会重复定义 stbi_* 符号。
 # 因此关闭它自带的图片解码，改由我们注册自定义解码器（见 GLTFLoader.cpp）。
 # 这两个宏必须对所有包含 tiny_gltf.h 的翻译单元一致，所以放在这里统一注入。
-target_compile_definitions(${PROJECT_NAME} PRIVATE
+target_compile_definitions(sentinel_core PUBLIC
     TINYGLTF_NO_STB_IMAGE
     TINYGLTF_NO_STB_IMAGE_WRITE
 )
@@ -132,11 +151,12 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 # ---------------------------------------------------------------------------
 option(SENTINEL_VMA_LEAK_CHECK "打开 VMA 的详细泄漏日志（排查用，会变慢）" OFF)
 if(SENTINEL_VMA_LEAK_CHECK)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE SENTINEL_VMA_LEAK_CHECK)
+    target_compile_definitions(sentinel_core PUBLIC SENTINEL_VMA_LEAK_CHECK)
 endif()
 
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    Vulkan::Vulkan 
+# PUBLIC：两个可执行文件都要拿到这些链接依赖与使用要求。
+target_link_libraries(sentinel_core PUBLIC
+    Vulkan::Vulkan
     glfw
     Threads::Threads
 )
@@ -157,24 +177,24 @@ option(SENTINEL_ENABLE_TRACY "编译入 Tracy 时间线剖析（需要 3rdParty/
 option(SENTINEL_ENABLE_RENDERDOC "编译入 RenderDoc 抓帧挂钩（需要 3rdParty/renderdoc/renderdoc_app.h）" OFF)
 
 if(SENTINEL_ENABLE_GPU_TIMING)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE SENTINEL_ENABLE_GPU_TIMING)
+    target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_GPU_TIMING)
 endif()
 if(SENTINEL_ENABLE_VALIDATION_FEATURES)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE SENTINEL_ENABLE_VALIDATION_FEATURES)
+    target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_VALIDATION_FEATURES)
 endif()
 if(SENTINEL_ENABLE_BUILD_INFO)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE SENTINEL_ENABLE_BUILD_INFO)
+    target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_BUILD_INFO)
 endif()
 if(SENTINEL_ENABLE_SCREENSHOT)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE SENTINEL_ENABLE_SCREENSHOT)
+    target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_SCREENSHOT)
 endif()
 
 # P1-1：Tracy 需要 3rdParty/tracy；源不存在时强制关闭，保证默认（OFF）构建不受影响。
 if(SENTINEL_ENABLE_TRACY)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public/tracy/Tracy.hpp" OR EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/tracy/Tracy.hpp")
-        target_compile_definitions(${PROJECT_NAME} PRIVATE SENTINEL_ENABLE_TRACY TRACY_ENABLE TRACY_ON_DEMAND)
-        target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public")
-        target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public/TracyClient.cpp")
+        target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_TRACY TRACY_ENABLE TRACY_ON_DEMAND)
+        target_include_directories(sentinel_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public")
+        target_sources(sentinel_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public/TracyClient.cpp")
         message(STATUS "Tracy profiling enabled")
     else()
         message(WARNING "SENTINEL_ENABLE_TRACY=ON but 3rdParty/tracy not found; Tracy disabled. See tools/SetupDependencies.ps1")
@@ -184,8 +204,8 @@ endif()
 # P1-2：RenderDoc in-app 抓帧需要 renderdoc_app.h；缺失时强制关闭。
 if(SENTINEL_ENABLE_RENDERDOC)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/renderdoc/renderdoc_app.h")
-        target_compile_definitions(${PROJECT_NAME} PRIVATE SENTINEL_ENABLE_RENDERDOC)
-        target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/renderdoc")
+        target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_RENDERDOC)
+        target_include_directories(sentinel_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/renderdoc")
         message(STATUS "RenderDoc capture hook enabled")
     else()
         message(WARNING "SENTINEL_ENABLE_RENDERDOC=ON but 3rdParty/renderdoc/renderdoc_app.h not found; disabled.")
@@ -226,12 +246,22 @@ foreach(SHADER_FILE ${SHADER_FILES})
         set(SPIRV_VAL_STEP "")
     endif()
 
+    # 用 OUTPUT 依赖而不是 PRE_BUILD：PRE_BUILD 每次构建都会重编**全部** shader，
+    # 而 OUTPUT 形式只在对应 .vert/.frag/.comp 真的变了时才重编那一个。
     add_custom_command(
-        TARGET ${PROJECT_NAME} PRE_BUILD
+        OUTPUT "${SHADER_OUTPUT}"
         # --target-env vulkan1.3 隐含 SPIR-V 1.6：compute 会改用 LocalSizeId 执行模式，
         # 不再使用 SPIR-V 1.6 已弃用的 WorkgroupSize 内建（否则 best-practices 每次报 2 条 warning）。
         COMMAND ${GLSL_VALIDATOR} -V --target-env vulkan1.3 "${SHADER_FILE}" -o "${SHADER_OUTPUT}"
         ${SPIRV_VAL_STEP}
+        DEPENDS "${SHADER_FILE}"
         COMMENT "自动编译并校验 Shader: ${FILE_NAME}"
+        VERBATIM
     )
+    list(APPEND SHADER_OUTPUTS "${SHADER_OUTPUT}")
 endforeach()
+
+# 两个可执行文件共享同一批 .spv，所以 shader 只编一次。
+add_custom_target(SentinelShaders ALL DEPENDS ${SHADER_OUTPUTS})
+add_dependencies(${PROJECT_NAME} SentinelShaders)
+add_dependencies(SentinelEditor SentinelShaders)
