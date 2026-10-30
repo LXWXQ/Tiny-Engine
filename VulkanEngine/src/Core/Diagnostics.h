@@ -48,6 +48,11 @@ namespace diag
         bool screenshot = false;
         std::string screenshotPath = "screenshot.png";
         int  screenshotFrame = -1;   // -1 = 自动（selftest 最后一帧）
+
+// --screenshot-viewport：拍编辑器离屏视口而不是交换链。
+// 交换链里含 ImGui（面板、菜单栏），视口纹理只有 3D 画面 ——
+// 写文档 / 做视觉回归时后者才是想要的。
+bool screenshotViewport = false;
         int  captureFrame = -1;      // RenderDoc in-app 抓帧的帧号（P1-2）
     };
 

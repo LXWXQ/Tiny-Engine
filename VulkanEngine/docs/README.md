@@ -198,3 +198,9 @@ updated: 2026-10-30
 | status | [tech-debt](70-status/tech-debt.md) | 决定下一步 |
 | status | [known-limits](70-status/known-limits.md) | 判断需求可行性 |
 | roadmap | [roadmap](80-roadmap/roadmap.md) | 开新主功能前 |
+| editor | [editor](90-editor/README.md) | **做编辑器任何改动前** |
+| editor | [architecture](90-editor/architecture.md) | 加面板 / 改接缝 |
+| editor | [commands](90-editor/commands.md) | 加可撤销操作 |
+| editor | [serialization](90-editor/serialization.md) | 改场景格式 |
+| editor | [panels](90-editor/panels.md) | 写新面板 / 改布局 |
+| editor | [viewport](90-editor/viewport.md) | 改视口 / 画面拉伸或发暗 |

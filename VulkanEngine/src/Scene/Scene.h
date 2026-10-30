@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Scene/Components.h"
+#include "Scene/SceneDescription.h"
 #include "Scene/Camera.h"
 #include "Scene/CameraController.h"
 #include "Scene/SpatialIndex.h"
@@ -56,8 +57,32 @@ public:
 
     MaterialSystem& getMaterialSystem() { return materialSystem; }
 
+    // ---- 场景描述（编辑器 / 序列化用）----
+    // captureDescription: 把当前 registry 导出成纯数据（不含任何 GPU 句柄）。
+    // buildFromDescription: 清空当前场景并按描述重建（会重新加载网格、重新分配材质槽位）。
+    // 两者都不抛异常，失败时通过 errorMessage 返回原因。
+    scene::SceneDescription captureDescription() const;
+    bool buildFromDescription(const scene::SceneDescription& description, std::string& errorMessage);
+
+    // 清空场景（保留相机实体）。编辑器的"新建场景"走这里。
+    void clearEntities();
+
+    // 编辑器需要主动刷新世界变换 / 可见性（它改完组件后不能等下一帧）。
+    void refreshTransformsAndVisibility();
+
     // D-7 regression test: hierarchy transform propagation + uniform-grid query.
     static bool selfTest();
+
+private:
+    // 编辑器加载场景时需要重新解析网格 / 材质，这两个指针由 init() 存下来。
+    Device* device = nullptr;
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+    DescriptorManager* descriptorManager = nullptr;
+
+public:
+    // 供编辑器按路径实例化一个网格实体（会自动分配材质槽位并设置包围盒）。
+    // 返回 entt::null 表示失败。
+    entt::entity createMeshEntity(const std::string& absolutePath, const std::string& name);
 
 private:
     void updateWorldTransforms();

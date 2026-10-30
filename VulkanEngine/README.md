@@ -66,6 +66,10 @@ cmake --build build --config Debug
 | CPU JobSystem | worker pool + `submit()`/`parallelFor()` + 异常传播 | [jobsystem](docs/30-systems/jobsystem.md) |
 | 窗口缩放 + 动态分辨率 | swapchain 原地重建；中间目标按 renderScale 缩放 | [synchronization](docs/10-architecture/synchronization.md) |
 | 版本化配置 v2 | 显式 v0->v1->v2 迁移、备份、损坏/未来版本保护 | [config](docs/30-systems/config.md) |
+| **场景编辑器** | Hierarchy / Inspector / Console 面板，菜单栏 + 播放状态机（`--editor`） | [editor](docs/90-editor/README.md) |
+| **撤销 / 重做** | 命令栈 + 拖拽合并窗口；删除实体可完整撤销（含子树与父子关系） | [commands](docs/90-editor/commands.md) |
+| **场景存读** | `*.scene.json`；存语义（路径/参数）不存 GPU 句柄 | [serialization](docs/90-editor/serialization.md) |
+| **离屏视口** | 3D 渲染到纹理后作为 ImGui 图片嵌入面板；相机纵横比按视口算 | [viewport](docs/90-editor/viewport.md) |
 | 调试剖析基础设施 | `--build-info` / `--gpu-timing` / `--screenshot` / 验证层增强 / RenderDoc / Tracy | [debug](docs/60-debug-profiling/README.md) |
 
 **已知边界**：无阴影 / SSR / 自动曝光 / 动画 / 音频 / 编辑器；跨队列资源走 `CONCURRENT` sharing；
@@ -88,6 +92,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | `--subresource-test` / `--subresource-error-test` | 子资源正例 / 反例 |
 | `--material-stress` | 材质槽位延迟回收压测 |
 | `--config-test` | 配置迁移 / 损坏保护自检 |
+| `--editor` | 以场景编辑器模式启动（默认关闭，运行时行为完全不变） |
 | `--build-info` | 打印编译进 & 本次开启的调试能力后退出 |
 | `--gpu-timing [--gpu-timing-csv P]` | 每 pass GPU 计时 |
 | `--validation-features bp,sync,printf,gpuav` | 验证层增强 |
@@ -115,6 +120,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
 | [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
+| [`docs/90-editor/`](docs/90-editor/README.md) | 编辑器架构、撤销栈、场景序列化、面板布局 | **改 `src/Editor/` 之前** |
 
 ---
 

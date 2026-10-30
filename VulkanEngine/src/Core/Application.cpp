@@ -1,10 +1,25 @@
 #include "Application.h"
+
+// Win32 文件对话框（编辑器 Open/Save 用）。
+// 放在引擎侧而不是编辑器层：编辑器不应依赖 windows.h。
+// WIN32_LEAN_AND_MEAN 必须在 windows.h 之前定义，NOMINMAX 防止 min/max 宏
+// 和 <algorithm> 的 std::min/std::max 打架。
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#  include <commdlg.h>
+#  pragma comment(lib, "comdlg32.lib")
+#endif
 #include "AssetPaths.h"
 #include "Core/FrameInfo.h"
 #include "Render/GeometryPass.h"
 #include "Render/LightingPass.h"
 #include "Render/BloomPass.h"
 #include "Render/PresentPass.h"
+#include "Render/UiCompositePass.h"
 #include "Render/SSAOPass.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
@@ -137,6 +152,10 @@ FirstApp::FirstApp(const diag::Options& options)
 	auto presentPass = std::make_unique<PresentPass>(*vulkanDevice, *vulkanSwapchain, *renderGraph,
 		*renderResources, descriptorManager.get(), descriptorManager->getGlobalSetLayout());
 
+	// TD-09：编辑器模式下最后一步是「只画 ImGui」的合成 Pass。
+	// 它在非编辑器模式下不会往渲染图里注册任何东西（见 addToGraph 的早退）。
+	auto uiComposite = std::make_unique<UiCompositePass>(*vulkanDevice, *renderGraph, *renderResources);
+
 	auto computeProbePass = std::make_unique<ComputeProbePass>(*vulkanDevice, *renderGraph,
 		descriptorManager.get());
 	auto crossQueueProbePass = std::make_unique<CrossQueueProbePass>(*vulkanDevice, *renderGraph,
@@ -144,6 +163,7 @@ FirstApp::FirstApp(const diag::Options& options)
 	auto subresourceProbePass = std::make_unique<SubresourceProbePass>(*vulkanDevice, *renderGraph);
 
 	presentPassPtr = presentPass.get();
+	uiCompositePassPtr = uiComposite.get();
 	ssaoPassPtr = ssaoPass.get();
 	computeProbePassPtr = computeProbePass.get();
 	crossQueueProbePassPtr = crossQueueProbePass.get();
@@ -154,6 +174,7 @@ FirstApp::FirstApp(const diag::Options& options)
 	renderPipeline.addPass(std::move(lightPass));
 	renderPipeline.addPass(std::move(bloomPass));
 	renderPipeline.addPass(std::move(presentPass));
+	renderPipeline.addPass(std::move(uiComposite));
 	renderPipeline.addPass(std::move(crossQueueProbePass));
 	renderPipeline.addPass(std::move(subresourceProbePass));
 	renderPipeline.addPass(std::move(computeProbePass));
@@ -200,6 +221,7 @@ FirstApp::FirstApp(const diag::Options& options)
 
 	currentTime = std::chrono::high_resolution_clock::now();
 	lastPerfLog = currentTime;
+
 }
 
 FirstApp::~FirstApp()
@@ -227,6 +249,10 @@ FirstApp::~FirstApp()
 	// 悄悄破坏它，而且编译器一声不吭。下面按"依赖方向"显式排好。
 	// =====================================================================
 	vkDeviceWaitIdle(vulkanDevice->getDevice());
+
+	// 编辑器只持有引用（Scene / DescriptorManager / ImGui），
+	// 但它必须在这些对象之前销毁 —— 否则它持有的 Scene* 会先失效。
+	shutdownEditor();
 
 	finalizeDiagnostics(); 
 	// W1：退出时保存。放在析构里而不是 run() 的循环之后，是因为自检和异常
@@ -615,6 +641,12 @@ std::cout << "[Sentinel] 材质就绪，描述符槽位占用 "
 
 void FirstApp::run()
 {
+	// 编辑器在这里惰性初始化，而不是构造函数里。
+	// 原因：main() 是"先构造 FirstApp，再按命令行参数调 setEditorEnabled"，
+	// 而 initEditor 依赖 ImGui 后端与场景全部就绪 —— 放到 run() 开头两个条件都满足。
+	if (editorRequested && !editorLayer)
+		initEditor();
+
 	if (screenshotCapture.isEnabled() && screenshotAutoTarget)
 		screenshotCapture.setTargetFrame(60);   // 交互模式：预热后第 60 帧
 while (!glfwWindowShouldClose(window))
@@ -715,6 +747,15 @@ void FirstApp::loadConfig()
 
 int FirstApp::runHeadlessSelfTest(int frames)
 {
+
+	// 自检路径也要能带编辑器跑（--editor --selftest 是无头验证编辑器 UI 的唯一手段）。
+	if (editorRequested && !editorLayer)
+		initEditor();
+
+	// 编辑器在真实场景上跑一次"创建/撤销/重做"。
+	// 必须在场景加载完之后、开始跑帧之前。
+	if (editorLayer && !editorLayer->selfTestWithScene())
+		throw std::runtime_error("editor scene selfTest failed");
 	// 固定帧率推进，不依赖窗口事件循环 —— 这样"关掉某个 Pass 之后验证层是否干净"
 	// 也能进自动化回归，而不需要有人去点一下 UI。
 	// 每帧仍然走完整的 update + render，包括 ImGui 构建与提交、present。
@@ -724,6 +765,12 @@ int FirstApp::runHeadlessSelfTest(int frames)
 		throw std::runtime_error("JobSystem selfTest failed");
 	if (!Scene::selfTest())
 		throw std::runtime_error("Scene ECS/spatial selfTest failed");
+
+	// D-8：编辑器自检（命令栈 / 删除撤销 / 序列化往返）。
+	// 放在场景自检之后：它只依赖 entt 与 JSON，不需要 Vulkan 设备。
+	if (!editor::EditorLayer::selfTest())
+		throw std::runtime_error("editor selfTest failed");
+	std::cout << "[Editor] selfTest PASS | commands + delete-undo + serialization round trip\n";
 
 	const EngineSettings& s = scene->getSettings();
 	std::cout << "[SelfTest] 开始，共 " << frames << " 帧，bloom=" << (s.bloomEnabled ? 1 : 0)
@@ -800,13 +847,317 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	return 0;
 }
 
+// ---------------------------------------------------------------------------
+// 场景编辑器接入（--editor）
+//
+// 三条边界，改动前请先读：
+//   1. 编辑器只拿到 EngineServices 的回调与只读指针，拿不到 vkDevice 之类的对象，
+//      所以它不可能绕过渲染图直接提交 GPU 命令。
+//   2. 关掉 --editor 时这条路径完全不执行：不分配、不注册回调、不多跑一次 ImGui 窗口。
+//   3. 场景仍由 Scene 拥有并照常被 RenderPipeline 渲染。编辑器只改数据，不碰渲染。
+// ---------------------------------------------------------------------------
+namespace
+{
+// 视口尺寸要连续这么多帧不变才真正重建纹理（防抖窗口）。
+// 2 帧 ≈ 33ms：用户松手后几乎立刻生效，但足以吸收拖拽期间的抖动。
+constexpr uint64_t kViewportSettleFrames = 2;
+
+// Win32 文件对话框的 filter 串用 '|' 分段（ImGui 风格），
+// 这里转成 Win32 要求的 '\0' 分段 + 双空字符结尾。
+std::wstring buildFilterBlock(const char* filter)
+{
+    const int len = MultiByteToWideChar(CP_UTF8, 0, filter, -1, nullptr, 0);
+    std::wstring wide(len > 0 ? len - 1 : 0, L'\0');
+    if (len > 1)
+        MultiByteToWideChar(CP_UTF8, 0, filter, -1, wide.data(), len);
+
+    std::wstring block;
+    block.reserve(wide.size() + 2);
+    for (wchar_t ch : wide)
+        block.push_back(ch == L'|' ? L'\0' : ch);
+    block.push_back(L'\0');
+    block.push_back(L'\0');
+    return block;
+}
+
+std::wstring toWide(const char* text)
+{
+    const int len = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+    std::wstring wide(len > 0 ? len - 1 : 0, L'\0');
+    if (len > 1)
+        MultiByteToWideChar(CP_UTF8, 0, text, -1, wide.data(), len);
+    return wide;
+}
+
+std::string fromWide(const wchar_t* text)
+{
+    const int len = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    std::string out(len > 0 ? len - 1 : 0, '\0');
+    if (len > 1)
+        WideCharToMultiByte(CP_UTF8, 0, text, -1, out.data(), len, nullptr, nullptr);
+    return out;
+}
+} // namespace
+
+// ---------------------------------------------------------------------------
+// TD-09：编辑器离屏视口的资源生命周期
+//
+// 为什么格式必须和交换链一致：present.frag 里手写了 gamma 编码（pow 1/2.2），
+// 它假设目标格式是 UNORM。视口纹理如果换成 SRGB 格式，硬件会在写入时再编码一次，
+// 编辑器里看到的画面就会比运行时模式亮一档 —— 这种差异极难归因，所以直接复用同一格式。
+// ---------------------------------------------------------------------------
+void FirstApp::createEditorViewportTextures(VkExtent2D extent)
+{
+if (extent.width == 0 || extent.height == 0)
+return;
+
+vkDeviceWaitIdle(vulkanDevice->getDevice());
+
+// 先摘掉 ImGui 对视口纹理的引用。
+// 尺寸一变，底层 imageView 会被重建，旧描述符立刻变成悬空句柄。
+removeEditorViewportImGuiTextures();
+
+for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+{
+RenderGraph::TextureDesc desc;
+desc.name = "EditorViewport.Frame" + std::to_string(frame);
+desc.format = vulkanSwapchain->getSwapChainImageFormat();
+desc.extent = extent;
+// 既当渲染目标（PresentPass 写）又被采样（ImGui 读）。
+// TRANSFER_SRC 是给 --screenshot-viewport 用的：没有它
+// vkCmdCopyImageToBuffer 会直接报 VUID-vkCmdCopyImageToBuffer-srcImage-00186。
+// 加一个 usage 位不产生任何额外内存，所以无条件带上，不做条件编译。
+desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+| VK_IMAGE_USAGE_SAMPLED_BIT
+| VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+// 【必须原地 resize，不能每次 createTexture】
+// createTexture 会在渲染图的资源表里**新增**一个条目，旧条目要等渲染图析构
+// 才释放。拖拽缩放窗口时每秒会重建几十次，等于每秒泄漏几十张全屏纹理
+// （1300x861x4B ≈ 4.5MB/张），几秒钟就能把显存吃光。
+// resizeOwnedTexture 是 TD-03 提供的原地重建接口，handle 保持不变。
+if (!renderResources->editorViewport[frame].valid())
+renderResources->editorViewport[frame] = renderGraph->createTexture(desc);
+else
+renderGraph->resizeOwnedTexture(renderResources->editorViewport[frame], extent);
+}
+
+// ImGui 采样用的 sampler：线性过滤 + clamp。
+// 视口是被整体缩放显示的一张图，不需要 mip。
+if (editorViewportSampler == VK_NULL_HANDLE)
+{
+VkSamplerCreateInfo si{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+si.magFilter = VK_FILTER_LINEAR;
+si.minFilter = VK_FILTER_LINEAR;
+si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+si.maxAnisotropy = 1.0f;
+if (vkCreateSampler(vulkanDevice->getDevice(), &si, nullptr, &editorViewportSampler) != VK_SUCCESS)
+throw std::runtime_error("editor viewport sampler creation failed");
+}
+
+// 重新注册成 ImGui 纹理。
+// 布局写死 SHADER_READ_ONLY_OPTIMAL —— UiCompositePass 里声明了 read，
+// 渲染图会保证 ImGui 真正绘制时它确实处于这个布局。
+for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+{
+editorViewportImGuiSets[frame] = ImGui_ImplVulkan_AddTexture(
+editorViewportSampler,
+renderGraph->getView(renderResources->editorViewport[frame]),
+VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+renderResources->editorViewportExtent = extent;
+renderResources->editorViewportEnabled = true;
+editorViewportTexturesCreated = true;
+
+std::cout << "[TD09] Editor viewport " << extent.width << "x" << extent.height
+<< " (offscreen, " << kFramesInFlight << " slots)\n";
+}
+
+void FirstApp::removeEditorViewportImGuiTextures()
+{
+for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+{
+if (editorViewportImGuiSets[frame] != VK_NULL_HANDLE)
+{
+ImGui_ImplVulkan_RemoveTexture(editorViewportImGuiSets[frame]);
+editorViewportImGuiSets[frame] = VK_NULL_HANDLE;
+}
+}
+}
+
+void FirstApp::destroyEditorViewportTextures()
+{
+if (!editorViewportTexturesCreated)
+return;
+
+// 先摘 ImGui 描述符，再让纹理失效 —— 反过来的话 ImGui 会持有悬空 imageView。
+removeEditorViewportImGuiTextures();
+
+// 渲染图没有"销毁单个纹理"的接口（它的资源都是整帧生命周期），
+// 这里只把 handle 置空让 addToGraph 走回退路径；内存由渲染图析构时统一释放。
+for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+renderResources->editorViewport[frame] = RenderGraph::TextureHandle{};
+
+renderResources->editorViewportEnabled = false;
+renderResources->editorViewportExtent = VkExtent2D{ 0, 0 };
+editorViewportTexturesCreated = false;
+}
+
+void FirstApp::initEditor()
+{
+    editor::EngineServices services;
+    services.scene = scene.get();
+    services.registry = &scene->getRegistry();
+    services.settings = &scene->getSettings();
+
+    services.saveConfig = [this] { saveConfig(); };
+    services.reloadConfig = [this] { loadConfig(); };
+
+    // 编辑器不直接碰 swapchain / G-Buffer，只表达"需要重建渲染目标"的意图。
+    services.requestRenderTargetResize = [this]
+    {
+        recreateRenderTargets(getDesiredRenderExtent());
+    };
+
+    services.pushLog = [](const std::string&) { /* 预留：接引擎日志流 */ };
+
+    services.openFileDialog = [](const char* filter, const char* title) -> std::string
+    {
+        const std::wstring filterBlock = buildFilterBlock(filter);
+        const std::wstring wideTitle = toWide(title);
+
+        wchar_t buffer[MAX_PATH] = { 0 };
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.lpstrFilter = filterBlock.c_str();
+        ofn.lpstrFile = buffer;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.lpstrTitle = wideTitle.c_str();
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+
+        if (!GetOpenFileNameW(&ofn))
+            return {};
+        return fromWide(buffer);
+    };
+
+    services.saveFileDialog = [](const char* filter, const char* title) -> std::string
+    {
+        const std::wstring filterBlock = buildFilterBlock(filter);
+        const std::wstring wideTitle = toWide(title);
+
+        wchar_t buffer[MAX_PATH] = { 0 };
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.lpstrFilter = filterBlock.c_str();
+        ofn.lpstrFile = buffer;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.lpstrTitle = wideTitle.c_str();
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+        ofn.lpstrDefExt = L"json";
+
+        if (!GetSaveFileNameW(&ofn))
+            return {};
+        return fromWide(buffer);
+    };
+
+    // 编辑器只"报尺寸"，引擎在帧首统一重建 —— 不能在 UI 构建期做，
+    // 那时命令缓冲已在录制，vkDeviceWaitIdle 会死锁。
+    services.requestViewportSize = [this](uint32_t width, uint32_t height)
+    {
+        const VkExtent2D requested{ width, height };
+        if (requested.width != pendingEditorViewportExtent.width ||
+                requested.height != pendingEditorViewportExtent.height)
+        {
+                pendingEditorViewportExtent = requested;
+        }
+        // 每次上报都刷新时间戳 —— 防抖靠它判断"尺寸还在变"。
+        viewportRequestFrame = viewportDebounceClock;
+    };
+
+    // 视口纹理的 ImGui 句柄。按 frame slot 各一张，因为两帧在飞时
+    // 第 N+1 帧写视口会覆盖 GPU 仍在采样的第 N 帧内容。
+    services.getViewportTextureId = [this](uint32_t frameSlot) -> ImTextureID
+    {
+        if (!editorViewportTexturesCreated || frameSlot >= kFramesInFlight)
+            return (ImTextureID)0;
+        return (ImTextureID)(uintptr_t)editorViewportImGuiSets[frameSlot];
+    };
+
+    editorLayer = std::make_unique<editor::EditorLayer>();
+    editorLayer->initialize(services, std::string(SENTINEL_RESOURCE_DIR) + "Scenes/main.scene.json");
+
+    // 先按窗口尺寸建一张，之后由编辑器的布局回调纠正成真实视口大小。
+    {
+        const VkExtent2D swapExtent = vulkanSwapchain->getSwapChainExtent();
+        createEditorViewportTextures(swapExtent);
+    }
+
+    // 切换到离屏输出：PresentPass 写视口纹理、不再叠 ImGui；
+    // UiCompositePass 负责把 ImGui（含视口图片）画到交换链。
+    presentPassPtr->setRenderImGui(false);
+    if (uiCompositePassPtr != nullptr)
+        uiCompositePassPtr->setImGuiSystem(imguiSystem.get());
+
+    std::cout << "[Editor] scene editor enabled (--editor)\n";
+}
+
+void FirstApp::shutdownEditor()
+{
+    // 顺序很重要：先摘掉 ImGui 对视口纹理的引用，再销毁编辑器，
+    // 最后才轮到 ImGuiSystem 自己析构。
+    destroyEditorViewportTextures();
+    if (editorViewportSampler != VK_NULL_HANDLE)
+    {
+        vkDestroySampler(vulkanDevice->getDevice(), editorViewportSampler, nullptr);
+        editorViewportSampler = VK_NULL_HANDLE;
+    }
+
+    // 编辑器只持有引用，销毁它不会带走 GPU 资源。
+    // 在 ~FirstApp 最前面调用，保证它不会晚于 Scene / ImGuiSystem 析构。
+    editorLayer.reset();
+}
+
 void FirstApp::update(float dt)
 {
 	SENTINEL_ZONE_SCOPED("update");
 	imguiSystem->newFrame();
 
+	// 编辑器每帧的第一步：处理快捷键与播放状态。
+	// 必须在 NewFrame 之后（ImGui 的按键状态此时才有效），
+	// 且在 scene->update 之前（编辑器可能要改场景，改动应当当帧生效）。
+	// 帧首统一应用视口尺寸变更。放在这里而不是 UI 构建期，是因为重建纹理
+	// 需要 vkDeviceWaitIdle，而 UI 构建时命令缓冲已在录制。
+	// 【为什么要防抖】拖拽窗口边缘时面板尺寸每帧都在变。每帧重建 = 每帧一次
+	// vkDeviceWaitIdle + 两张全屏纹理重建，缩放会卡成幻灯片。
+	// 判据是"尺寸连续 kViewportSettleFrames 帧没再变"，也就是用户松手了。
+	++viewportDebounceClock;
+	if (editorLayer && pendingEditorViewportExtent.width > 0)
+	{
+		const VkExtent2D current = renderResources->editorViewportExtent;
+		const bool sizeDiffers = pendingEditorViewportExtent.width != current.width ||
+			pendingEditorViewportExtent.height != current.height;
+		const bool settled = (viewportDebounceClock - viewportRequestFrame) >= kViewportSettleFrames;
+		if (sizeDiffers && settled)
+			createEditorViewportTextures(pendingEditorViewportExtent);
+	}
+
+	if (editorLayer)
+		editorLayer->beginFrame(dt, false);
+
+	// 纵横比必须用**视口**尺寸而不是窗口尺寸。
+	// 用窗口尺寸会让画面在编辑器里横向拉伸（视口比窗口窄），
+	// 而且取景范围与运行时模式不一致。
 	float aspect = vulkanSwapchain->getSwapChainExtent().width /
 		(float)vulkanSwapchain->getSwapChainExtent().height;
+	if (editorLayer && renderResources->editorViewportExtent.width > 0)
+	{
+		aspect = renderResources->editorViewportExtent.width /
+			(float)renderResources->editorViewportExtent.height;
+	}
 	scene->update(dt, window, aspect);
 }
 
@@ -866,6 +1217,17 @@ void FirstApp::render(float dt)
 		frameInfo.onSaveConfig = [this] { saveConfig(); };
 		frameInfo.onLoadConfig = [this] { loadConfig(); };
 
+		// 编辑器接管 UI 时，ImGuiSystem 不再画内置面板，改调这个回调。
+		if (editorLayer)
+		{
+			frameInfo.isEditorMode = [this] { return editorLayer != nullptr; };
+			frameInfo.onBuildEditorUI = [this, &frameInfo]
+			{
+				editorLayer->setFrameSlot(frameInfo.frameInFlightIndex);
+				editorLayer->drawUI();
+			};
+		}
+
 		// D-2：先把本帧的 ImGui 面板建好并生成绘制列表（纯 CPU 工作，不含 GPU 命令）。
 		// 放在这里而不是 Present 回调里，是为了让面板上的改动（曝光、Bloom 参数）
 		// 当帧就生效 —— 否则会有一帧延迟，拖滑块的手感会发飘。
@@ -879,15 +1241,37 @@ void FirstApp::render(float dt)
 		renderGraph->presentTransition(renderResources->swapchainImages[frameInfo.swapchainImageIndex]);
 		renderGraph->endFrame();
 
-		// P1-4：目标帧把交换链图像读回 staging buffer（present 之前）。
+		// P1-4：目标帧读回一张图到 staging buffer（present 之前）。
+		// 默认拍交换链（含 ImGui）；--screenshot-viewport 拍编辑器离屏视口（纯 3D）。
 		if (screenshotCapture.isTargetFrame(renderer->getFrameNumber()))
-			screenshotCapture.recordCopy(commandBuffer, vulkanSwapchain->getImage(frameInfo.swapchainImageIndex),
-				vulkanSwapchain->getSwapChainExtent());
+		{
+			if (diagnosticsOptions.screenshotViewport && editorLayer &&
+				renderResources->editorViewportEnabled)
+			{
+				// 视口纹理在 UiCompositePass 里被声明为 read，此刻处于 SHADER_READ_ONLY_OPTIMAL。
+				// 拷完必须转回同一布局：渲染图记录的布局必须与真实布局一致，
+				// 否则下一帧它会用错误的 oldLayout 插屏障，验证层立刻报错。
+				screenshotCapture.recordCopy(commandBuffer,
+					renderGraph->getImage(renderResources->editorViewport[frameInFlight]),
+					renderResources->editorViewportExtent,
+					VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+					VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+			}
+			else
+			{
+				screenshotCapture.recordCopy(commandBuffer,
+					vulkanSwapchain->getImage(frameInfo.swapchainImageIndex),
+					vulkanSwapchain->getSwapChainExtent());
+			}
+		}
 
 		const auto& crossQueue = renderGraph->getCrossQueueDependencies();
 		// P1-1：收集本帧的 Tracy GPU zone（必须在命令缓冲结束前）。
 		gpuProfiler.collect(commandBuffer);
 		renderer->endFrame(crossQueue.computeToGraphics, crossQueue.graphicsToCompute);
+
+		if (editorLayer)
+			editorLayer->endFrame();
 
 		// This frame is fully submitted. It becomes the reprojection source for
 		// the next frame's camera motion blur.

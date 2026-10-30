@@ -35,7 +35,14 @@ public:
     bool isTargetFrame(uint64_t frameNumber) const { return enabled && frameNumber == targetFrame; }
 
     // 在 renderGraph->endFrame() 之后、renderer->endFrame() 之前录制。
-    void recordCopy(VkCommandBuffer cmd, VkImage image, VkExtent2D extent);
+    //
+    // 默认参数对应交换链（present 之后处于 PRESENT_SRC_KHR）。
+    // 拍编辑器离屏视口时传 (SHADER_READ_ONLY_OPTIMAL, SHADER_READ_ONLY_OPTIMAL)：
+    // 拷完必须**转回原布局**，否则渲染图记录的布局与真实布局不一致，
+    // 下一帧它会用错误的 oldLayout 插屏障，验证层立刻报错。
+    void recordCopy(VkCommandBuffer cmd, VkImage image, VkExtent2D extent,
+                    VkImageLayout oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    VkImageLayout newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
     // 提交完成（调用方需先 vkDeviceWaitIdle）后写出 PNG。
     bool writePng(const std::string& path);

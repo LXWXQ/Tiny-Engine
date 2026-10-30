@@ -198,4 +198,11 @@ VkCommandBuffer commandBuffer;
 	// 为空表示"当前上下文不支持配置操作"（例如还没接上）。
 	std::function<void()> onSaveConfig;
 	std::function<void()> onLoadConfig;
+
+	// 编辑器接管 UI 时的绘制回调。
+	// 为空 -> ImGuiSystem 画内置面板（运行时模式）；
+	// 非空 -> 由编辑器画自己的菜单栏与面板，内置面板不再绘制。
+	// 用回调而不是让 ImGuiSystem 认识 EditorLayer：保持 "Core 不依赖 Editor" 的边界。
+	std::function<void()> onBuildEditorUI;
+	std::function<bool()> isEditorMode;
 };

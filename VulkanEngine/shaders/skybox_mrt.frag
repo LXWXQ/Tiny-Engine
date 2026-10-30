@@ -19,18 +19,40 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
 layout(set = 0, binding = 1) uniform sampler2D environmentMap;
 const vec2 invAtan = vec2(0.1591, 0.3183);
 
+// 等距柱状投影。
+//
+// 注意 V 的方向：这张 HDR 的**图像顶部是天顶**，所以 +Y 方向必须落在 uv.y = 0。
+// 原来的写法 (asin(y)/PI + 0.5) 得到的是 uv.y = 1（图像底行），整个天空上下颠倒：
+// 屏幕上方采样到了贴图的雾/地面区域，于是看起来又灰又平、云都在下半部分。
+// 以 ibl_equirect_to_cube.frag 为准（它一直是 0.5 - asin/PI，也是 IBL 光照用的方向），
+// 两边必须一致，否则"看到的天空"和"照亮场景的环境光"来自相反方向。
 vec2 sampleSphericalMap(vec3 v) {
-    vec2 uv = vec2(atan(v.z, v.x), asin(v.y));
-    uv *= invAtan;
-    uv += 0.5;
-    return uv;
+    return vec2(atan(v.z, v.x) * invAtan.x + 0.5,
+                0.5 - asin(clamp(v.y, -1.0, 1.0)) * invAtan.y);
 }
 
 void main() {
     // 1. 利用你原本的逻辑，进行正确的 3D 向量球面采样！
     vec3 dir = normalize(inUVW);
     vec2 envUV = sampleSphericalMap(dir);
-    vec3 envColor = texture(environmentMap, envUV).rgb;
+    // ---------------------------------------------------------------------
+    // 等距柱状贴图的接缝修复（这就是那条虚线亮纹的来源）
+    //
+    // sampleSphericalMap() 用 atan(v.z, v.x) 求经度：在 ±PI 处它会从 +PI 跳回
+    // -PI，于是 envUV.x 在接缝两侧相差约 1.0。硬件用 dFdx/dFdy 自动选 mip，
+    // 在接缝那一列算出的导数 ≈ 1.0（整整绕一圈），判定"这里被极度缩小"，
+    // 直接退到最低 mip（2048x1024 退到 1x1），结果是一条亮线。
+    // 实测：把 textureQueryLod 可视化出来，整片天空 LOD≈0，只有那条线是 LOD=8。
+    //
+    // 修法：不用隐式导数，改成手工算 dFdx/dFdy 后把跨接缝的那一份折回来
+    // （差值落在 [-0.5, 0.5]），再交给 textureGrad。这样接缝两侧的 LOD 连续，
+    // 纹理本身又是 REPEAT 寻址，采样值天然连续，线就消失了。
+    // ---------------------------------------------------------------------
+    vec2 dx = dFdx(envUV);
+    vec2 dy = dFdy(envUV);
+    dx.x -= round(dx.x);
+    dy.x -= round(dy.x);
+    vec3 envColor = textureGrad(environmentMap, envUV, dx, dy).rgb;
     
     // 2. 直接透传线性 HDR 辐照度，不在这里做任何色调映射。
     //

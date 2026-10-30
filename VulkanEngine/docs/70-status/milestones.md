@@ -67,3 +67,33 @@ updated: 2026-10-30
 1. 跑 `tools/Baseline.ps1 -Action Diff` 确认无回归；
 2. **成对更新**本文件 §2 与根 [`README.md`](../../README.md) §6；
 3. 记录测法（帧数、是否剔除预热、构建配置），否则数字无法复现。
+
+## D-8：场景编辑器框架
+
+- **目标**：把引擎层和编辑器层分开，让后续加编辑功能不必再动 RHI/Render。
+- **产出**
+  - `src/Editor/` 独立层：`EditorContext`（EngineServices 回调）/ `EditorState` /
+    `EditorLayer` / `CommandStack` / `Commands` / `SceneSerializer` / 三个面板
+  - `scene::SceneDescription` 纯数据结构，作为`registry <-> JSON` 的中间层
+  - `NameComponent`、`Model::getSourcePath()`、`Texture::getPath()` 用于序列化
+  - `--editor` 开关；关闭时运行时行为与改造前一致
+- **实测**
+  - `--editor --selftest 70`：`[Editor] selfTest PASS`，`[Validation] errors=0 warnings=0`
+  - 运行时 `--selftest 40`：同样 0 error / 0 warning，无回归
+- **自检抓到的真 bug**：`DeleteEntityCommand` 的 `rebuild` 闭包捕获了
+  `registry.try_get` 返回的**指针**，`apply()` 销毁实体后悬空，撤销删除失效。
+  改为 `std::optional<T>` 值拷贝后通过。见 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 24。
+
+## D-9：编辑器可用性补完
+
+- **离屏视口（TD-09）**：PresentPass 写视口纹理，UiCompositePass 只画 ImGui 到交换链。
+  相机纵横比改用视口尺寸（此前按窗口算会横向拉伸）。
+- **尺寸防抖**：连续 2 帧不变才重建纹理；重建走 `resizeOwnedTexture` 原地进行
+  （最初每次 `createTexture` 会以约 270MB/s 泄漏显存）。
+- **资产面板**：扫描 `Resources/Models`（实测 7 个模型），双击通过
+  `CreateEntityCommand` 创建实体。redo 复用模型快照，不重新读盘。
+- **纯 3D 截图**：`--screenshot-viewport`，输出视口纹理（1300x861）。
+- **实测**
+  - `--editor --selftest 40`：`[Editor] scene selfTest PASS | create/undo/redo via command stack`
+  - `--editor --screenshot-viewport`：`[Validation] errors=0 warnings=0`
+  - `tools/Validate.ps1`：20/20 PASS，stderr 0 字节

@@ -67,3 +67,21 @@ updated: 2026-10-30
 - 改 `envCube` 分辨率要同步 `prefiltered` 的 mip 级数（当前 5 级）。
 - 改格式要检查 `lighting.frag` 里的 `samplerCube` 采样。
 - 烘焙是一次性的，改完必须重启进程才能看到效果（没有热重载）。
+## 6. 球面映射约定（两个 shader 必须一致）
+
+等距柱状贴图的**图像顶部是天顶**，因此 `+Y` 方向要映射到 `uv.y = 0`：
+
+```glsl
+vec2 sampleSphericalMap(vec3 v) {
+    return vec2(atan(v.z, v.x) * (1.0/(2.0*PI)) + 0.5,
+                0.5 - asin(clamp(v.y, -1.0, 1.0)) * (1.0/PI));
+}
+```
+
+**权威实现是本目录的 `shaders/ibl_equirect_to_cube.frag`。**
+`shaders/skybox_mrt.frag` 必须使用完全相同的公式 —— 否则"看到的天空"和
+"照亮场景的环境光"会来自相反方向（曾经就是这样，见
+[pitfalls](../60-debug-profiling/pitfalls.md) 坑 23.2）。
+
+另外，`skybox_mrt.frag` 采样时**必须手工修正 UV 导数**再 `textureGrad`，
+否则 atan 接缝会退到最低 mip 出现亮线（坑 23.1）。

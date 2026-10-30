@@ -102,7 +102,8 @@ void ScreenshotCapture::onResize(VkExtent2D extent)
     createStaging(extent);
 }
 
-void ScreenshotCapture::recordCopy(VkCommandBuffer cmd, VkImage image, VkExtent2D extent)
+void ScreenshotCapture::recordCopy(VkCommandBuffer cmd, VkImage image, VkExtent2D extent,
+                                   VkImageLayout oldLayout, VkImageLayout newLayout)
 {
     if (!enabled)
         return;
@@ -116,7 +117,7 @@ void ScreenshotCapture::recordCopy(VkCommandBuffer cmd, VkImage image, VkExtent2
     toTransfer.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
     toTransfer.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     toTransfer.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    toTransfer.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toTransfer.oldLayout = oldLayout;
     toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -143,7 +144,7 @@ void ScreenshotCapture::recordCopy(VkCommandBuffer cmd, VkImage image, VkExtent2
     toPresent.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
     toPresent.dstAccessMask = VK_ACCESS_2_NONE;
     toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toPresent.newLayout = newLayout;
     toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toPresent.image = image;

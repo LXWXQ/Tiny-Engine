@@ -1,4 +1,5 @@
 #include "ImGuiSystem.h"
+#include "AssetPaths.h"   // SENTINEL_IMGUI_INI_PATH
 #include "Scene/CameraController.h"
 #include "Core/EngineConfig.h"
 #include <stdexcept>
@@ -6,15 +7,23 @@
 ImGuiSystem::ImGuiSystem(GLFWwindow* window, Device& device, VkFormat swapchainFormat, uint32_t imageCount, VkCommandPool commandPool)
 	: vulkanDevice(device), swapchainFormat(swapchainFormat)
 {
+	// 池容量必须够 ImGui 注册"用户纹理"用（ImGui_ImplVulkan_AddTexture 会从
+	// 这个池里分配描述符集）。编辑器离屏视口每帧槽一张，加上将来可能的
+	// 缩略图 / 资产预览，给到 64 是留余量而不是精确够用。
+	//
+	// 这里曾经是 maxSets = 1、COMBINED_IMAGE_SAMPLER = 1：只要注册第二张纹理，
+	// vkAllocateDescriptorSets 就会失败并返回未初始化的句柄，随后在绘制时
+	// 解引用空描述符 —— 表现为毫无线索的 0xC0000005。
+	constexpr uint32_t kImGuiTextureCapacity = 64;
 	VkDescriptorPoolSize pool_sizes[] =
 	{
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kImGuiTextureCapacity }
 	};
 
 	VkDescriptorPoolCreateInfo pool_info = {};
 	pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-	pool_info.maxSets = 1;
+	pool_info.maxSets = kImGuiTextureCapacity;
 	pool_info.poolSizeCount = (uint32_t)std::size(pool_sizes);
 	pool_info.pPoolSizes = pool_sizes;
 	vkCreateDescriptorPool(device.getDevice(), &pool_info, nullptr, &imguiPool);
@@ -22,7 +31,14 @@ ImGuiSystem::ImGuiSystem(GLFWwindow* window, Device& device, VkFormat swapchainF
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO(); (void)io;
-	ImGui::StyleColorsDark();
+	// 窗口布局持久化到 config/imgui.ini。
+// 为什么不放默认的 imgui.ini（工作目录）：
+//   1. 仓库根目录只允许出现 README.md；
+//   2. 工作目录随启动方式变化（双击 / IDE / 脚本），会到处生成 ini。
+// 放到 config/ 下还能和 engine.json 一样进版本库、跨机器共享。
+ImGui::GetIO().IniFilename = SENTINEL_IMGUI_INI_PATH;
+
+ImGui::StyleColorsDark();
 
 	ImGui_ImplGlfw_InitForVulkan(window, true);
 
@@ -62,6 +78,17 @@ void ImGuiSystem::newFrame()
 
 void ImGuiSystem::prepareDrawData(FrameInfo& frameInfo)
 {
+
+// 编辑器模式：UI 由 EditorLayer 全权构建（它有自己的菜单栏与面板布局），
+// 内置的 "Sentinel Engine Core" 面板不再绘制。
+// 两者不并存，避免两套面板同时修改同一批 EngineSettings 造成控制权歧义。
+if (frameInfo.isEditorMode && frameInfo.isEditorMode())
+{
+if (frameInfo.onBuildEditorUI)
+frameInfo.onBuildEditorUI();
+ImGui::Render();
+return;
+}
 	// 让面板宽度严格贴合内容：ImGui 的窗口宽度是"历史最大值"，一旦某帧出现过
 	// 宽内容（比如一长串路径），窗口就再也不会缩回来，在画面上永久留一块
 	// 多余的黑底把场景挡住。每帧清一次尺寸标志，面板宽度就只由当前内容决定。

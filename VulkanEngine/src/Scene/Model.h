@@ -121,6 +121,11 @@ public:
     void draw(VkCommandBuffer commandBuffer) const;                                 // 画全部子网格
     void drawSubMesh(VkCommandBuffer commandBuffer, const SubMesh& subMesh) const;  // 只画一个子网格
 
+    // 场景序列化需要知道这个模型来自哪个文件（编辑器保存 / 重载场景时用）。
+    // 存的是 Model::createModelFromFile 收到的原始字符串（绝对路径），
+    // 因为引擎本来就靠 AssetPaths.h 固化了资源根目录。
+    const std::string& getSourcePath() const { return sourcePath; }
+
     uint32_t getVertexCount() const { return vertexCount; }
     uint32_t getIndexCount()  const { return indexCount; }
 
@@ -152,6 +157,7 @@ private:
     uint32_t indexCount = 0;
 
     std::vector<SubMesh> subMeshes;
+    std::string sourcePath;
 
     glm::vec3 boundsMin{ 0.0f };
     glm::vec3 boundsMax{ 0.0f };

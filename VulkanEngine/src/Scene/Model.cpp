@@ -196,7 +196,9 @@ std::shared_ptr<Model> Model::createModelFromFile(Device& device, VkCommandPool 
         << " 顶点数: " << builder.vertices.size()
         << " 索引数: " << builder.indices.size()
         << " 子网格数: " << builder.subMeshes.size() << "\n";
-    return std::make_shared<Model>(device, commandPool, builder);
+    std::shared_ptr<Model> model = std::make_shared<Model>(device, commandPool, builder);
+    model->sourcePath = filepath;
+    return model;
 }
 
 void Model::Builder::loadModel(const std::string& filepath)

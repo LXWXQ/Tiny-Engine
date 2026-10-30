@@ -189,3 +189,92 @@ CMake 里既 `find_package(glfw3 REQUIRED)`，又把 `${GLFW_DIR}/include` 塞�
 - **修法**：`Validate.ps1` 里设置 `$env:MSBUILDDISABLENODEREUSE = "1"`，
   让每次构建都是自包含进程。
 - **判据**：脚本正常走到 `[validate] Test: jobtest`。
+## 23. 等距柱状天空盒的两类经典缺陷（接缝亮线 + 上下颠倒）
+
+天空盒用 `sampler2D` 直接采样等距柱状 HDR 时，有两个**独立**的坑，且都不报验证层错误。
+
+### 23.1 atan 接缝处的一条亮虚线
+
+- **现象**：天空中出现一条**竖直的亮虚线**（断续的白色短线）。
+- **原因**：经度用 `atan(v.z, v.x)` 求，在 ±PI 处从 +PI 跳回 -PI，`envUV.x` 在接缝
+  两侧相差约 1.0。硬件用 `dFdx/dFdy` 自动选 mip，接缝那一列的导数 ≈ 1.0（整整绕一圈），
+  被判定为"极度缩小"，直接退到最低 mip（2048x1024 退到 1x1），于是出现一条亮线。
+- **判据（决定性）**：把 `textureQueryLod(environmentMap, envUV).x` 当颜色输出，
+  整片天空 LOD ≈ 0（黑），**只有那条线是 LOD = 8（纯白）**。
+- **修法**：不用隐式导数，手工算完把跨接缝的那一份折回 `[-0.5, 0.5]`，再交给 `textureGrad`：
+
+```glsl
+vec2 dx = dFdx(envUV);
+vec2 dy = dFdy(envUV);
+dx.x -= round(dx.x);      // 把「绕一圈」折回「几乎不动」
+dy.x -= round(dy.x);
+vec3 envColor = textureGrad(environmentMap, envUV, dx, dy).rgb;
+```
+
+纹理本身用 `REPEAT` 寻址，所以采样值天然连续，线就消失了。
+**注意**：`addressModeU/V = REPEAT` 是前提；改成 `CLAMP_TO_EDGE` 会重新出现接缝。
+
+### 23.2 天空上下颠倒 / 与 IBL 光照方向相反
+
+- **现象**：天空又灰又平，云都挤在画面下方，顶部一片雾；但 IBL 照亮的结果却是对的。
+- **原因**：等距柱状贴图的**图像顶部是天顶**，所以 `+Y` 方向必须映射到 `uv.y = 0`。
+  错误写法 `asin(y)/PI + 0.5` 把"向上"映射到了 `uv.y = 1`（图像底行 = 雾/地面）。
+  而 `ibl_equirect_to_cube.frag` 一直用的是 `0.5 - asin(y)/PI`。两者相反，于是
+  **"看到的天空"和"照亮场景的环境光"来自相反方向**。
+- **判据**：先量出贴图的亮度分布（本例顶部 25% 均值 194、底部 25% 均值 143 且方差极小），
+  确认顶部是天顶；再把 `uv.y` 分四段染成红/绿/蓝/白渲染出来，看地平线是否落在 `v = 0.5`。
+- **修法**：天空盒与 IBL 使用**同一个** `sampleSphericalMap`：
+
+```glsl
+vec2 sampleSphericalMap(vec3 v) {
+    return vec2(atan(v.z, v.x) * (1.0/(2.0*PI)) + 0.5,
+                0.5 - asin(clamp(v.y, -1.0, 1.0)) * (1.0/PI));
+}
+```
+
+**教训**：同一个数学约定出现在两个 shader 里时，必须有一处是"权威实现"并被交叉引用。
+本项目的权威是 `ibl_equirect_to_cube.frag`（它的注释里写明了图像顶部是天顶）。
+
+## 24. `try_get` 返回的是指针，闭包捕获它会在实体销毁后悬空
+
+- **现象**：撤销"删除实体"之后实体没回来；或回来但数值是垃圾。
+  没有任何验证层输出，程序也不一定崩。
+- **代码**（错的）：
+  ```cpp
+  auto transform = registry.try_get<TransformComponent>(e);   // 指针，不是值
+  rebuild = [transform](entt::entity created) {
+      registry.emplace<TransformComponent>(created, *transform);  // UB
+  };
+  ```
+- **原因**：`entt::registry::try_get<T>()` 返回 `T*`，指向组件存储。
+  构造命令时实体还活着，指针有效；`apply()` 一 `destroy()`，指针就悬空。
+  `revert()` 在其后才解引用 —— 读到的是已释放的内存。
+- **修法**：做**真正的值拷贝**，让快照与实体生命周期解耦：
+  ```cpp
+  std::optional<TransformComponent> transform;
+  if (const auto* p = registry.try_get<TransformComponent>(e)) transform = *p;
+  ```
+- **为什么这条值得单独记**：这类 bug 在 Debug 下经常"看起来正常"
+  （内存还没被复用），只在特定顺序下出错，而且错误信息完全不指向真因。
+  本项目是**自检**（断言"撤销后两个实体都回来了、父子关系也恢复了"）抓到的，
+  不是人工发现的。
+- **副产品**：`CameraComponent` 是空 tag 组件，查存在性要用
+  `registry.any_of<T>(e)`；对空类型 `try_get` 取指针不成立。
+
+## 25. ImGui 描述符池只有 1 个 set：注册第二张纹理就 0xC0000005
+
+- **现象**：`ImGui_ImplVulkan_AddTexture()` 之后程序直接崩溃，退出码 `0xC0000005`，
+  stderr 全空，验证层一声不吭，日志停在崩溃前最后一句正常输出。
+- **原因**：`ImGuiSystem` 初始化时描述符池是
+  `maxSets = 1` / `COMBINED_IMAGE_SAMPLER = 1` —— 只够 ImGui 后端自己用。
+  `AddTexture` 从**同一个池**里分配描述符集，第二个请求直接失败，
+  返回未初始化的句柄；后续绘制解引用它。
+- **为什么难查**：`vkAllocateDescriptorSets` 的返回值没被检查（ImGui 后端内部调用），
+  失败是静默的。验证层不报"你用了无效描述符集"，因为句柄只是个整数。
+- **修法**：池容量按"用户纹理"需求给足。现在是 64：
+  ```cpp
+  constexpr uint32_t kImGuiTextureCapacity = 64;
+  ```
+- **判据**：只要崩溃点正好在第一次 `AddTexture` 之后、且没有任何 Vulkan 报错，
+  先怀疑描述符池/堆容量，而不是纹理本身。
+- **相关**：编辑器离屏视口每帧槽注册一张，见 [editor/viewport](../90-editor/viewport.md)。

@@ -17,6 +17,7 @@
 #include "RHI/RenderDocHook.h"
 #include "RHI/GpuProfiler.h"
 #include "Scene/Scene.h"
+#include "Editor/EditorLayer.h"
 #include <memory>
 #include <chrono>
 #include <array>
@@ -24,6 +25,7 @@
 class ComputeProbePass;
 class CrossQueueProbePass;
 class PresentPass;
+class UiCompositePass;
 class SSAOPass;
 class SubresourceProbePass;
 
@@ -57,6 +59,11 @@ public:
 	// without recreating pipelines or the swapchain.
 	void setRenderScale(float scale);
 	int  runHeadlessSelfTest(int frames);
+
+
+	// 场景编辑器（--editor）。默认关闭；关闭时引擎行为与改造前完全一致。
+	void setEditorEnabled(bool enabled) { editorRequested = enabled; }
+	bool isEditorActive() const { return editorRequested; }
 
 	// W1：配置存取。ImGui 面板上的 Save/Load 按钮走这里 ——
 	// 让"面板改的参数"和"启动时读的参数"共用同一条代码路径，
@@ -94,6 +101,7 @@ private:
 	CrossQueueProbePass* crossQueueProbePassPtr = nullptr;
 	SubresourceProbePass* subresourceProbePassPtr = nullptr;
 	PresentPass* presentPassPtr = nullptr;
+	UiCompositePass* uiCompositePassPtr = nullptr;
 	SSAOPass* ssaoPassPtr = nullptr;
 
 	RenderPipeline renderPipeline;
@@ -131,6 +139,30 @@ private:
 
 	// 自检会故意把 bloom/ssao 关掉，如果照常自动保存，一次回归跑下来
 	// 就把用户调好的配置改成了"全关"。所以自检模式下禁掉退出自动保存。
+	// ---- 场景编辑器 ----
+	std::unique_ptr<editor::EditorLayer> editorLayer;
+	bool editorRequested = false;
+	void initEditor();
+	void shutdownEditor();
+	// TD-09：编辑器离屏视口的资源生命周期。
+	// 由编辑器报尺寸、引擎在帧首统一应用 —— 不能在 UI 构建期重建纹理，
+	// 那时命令缓冲已经在录制，vkDeviceWaitIdle 会直接死锁。
+	void createEditorViewportTextures(VkExtent2D extent);
+	void destroyEditorViewportTextures();
+	void removeEditorViewportImGuiTextures();
+
+	VkSampler editorViewportSampler = VK_NULL_HANDLE;
+	std::array<VkDescriptorSet, kFramesInFlight> editorViewportImGuiSets{};
+	bool editorViewportTexturesCreated = false;
+
+	// 编辑器请求的视口尺寸。这个值**粘住**不清零：编辑器只在尺寸变化时才上报，
+	// 引擎靠"它连续若干帧没再变"判断拖拽已经停下。
+	VkExtent2D pendingEditorViewportExtent{ 0, 0 };
+	// 上一次上报发生在第几帧。用于视口尺寸防抖（见 update() 里的说明）。
+	uint64_t viewportRequestFrame = 0;
+	// 每帧递增的计数器，仅用于视口尺寸防抖。
+	uint64_t viewportDebounceClock = 0;
+
 	bool suppressAutoSave = false;
 	bool resizeTestEnabled = false;
 	bool materialStressEnabled = false;

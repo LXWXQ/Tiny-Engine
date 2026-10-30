@@ -9,6 +9,8 @@
 Texture::Texture(Device& device, const std::string& filepath, VkFormat format, VkCommandPool commandPool, bool isHDR)
 	: vulkanDevice(device)
 {
+	// 记录来源路径：场景序列化时要用它写回文件。
+	sourcePath = filepath;
 	if (isHDR)
 		loadHDR(filepath, commandPool);
 	else

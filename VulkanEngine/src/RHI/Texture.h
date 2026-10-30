@@ -21,7 +21,11 @@ public:
 	Texture(Texture&& other) noexcept;
 	Texture& operator=(Texture&& other) noexcept;
 
-	VkImageView getView() const { return view; }
+	// 编辑器 / 场景序列化需要知道贴图来自哪个文件。空串表示来自内存（非文件）。
+const std::string& getPath() const { return sourcePath; }
+void setPath(const std::string& path) { sourcePath = path; }
+
+VkImageView getView() const { return view; }
 	VkSampler getSampler() const { return sampler; }
 	VkImage getImage() const { return image; }
 
@@ -38,4 +42,5 @@ private:
 	VmaAllocation allocation = VK_NULL_HANDLE;
 	VkImageView view = VK_NULL_HANDLE;
 	VkSampler sampler = VK_NULL_HANDLE;
+std::string sourcePath;
 };

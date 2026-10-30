@@ -219,8 +219,15 @@ void PresentPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         pass.read(resources.bloomResult[frame]);
     pass.read(resources.gbPosition[frame]);
 
-    pass.writeColor(resources.swapchainImages[frameInfo.swapchainImageIndex],
-        VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+    // 输出目标二选一：编辑器离屏视口 or 交换链。
+    // 视口纹理按 frame slot 各一张 —— 用 frameInfo.frameInFlightIndex 索引，
+    // 与 UiCompositePass 读的那张严格对齐。
+    // 两者格式相同（都用交换链格式），所以 present.frag 里手写的 gamma 编码
+    // 在两条路径上的语义完全一致，不会出现"编辑器里亮一点"这种差异。
+    const RenderGraph::TextureHandle target = resources.editorViewportEnabled
+        ? resources.editorViewport[frame]
+        : resources.swapchainImages[frameInfo.swapchainImageIndex];
+    pass.writeColor(target, VK_ATTACHMENT_LOAD_OP_DONT_CARE);
 
     PresentPush push{};
     push.exposure = frameInfo.settings.exposure;
@@ -255,7 +262,9 @@ void PresentPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
 
         vkCmdDraw(cmd, 3, 1, 0, 0);
 
-        if (imguiSystem != nullptr)
+        // 离屏模式（编辑器）下 ImGui 由 UiCompositePass 绘制 —— 它需要先采样
+        // 本 Pass 刚写好的视口纹理，两件事不能在同一个 Pass 里做。
+        if (renderImGui && imguiSystem != nullptr)
             imguiSystem->renderDrawData(cmd);
     });
 }

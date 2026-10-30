@@ -55,3 +55,17 @@ updated: 2026-10-30
 1. 先看 [roadmap](../80-roadmap/roadmap.md) 的下一阶段，确认哪些债是该阶段的前置；
 2. 修一项就补一项回归（[test-matrix](../50-validation/test-matrix.md)）；
 3. 修完在本文件 §1 加一行、从 §2 删一行，并更新 `updated`。
+
+## TD-09 ~~编辑器视口仍是整窗渲染~~ （已完成）
+
+> 已实现，见 [editor/viewport](../90-editor/viewport.md)。以下保留原始分析作为背景。
+
+
+- **现状**：3D 画面直接铺满交换链，面板浮在它上面。`EditorState` 里已经算好
+  "未被遮挡的中央矩形"（`viewportX/Y/Width/Height`），但没有离屏目标。
+- **影响**：面板无法真正"嵌入"视口区；截图会带上 UI；不能做多视口。
+- **为什么先这样**：离屏视口要求渲染图的最终目标从交换链换成一个纹理，
+  再把该纹理作为 `ImGui::Image` 的描述符 —— 属于对渲染图输出契约的改动，
+  不是编辑器层能独立完成的。先把手写布局这条路走通，避免一次改两层。
+- **解决方向**：`PresentPass` 增加"输出到指定 image"的模式；
+  `EngineServices` 增加 `requestViewportTarget(w,h)`。

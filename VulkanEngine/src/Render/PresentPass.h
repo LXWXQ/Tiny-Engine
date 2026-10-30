@@ -29,6 +29,13 @@ public:
 
     void setImGuiSystem(ImGuiSystem* imgui) { imguiSystem = imgui; }
 
+    // TD-09：输出目标由 RenderResources::editorViewportEnabled 决定，
+    // 不再单独存一个 handle —— 视口纹理是**按 frame slot 各一张**的，
+    // 存单个 handle 必然会在两帧在飞时写错槽位（渲染图的语义校验会当场报出来）。
+    // 离屏模式下 ImGui 由 UiCompositePass 绘制，这里必须关掉，
+    // 否则同一帧会有两份 ImGui 绘制列表提交到不同的渲染目标上。
+    void setRenderImGui(bool value) { renderImGui = value; }
+
 private:
     struct PresentPush
     {
@@ -69,4 +76,7 @@ private:
     std::unique_ptr<Pipeline> noBloomPipeline;
 
     ImGuiSystem* imguiSystem = nullptr;
+
+    // 编辑器模式下 ImGui 由 UiCompositePass 绘制。
+    bool renderImGui = true;
 };

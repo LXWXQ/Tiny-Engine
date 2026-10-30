@@ -23,3 +23,7 @@
 //   * Debug / Release 共享同一份用户设置
 //   * 进版本库，充当"默认预设"
 #define SENTINEL_CONFIG_PATH  "@SENTINEL_CONFIG_DIR@/engine.json"
+
+// ImGui 的窗口布局持久化文件。和 engine.json 放在同一个目录，
+// 保证仓库根目录始终只有 README.md。
+#define SENTINEL_IMGUI_INI_PATH "@SENTINEL_CONFIG_DIR@/imgui.ini"

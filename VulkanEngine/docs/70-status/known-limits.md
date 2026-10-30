@@ -52,3 +52,15 @@ updated: 2026-10-30
 - 无 CI（全部靠本地 `Validate.ps1`）。
 - 无 Release 构建的性能基线（所有数字都是 Debug）。
 - 无单元测试框架，测试都以"进程内自检 + stdout 标记"的形式存在。
+
+## 编辑器（D-8）
+
+- **单选**：`Selection` 接口按集合设计，但 UI 只做单选。
+- **材质参数不可撤销**：Inspector 里改 metallic/roughness/baseColor 不进命令栈。
+  它们是外观调参，撤销需求弱；真正需要的是"材质库 + 引用的撤销"，那是另一个量级。
+- **播放模式没有逻辑**：`PlayState` 状态机与快照/恢复已就位，但没有脚本/物理推进点。
+  以后加逻辑时在 `EditorLayer::updatePlayState()` 里接。
+- **无 docking**：ImGui 1.92.6 是非 docking 分支，布局是手写的固定位置。
+  换成 docking 分支后 `drawPanels()` 里的布局分支可以整段删掉。
+- **实体 ID 不稳定**：删除后撤销，实体 ID 会变。任何跨帧缓存 `entt::entity`
+  的地方（选中态除外，它会被显式更新）都不能假设 ID 稳定。

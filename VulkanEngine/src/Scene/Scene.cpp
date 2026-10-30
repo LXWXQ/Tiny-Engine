@@ -2,6 +2,7 @@
 #include "AssetPaths.h"
 #include "RHI/Texture.h"
 #include "Scene/GLTFLoader.h"
+#include <unordered_map>
 
 #include <algorithm>
 #include <cmath>
@@ -175,14 +176,28 @@ namespace
     }
 }
 
-void Scene::init(Device& device, VkCommandPool commandPool, DescriptorManager& descriptorManager)
+void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorManager& descriptorManagerArg)
 {
+    // 编辑器 / 场景重建需要这些依赖（创建网格实体、分配材质槽位）。
+    // 存指针而不是让每个调用点都传参，是因为 Scene 已经是"场景所有者"，
+    // 它天然应该记得自己是用哪个设备创建出来的。
+    device = &deviceArg;
+    commandPool = commandPoolArg;
+    descriptorManager = &descriptorManagerArg;
+
+    Device& device = deviceArg;
+    VkCommandPool commandPool = commandPoolArg;
+    DescriptorManager& descriptorManager = descriptorManagerArg;
+
     const std::string basePath = SENTINEL_RESOURCE_DIR;
 
     materialSystem.initDefaultTextures(device, commandPool);
 
     cameraEntity = createTransformEntity(registry);
     registry.emplace<CameraComponent>(cameraEntity);
+    // 编辑器层级面板需要一个可读名字。没有 NameComponent 时面板只能显示
+    // "Entity 2" 这样的数字 ID，完全看不出哪个是相机、哪个是天空盒。
+    registry.emplace<NameComponent>(cameraEntity, NameComponent{ "Camera" });
 
     std::shared_ptr<Model> heroModel;
     if (kLoadSponza)
@@ -202,6 +217,7 @@ void Scene::init(Device& device, VkCommandPool commandPool, DescriptorManager& d
     {
         const entt::entity hero = createTransformEntity(registry);
         registry.emplace<MeshComponent>(hero, MeshComponent{ heroModel });
+        registry.emplace<NameComponent>(hero, NameComponent{ "Sponza" });
         registry.emplace<RenderTagComponent>(hero);
         setModelBounds(registry, hero, heroModel);
 
@@ -227,6 +243,7 @@ void Scene::init(Device& device, VkCommandPool commandPool, DescriptorManager& d
         auto helmetModel = Model::createModelFromFile(device, commandPool,
             basePath + "Models/DamagedHelmet/DamagedHelmet.obj");
         registry.emplace<MeshComponent>(helmet, MeshComponent{ helmetModel });
+        registry.emplace<NameComponent>(helmet, NameComponent{ "DamagedHelmet" });
         registry.emplace<RenderTagComponent>(helmet);
         setModelBounds(registry, helmet, helmetModel);
         getCameraTransform().translation = { 0.0f, 0.0f, -5.0f };
@@ -238,6 +255,7 @@ void Scene::init(Device& device, VkCommandPool commandPool, DescriptorManager& d
         auto skyboxModel = Model::createModelFromFile(device, commandPool,
             basePath + "Models/sphere.obj");
         registry.emplace<MeshComponent>(skybox, MeshComponent{ skyboxModel });
+        registry.emplace<NameComponent>(skybox, NameComponent{ "Skybox" });
         RenderTagComponent tag;
         tag.isSkybox = true;
         registry.emplace<RenderTagComponent>(skybox, tag);
@@ -437,4 +455,295 @@ bool Scene::selfTest()
     std::cout << "[Scene] ECS/spatial selfTest " << (ok ? "PASS" : "FAIL")
               << " | hierarchy=T*Ry*Rx*Rz*S | grid cells=" << index.cellCount() << "\n";
     return ok;
+}
+
+// ---------------------------------------------------------------------------
+// 场景描述：导出 / 重建（编辑器与序列化共用）
+// ---------------------------------------------------------------------------
+scene::SceneDescription Scene::captureDescription() const
+{
+    scene::SceneDescription description;
+    description.version = 1;
+
+    // 建立 "实体 -> 下标" 映射。父子关系用下标表示，因为实体 ID 跨进程不稳定。
+    std::unordered_map<uint32_t, int> idToIndex;
+    int nextIndex = 0;
+    for (entt::entity entity : registry.view<TransformComponent>())
+        idToIndex[static_cast<uint32_t>(entity)] = nextIndex++;
+
+    description.entities.reserve(idToIndex.size());
+
+    for (entt::entity entity : registry.view<TransformComponent>())
+    {
+        scene::EntityDescription e;
+        e.name = registry.try_get<NameComponent>(entity)
+            ? registry.get<NameComponent>(entity).name
+            : std::string("Entity");
+
+        const TransformComponent& transform = registry.get<TransformComponent>(entity);
+        e.translation = transform.translation;
+        e.rotation = transform.rotation;
+        e.scale = transform.scale;
+
+        if (const auto* hierarchy = registry.try_get<HierarchyComponent>(entity))
+        {
+            if (hierarchy->parent != entt::null)
+            {
+                const auto it = idToIndex.find(static_cast<uint32_t>(hierarchy->parent));
+                if (it != idToIndex.end())
+                    e.parentIndex = it->second;
+            }
+        }
+
+        if (const auto* mesh = registry.try_get<MeshComponent>(entity))
+        {
+            if (mesh->model)
+                e.meshPath = mesh->model->getSourcePath();
+        }
+
+        if (const auto* tag = registry.try_get<RenderTagComponent>(entity))
+        {
+            e.isSkybox = tag->isSkybox;
+            e.isGrid = tag->isGrid;
+        }
+        // CameraComponent 是空 tag 组件，用 any_of 判断存在性。
+        e.isCamera = registry.any_of<CameraComponent>(entity);
+
+        if (const auto* materialComp = registry.try_get<MaterialComponent>(entity))
+        {
+            if (materialComp->material)
+            {
+                const Material& m = *materialComp->material;
+                e.material.present = true;
+                e.material.name = m.name;
+                e.material.baseColorFactor = m.baseColorFactor;
+                e.material.metallicFactor = m.metallicFactor;
+                e.material.roughnessFactor = m.roughnessFactor;
+                e.material.alphaCutoff = m.alphaCutoff;
+                e.material.alphaMode = static_cast<int>(m.alphaMode);
+                if (m.albedoMap)            e.material.albedoMap = m.albedoMap->getPath();
+                if (m.normalMap)            e.material.normalMap = m.normalMap->getPath();
+                if (m.metallicRoughnessMap) e.material.metallicRoughnessMap = m.metallicRoughnessMap->getPath();
+            }
+        }
+
+        // 注意：这里用 push_back，顺序必须与我上面 enum 的顺序一致。
+        // 因为 idToIndex 也是按同一个 view 顺序建的，所以两边一致。
+        description.entities.push_back(std::move(e));
+    }
+
+    return description;
+}
+
+void Scene::clearEntities()
+{
+    // 先归还材质槽位（延迟回收，不阻塞设备），再销毁实体。
+    // 不归还的话，反复"新建场景"会慢慢吃满 256 个 bindless 槽位。
+    for (entt::entity entity : registry.view<MaterialComponent>())
+    {
+        auto& materialComp = registry.get<MaterialComponent>(entity);
+        if (materialComp.materialSetIndex != kInvalidMaterialSlot)
+        {
+            descriptorManager->releaseMaterialSet(materialComp.materialSetIndex);
+            materialComp.materialSetIndex = kInvalidMaterialSlot;
+        }
+    }
+
+    const entt::entity keepCamera = cameraEntity;
+
+    std::vector<entt::entity> all;
+    for (entt::entity entity : registry.view<TransformComponent>())
+        all.push_back(entity);
+
+    for (entt::entity entity : all)
+    {
+        if (entity == keepCamera)
+            continue;
+        if (registry.valid(entity))
+            registry.destroy(entity);
+    }
+
+    // 相机实体本身也可能带有子节点，重新挂成根
+    if (registry.valid(keepCamera))
+    {
+        auto& hierarchy = registry.get_or_emplace<HierarchyComponent>(keepCamera);
+        hierarchy.parent = entt::null;
+        hierarchy.children.clear();
+    }
+
+    visibleEntities.clear();
+    updateWorldTransforms();
+    rebuildSpatialIndex();
+}
+
+bool Scene::buildFromDescription(const scene::SceneDescription& description, std::string& errorMessage)
+{
+    if (!device || !descriptorManager)
+    {
+        errorMessage = "scene is not initialized";
+        return false;
+    }
+
+    clearEntities();
+
+    // 注意：不要写成 vector<entt::entity>(n, entt::null)。
+    // MSVC 在 vector 的填充构造里会拿 allocator<entity> 去实例化 entt_traits，
+    // 报 "entity_type 不是 std::allocator<Entity> 的成员"。
+    // 先把 entt::null 转成具名 entt::entity，转换就发生在非模板推导上下文里。
+    const entt::entity nullEntity = entt::null;
+    std::vector<entt::entity> created(description.entities.size(), nullEntity);
+    bool foundCamera = false;
+
+    for (size_t i = 0; i < description.entities.size(); ++i)
+    {
+        const scene::EntityDescription& e = description.entities[i];
+
+        const entt::entity entity = registry.create();
+        created[i] = entity;
+
+        TransformComponent transform;
+        transform.translation = e.translation;
+        transform.rotation = e.rotation;
+        transform.scale = e.scale;
+        registry.emplace<TransformComponent>(entity, transform);
+        registry.emplace<HierarchyComponent>(entity);
+        registry.emplace<NameComponent>(entity, NameComponent{ e.name });
+
+        if (e.isCamera && !foundCamera)
+        {
+            // 复用已有的相机实体，而不是新建 —— Scene 里 cameraEntity 是唯一句柄
+            registry.destroy(entity);
+            created[i] = cameraEntity;
+            registry.get<NameComponent>(cameraEntity).name = e.name;
+            registry.get<TransformComponent>(cameraEntity) = transform;
+            foundCamera = true;
+        }
+
+        if (!e.meshPath.empty())
+        {
+            const entt::entity target = created[i];
+            std::shared_ptr<Model> model;
+            try
+            {
+                model = Model::createModelFromFile(*device, commandPool, e.meshPath);
+            }
+            catch (const std::exception& ex)
+            {
+                errorMessage = std::string("failed to load mesh '") + e.meshPath + "': " + ex.what();
+                return false;
+            }
+            if (model)
+            {
+                registry.emplace<MeshComponent>(target, MeshComponent{ model });
+                RenderTagComponent tag;
+                tag.isSkybox = e.isSkybox;
+                tag.isGrid = e.isGrid;
+                registry.emplace<RenderTagComponent>(target, tag);
+                setModelBounds(registry, target, model);
+            }
+        }
+        else if (e.isSkybox || e.isGrid)
+        {
+            RenderTagComponent tag;
+            tag.isSkybox = e.isSkybox;
+            tag.isGrid = e.isGrid;
+            registry.emplace<RenderTagComponent>(created[i], tag);
+        }
+
+        // 材质：默认用 defaultMat（MaterialSystem 已建好的），有描述则覆盖参数
+        if (created[i] != entt::null && registry.valid(created[i]))
+        {
+            if (registry.try_get<MeshComponent>(created[i]))
+            {
+                MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(created[i]);
+                materialComp.material = materialSystem.getOrCreateMaterial(
+                    e.material.present ? e.material.name : std::string("scene_default"));
+                materialComp.material->baseColorFactor = e.material.baseColorFactor;
+                materialComp.material->metallicFactor = e.material.metallicFactor;
+                materialComp.material->roughnessFactor = e.material.roughnessFactor;
+                materialComp.material->alphaCutoff = e.material.alphaCutoff;
+                materialComp.material->alphaMode = static_cast<AlphaMode>(e.material.alphaMode);
+
+                // 贴图按需加载（走 MaterialSystem 的缓存）
+                auto loadIfAny = [&](const std::string& path, bool srgb) -> std::shared_ptr<Texture>
+                {
+                    if (path.empty()) return nullptr;
+                    return materialSystem.loadTexture(path, *device, commandPool, srgb);
+                };
+                if (!e.material.albedoMap.empty())
+                    materialComp.material->albedoMap = loadIfAny(e.material.albedoMap, true);
+                if (!e.material.normalMap.empty())
+                    materialComp.material->normalMap = loadIfAny(e.material.normalMap, false);
+                if (!e.material.metallicRoughnessMap.empty())
+                    materialComp.material->metallicRoughnessMap = loadIfAny(e.material.metallicRoughnessMap, false);
+
+                // 重新分配 bindless 槽位（序列化不存槽位号，因为它是运行期分发的）
+                materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*materialComp.material);
+            }
+        }
+    }
+
+    // 第二遍：挂父子关系（父必须先存在，所以不能和创建放在一个循环里）
+    for (size_t i = 0; i < description.entities.size(); ++i)
+    {
+        const int parentIndex = description.entities[i].parentIndex;
+        if (parentIndex < 0 || parentIndex >= static_cast<int>(created.size()))
+            continue;
+
+        // 相机实体被复用时 created[i] 指向它，同样要参与挂接
+        const entt::entity child = created[i];
+        const entt::entity parent = created[parentIndex];
+        if (child == entt::null || parent == entt::null)
+            continue;
+        if (!registry.valid(child) || !registry.valid(parent))
+            continue;
+        if (child == parent)
+            continue;
+
+        registry.get<HierarchyComponent>(child).parent = parent;
+        registry.get<HierarchyComponent>(parent).children.push_back(child);
+    }
+
+    refreshTransformsAndVisibility();
+    return true;
+}
+
+entt::entity Scene::createMeshEntity(const std::string& absolutePath, const std::string& name)
+{
+    if (!device || !descriptorManager)
+        return entt::null;
+
+    std::shared_ptr<Model> model;
+    try
+    {
+        model = Model::createModelFromFile(*device, commandPool, absolutePath);
+    }
+    catch (const std::exception& ex)
+    {
+        std::cerr << "[Scene] createMeshEntity failed: " << ex.what() << "\n";
+        return entt::null;
+    }
+    if (!model)
+        return entt::null;
+
+    const entt::entity entity = createTransformEntity(registry);
+    registry.emplace<MeshComponent>(entity, MeshComponent{ model });
+    registry.emplace<RenderTagComponent>(entity);
+    registry.emplace<NameComponent>(entity, NameComponent{ name });
+    setModelBounds(registry, entity, model);
+
+    MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(entity);
+    materialComp.material = materialSystem.getOrCreateMaterial(name + "_mat");
+    materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*materialComp.material);
+
+    updateWorldTransforms();
+    rebuildSpatialIndex();
+    return entity;
+}
+
+void Scene::refreshTransformsAndVisibility()
+{
+    updateWorldTransforms();
+    rebuildSpatialIndex();
+    updateVisibility(camera.getProjection() * camera.getView());
 }

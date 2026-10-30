@@ -50,4 +50,18 @@ struct RenderResources
 
     // ---- 交换链（每帧按 imageIndex 选一个）----
     std::vector<RenderGraph::TextureHandle> swapchainImages;
+
+    // ---- 编辑器离屏视口（TD-09）----
+    //
+    // 编辑器模式下 PresentPass 不再直接写交换链，而是把 tonemap 之后的 LDR 结果
+    // 写进这张图；随后由 UiCompositePass 把这张图当作 ImGui 的一张图片画到交换链上，
+    // 面板就真正"围绕"视口而不是"浮在"3D 画面上面。
+    //
+    // 为什么按 frame slot 各一份：和 hdrScene 同理 —— 两帧在飞时，
+    // 第 N+1 帧写这张图会覆盖 GPU 仍在采样的第 N 帧内容。
+    //
+    // 非编辑器模式下这些 handle 保持 invalid()，PresentPass 走原来的直写交换链路径。
+    std::array<RenderGraph::TextureHandle, kFramesInFlight> editorViewport;
+    VkExtent2D editorViewportExtent{ 0, 0 };
+    bool editorViewportEnabled = false;
 };

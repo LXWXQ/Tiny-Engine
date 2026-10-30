@@ -98,6 +98,37 @@ updated: 2026-10-30
 | `tools/Baseline.ps1` / `DebugBundle.ps1` / `DeepValidation.ps1` / `Screenshot.ps1` / `Capture.ps1` / `Profile.ps1` | 剖析与证据收集 | [tools](../60-debug-profiling/tools.md) | tools |
 | `config/engine.json` | 运行时配置（version 2） | [config](../30-systems/config.md) | config |
 
+## 6.5 编辑器层（`src/Editor/`）
+
+> 编辑器是 `--editor` 才启用的独立层。关掉时这条路径完全不存在。
+
+| 源文件 | 内容 | 必读文档 | 回写 |
+|---|---|---|---|
+| `EditorContext.h` | `EngineServices` / `Selection` / `PlayState` —— 编辑器与引擎的唯一接缝 | [editor/architecture](../90-editor/architecture.md) | architecture |
+| `EditorState.h` | 选中、命令栈、日志、文档路径、播放快照 | [editor/architecture](../90-editor/architecture.md) | architecture |
+| `EditorLayer.h/.cpp` | 菜单栏、布局、快捷键、播放状态机、场景存读 | [editor/architecture](../90-editor/architecture.md)、[editor/panels](../90-editor/panels.md) | architecture、panels |
+| `CommandStack.h/.cpp` | 撤销/重做栈、合并窗口、历史上限 | [editor/commands](../90-editor/commands.md) | commands |
+| `Commands.h/.cpp` | `SetTransform` / `Rename` / `DeleteEntity` 三个具体命令 | [editor/commands](../90-editor/commands.md) | commands |
+| `SceneSerializer.h/.cpp` | `SceneDescription` <-> JSON | [editor/serialization](../90-editor/serialization.md) | serialization |
+| `panels/HierarchyPanel.*` | 实体树、拖拽重挂、右键删除 | [editor/panels](../90-editor/panels.md) | panels |
+| `panels/InspectorPanel.*` | 组件编辑，变换走命令栈 | [editor/panels](../90-editor/panels.md)、[editor/commands](../90-editor/commands.md) | panels、commands |
+| `panels/ConsolePanel.*` | 日志过滤 | [editor/panels](../90-editor/panels.md) | panels |
+| `panels/ViewportPanel.*` | 3D 视口：把离屏纹理当 ImGui 图片画出来 | [editor/viewport](../90-editor/viewport.md) | viewport |
+| `panels/AssetBrowserPanel.*` | 扫描 Models 目录，双击创建实体（走命令栈） | [editor/panels](../90-editor/panels.md) | panels |
+
+配套的引擎侧改动（改这些要同时看编辑器文档）：
+
+| 源文件 | 改动 | 必读文档 |
+|---|---|---|
+| `src/Core/FrameInfo.h` | `onBuildEditorUI` / `isEditorMode` 两个回调 | [editor/architecture](../90-editor/architecture.md) |
+| `src/Core/ImGuiSystem.cpp` | 编辑器模式下跳过内置面板；`io.IniFilename` 指向 `config/imgui.ini` | [editor/panels](../90-editor/panels.md) |
+| `src/Scene/SceneDescription.h` | 纯数据场景描述（序列化边界） | [editor/serialization](../90-editor/serialization.md) |
+| `src/Scene/Scene.cpp` `captureDescription/buildFromDescription` | registry <-> 描述 | [editor/serialization](../90-editor/serialization.md) |
+| `src/Render/UiCompositePass.*` | 编辑器模式最后一步：只画 ImGui 到交换链 | [editor/viewport](../90-editor/viewport.md) |
+| `src/Render/PresentPass.*` | 输出目标二选一（视口纹理 / 交换链） | [editor/viewport](../90-editor/viewport.md) |
+| `src/Core/ImGuiSystem.cpp` 描述符池 | 容量 64，供 `AddTexture` 注册视口纹理 | [editor/viewport](../90-editor/viewport.md) |
+| `src/Scene/Components.h` `NameComponent` | 实体名（层级面板 + 序列化） | [scene-ecs](../30-systems/scene-ecs.md)、[editor/serialization](../90-editor/serialization.md) |
+
 ## 7. 新会话最短路径
 
 1. 读根 [`README.md`](../../README.md)（约 150 行）——知道项目是什么、怎么跑。

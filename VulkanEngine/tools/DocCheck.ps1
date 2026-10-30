@@ -133,10 +133,20 @@ foreach ($relative in $docInfo.Keys) {
     $parentText = Get-Content -LiteralPath $parentReadme -Raw -Encoding UTF8
 
     if ($leaf -eq "README.md") {
-        # A folder index is registered by naming the folder in the parent index.
+        # 文件夹索引 docs/<cat>/README.md 由**上一层**的索引登记（docs/README.md），
+        # 登记方式是写出文件夹名。不能拿它自己做对照 —— 文件夹名天然会
+        # 出现在它自己的 README 正文里，那样这条检查永远通过，等于没检查。
         $categoryName = Split-Path -Leaf $parentDir
-        if ($parentText -notmatch [Regex]::Escape($categoryName)) {
-            Add-Problem "docs/$relative is not referenced by its parent index (folder '$categoryName')"
+        $grandParentDir = Split-Path -Parent $parentDir
+        if ([string]::IsNullOrWhiteSpace($grandParentDir)) { $grandParentDir = $docsPath }
+        $grandParentReadme = Join-Path $grandParentDir "README.md"
+        if (-not (Test-Path -LiteralPath $grandParentReadme)) {
+            Add-Problem "docs/$parent/README.md is missing (required as folder index)"
+            continue
+        }
+        $grandParentText = Get-Content -LiteralPath $grandParentReadme -Raw -Encoding UTF8
+        if ($grandParentText -notmatch [Regex]::Escape($categoryName)) {
+            Add-Problem "docs/$relative is not referenced by its parent index (folder $categoryName)"
         }
         continue
     }
