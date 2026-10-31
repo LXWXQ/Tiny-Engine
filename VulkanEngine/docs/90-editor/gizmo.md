@@ -42,7 +42,9 @@ Möller-Trumbore 三角形求交（精确）
 
 ## 选中包围盒：必须走 3D，不能用 ImGui 画
 
-选中实体的**世界 AABB** 画成白色 12 边线框。
+选中实体的**有向包围盒（OBB）**画成白色 12 边线框：
+把 `BoundsComponent.local` 的 8 个角点乘 `WorldTransformComponent.matrix`。
+物体平移/旋转/缩放时，框跟着一起动。
 
 ### 为什么不能用 ImGui 的 draw list
 
@@ -54,7 +56,7 @@ ImGui 的 draw list 是**纯 2D 叠加，没有深度概念** —— 框会穿�
 | 项 | 做法 |
 |---|---|
 | 拓扑 | `VK_PRIMITIVE_TOPOLOGY_LINE_LIST`，12 条边 = 24 顶点 |
-| 顶点 | 世界空间坐标（AABB 本来就在世界空间算好，不需要 model 矩阵） |
+| 顶点 | 局部 AABB 角点 × 世界矩阵（OBB）；没有局部包围盒时才退回世界 AABB |
 | 深度附件 | **复用 G-Buffer 的深度图**，`LOAD_OP_LOAD` + 管线里 `depthWriteEnable = VK_FALSE` |
 | 颜色目标 | `editorViewport`，`LOAD_OP_LOAD`（保住 PresentPass 的画面） |
 | 顺序 | PresentPass 之后、UiCompositePass 之前 |
@@ -66,10 +68,16 @@ ImGui 的 draw list 是**纯 2D 叠加，没有深度概念** —— 框会穿�
 Gizmo 手柄还是 ImGui 叠加。这是有意的 —— 即使物体被挡住，你也得能抓住手柄。
 主流编辑器（Unity / Unreal）也是这个行为。
 
-### 为什么用世界 AABB 而不是模型 OBB
+### 为什么用局部 AABB × 世界矩阵（OBB），而不是世界 AABB
 
-它每帧已经在 `Scene::rebuildSpatialIndex()` 里算好（零额外开销），
-而且它同时是拾取用的粗筛体 —— 看到的框和"能点到的范围"是同一个东西。
+世界 AABB 是**轴对齐**的：物体旋转 45° 后，AABB 会被"包大"，
+框看起来比物体大一圈，而且框本身不会跟着转 —— 这是三维编辑器里最基础的错误。
+
+OBB 用局部包围盒的角点乘世界矩阵，框和物体的局部轴完全一致：
+旋转、缩放、父节点变换都会正确反映。
+
+拾取用的粗筛体仍然是世界 AABB（`rebuildSpatialIndex` 里的 `WorldBoundsComponent`），
+两者用途不同：**显示用 OBB，粗筛用 AABB**。没有局部包围盒的实体才退回 AABB 显示。
 
 ## 为什么拖拽时包围盒会和物体分开（已修）
 
@@ -88,7 +96,7 @@ UI 是在 `render()` 里构建的，而 `Scene::update()`（负责
 
 ```cpp
 state.services.scene->refreshTransformsAndVisibility();
-origin = refreshedBounds->world.center();       // 手柄锚点
+origin = glm::vec3(refreshedWorld->matrix * glm::vec4(refreshedLocal->local.center(), 1.0f));
 localAxes[0..2] = 归一化的世界矩阵列向量;        // 旋转后轴要跟着转
 ```
 
@@ -119,14 +127,15 @@ gizmo.draw()       ← 手柄最后画，压在框上面
 
 ## 手柄中心对齐包围盒中心
 
-手柄中心取 `WorldBoundsComponent.world.center()`，没有包围盒时退回物体原点。
+手柄中心取 `BoundsComponent.local.center()` 经过 `WorldTransformComponent.matrix`
+变换后的 OBB 中心；没有局部包围盒时退回世界 AABB 中心，再退回物体原点。
 
 为什么不用原点：很多模型的几何原点在脚底或角上（Sponza 的原点在地面中心），
 手柄画在原点会离物体很远，看起来像"没对齐"。用户期望的是手柄落在
 物体"看起来的中心"。
 
-**已知偏差**：旋转手柄视觉上以包围盒中心为圆心，但实际旋转仍绕物体原点
-（因为 `TransformComponent` 的 rotation 是绕自身原点的欧拉角）。
+**已知偏差**：旋转手柄视觉上以 OBB 中心为圆心，但实际旋转仍绕物体原点
+（`orientation` 是相对父节点的局部旋转）。
 父节点带非均匀缩放时更明显。
 
 ## 坐标系约定（最容易搞错的地方）
@@ -134,7 +143,7 @@ gizmo.draw()       ← 手柄最后画，压在框上面
 | 模式 | 手柄画在 | 为什么 |
 |---|---|---|
 | 平移 | **世界轴** | "往上拖就是世界往上"，符合直觉 |
-| 旋转 | 实体**局部轴** | `rotation` 是欧拉角，用局部轴才不会"拖 X 结果斜着转" |
+| 旋转 | 实体**局部轴** | `orientation` 是局部旋转，用局部轴才不会"拖 X 结果斜着转" |
 | 缩放 | 实体**局部轴** | `scale` 本身就是局部的 |
 
 平移时世界位移要折算回**父节点局部空间**：
@@ -158,6 +167,45 @@ const float angle = std::atan2(glm::dot(v, dragPlaneV), glm::dot(v, dragPlaneU))
 float delta = angle - startAngle;
 // 折到 [-PI, PI]，否则绕一圈会突然跳 2PI
 ```
+
+## 旋转：四元数，不是欧拉角加法
+
+这是本手柄最重要的一条修正。
+
+旧实现直接 `newRotation[axis] = startRotation[axis] + delta`。在
+`T * Ry * Rx * Rz * S` 的合成顺序下，**"改 rotation.x"并不等于"绕当前局部 X 轴转"**：
+
+- 拖 X 环，物体会绕一个混合轴转，看起来方向不对；
+- pitch 到 ±90° 时，Y/Z 两个欧拉角描述同一个自由度 —— 万向节死锁，
+  继续拖一个轴会突然翻转或失去响应。
+
+现在的约定：
+
+| 数据 | 作用 |
+|---|---|
+| `TransformComponent::orientation`（`glm::quat`） | **旋转的唯一事实来源**，`localMatrix()` 用它生成矩阵 |
+| `TransformComponent::rotation`（Euler） | 只给 Inspector / JSON / 相机用；`setEuler()` 时同步四元数 |
+| `Gizmo` 的 `startOrientation` | 拖拽开始时的四元数快照 |
+
+拖拽时在**局部轴**上做右乘：
+
+```cpp
+const glm::vec3 localAxis = axisIndex == 0 ? X : axisIndex == 1 ? Y : Z;
+const glm::quat deltaRotation = glm::angleAxis(delta, localAxis);
+newOrientation = glm::normalize(startOrientation * deltaRotation);
+newRotation = TransformComponent::eulerFromQuat(newOrientation);
+```
+
+为什么是右乘：`orientation` 是相对父节点的局部旋转。绕物体自己的局部轴转，
+等价于在局部空间后乘一个增量；换到世界空间就是绕"世界矩阵列向量"转，
+两者由 `startOrientation` 共轭，方向一致。
+
+`buildPlaneBasis` 保证 `(u, v, normal)` 是右手系（`cross(u,v) == normal`），
+所以正的 `delta` 就是绕手柄显示轴的正向右手旋转，不会再出现"拖过去反向转"。
+
+**欧拉角只用于显示**：`eulerFromQuat` 在万向节处固定 `z=0`，Inspector 的数值
+可能跳变，但矩阵不会丢自由度。保存/加载仍然走欧拉角（版本 1 格式不变），
+普通角度可以精确往返；极端万向节姿态保存后会有等价但不同的欧拉表示。
 
 ## 屏幕坐标 ↔ NDC：Y 方向只能翻一次
 
@@ -210,6 +258,10 @@ const float tanHalfFov = std::abs(1.0f / view.projection[1][1]);   // 必须取�
 每一帧拖拽都提交一条 `SetTransformCommand`，靠 `CommandStack` 的合并窗口
 （0.35s，按实体合并）把整个拖拽压成**一条**命令 —— 撤销一次回到拖拽前，
 而不是退回一帧。
+
+命令同时保存**欧拉角 + 四元数**：撤销/重做写回 `orientation`，不会在万向节处
+因为欧拉反解丢信息。合并时由栈里的上一条命令 `absorb()` 新命令的目标值再
+`apply()` —— 否则重做只会回到拖拽的第一帧，而不是最后一帧。
 
 ## 输入优先级
 
@@ -280,5 +332,7 @@ build\Debug\SentinelEditor.exe --empty-scene
 ## 已知限制
 
 - 只有单轴约束。没有平面手柄（XY/YZ/XZ）和屏幕空间手柄。
-- 旋转直接改对应欧拉分量，父节点带非均匀缩放时会与视觉不完全一致。
+- 旋转以四元数为准，Inspector 仍显示欧拉角；万向节附近欧拉数值可能跳变，
+  但物体矩阵不会死锁。父节点带非均匀缩放时，局部轴可能不再严格正交，
+  手柄方向是近似值。
 - 拾取用 AABB，细长/镂空物体的选中范围会比视觉略大（例如 Sponza 整栋是一个实体）。

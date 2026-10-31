@@ -38,12 +38,17 @@ public:
     // 显示在"编辑"菜单里的名字，例如 "Move Entity"
     virtual const char* name() const = 0;
 
-    // 是否把相邻的同类命令合并（用于拖拽滑块：一次拖拽 = 一条命令）
+    // 把相邻的同类命令合并（用于拖拽滑块：一次拖拽 = 一条命令）
     //
     // 为什么需要：ImGui 的 DragFloat 在拖动过程中每帧都会变化，
     // 如果每次都压栈，撤销一次只能退回一帧的数值，用户要按几百次 Ctrl+Z。
     // 返回 true 时，CommandStack 会把连续同类型命令合并成一条。
     virtual bool mergeWith(const Command& previous) const { (void)previous; return false; }
+
+    // 合并时由**上一条命令**吸收新命令的目标值，然后重新 apply。
+    // 这样撤销回到拖拽开始，重做则到拖拽结束（只把新命令 apply 一次，
+    // 上一条命令里的 new* 仍是第一帧的值，重做会退回第一帧）。
+    virtual void absorb(const Command& newer) { (void)newer; }
 };
 
 class CommandStack

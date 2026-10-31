@@ -79,7 +79,7 @@ cursorCaptured = false;
 firstMouse = true;
 
 cameraTransform.translation = smoothPosition;
-cameraTransform.rotation = { smoothPitch, smoothYaw, 0.0f };
+cameraTransform.setEuler({ smoothPitch, smoothYaw, 0.0f });
 lastAppliedPosition = cameraTransform.translation;
 lastAppliedYaw = cameraTransform.rotation.y;
 lastAppliedPitch = cameraTransform.rotation.x;
@@ -175,7 +175,7 @@ smoothPosition = focusPoint - cameraForward(smoothYaw, smoothPitch) * distance;
 // Write back the actually rendered state. The next frame can then tell
 // controller updates apart from external edits.
 cameraTransform.translation = smoothPosition;
-cameraTransform.rotation = { smoothPitch, smoothYaw, 0.0f };
+cameraTransform.setEuler({ smoothPitch, smoothYaw, 0.0f });
 lastAppliedPosition = cameraTransform.translation;
 lastAppliedYaw = cameraTransform.rotation.y;
 lastAppliedPitch = cameraTransform.rotation.x;

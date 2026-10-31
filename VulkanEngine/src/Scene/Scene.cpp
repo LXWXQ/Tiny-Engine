@@ -241,7 +241,7 @@ void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorMana
         // still override this pose at runtime.
         TransformComponent& cameraTransform = getCameraTransform();
         cameraTransform.translation = { -4.6485233f, 5.2119632f, 0.0523994f };
-        cameraTransform.rotation = { 0.3507974f, -17.3302765f, 0.0f };
+        cameraTransform.setEuler({ 0.3507974f, -17.3302765f, 0.0f });
     }
     else if (loadDefaultContent)
     {
@@ -459,6 +459,70 @@ bool Scene::selfTest()
         ok = false;
     }
 
+    // 旋转现在以四元数为准，欧拉角只是显示值。这里钉住三件事：
+    //   1. setEuler -> orientation -> eulerFromQuat 往返一致（非万向节区）；
+    //   2. 四元数矩阵与旧的 T*Ry*Rx*Rz*S 完全等价（不能悄悄改变旋转约定）；
+    //   3. 万向节附近 orientation 仍然有效，矩阵不是 NaN。
+    {
+        TransformComponent rotationTest;
+        const glm::vec3 euler{ 0.31f, -0.72f, 1.13f };
+        rotationTest.setEuler(euler);
+        const glm::vec3 roundTrip = TransformComponent::eulerFromQuat(rotationTest.orientation);
+        if (glm::length(roundTrip - euler) > 1e-4f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: quaternion/euler round trip mismatch\n";
+            ok = false;
+        }
+
+        glm::mat4 legacy = glm::translate(glm::mat4{ 1.0f }, rotationTest.translation);
+        legacy = glm::rotate(legacy, euler.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        legacy = glm::rotate(legacy, euler.x, glm::vec3(1.0f, 0.0f, 0.0f));
+        legacy = glm::rotate(legacy, euler.z, glm::vec3(0.0f, 0.0f, 1.0f));
+        legacy = glm::scale(legacy, rotationTest.scale);
+        const glm::mat4 fromQuat = rotationTest.localMatrix();
+        float maxDiff = 0.0f;
+        for (int column = 0; column < 4; ++column)
+            for (int row = 0; row < 4; ++row)
+                maxDiff = std::max(maxDiff, std::abs(legacy[column][row] - fromQuat[column][row]));
+        if (maxDiff > 1e-5f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: quaternion matrix differs from legacy Euler order\n";
+            ok = false;
+        }
+
+        // pitch 到 90° 是欧拉角的奇异点；四元数必须仍然能生成有限矩阵。
+        TransformComponent gimbalTest;
+        gimbalTest.setOrientation(glm::angleAxis(glm::half_pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f)) *
+                                  TransformComponent::quatFromEuler({ 0.2f, 0.3f, 0.4f }));
+        const glm::mat4 gimbalMatrix = gimbalTest.localMatrix();
+        bool finite = true;
+        for (int column = 0; column < 4; ++column)
+            for (int row = 0; row < 4; ++row)
+                finite = finite && std::isfinite(gimbalMatrix[column][row]);
+        if (!finite)
+        {
+            std::cerr << "[Scene] selfTest FAIL: gimbal-lock orientation produced NaN\n";
+            ok = false;
+        }
+
+        // 单轴旋转反解只能落在对应分量上；拖 X 手柄时 Inspector 不应该同时跳 Y/Z。
+        const glm::vec3 axes[3] = {
+            { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }
+        };
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const glm::vec3 e = TransformComponent::eulerFromQuat(
+                glm::angleAxis(0.4f, axes[axis]));
+            glm::vec3 expected(0.0f);
+            expected[axis] = 0.4f;
+            if (glm::length(e - expected) > 1e-4f)
+            {
+                std::cerr << "[Scene] selfTest FAIL: single-axis euler extraction mismatch\n";
+                ok = false;
+            }
+        }
+    }
+
     std::cout << "[Scene] ECS/spatial selfTest " << (ok ? "PASS" : "FAIL")
               << " | hierarchy=T*Ry*Rx*Rz*S | grid cells=" << index.cellCount() << "\n";
     return ok;
@@ -610,7 +674,7 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
 
         TransformComponent transform;
         transform.translation = e.translation;
-        transform.rotation = e.rotation;
+        transform.setEuler(e.rotation);
         transform.scale = e.scale;
         registry.emplace<TransformComponent>(entity, transform);
         registry.emplace<HierarchyComponent>(entity);
@@ -684,7 +748,8 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
                 if (!e.material.metallicRoughnessMap.empty())
                     materialComp.material->metallicRoughnessMap = loadIfAny(e.material.metallicRoughnessMap, false);
 
-                // 重新分配 bindless 槽位（序列化不存槽位号，因为它是运行期分发的）
+                // 重新分配 bindless 槽位（序列化不存槽位号，因为它是运行期分发的）。
+                // 槽位归实体所有，和 createMeshEntity 保持同一套规则。
                 materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*materialComp.material);
             }
         }
@@ -741,6 +806,10 @@ entt::entity Scene::createMeshEntity(const std::string& absolutePath, const std:
 
     MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(entity);
     materialComp.material = materialSystem.getOrCreateMaterial(name + "_mat");
+
+    // 实体级槽位归 MaterialComponent 所有：每个实体一个槽位，clearEntities()
+    // 按实体归还。不要写 Material::descriptorSetIndex —— 那是材质对象的字段，
+    // 同名的多个实体会共享同一个 Material，但各自持有独立的槽位。
     materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*materialComp.material);
 
     updateWorldTransforms();

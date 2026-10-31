@@ -85,6 +85,14 @@ struct SimplePushConstantData
 // 写死一个常数会导致大模型糊成一片灰、小模型只有一格。
 float checkerScale = 1.0f;
 
+	// 有 UV 时的 UV 归一化：p = (uv - zw) * xy。
+	// 不同模型的 UV 可能只占 [0,1] 的一小块（Quad-Sphere 是 0.05~0.43），
+	// 不归一化的话 8 格棋盘在球上只会显示两三个大格子。
+	//
+	// alignas(16)：GLSL std430 的 vec4 必须 16 字节对齐；而 C++ 的 glm::vec4
+	// 默认只有 4 字节对齐。不加这个会悄悄错开 8 字节，材质字段全乱。
+	alignas(16) glm::vec4 checkerUvTransform{ 1.0f, 1.0f, 0.0f, 0.0f };
+
 	// 偏移必须在编译期钉死，否则"某个字段悄悄移位"会导致材质错乱，
 	// 而且这类错乱看起来像"贴图加载错了"，极难往回追。
 	static constexpr size_t kMaterialOffset = 2 * sizeof(glm::mat4);
@@ -99,7 +107,9 @@ static_assert(offsetof(SimplePushConstantData, albedoFallback) == SimplePushCons
 	"albedoFallback must follow alphaMasked");
 static_assert(offsetof(SimplePushConstantData, checkerScale) == SimplePushConstantData::kMaterialOffset + 20,
 "checkerScale must follow albedoFallback");
-static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 24,
+static_assert(offsetof(SimplePushConstantData, checkerUvTransform) == SimplePushConstantData::kMaterialOffset + 32,
+	"checkerUvTransform must be 16-byte aligned after checkerScale");
+static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 48,
 	"push constant size must match GLSL layout");
 
 struct EngineSettings

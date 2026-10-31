@@ -32,10 +32,12 @@ updated: 2026-10-30
 每帧按固定顺序计算世界变换：
 
 ```
-World = T * Ry * Rx * Rz * S
+World = T * mat4_cast(orientation) * S
 ```
 
-然后用 `World` 的左上 3x3 求逆再转置得到 `normalMatrix`。
+`orientation` 是 `glm::quat`，旋转的唯一事实来源；`setEuler()` 把
+`(x,y,z)` 转成 `qy * qx * qz`，与旧的 `T*Ry*Rx*Rz*S` 完全等价。
+用 `World` 的左上 3x3 求逆再转置得到 `normalMatrix`。
 顺序固定（`T*Ry*Rx*Rz*S`）是刻意的——不同顺序会得到不同的旋转结果，
 而配置里存的是欧拉角，必须与渲染一致。
 
@@ -91,5 +93,6 @@ Scene::selfTest();
 ## 7. 改动注意
 
 - 加组件要在 `Scene::selfTest()` 里补相应校验。
-- 改变换顺序要同步 `CameraController` 与配置里存的欧拉角约定。
+- 改变换顺序要同步 `CameraController` 与配置里存的欧拉角约定；
+  旋转矩阵由 `TransformComponent::orientation` 生成，欧拉角只做显示/序列化。
 - 改剔除逻辑后确认 Sponza `draw calls` 仍是 104（少了说明误剔除）。

@@ -94,6 +94,10 @@ struct SubMesh
     // the opaque white background of the leaf atlas becomes a visible fringe.
     bool alphaMasked = false;
     float alphaCutoff = 0.5f;
+
+    // 该子网格的材质没有 albedo 贴图（会采样到默认白纹理）。
+    // 渲染时用程序化棋盘格代替，避免"没有纹理的网格"变成一坨纯白。
+    bool albedoFallback = false;
 };
 
 class Model
@@ -151,6 +155,13 @@ public:
     glm::vec3 getBoundsCenter() const { return (boundsMin + boundsMax) * 0.5f; }
     float getBoundsRadius() const { return glm::length(boundsMax - boundsMin) * 0.5f; }
 
+    // UV 的实际取值范围。不同模型的 UV 可能只占 [0,1] 的一小块
+    //（Quad-Sphere 的 UV 只在 0.05~0.43），棋盘格要用这个范围归一化，
+    // 否则一张 UV 范围很小的球只会显示两三个大格子。
+    bool hasUv() const { return uvValid; }
+    glm::vec2 getUvMin() const { return uvMin; }
+    glm::vec2 getUvMax() const { return uvMax; }
+
 private:
     void createVertexBuffers(const std::vector<Vertex>& vertices, VkCommandPool commandPool);
     void createIndexBuffers(const std::vector<uint32_t>& indices, VkCommandPool commandPool);
@@ -158,6 +169,7 @@ private:
         VkCommandPool commandPool, VkPipelineStageFlags dstStage, VkAccessFlags dstAccess);
     void finalizeSubMeshes(const std::vector<SubMesh>& src);
     void computeBounds(const std::vector<Vertex>& vertices);
+    void computeUvBounds(const std::vector<Vertex>& vertices);
 
     Device& device;
 
@@ -179,4 +191,8 @@ private:
 
     glm::vec3 boundsMin{ 0.0f };
     glm::vec3 boundsMax{ 0.0f };
+
+    glm::vec2 uvMin{ 0.0f };
+    glm::vec2 uvMax{ 0.0f };
+    bool uvValid = false;
 };

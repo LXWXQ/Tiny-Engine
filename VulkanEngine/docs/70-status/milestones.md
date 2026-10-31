@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
 size: ~170 行
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 # 里程碑与实测基线
@@ -198,3 +198,51 @@ updated: 2026-10-30
 - **验证**：空场景放"遮挡方块(3m) + 被选中的球(8m)"，截图确认包围盒被完全挡住、
   手柄仍可见；遮挡方块显示棋盘格。
 - **回归**：`tools/Validate.ps1` 20/20 PASS，stderr 0 字节。
+
+## D-16：占位棋盘格修复
+
+用户反馈两条：没有有效材质的子网格每帧往 stderr 刷警告；棋盘格整片发白，
+只剩格子缝是暗的。
+
+1. **警告刷屏**：`GeometrySystem` 优先读 `Material::descriptorSetIndex`，
+   而编辑器实体只写了 `MaterialComponent::materialSetIndex`，于是每帧都误判成
+   "没有材质"。改为只认实体组件字段；提示改成每个实体最多一行，且走 `stdout`
+   （`stderr` 必须保持 0 字节）。
+2. **棋盘格发白**：盒式滤波在窗口小于格子时外插到 `[-1.5, 2.5]`，负 albedo
+   写进 HDR G-Buffer 后，PresentPass 的 ACES 会把负输入 clamp 成**白色**。
+   修法是把 pattern clamp 到 `[0,1]`，并改成局部空间三平面投影
+   （球面不再有选轴接缝、不依赖 UV）；fallback 的 PBR 固定为金属度 0、粗糙度 1。
+3. **立方体侧面变条纹**：`debug_cube.obj` 没有 `vn`，`Model.cpp` 原来把缺失法线
+   填成 `(0,1,0)`，导致所有面都按 +Y 投影。改成零法线，片元着色器在零法线时
+   用屏幕导数重建几何法线（同时补上这类模型的 G-Buffer 法线）。
+4. **覆盖到 glTF 子网格**：`SubMesh` 增加 `albedoFallback`，`GLTFLoader` 在材质
+   没有 `baseColorTexture` 时置位。这样"一切没有纹理的网格"都会走棋盘格，
+   而不只是编辑器新建的实体。
+5. **验证**：`--empty-scene` + 资产面板创建 `Quad-Sphere.obj` / `plane.obj` /
+   立方体，截图都是清晰黑白格（立方体六个面都正确）；`tools/Validate.ps1`
+   20/20 PASS，stderr 0 字节。
+
+## D-17：OBB 选中框 + 四元数旋转 + 3D 棋盘
+
+用户反馈三条：旋转时包围盒不跟着转；某些旋转方向相反；球体的黑白格着色有明显
+问题。
+
+1. **包围盒必须是 OBB**：`EditorOverlayPass` 原来用 `WorldBoundsComponent`
+   的轴对齐 AABB，旋转后框会被包大且不跟着转。改为 `BoundsComponent.local`
+   的 8 个角点乘 `WorldTransformComponent.matrix`；Gizmo 手柄锚点同样用
+   `matrix * local.center()`。没有局部包围盒的实体才退回世界 AABB。
+2. **旋转改用四元数**：`TransformComponent` 新增 `orientation`，`localMatrix()`
+   由它生成；欧拉角 `rotation` 只做 Inspector / JSON / 相机显示。Gizmo 拖拽
+   从"直接加欧拉分量"改成 `startOrientation * angleAxis(delta, 局部轴)`，
+   方向由 `buildPlaneBasis` 的右手系保证，pitch 到 ±90° 不再万向节死锁。
+   `SetTransformCommand` 同时保存欧拉角与四元数，撤销/重做写回 `orientation`；
+   `CommandStack` 合并时由上一条命令 `absorb()` 新值，重做能回到拖拽最后一帧。
+3. **棋盘格**：三平面在球面 45° 过渡带会把黑白混成灰带，UV 图集子区间强行
+   拉伸又会接缝/扭曲。改为两条路径：UV 完整时用 8 格 UV 棋盘（导数跨接缝
+   折回）；无 UV 或 UV 只占图集子区间时用局部空间 3D 棋盘（周期 1、加非整数
+   偏移避免整面落在格子边界、屏幕导数抗锯齿）。`Quad-Sphere.obj` 的 UV 只占
+   0.05~0.43，走 3D 路径；`debug_cube` 六个面仍清晰。
+4. **验证**：`--empty-scene` 截图确认立方体/球体都是干净黑白格；Inspector
+   拖 Rotation X 后白框跟着立方体倾斜；Gizmo 拖 Z 环后框与手柄同步旋转；
+   `tools/Validate.ps1` 20/20 PASS，stderr 0 字节；`--selftest` 里新增
+   四元数/欧拉矩阵等价、万向节有限性、单轴反解断言。

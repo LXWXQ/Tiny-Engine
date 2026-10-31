@@ -27,7 +27,10 @@ void CommandStack::execute(std::unique_ptr<Command> command)
     // 因为命令对象里存的是"旧值 + 新值"，上一条的 apply 用的是最新的目标值。
     if (withinMergeWindow && !undoStack.empty() && command->mergeWith(*undoStack.back()))
     {
-        command->apply();
+        // 由上一条命令吸收本次的新值再 apply：撤销回到拖拽开始，
+        // 重做到拖拽结束（新命令不留在栈里）。
+        undoStack.back()->absorb(*command);
+        undoStack.back()->apply();
         lastExecuteTime = now;
         redoStack.clear();
         return;

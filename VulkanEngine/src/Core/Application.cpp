@@ -127,7 +127,7 @@ scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager, loadD
 	if (hasCamera)
 	{
 		scene->getCameraTransform().translation = loadedCamera.position;
-		scene->getCameraTransform().rotation = loadedCamera.rotation;
+		scene->getCameraTransform().setEuler(loadedCamera.rotation);
 		std::cout << "[Config] 已应用相机位姿 ("
 			<< loadedCamera.position.x << ", " << loadedCamera.position.y << ", " << loadedCamera.position.z << ")\n";
 	}
@@ -743,7 +743,7 @@ void FirstApp::loadConfig()
 	if (EngineConfig::load(cam))
 	{
 		scene->getCameraTransform().translation = cam.position;
-		scene->getCameraTransform().rotation = cam.rotation;
+		scene->getCameraTransform().setEuler(cam.rotation);
 		// Treat a camera teleport as a cut, not as a giant motion-blur path.
 		hasPreviousViewProjection = false;
 	}

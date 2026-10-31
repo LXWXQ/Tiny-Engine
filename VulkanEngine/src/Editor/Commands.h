@@ -32,10 +32,18 @@ public:
                         const glm::vec3& oldRotation, const glm::vec3& newRotation,
                         const glm::vec3& oldScale, const glm::vec3& newScale);
 
+    // 四元数版本：Gizmo 拖拽时旋转不能只存欧拉角（万向节处会丢信息）。
+    SetTransformCommand(entt::registry& registry, entt::entity entity,
+                        const glm::vec3& oldTranslation, const glm::vec3& newTranslation,
+                        const glm::vec3& oldRotation, const glm::vec3& newRotation,
+                        const glm::vec3& oldScale, const glm::vec3& newScale,
+                        const glm::quat& oldOrientation, const glm::quat& newOrientation);
+
     void apply() override;
     void revert() override;
     const char* name() const override { return "Modify Transform"; }
     bool mergeWith(const Command& previous) const override;
+    void absorb(const Command& newer) override;
 
 private:
     entt::registry* registry;
@@ -43,6 +51,7 @@ private:
     glm::vec3 oldTranslation, newTranslation;
     glm::vec3 oldRotation, newRotation;
     glm::vec3 oldScale, newScale;
+    glm::quat oldOrientation, newOrientation;
 };
 
 // 重命名实体。
@@ -56,6 +65,7 @@ public:
     void revert() override;
     const char* name() const override { return "Rename Entity"; }
     bool mergeWith(const Command& previous) const override;
+    void absorb(const Command& newer) override;
 
 private:
     entt::registry* registry;

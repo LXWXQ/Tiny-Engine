@@ -137,18 +137,48 @@ void EditorOverlayPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     if (selected != entt::null && frameInfo.registry.valid(selected))
         worldBounds = frameInfo.registry.try_get<WorldBoundsComponent>(selected);
 
-    if (worldBounds == nullptr || !worldBounds->world.valid)
+    // 选中框优先用**局部包围盒 × 世界矩阵**（OBB）：
+    // 物体旋转/缩放时框必须跟着一起转，不能用一个世界 AABB 把旋转"包大"。
+    // 没有局部包围盒时才退回世界 AABB。
+    const BoundsComponent* localBounds = nullptr;
+    const WorldTransformComponent* worldTransform = nullptr;
+    if (selected != entt::null && frameInfo.registry.valid(selected))
+    {
+        localBounds = frameInfo.registry.try_get<BoundsComponent>(selected);
+        worldTransform = frameInfo.registry.try_get<WorldTransformComponent>(selected);
+    }
+
+    glm::vec3 corners[8];
+    if (localBounds != nullptr && localBounds->local.valid && worldTransform != nullptr)
+    {
+        const AABB& box = localBounds->local;
+        const glm::vec3 localCorners[8] = {
+            { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
+            { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
+            { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
+            { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z },
+        };
+        for (int i = 0; i < 8; ++i)
+            corners[i] = glm::vec3(worldTransform->matrix * glm::vec4(localCorners[i], 1.0f));
+    }
+    else if (worldBounds != nullptr && worldBounds->world.valid)
+    {
+        const AABB& box = worldBounds->world;
+        const glm::vec3 worldCorners[8] = {
+            { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
+            { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
+            { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
+            { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z },
+        };
+        for (int i = 0; i < 8; ++i)
+            corners[i] = worldCorners[i];
+    }
+    else
+    {
         return;
+    }
 
     // 12 条棱 -> 24 个世界空间顶点
-    const AABB& box = worldBounds->world;
-    const glm::vec3 corners[8] = {
-        { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
-        { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
-        { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
-        { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z },
-    };
-
     glm::vec3 vertices[24];
     for (int e = 0; e < 12; ++e)
     {

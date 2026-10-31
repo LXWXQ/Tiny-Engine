@@ -22,6 +22,7 @@
 
 #include <imgui.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <entt/entt.hpp>
 
 namespace editor
@@ -116,6 +117,8 @@ private:
     glm::vec3 startTranslation{ 0.0f };
     glm::vec3 startRotation{ 0.0f };
     glm::vec3 startScale{ 1.0f };
+    // 旋转以四元数为准：拖拽过程中在四元数空间复合，避免欧拉角万向节死锁。
+    glm::quat startOrientation{ 1.0f, 0.0f, 0.0f, 0.0f };
 
     // 拖拽开始时的参考量
     float startAxisParam = 0.0f;    // 平移 / 缩放：沿轴的距离

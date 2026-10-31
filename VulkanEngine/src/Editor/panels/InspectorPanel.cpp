@@ -80,6 +80,9 @@ void InspectorPanel::drawTransform(EditorState& state, entt::entity entity)
     const glm::vec3 oldTranslation = transform->translation;
     const glm::vec3 oldRotation = transform->rotation;
     const glm::vec3 oldScale = transform->scale;
+    // 欧拉角在万向节附近可能不是唯一表示；撤销要回到**原来的四元数**，
+    // 不能从 oldRotation 反算（反算会丢掉一个自由度）。
+    const glm::quat oldOrientation = transform->orientation;
 
     glm::vec3 translation = oldTranslation;
     glm::vec3 rotationDegrees = glm::degrees(oldRotation);
@@ -96,11 +99,13 @@ void InspectorPanel::drawTransform(EditorState& state, entt::entity entity)
         if (scale.y < 0.001f) scale.y = 0.001f;
         if (scale.z < 0.001f) scale.z = 0.001f;
 
+        const glm::vec3 newRotation = glm::radians(rotationDegrees);
         state.commands.execute(std::make_unique<SetTransformCommand>(
             registry, entity,
             oldTranslation, translation,
-            oldRotation, glm::radians(rotationDegrees),
-            oldScale, scale));
+            oldRotation, newRotation,
+            oldScale, scale,
+            oldOrientation, TransformComponent::quatFromEuler(newRotation)));
         state.markDirty();
         state.transformRefreshPending = true;
     }

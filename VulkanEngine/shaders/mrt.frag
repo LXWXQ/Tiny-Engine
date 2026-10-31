@@ -6,6 +6,7 @@ layout(location = 1) in vec3 fragPosWorld;
 layout(location = 2) in vec3 fragNormalWorld;
 layout(location = 3) in vec2 fragUV;
 layout(location = 4) in vec3 fragPosLocal;
+layout(location = 5) in vec3 fragNormalLocal;
 
 // 向 4 个 G-Buffer 颜色附件输出。
 // 编号是「输出槽位」而不是附件序号 —— 动态渲染下附件集合由 GeometryPass
@@ -44,49 +45,85 @@ layout(push_constant) uniform Push {
     uint albedoFallback;
     // 棋盘格密度（由 CPU 按模型包围盒算好）
     float checkerScale;
+    // 有 UV 时的归一化：(uv - zw) * xy
+    vec4 checkerUvTransform;
 } push;
 
-// 程序化棋盘格（8x8 格）。
+// 程序化棋盘格。
 //
-// 用途：没有有效材质 / 材质没有 albedo 贴图时，用它代替"默认白纹理"。
+// 用途：没有有效材质槽位 / 材质没有 albedo 贴图时，用它代替"默认白纹理"。
 // 纯白渲染会让物体变成一团没有细节的白块 —— 看不出形状、朝向、有没有在动。
 // 棋盘格能同时暴露：轮廓、UV 方向、物体的旋转。
-//
-// 用 fragUV 而不是屏幕坐标：贴图跟着物体走，转动物体时格子会跟着转。
-// 占位材质的棋盘格（三平面 + 盒式滤波抗锯齿）
 //
 // 【为什么不用 UV】
 //   1. 不同模型/不同面的 UV 尺度可能完全不一致 —— 同一个立方体六个面会显示
 //      出密度不同的格子，看起来像"贴图错了"；
-//   2. UV 频率一旦过高就会产生**摩尔纹**（远处的面糊成一片条纹）。
-//   改用**局部空间坐标**按法线主轴投影（三平面映射的单轴版）：
-//   六个面共用同一套尺度，且格子跟着物体旋转/移动。
+//   2. 还有些模型（debug_cube.obj、plane.obj）根本没有有效 UV；
+//   3. UV 频率一旦过高就会产生摩尔纹。
+// 改用**局部空间坐标 + 局部法线**做三平面投影：任何多面体、球体、
+// 规则/不规则平面都能出格子，且格子跟着物体旋转、不会随世界坐标滑动。
 //
-// 【为什么必须做滤波】
-//   程序化棋盘格没有 mipmap，高频处必然走样。这里用 fwidth 估计
-//   一个像素覆盖多少格，做盒式滤波：
-//     - 格子足够大时 -> 接近清晰的黑白格
-//     - 格子小于一个像素时 -> 平滑收敛到平均灰度，不产生摩尔纹
-vec3 checkerboardTriplanar(vec3 localPos, vec3 worldNormal)
+// 【为什么必须 clamp】
+//   下面的盒式滤波是对"方波"的近似。滤波窗口比格子小时，表达式会外插到
+//   [-1.5, 2.5] 而不是 [0,1]。负的 albedo 会写进 G-Buffer，而 PresentPass
+//   的 ACES 对负输入会 clamp 到**白色**（分子分母同时为负 -> 正值），
+//   表现就是"本该是黑格子的地方全变成白的，只剩格子缝是暗的"。
+//   所以这里必须把 pattern 夹到 [0,1]。
+float checkerFiltered(vec2 p, vec2 dpdx, vec2 dpdy)
 {
-    // 按法线主轴选两个分量（与三平面映射同样的思路）
-    vec3 an = abs(normalize(worldNormal));
-    vec2 coord;
-    if (an.x >= an.y && an.x >= an.z)      coord = localPos.zy;
-    else if (an.y >= an.z)                 coord = localPos.xz;
-    else                                   coord = localPos.xy;
+    // 盒式滤波：w = 一个像素在 p 空间覆盖的宽度。
+    // 格子周期是 2，所以半宽正好覆盖"半格"的过渡带。
+    vec2 w = (abs(dpdx) + abs(dpdy)) * 0.5 + 1e-5;
+    vec2 i = 2.0 * (abs(fract((p - w) * 0.5) - 0.5)
+                  - abs(fract((p + w) * 0.5) - 0.5)) / w;
+    return clamp(0.5 - 0.5 * i.x * i.y, 0.0, 1.0);
+}
 
-    // 密度来自 CPU：保证"物体最大尺寸上大约 6 格"，
-    // 与模型自身的局部尺寸无关（debug_cube.obj 与 Quad-Sphere.obj 差上百倍）。
-    coord *= push.checkerScale;
+// 有完整 UV 的网格用 2D 棋盘按 UV 包在表面上（平面、teapot）。
+// 2D 棋盘按 UV 包在表面上，比三平面混合更接近"贴了一张棋盘贴图"，
+// 球面上也不会出现三平面在 45° 过渡带把黑白混成一片灰的抹痕。
+//
+// u 在 1 -> 0 处环绕：fragUV 跳变会让 dFdx 变成约 8（8 格）。
+// 直接用它做滤波会把接缝那一列糊成灰色；把跨接缝的导数折回 [-0.5,0.5]
+// 就恢复了正常频率（和 skybox 的 textureGrad 处理同一个道理）。
+float checkerUv(vec2 uv)
+{
+    const float kTiles = 8.0;             // 参考你给的黑白格：约 8 格
+    vec2 normalized = (uv - push.checkerUvTransform.zw) * push.checkerUvTransform.xy;
+    vec2 p = normalized * kTiles;
+    vec2 dpdx = dFdx(p);
+    vec2 dpdy = dFdy(p);
+    dpdx.x -= round(dpdx.x);
+    dpdy.x -= round(dpdy.x);
+    return checkerFiltered(p, dpdx, dpdy);
+}
 
-    // 盒式滤波：w = 一个像素在 coord 空间覆盖的宽度
-    vec2 w = fwidth(coord) * 0.5 + 1e-5;
-    vec2 i = 2.0 * (abs(fract((coord - w) * 0.5) - 0.5)
-                  - abs(fract((coord + w) * 0.5) - 0.5)) / w;
-    float pattern = 0.5 - 0.5 * i.x * i.y;   // 0/1 = 两色，0.5 = 平均
+// 3D 棋盘格：在局部空间里按单位立方体做黑白格。
+// 对任何表面（球、多面体、不规则平面）都连续，没有 UV 接缝，也不会像
+// 三平面那样在 45° 过渡带把黑白混成一片灰。
+float checker3D(vec3 p)
+{
+    vec3 q = p + vec3(0.317f, 0.619f, 0.733f); // 避免平面正好落在格子边界上（整面变灰）
+    vec3 f = fract(q);
+    vec3 toBoundary = min(f, vec3(1.0) - f); // 0 = 边界，0.5 = 格子中心
+    vec3 w = (abs(dFdx(q)) + abs(dFdy(q))) * 0.5 + 1e-5;
+    vec3 inside = smoothstep(vec3(0.0), w, toBoundary);
 
-    return mix(vec3(0.05), vec3(0.62), pattern);
+    float parity = mod(floor(q.x) + floor(q.y) + floor(q.z), 2.0);
+    return mix(0.5, parity, min(min(inside.x, inside.y), inside.z));
+}
+
+// 无纹理网格的最终入口：
+//   * UV 覆盖完整（接近 [0,1]）-> 2D 棋盘按 UV 包在表面上（平面/teapot）；
+//   * UV 是图集子区间或没有 UV（Quad-Sphere / debug_cube）-> 局部空间 3D 棋盘。
+// 3D 棋盘在球面上不会出现三平面的灰带或 UV 图集的接缝。
+vec3 checkerboardFallback(vec3 localPos)
+{
+    if (push.checkerUvTransform.x > 0.0f)
+        return mix(vec3(0.03), vec3(0.85), checkerUv(fragUV));
+
+    const vec3 p = localPos * push.checkerScale;
+    return mix(vec3(0.03), vec3(0.85), checker3D(p));
 }
 
 // 你的偏导数法线计算魔法保留在这里！
@@ -129,15 +166,33 @@ void main() {
     // 2. 顶点法线（世界空间）
     // 注意：切线空间法线贴图目前是「有意关闭」的 —— getNormalFromMap() 保留待用，
     // 等材质系统完善、模型能提供可靠切线之后再启用。
-    outNormal = vec4(normalize(fragNormalWorld), 1.0);
+    //
+    // 没有法线的模型（debug_cube.obj 这类 OBJ）顶点法线是零。
+    // 直接 normalize(0) 会得到 NaN，进而污染整个 G-Buffer；这里用世界位置的
+    // 屏幕导数重建几何法线（立方体/平面正好是面法线，光照也一起修好）。
+    vec3 worldNormal = fragNormalWorld;
+    float worldNormal2 = dot(worldNormal, worldNormal);
+    if (any(isnan(worldNormal)) || worldNormal2 < 1e-8)
+    {
+        vec3 gn = cross(dFdx(fragPosWorld), dFdy(fragPosWorld));
+        float g2 = dot(gn, gn);
+        worldNormal = (g2 > 1e-12) ? gn * inversesqrt(g2) : vec3(0.0, 1.0, 0.0);
+    }
+    else
+    {
+        worldNormal *= inversesqrt(worldNormal2);
+    }
+    outNormal = vec4(worldNormal, 1.0);
 
-    // 材质下标。y == 0 表示这个物体不用材质（天空盒 / 程序化网格），
-    // 直接把顶点色当 albedo 写出去 —— 因为此时数组里那个下标可能压根没绑定内容
-    //（descriptorBindingPartiallyBound 允许数组尾部未绑定，采它就是未定义行为）。
+    // 材质下标。y == 0 表示这个物体没有可用的材质槽位（天空盒 / 程序化网格 /
+    // 编辑器里还没分配材质的网格），直接画棋盘格占位 —— 因为此时数组里那个
+    // 下标可能压根没绑定内容（descriptorBindingPartiallyBound 允许数组尾部未绑定，
+    // 采它就是未定义行为）。
     const uint matId = push.material.x;
     if (push.material.y == 0u) {
-        // 没有材质：画棋盘格而不是纯顶点色（顶点色通常是白的，看不出形状）
-        outAlbedo = vec4(checkerboardTriplanar(fragPosLocal, fragNormalWorld) * fragColor, 1.0);
+        // 不乘顶点色：占位着色的目的就是让任何模型（含顶点色非白的）
+        // 都能看到清晰的黑白格。
+        outAlbedo = vec4(checkerboardFallback(fragPosLocal), 1.0);
         outPBR = vec4(0.0, 1.0, 0.0, 1.0);   // 金属度 0、粗糙度 1
         return;
     }
@@ -151,14 +206,27 @@ void main() {
     // 材质没有 albedo 贴图时，采样到的是"默认白纹理" —— 渲染出来是一团白。
     // 改画棋盘格，让占位材质一眼可辨。
     vec4 albedoColor = (push.albedoFallback != 0u)
-        ? vec4(checkerboardTriplanar(fragPosLocal, fragNormalWorld), 1.0)
+        ? vec4(checkerboardFallback(fragPosLocal), 1.0)
         : texture(albedoMaps[nonuniformEXT(matId)], fragUV);
     if (push.alphaMasked != 0u && albedoColor.a < push.alphaCutoff)
         discard;
-    outAlbedo = vec4(albedoColor.rgb * fragColor, albedoColor.a);
+
+    // 占位棋盘格不乘顶点色（理由同上：要保证任何模型都能看出黑白格）；
+    // 真正有 albedo 贴图的走原来的 tint 行为。
+    vec3 albedo = albedoColor.rgb;
+    if (push.albedoFallback == 0u)
+        albedo *= fragColor;
+    outAlbedo = vec4(albedo, albedoColor.a);
 
     // 4. PBR 参数打包 (R: 金属度, G: 粗糙度)
-    float metallic = texture(metallicMaps[nonuniformEXT(matId)], fragUV).b;
-    float roughness = texture(roughnessMaps[nonuniformEXT(matId)], fragUV).g;
+    // 占位材质没有 metallic/roughness 贴图：默认白纹理会给出 metallic=1，
+    // 让棋盘格变成金属反射，黑白对比会被环境光吃掉。退化为"粗糙电介质"。
+    float metallic = 0.0;
+    float roughness = 1.0;
+    if (push.albedoFallback == 0u)
+    {
+        metallic = texture(metallicMaps[nonuniformEXT(matId)], fragUV).b;
+        roughness = texture(roughnessMaps[nonuniformEXT(matId)], fragUV).g;
+    }
     outPBR = vec4(metallic, roughness, 0.0, 1.0);
 }

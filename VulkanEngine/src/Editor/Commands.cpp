@@ -15,10 +15,25 @@ SetTransformCommand::SetTransformCommand(entt::registry& registry, entt::entity 
                                          const glm::vec3& oldTranslation, const glm::vec3& newTranslation,
                                          const glm::vec3& oldRotation, const glm::vec3& newRotation,
                                          const glm::vec3& oldScale, const glm::vec3& newScale)
+    : SetTransformCommand(registry, entity,
+                          oldTranslation, newTranslation,
+                          oldRotation, newRotation,
+                          oldScale, newScale,
+                          TransformComponent::quatFromEuler(oldRotation),
+                          TransformComponent::quatFromEuler(newRotation))
+{
+}
+
+SetTransformCommand::SetTransformCommand(entt::registry& registry, entt::entity entity,
+                                         const glm::vec3& oldTranslation, const glm::vec3& newTranslation,
+                                         const glm::vec3& oldRotation, const glm::vec3& newRotation,
+                                         const glm::vec3& oldScale, const glm::vec3& newScale,
+                                         const glm::quat& oldOrientation, const glm::quat& newOrientation)
     : registry(&registry), entity(entity),
       oldTranslation(oldTranslation), newTranslation(newTranslation),
       oldRotation(oldRotation), newRotation(newRotation),
-      oldScale(oldScale), newScale(newScale)
+      oldScale(oldScale), newScale(newScale),
+      oldOrientation(oldOrientation), newOrientation(newOrientation)
 {
 }
 
@@ -30,6 +45,7 @@ void SetTransformCommand::apply()
     {
         transform->translation = newTranslation;
         transform->rotation = newRotation;
+        transform->orientation = newOrientation;
         transform->scale = newScale;
     }
 }
@@ -42,6 +58,7 @@ void SetTransformCommand::revert()
     {
         transform->translation = oldTranslation;
         transform->rotation = oldRotation;
+        transform->orientation = oldOrientation;
         transform->scale = oldScale;
     }
 }
@@ -52,6 +69,17 @@ bool SetTransformCommand::mergeWith(const Command& previous) const
     // 用 dynamic_cast 而不是类型标签：命令类型很少，且这条路径不在渲染热路径上。
     const auto* other = dynamic_cast<const SetTransformCommand*>(&previous);
     return other && other->entity == entity;
+}
+
+void SetTransformCommand::absorb(const Command& newer)
+{
+    const auto* other = dynamic_cast<const SetTransformCommand*>(&newer);
+    if (other == nullptr || other->entity != entity)
+        return;
+    newTranslation = other->newTranslation;
+    newRotation = other->newRotation;
+    newOrientation = other->newOrientation;
+    newScale = other->newScale;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +113,14 @@ bool RenameEntityCommand::mergeWith(const Command& previous) const
 {
     const auto* other = dynamic_cast<const RenameEntityCommand*>(&previous);
     return other && other->entity == entity;
+}
+
+void RenameEntityCommand::absorb(const Command& newer)
+{
+    const auto* other = dynamic_cast<const RenameEntityCommand*>(&newer);
+    if (other == nullptr || other->entity != entity)
+        return;
+    newName = other->newName;
 }
 
 // ---------------------------------------------------------------------------

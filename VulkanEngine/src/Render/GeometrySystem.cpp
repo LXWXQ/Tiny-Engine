@@ -119,11 +119,10 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         push.materialValid = objectUsesMaterial ? 1u : 0u;
         push.materialId = fallbackMatId;
 
-        // 只有"实体自己带材质、但那个材质没有 albedo 贴图"才算 fallback。
-        // glTF 实体的材质在子网格槽位里（materialComp 为空），不能误判成 fallback，
-        // 否则 Sponza 会整片变成棋盘格。
-        push.albedoFallback = (materialComp && materialComp->material &&
-                               !materialComp->material->albedoMap) ? 1u : 0u;
+        // 实体自带材质、但材质没有 albedo 贴图 -> 整实体走占位棋盘格。
+        // glTF 的子网格材质另算（SubMesh::albedoFallback），不能在这里一刀切。
+        const bool entityAlbedoFallback = materialComp && materialComp->material &&
+                                          !materialComp->material->albedoMap;
 
         // 棋盘格密度：让"最大尺寸上约 6 格"。
         // 不用固定常数是因为模型的局部尺寸差异极大（debug_cube 与 Quad-Sphere
@@ -136,7 +135,24 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                 const glm::vec3 extent = bounds->local.max - bounds->local.min;
                 const float maxExtent = std::max({ extent.x, extent.y, extent.z });
                 if (maxExtent > 1e-6f)
-                    push.checkerScale = 12.0f / maxExtent;   // 滤波公式周期为 2 -> 实际 6 格
+                    push.checkerScale = 6.0f / maxExtent;   // 3D 棋盘格周期为 1
+            }
+        }
+
+        // UV 归一化：只有 UV 本身覆盖 [0,1] 附近时才用 UV 棋盘。
+        // Quad-Sphere 的 UV 只占 0.05~0.43（图集子区间），强行归一化会在
+        // 球面/接缝处变成大片扭曲的格子；这种情况改用 3D 棋盘。
+        push.checkerUvTransform = glm::vec4(0.0f);
+        if (mesh->model && mesh->model->hasUv())
+        {
+            const glm::vec2 uvMin = mesh->model->getUvMin();
+            const glm::vec2 uvMax = mesh->model->getUvMax();
+            const glm::vec2 uvExtent = uvMax - uvMin;
+            if (uvExtent.x > 0.8f && uvExtent.y > 0.8f)
+            {
+                const float scaleU = 1.0f / uvExtent.x;
+                const float scaleV = 1.0f / uvExtent.y;
+                push.checkerUvTransform = glm::vec4(scaleU, scaleV, uvMin.x, uvMin.y);
             }
         }
 
@@ -149,10 +165,14 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
         for (const SubMesh& subMesh : mesh->model->getSubMeshes())
         {
-            const uint32_t objectMaterialSlot = materialComp
-                ? (materialComp->material ? materialComp->material->descriptorSetIndex
-                                          : materialComp->materialSetIndex)
-                : kInvalidMaterialSlot;
+            // 实体级材质槽位只认 MaterialComponent::materialSetIndex：
+            //   * 它跟着实体生命周期走，clearEntities() 释放槽位时会一起清掉；
+            //   * Material::descriptorSetIndex 是"材质对象"的字段，材质可能被多个
+            //     实体共享，槽位释放后它会过期，不能拿来判断实体有没有槽位。
+            // 之前这里优先读 material->descriptorSetIndex，而 createMeshEntity 只写了
+            // MaterialComponent 那一份 —— 结果每帧都误判成"没有材质"并刷屏。
+            const uint32_t objectMaterialSlot = materialComp ? materialComp->materialSetIndex
+                                                             : kInvalidMaterialSlot;
 
             uint32_t slot = (subMesh.materialSlot != kInvalidMaterialSlot)
                 ? subMesh.materialSlot
@@ -160,8 +180,13 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
             if (objectUsesMaterial && slot == kInvalidMaterialSlot)
             {
-                std::cerr << "[GeometrySystem] entity " << entt::to_integral(entity)
-                          << " 的子网格没有有效材质槽位，退化为默认着色。\n";
+                const uint32_t entityId = entt::to_integral(entity);
+                if (warnedFallbackEntities.insert(entityId).second)
+                {
+                    // 只提示一次，并且走 stdout：stderr 必须保持 0 字节（回归判据）。
+                    std::cout << "[GeometrySystem] entity " << entityId
+                              << " 没有有效材质槽位，使用棋盘格占位着色（仅提示一次）\n";
+                }
                 slot = fallbackMatId;
                 push.materialValid = 0u;
             }
@@ -171,6 +196,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
             }
 
             push.materialId = (slot == kInvalidMaterialSlot) ? fallbackMatId : slot;
+            push.albedoFallback = (subMesh.albedoFallback || entityAlbedoFallback) ? 1u : 0u;
             push.alphaMasked = subMesh.alphaMasked ? 1u : 0u;
             push.alphaCutoff = subMesh.alphaCutoff;
             vkCmdPushConstants(commandBuffer, pipelineLayout,

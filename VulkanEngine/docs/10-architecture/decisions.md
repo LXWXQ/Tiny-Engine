@@ -180,3 +180,31 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 - **收益/代价**：FPS 452 -> 498，绑定 104 -> 1，**draw call 不变**。
 - **新增约束**：bindless 后"回收再复用"会改写 GPU 可能正在读的数组项。
   D-4 已改为 timeline 延迟回收（见 [resource-lifetime](resource-lifetime.md) §4.3）。
+
+## 决策 22：旋转以四元数为真源，欧拉角只做边界表示
+
+- **为什么**：Gizmo 连续拖拽不能直接改欧拉分量。`T*Ry*Rx*Rz*S` 下
+  `rotation.x += delta` 不等于绕局部 X 转；pitch 到 ±90° 还会万向节死锁。
+- **做法**：`TransformComponent` 增加 `glm::quat orientation`，`localMatrix()`
+  用 `mat4_cast`；`rotation` 是显示/序列化缓存，通过 `setEuler()` /
+  `setOrientation()` 双向同步。
+- **为什么保留欧拉角**：相机、`config/engine.json`、`*.scene.json` v1、
+  Inspector 都以欧拉角为接口。改格式会破坏现有资产与配置迁移。
+- **为什么局部右乘**：`orientation` 是相对父节点的局部旋转，绕自身轴转就是
+  `orientation * angleAxis(delta, localAxis)`；世界空间方向由父矩阵共轭得到。
+- **代价**：两套表示必须同步。**禁止直接写 `.rotation`**，只能走
+  `setEuler()`；拖拽命令同时存欧拉角与四元数，撤销/重做写回 `orientation`。
+- **已知代价**：万向节附近 Inspector 的欧拉数值可能跳变；极端姿态存盘后
+  可能得到等价但不同的欧拉表示。普通角度矩阵精确一致（`--selftest` 有断言）。
+
+## 决策 23：选中框显示 OBB，拾取粗筛仍用世界 AABB
+
+- **为什么**：世界 AABB 旋转后会被包大，框与物体分离；三维编辑器的选中框
+  必须跟物体一起转。
+- **做法**：`EditorOverlayPass` 用 `BoundsComponent.local` 的 8 个角点乘
+  `WorldTransformComponent.matrix`；Gizmo 锚点用局部中心乘世界矩阵。
+- **为什么拾取仍用 AABB**：均匀网格 broad phase 需要轴对齐体；精确求交仍在
+  三角形上。看到的是 OBB，能点到的范围是稍大的 AABB —— 这是性能与精度的
+  折中，不是 bug。
+- **代价**：没有 `BoundsComponent` 的实体退回 AABB 显示；细长/旋转物体的
+  点选范围会比 OBB 略大。

@@ -7,7 +7,9 @@
 
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/glm.hpp>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,14 +28,61 @@ struct TransformComponent
 {
     glm::vec3 translation{ 0.0f };
     glm::vec3 scale{ 1.0f, 1.0f, 1.0f };
-    glm::vec3 rotation{ 0.0f }; // Euler radians, same convention as before
+    // 欧拉角只用于 Inspector / 配置文件 / 相机。**矩阵由 orientation 生成**。
+    // 直接写 rotation 不会同步 orientation —— 请用 setEuler()。
+    glm::vec3 rotation{ 0.0f };              // Euler radians, XYZ 合成顺序
+    // 旋转的唯一事实来源。用四元数而不是欧拉角，避免万向节死锁：
+    // 连续拖动手柄时每帧在四元数空间复合，不会在 pitch=±90° 处丢一个自由度。
+    glm::quat orientation{ 1.0f, 0.0f, 0.0f, 0.0f };
+
+    // 与旧 localMatrix() 的 T*Ry*Rx*Rz*S 完全等价：
+    //   q = qy * qx * qz
+    static glm::quat quatFromEuler(const glm::vec3& e)
+    {
+        return glm::angleAxis(e.y, glm::vec3(0.0f, 1.0f, 0.0f)) *
+               glm::angleAxis(e.x, glm::vec3(1.0f, 0.0f, 0.0f)) *
+               glm::angleAxis(e.z, glm::vec3(0.0f, 0.0f, 1.0f));
+    }
+
+    // 从 R = Ry(y) * Rx(x) * Rz(z) 反解欧拉角，仅用于显示/序列化。
+    // 注意 GLM 的 mat3 是列主序：R[col][row]。
+    static glm::vec3 eulerFromQuat(const glm::quat& q)
+    {
+        const glm::mat3 R = glm::mat3_cast(glm::normalize(q));
+        const float sx = glm::clamp(-R[2][1], -1.0f, 1.0f);   // R[row=1][col=2]
+        const float x = std::asin(sx);
+        float y;
+        float z;
+        if (std::abs(sx) < 0.999999f)
+        {
+            y = std::atan2(R[2][0], R[2][2]);                 // R[0][2], R[2][2]
+            z = std::atan2(R[0][1], R[1][1]);                 // R[1][0], R[1][1]
+        }
+        else
+        {
+            // 万向节：y/z 只能确定和/差，固定 z=0。
+            y = std::atan2(-R[0][2], R[0][0]);
+            z = 0.0f;
+        }
+        return glm::vec3(x, y, z);
+    }
+
+    void setEuler(const glm::vec3& e)
+    {
+        rotation = e;
+        orientation = quatFromEuler(e);
+    }
+
+    void setOrientation(const glm::quat& q)
+    {
+        orientation = glm::normalize(q);
+        rotation = eulerFromQuat(orientation);
+    }
 
     glm::mat4 localMatrix() const
     {
         glm::mat4 transform = glm::translate(glm::mat4{ 1.0f }, translation);
-        transform = glm::rotate(transform, rotation.y, { 0.0f, 1.0f, 0.0f });
-        transform = glm::rotate(transform, rotation.x, { 1.0f, 0.0f, 0.0f });
-        transform = glm::rotate(transform, rotation.z, { 0.0f, 0.0f, 1.0f });
+        transform *= glm::mat4_cast(orientation);
         transform = glm::scale(transform, scale);
         return transform;
     }

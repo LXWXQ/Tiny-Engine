@@ -17,6 +17,7 @@ Model::Model(Device& device, VkCommandPool commandPool, const std::vector<Vertex
     createVertexBuffers(vertices, commandPool);
     createIndexBuffers(indices, commandPool);
     computeBounds(vertices);
+    computeUvBounds(vertices);
     finalizeSubMeshes({});
 }
 
@@ -26,6 +27,7 @@ Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& bu
     createVertexBuffers(builder.vertices, commandPool);
     createIndexBuffers(builder.indices, commandPool);
     computeBounds(builder.vertices);
+    computeUvBounds(builder.vertices);
     finalizeSubMeshes(builder.subMeshes);
 
     // 保留一份 CPU 侧几何用于编辑器点选。
@@ -129,6 +131,23 @@ void Model::computeBounds(const std::vector<Vertex>& vertices)
         boundsMin = glm::min(boundsMin, v.position);
         boundsMax = glm::max(boundsMax, v.position);
     }
+}
+
+void Model::computeUvBounds(const std::vector<Vertex>& vertices)
+{
+    uvValid = false;
+    if (vertices.empty()) return;
+
+    uvMin = vertices[0].uv;
+    uvMax = vertices[0].uv;
+    for (const Vertex& v : vertices)
+    {
+        uvMin = glm::min(uvMin, v.uv);
+        uvMax = glm::max(uvMax, v.uv);
+    }
+
+    const glm::vec2 extent = uvMax - uvMin;
+    uvValid = (extent.x > 1e-5f || extent.y > 1e-5f);
 }
 
 void Model::finalizeSubMeshes(const std::vector<SubMesh>& src)
@@ -345,7 +364,10 @@ void Model::Builder::loadModel(const std::string& filepath)
             }
             else
             {
-                vertex.normal = { 0.0f, 1.0f, 0.0f };  // 没有法线时默认朝上
+                // 没有法线时写零，而不是伪造 (0,1,0)：
+                // 伪造的"朝上"会让占位棋盘格在立方体侧面只沿一个轴变化，
+                // 退化成竖条纹；片元着色器看到零法线会用屏幕导数重建几何法线。
+                vertex.normal = { 0.0f, 0.0f, 0.0f };
             }
 
             if (attrib.texcoords.size() > 0 && index.texcoord_index >= 0)

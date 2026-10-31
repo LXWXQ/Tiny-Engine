@@ -12,6 +12,10 @@ layout(location = 3) out vec2 fragUV;
 // 局部空间坐标：占位材质的棋盘格用它，保证六个面尺度一致、且跟着物体旋转。
 // 用局部坐标而不是世界坐标，是因为世界坐标的格子会在物体移动时"滑动"。
 layout(location = 4) out vec3 fragPosLocal;
+// 局部空间法线：占位棋盘格的三平面投影按它选轴/混合。
+// 必须用 local normal（不是 world normal）：物体旋转时棋盘格应该"贴在物体上"，
+// 而不是跟着世界轴换投影方向。
+layout(location = 5) out vec3 fragNormalLocal;
 
 layout(set = 0, binding = 0) uniform GlobalUbo
 {
@@ -31,6 +35,11 @@ layout(push_constant) uniform Push
     // 顶点着色器不读它，但必须在这里声明出来 —— push_constant 块的大小是
     // 由所有 stage 里最大的那个声明决定的；少声明会导致片元这边读越界。
     uvec2 material;
+    float alphaCutoff;
+    uint alphaMasked;
+    uint albedoFallback;
+    float checkerScale;
+    vec4 checkerUvTransform;
 } push;
 
 void main() 
@@ -42,4 +51,5 @@ void main()
     fragColor = inColor;
     fragUV = inUV;
     fragPosLocal = inPosition;
+    fragNormalLocal = inNormal;
 }

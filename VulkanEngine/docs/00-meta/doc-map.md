@@ -117,8 +117,8 @@ updated: 2026-10-30
 | `panels/ConsolePanel.*` | 日志过滤 | [editor/panels](../90-editor/panels.md) | panels |
 | `panels/ViewportPanel.*` | 3D 视口：离屏纹理 + 射线拾取 | [editor/viewport](../90-editor/viewport.md)、[editor/gizmo](../90-editor/gizmo.md) | viewport、gizmo |
 | `Gizmo.h/.cpp` | 三轴手柄：投影、命中测试、拖拽换算 | [editor/gizmo](../90-editor/gizmo.md) | gizmo |
-| `src/Render/EditorOverlayPass.*` | 选中包围盒的 3D 线框（复用 G-Buffer 深度做遮挡） | [editor/gizmo](../90-editor/gizmo.md) | gizmo |
-| `shaders/mrt.frag` 棋盘格 | 无 albedo 贴图时的占位着色 + UV 退化回退 | [editor/materials](../90-editor/materials.md) | materials |
+| `src/Render/EditorOverlayPass.*` | 选中包围盒 OBB 的 3D 线框（复用 G-Buffer 深度做遮挡） | [editor/gizmo](../90-editor/gizmo.md) | gizmo |
+| `shaders/mrt.frag` 棋盘格 | 无 albedo 贴图时的占位着色（完整 UV 走 2D 棋盘，否则 3D 棋盘） | [editor/materials](../90-editor/materials.md) | materials |
 | `panels/AssetBrowserPanel.*` | 扫描 Models 目录，双击创建实体（走命令栈） | [editor/panels](../90-editor/panels.md) | panels |
 
 配套的引擎侧改动（改这些要同时看编辑器文档）：

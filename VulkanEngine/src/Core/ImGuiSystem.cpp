@@ -207,7 +207,7 @@ void ImGuiSystem::renderCameraPanel(TransformComponent& cameraTransform, CameraC
 
 	glm::vec3 eulerAngles = glm::degrees(cameraTransform.rotation);
 	if (ImGui::DragFloat3("Rotation", &eulerAngles.x, 1.0f))
-		cameraTransform.rotation = glm::radians(eulerAngles);
+		cameraTransform.setEuler(glm::radians(eulerAngles));
 
 	if (!controller) return;
 

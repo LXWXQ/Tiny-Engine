@@ -230,6 +230,7 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
     std::vector<uint32_t> materialSlots(gltf.materials.size(), kInvalidMaterialSlot);
     std::vector<uint8_t> materialAlphaMasked(gltf.materials.size(), 0);
     std::vector<float> materialAlphaCutoff(gltf.materials.size(), 0.5f);
+    std::vector<uint8_t> materialAlbedoFallback(gltf.materials.size(), 0);
 
     for (size_t i = 0; i < gltf.materials.size(); ++i)
     {
@@ -270,6 +271,9 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
         materialSlots[i] = mat->descriptorSetIndex;
         materialAlphaMasked[i] = (mat->alphaMode == AlphaMode::MASK_MODE) ? 1u : 0u;
         materialAlphaCutoff[i] = mat->alphaCutoff;
+        // 没有 baseColorTexture 的 glTF 材质也会采样到默认白纹理；标记出来，
+        // 让 GeometrySystem 对"没有纹理的网格"统一走棋盘格占位着色。
+        materialAlbedoFallback[i] = mat->albedoMap ? 0u : 1u;
     }
 
     // ---------------- 几何 ----------------
@@ -374,7 +378,9 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
                         vertex.normal = glm::normalize(normalMatrix * readVec3(normView, v));
                     else
                     {
-                        vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                        // 零法线：片元着色器会用屏幕导数重建几何法线。
+                        // 不要伪造成 (0,1,0)，否则占位棋盘格会在侧面退化成条纹。
+                        vertex.normal = glm::vec3(0.0f);
                         ++missingNormals;
                     }
 
@@ -410,6 +416,7 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
                 {
                     sub.alphaMasked = materialAlphaMasked[prim.material] != 0;
                     sub.alphaCutoff = materialAlphaCutoff[prim.material];
+                    sub.albedoFallback = materialAlbedoFallback[prim.material] != 0;
                 }
 
                 if (sub.indexCount > 0)
@@ -438,7 +445,8 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
     }
 
     if (missingNormals > 0)
-        std::cerr << "[GLTF] 警告: " << missingNormals << " 个顶点缺少法线，已填 (0,1,0)\n";
+        std::cout << "[GLTF] 提示: " << missingNormals
+                  << " 个顶点缺少法线，已填零向量（渲染时用几何法线）\n";
     if (skippedPrimitives > 0)
         std::cerr << "[GLTF] 警告: 跳过 " << skippedPrimitives << " 个非三角形/无效图元\n";
 

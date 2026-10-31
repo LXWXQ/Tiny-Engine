@@ -340,6 +340,22 @@ bool Gizmo::selfTest()
         }
     }
 
+    // 旋转的符号约定：buildPlaneBasis 必须给右手系，这样正的极角增量
+    // 就是绕 normal 的正向右手旋转，和 angleAxis(delta, localAxis) 一致。
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        glm::vec3 normal(0.0f);
+        normal[axis] = 1.0f;
+        glm::vec3 u(0.0f);
+        glm::vec3 v(0.0f);
+        buildPlaneBasis(normal, u, v);
+        if (glm::dot(glm::cross(u, v), normal) < 0.9999f)
+        {
+            std::cerr << "[Gizmo] selfTest FAIL: rotation plane basis is not right-handed\n";
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -369,16 +385,28 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         return false;
     }
 
-    // 手柄中心：优先用**世界包围盒中心**，没有包围盒时退回物体原点。
+    // 手柄中心：优先用**局部包围盒中心经过世界矩阵变换**（OBB 中心），
+    // 没有局部包围盒时退回世界 AABB 中心，再退回物体原点。
     //
-    // 为什么不用原点：很多模型的几何原点在脚底或角上（Sponza 的原点在地面中心），
-    // 手柄画在原点会离物体很远，看起来像"没对齐"。用户期望的是手柄落在
-    // 物体"看起来的中心"，也就是包围盒中心。
+    // 不能用世界 AABB 中心：物体旋转后 AABB 会被"包大"，中心也会漂移，
+    // 手柄看起来就不在物体上了。局部中心 × 世界矩阵会跟着旋转/缩放/平移。
     glm::vec3 origin = glm::vec3(world->matrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-    if (const auto* worldBounds = registry.try_get<WorldBoundsComponent>(entity))
+    bool usedLocalCenter = false;
+    if (const auto* localBounds = registry.try_get<BoundsComponent>(entity))
     {
-        if (worldBounds->world.valid)
-            origin = worldBounds->world.center();
+        if (localBounds->local.valid)
+        {
+            origin = glm::vec3(world->matrix * glm::vec4(localBounds->local.center(), 1.0f));
+            usedLocalCenter = true;
+        }
+    }
+    if (!usedLocalCenter)
+    {
+        if (const auto* worldBounds = registry.try_get<WorldBoundsComponent>(entity))
+        {
+            if (worldBounds->world.valid)
+                origin = worldBounds->world.center();
+        }
     }
 
     // 局部轴（列向量；缩放会污染长度，所以归一化）
@@ -474,6 +502,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         startTranslation = transform->translation;
         startRotation = transform->rotation;
         startScale = transform->scale;
+        startOrientation = transform->orientation;
         dragOrigin = origin;
 
         const int axisIndex = (int)hovered - 1;
@@ -529,6 +558,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         glm::vec3 newTranslation = startTranslation;
         glm::vec3 newRotation = startRotation;
         glm::vec3 newScale = startScale;
+        glm::quat newOrientation = startOrientation;
 
         const int axisIndex = (int)activeAxis - 1;
 
@@ -566,10 +596,16 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
                 while (delta > 3.14159265359f) delta -= 6.28318530718f;
                 while (delta < -3.14159265359f) delta += 6.28318530718f;
 
-                // 直接改对应的欧拉分量。
-                // TransformComponent 的合成顺序是 T*Ry*Rx*Rz*S，手柄也画在局部轴上，
-                // 所以"拖 X 环改 rotation.x"在这套约定下是自洽的。
-                newRotation[axisIndex] = startRotation[axisIndex] + delta;
+                // 在四元数空间绕**局部轴**复合：
+                //   新朝向 = 旧朝向 * angleAxis(delta, 局部单位轴)
+                // 旧实现直接改欧拉分量，在 T*Ry*Rx*Rz 的顺序下拖 X 轴并不等于
+                // 绕当前局部 X 轴转，而且 pitch 到 ±90° 会万向节死锁。
+                const glm::vec3 localAxis = (axisIndex == 0) ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                           : (axisIndex == 1) ? glm::vec3(0.0f, 1.0f, 0.0f)
+                                                              : glm::vec3(0.0f, 0.0f, 1.0f);
+                const glm::quat deltaRotation = glm::angleAxis(delta, localAxis);
+                newOrientation = glm::normalize(startOrientation * deltaRotation);
+                newRotation = TransformComponent::eulerFromQuat(newOrientation);
             }
         }
         else // Scale
@@ -587,7 +623,8 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
             registry, dragEntity,
             startTranslation, newTranslation,
             startRotation, newRotation,
-            startScale, newScale));
+            startScale, newScale,
+            startOrientation, newOrientation));
         state.markDirty();
 
         // 立刻重算世界变换与包围盒，否则本帧画出来的包围盒/手柄还是旧位置
@@ -603,10 +640,23 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
             if (const auto* refreshedWorld = registry.try_get<WorldTransformComponent>(dragEntity))
             {
                 origin = glm::vec3(refreshedWorld->matrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-                if (const auto* refreshedBounds = registry.try_get<WorldBoundsComponent>(dragEntity))
+                bool refreshedLocalCenter = false;
+                if (const auto* refreshedLocalBounds = registry.try_get<BoundsComponent>(dragEntity))
                 {
-                    if (refreshedBounds->world.valid)
-                        origin = refreshedBounds->world.center();
+                    if (refreshedLocalBounds->local.valid)
+                    {
+                        origin = glm::vec3(refreshedWorld->matrix *
+                                           glm::vec4(refreshedLocalBounds->local.center(), 1.0f));
+                        refreshedLocalCenter = true;
+                    }
+                }
+                if (!refreshedLocalCenter)
+                {
+                    if (const auto* refreshedBounds = registry.try_get<WorldBoundsComponent>(dragEntity))
+                    {
+                        if (refreshedBounds->world.valid)
+                            origin = refreshedBounds->world.center();
+                    }
                 }
 
                 // 旋转会改变局部轴的方向，手柄必须跟着转
