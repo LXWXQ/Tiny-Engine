@@ -1,6 +1,7 @@
 #include "Model.h"
 
 #include <glm/gtc/matrix_inverse.hpp>
+#include <algorithm>
 #include <limits>
 #include "RHI/Device.h"
 #include "RHI/CommandUtils.h"
@@ -35,7 +36,79 @@ Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& bu
     pickingPositions.reserve(builder.vertices.size());
     for (const Vertex& v : builder.vertices)
         pickingPositions.push_back(v.position);
-    pickingIndices = builder.indices;
+    // Terrain stores every LOD plus skirts in one Model. Picking uses only the
+    // LOD0 surface range: other LODs are duplicates and skirts are not ground.
+    const bool hasTerrainLods = std::any_of(
+        subMeshes.begin(), subMeshes.end(),
+        [](const SubMesh& subMesh) { return subMesh.isTerrainChunk; });
+    if (hasTerrainLods)
+    {
+        pickingIndices.clear();
+        for (const SubMesh& subMesh : subMeshes)
+        {
+            if (!subMesh.isTerrainChunk || subMesh.terrainLod != 0u)
+                continue;
+            const uint32_t surfaceCount = std::min(
+                subMesh.terrainSurfaceIndexCount, subMesh.indexCount);
+            const uint32_t end = subMesh.firstIndex + surfaceCount;
+            if (subMesh.firstIndex < builder.indices.size())
+            {
+                const uint32_t clampedEnd = std::min(
+                    end, static_cast<uint32_t>(builder.indices.size()));
+                pickingIndices.insert(pickingIndices.end(),
+                                      builder.indices.begin() + subMesh.firstIndex,
+                                      builder.indices.begin() + clampedEnd);
+            }
+        }
+    }
+    else
+    {
+        pickingIndices = builder.indices;
+    }
+}
+
+Model::Model(Device& device, GpuMeshTag,
+             VkBuffer vertexBufferArg, VmaAllocation vertexAllocationArg,
+             uint32_t vertexCountArg,
+             VkBuffer indexBufferArg, VmaAllocation indexAllocationArg,
+             uint32_t indexCountArg,
+             std::vector<SubMesh> subMeshesArg,
+             std::vector<glm::vec3> pickingPositionsArg,
+             std::vector<uint32_t> pickingIndicesArg,
+             const glm::vec3& boundsMinArg, const glm::vec3& boundsMaxArg,
+             const glm::vec2& uvMinArg, const glm::vec2& uvMaxArg, bool uvValidArg)
+    : device(device),
+      vertexBuffer(vertexBufferArg), vertexAllocation(vertexAllocationArg),
+      vertexCount(vertexCountArg),
+      hasIndexBuffer(indexCountArg > 0u),
+      indexBuffer(indexBufferArg), indexAllocation(indexAllocationArg),
+      indexCount(indexCountArg),
+      subMeshes(std::move(subMeshesArg)),
+      pickingPositions(std::move(pickingPositionsArg)),
+      pickingIndices(std::move(pickingIndicesArg)),
+      boundsMin(boundsMinArg), boundsMax(boundsMaxArg),
+      uvMin(uvMinArg), uvMax(uvMaxArg), uvValid(uvValidArg)
+{
+    if (subMeshes.empty() && indexCount > 0u)
+        subMeshes.push_back(SubMesh{ 0, indexCount, kInvalidMaterialSlot });
+}
+
+std::shared_ptr<Model> Model::createFromGpuMesh(
+    Device& device,
+    VkBuffer vertexBufferArg, VmaAllocation vertexAllocationArg, uint32_t vertexCountArg,
+    VkBuffer indexBufferArg, VmaAllocation indexAllocationArg, uint32_t indexCountArg,
+    std::vector<SubMesh> subMeshesArg,
+    std::vector<glm::vec3> pickingPositionsArg,
+    std::vector<uint32_t> pickingIndicesArg,
+    const glm::vec3& boundsMinArg, const glm::vec3& boundsMaxArg,
+    const glm::vec2& uvMinArg, const glm::vec2& uvMaxArg, bool uvValidArg)
+{
+    return std::shared_ptr<Model>(new Model(
+        device, GpuMeshTag{}, vertexBufferArg, vertexAllocationArg, vertexCountArg,
+        indexBufferArg, indexAllocationArg, indexCountArg,
+        std::move(subMeshesArg), std::move(pickingPositionsArg),
+        std::move(pickingIndicesArg), boundsMinArg, boundsMaxArg,
+        uvMinArg, uvMaxArg, uvValidArg));
 }
 
 Model::~Model()

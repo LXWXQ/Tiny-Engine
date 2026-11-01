@@ -52,7 +52,23 @@ void HierarchyPanel::draw(EditorState& state)
         state.markDirty();
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("(%d entities)", static_cast<int>(registry.view<TransformComponent>().size()));
+    if (ImGui::Button("Create Terrain"))
+    {
+        terrain::TerrainConfig config;
+        const entt::entity entity = createTerrainThroughCommand(
+            registry, *state.services.scene, state.commands, config, "Terrain");
+        if (entity != entt::null)
+        {
+            state.selection.select(entity);
+            state.markDirty();
+        }
+        else
+        {
+            state.pushLog(LogEntry::Level::Error, "[Editor] create terrain failed");
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%d entities)", static_cast<int>(registry.view<TransformComponent>().size() - registry.view<TerrainChunkComponent>().size()));
 
     ImGui::Separator();
 
@@ -61,6 +77,8 @@ void HierarchyPanel::draw(EditorState& state)
     std::vector<entt::entity> roots;
     for (entt::entity entity : registry.view<TransformComponent>())
     {
+        if (registry.any_of<TerrainChunkComponent>(entity))
+            continue;
         const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
         const bool isRoot = !hierarchy || hierarchy->parent == entt::null ||
                             !registry.valid(hierarchy->parent);
@@ -84,7 +102,7 @@ void HierarchyPanel::draw(EditorState& state)
 void HierarchyPanel::drawEntityNode(EditorState& state, entt::entity entity)
 {
     entt::registry& registry = *state.services.registry;
-    if (!registry.valid(entity))
+    if (!registry.valid(entity) || registry.any_of<TerrainChunkComponent>(entity))
         return;
 
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -151,7 +169,8 @@ void HierarchyPanel::drawContextMenu(EditorState& state, entt::entity entity)
     if (ImGui::MenuItem("Delete"))
     {
         state.selection.clear();
-        state.commands.execute(std::make_unique<DeleteEntityCommand>(*state.services.registry, entity));
+        state.commands.execute(std::make_unique<DeleteEntityCommand>(
+            *state.services.registry, entity, state.services.scene));
         state.markDirty();
     }
     if (ImGui::MenuItem("Unparent"))

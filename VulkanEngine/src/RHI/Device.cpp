@@ -336,6 +336,10 @@ void Device::createLogicalDevice()
     // compute 产物（GPU culling / indirect draw 的同类路径）。
     if (!supportedFeatures.features.fragmentStoresAndAtomics)
         throw std::runtime_error("GPU 不支持 fragmentStoresAndAtomics；无法在 fragment shader 写 SSBO/storage image。");
+    multiDrawIndirectSupported = supportedFeatures.features.multiDrawIndirect == VK_TRUE;
+    // B-03: GPU-selected terrain commands need vkCmdDrawIndexedIndirectCount.
+    // If unsupported, GeometrySystem keeps the CPU command-building fallback.
+    drawIndirectCountSupported = supported12.drawIndirectCount == VK_TRUE;
 
     // ---- D-3 bindless 需要的 1.2 次特性 ----
     // 只启真正必需的，不做"看到支持就全开"——每多开一个都要在这里写清用途，
@@ -382,6 +386,8 @@ void Device::createLogicalDevice()
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     // D-4：用 timeline semaphore 追踪每个 frame slot 的 GPU 完成进度。
     features12.timelineSemaphore = VK_TRUE;
+    // B-03: consume a GPU-written draw count without host readback.
+    features12.drawIndirectCount = drawIndirectCountSupported ? VK_TRUE : VK_FALSE;
 
     VkPhysicalDeviceVulkan13Features features13{};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -403,6 +409,7 @@ void Device::createLogicalDevice()
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
     deviceFeatures.fragmentStoresAndAtomics = VK_TRUE;
+    deviceFeatures.multiDrawIndirect = multiDrawIndirectSupported ? VK_TRUE : VK_FALSE;
     if (validationGpuAssisted)
     {
         // 显式启用以避免验证层在 vkCreateDevice 时"强制"打开（它会警告）。

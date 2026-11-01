@@ -5,7 +5,7 @@ type: pipeline
 scope: src/RHI/GBuffer.h, shaders/mrt.frag, shaders/grid_mrt.*, shaders/skybox_mrt.*
 read-when: 修改 G-Buffer 附件、格式，或改几何着色器输出
 size: ~120 行
-updated: 2026-10-30
+updated: 2026-11-01
 ---
 
 # G-Buffer 布局
@@ -17,7 +17,7 @@ updated: 2026-10-30
 | 附件 | 格式 | 内容 | 谁写 | 谁读 |
 |---|---|---|---|---|
 | Position | `R16G16B16A16_SFLOAT` | 世界空间位置，`.w = 1` | mrt / grid_mrt / skybox_mrt | SSAO, Lighting |
-| Normal | `R16G16B16A16_SFLOAT` | 世界空间法线，`.w = 1`；**天空盒写 `(0,0,0)`** | 同上 | SSAO, Lighting |
+| Normal | `R16G16B16A16_SFLOAT` | 世界空间法线；`.w` 是 SSAO policy mask（1=参与，0=跳过）；**天空盒 xyz 写 `(0,0,0)`** | 同上 | SSAO, Lighting |
 | Albedo | `R16G16B16A16_SFLOAT` | 线性基础色；**天空盒往这里写线性 HDR 辐照度（可 > 1）** | 同上 | Lighting（透传） |
 | Pbr | `R8G8B8A8_UNORM` | `.r` = 金属度（取 metallicRoughness 的 `.b`），`.g` = 粗糙度（取 `.g`） | mrt / grid_mrt | Lighting |
 | Depth | `findDepthFormat()` -> 首选 `D32_SFLOAT` | 深度 | Geometry | 深度测试 |
@@ -36,17 +36,19 @@ updated: 2026-10-30
 `skybox_mrt.frag` 把 `outNormal` 写成 `(0,0,0)`；`lighting.frag` 和 `ssao.frag`
 都靠 `length(N) < 0.1` 判断"这是天空，原样透传 / 跳过遮蔽"。
 
-**改动这条约定要三处同步**：`skybox_mrt.frag`、`lighting.frag`、`ssao.frag`。
+**改动天空 XYZ=0 约定要三处同步**：`skybox_mrt.frag`、`lighting.frag`、`ssao.frag`。**改动 `.w` SSAO policy mask 要同步**：`mrt.frag`（普通几何写 1 / 地形写 0）、`grid_mrt.frag`（0）、`skybox_mrt.frag`（0）和 `ssao.frag`。
 
 ## 4. 三条几何路径
 
 | 路径 | 管线 | 用途 |
 |---|---|---|
-| 普通网格 | `mrt.vert/.frag` | Sponza、OBJ 模型 |
+| 普通网格 | `mrt.vert/.frag` | Sponza、OBJ 模型；`terrainMode=1` 时写顶点色 albedo |
 | 网格线 | `grid_mrt.vert/.frag` | 地面网格（`isGrid` 标签；**当前无实体触发**） |
 | 天空盒 | `skybox_mrt.vert/.frag` | 环境 cubemap |
 
-按 `RenderTagComponent` 的 `isSkybox` / `isGrid` 选择，见
+地形仍走 `mrt.*` 和同一组 G-Buffer：法线/深度来自真实网格，albedo 写顶点色 + 程序化材质层，PBR 使用粗糙电介质。地形把 Normal `.w` 写成 0，`ssao.frag` 对它输出 1.0（无遮蔽），避免大面积平滑表面上的 SSAO 干涉条纹。细节见 [terrain](../30-systems/terrain.md)。
+
+按 `RenderTagComponent` 的 `isSkybox` / `isGrid` / `isTerrain` 选择，见
 [decisions](../10-architecture/decisions.md) 决策 14。
 
 ## 5. 法线贴图当前关闭

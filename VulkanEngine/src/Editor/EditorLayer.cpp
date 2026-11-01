@@ -17,6 +17,9 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace editor
 {
@@ -144,20 +147,56 @@ void EditorLayer::handleShortcuts()
             {
                 state.selection.clear();
                 state.commands.execute(std::make_unique<DeleteEntityCommand>(
-                    *state.services.registry, selected));
+                    *state.services.registry, selected, state.services.scene));
                 state.markDirty();
             }
         }
     }
 }
 
-void EditorLayer::updatePlayState(float /*dt*/)
+void EditorLayer::updatePlayState(float dt)
 {
-    // 播放状态目前没有"游戏逻辑"可推进（场景是静态的），
-    // 但状态机本身是框架的一部分：以后加脚本/物理时，推进点就在这里。
-    if (state.playState == PlayState::Playing)
+    if (state.playState != PlayState::Playing ||
+        !state.services.scene || !state.services.registry || dt <= 0.0f)
+        return;
+
+    entt::registry& registry = *state.services.registry;
+    entt::entity controlled = state.selection.primary();
+    if (controlled == entt::null || !registry.valid(controlled) ||
+        !registry.try_get<CharacterControllerComponent>(controlled))
     {
-        // 预留：调用 scene->tickSimulation(dt) 之类
+        controlled = entt::null;
+        for (auto [entity, controller] : registry.view<CharacterControllerComponent>().each())
+        {
+            (void)controller;
+            controlled = entity;
+            break;
+        }
+    }
+    if (controlled == entt::null)
+        return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    glm::vec3 move{ 0.0f };
+    if (!io.WantTextInput)
+    {
+        const float yaw = state.services.scene->getCameraTransform().getEuler().y;
+        const glm::vec3 forward{ std::sin(yaw), 0.0f, std::cos(yaw) };
+        const glm::vec3 right{ std::cos(yaw), 0.0f, -std::sin(yaw) };
+
+        if (ImGui::IsKeyDown(ImGuiKey_W)) move += forward;
+        if (ImGui::IsKeyDown(ImGuiKey_S)) move -= forward;
+        if (ImGui::IsKeyDown(ImGuiKey_D)) move += right;
+        if (ImGui::IsKeyDown(ImGuiKey_A)) move -= right;
+    }
+
+    const bool jump = !io.WantTextInput &&
+                      ImGui::IsKeyPressed(ImGuiKey_Space, false);
+    CharacterMoveResult result;
+    if (state.services.scene->updateCharacterController(
+            controlled, move, jump, dt, result))
+    {
+        state.transformRefreshPending = true;
     }
 }
 
@@ -236,6 +275,15 @@ void EditorLayer::drawMenuBar()
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("Create"))
+    {
+        if (ImGui::MenuItem("Terrain"))
+            createTerrainFromUi();
+        if (ImGui::MenuItem("Character"))
+            createCharacterFromUi();
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("Play"))
     {
         const bool editing = (state.playState == PlayState::Editing);
@@ -304,6 +352,64 @@ void EditorLayer::drawMenuBar()
                                  : (state.gizmo.mode == GizmoMode::Rotate) ? "rotate" : "scale");
 }
 
+entt::entity EditorLayer::createCharacterFromUi()
+{
+    if (!state.services.scene || !state.services.registry)
+        return entt::null;
+
+    glm::vec3 spawn = state.services.scene->getCameraTransform().getTranslation();
+    float ground = 0.0f;
+    if (state.services.scene->sampleTerrainGroundHeightWorld(spawn.x, spawn.z, ground))
+        spawn.y = ground;
+
+    auto command = std::make_unique<CreateCharacterCommand>(
+        *state.services.registry, *state.services.scene, "Character", spawn);
+    CreateCharacterCommand* raw = command.get();
+    state.commands.execute(std::move(command));
+    const entt::entity entity = raw->currentEntity();
+    if (entity == entt::null || !state.services.registry->valid(entity))
+    {
+        state.pushLog(LogEntry::Level::Error, "[Editor] create character failed");
+        return entt::null;
+    }
+
+    state.selection.select(entity);
+    state.transformRefreshPending = true;
+    state.markDirty();
+    state.pushLog(LogEntry::Level::Info, "[Editor] created Character (kinematic controller)");
+    return entity;
+}
+
+entt::entity EditorLayer::createTerrainFromUi()
+{
+    if (!state.services.scene || !state.services.registry)
+        return entt::null;
+
+    terrain::TerrainConfig config;
+    const entt::entity entity = createTerrainThroughCommand(
+        *state.services.registry, *state.services.scene, state.commands,
+        config, "Terrain");
+
+    if (entity == entt::null)
+    {
+        state.pushLog(LogEntry::Level::Error, "[Editor] create terrain failed");
+        return entt::null;
+    }
+
+    state.selection.select(entity);
+    state.markDirty();
+    if (const auto* terrain = state.services.registry->try_get<TerrainComponent>(entity))
+    {
+        char buffer[256];
+        std::snprintf(buffer, sizeof(buffer),
+                      "[Editor] created Terrain | %ux%u, vertices=%u, indices=%u, %.2f ms",
+                      terrain->config.resolutionX, terrain->config.resolutionZ,
+                      terrain->vertexCount, terrain->indexCount,
+                      terrain->lastGenerationMs);
+        state.pushLog(LogEntry::Level::Info, buffer);
+    }
+    return entity;
+}
 void EditorLayer::drawPanels()
 {
     // 关键约束：ImGui::SetNextWindowPos/Size 是**单槽位**的 ——
@@ -574,7 +680,9 @@ bool EditorLayer::selfTest()
     {
         const entt::entity entity = registry.create();
         const glm::vec3 original{ 1.0f, 2.0f, 3.0f };
-        registry.emplace<TransformComponent>(entity, TransformComponent{ original, {}, { 1.0f, 1.0f, 1.0f } });
+        TransformComponent initialTransform;
+        initialTransform.setTranslation(original);
+        registry.emplace<TransformComponent>(entity, initialTransform);
 
         CommandStack stack;
         const glm::vec3 target{ 4.0f, 5.0f, 6.0f };
@@ -582,7 +690,7 @@ bool EditorLayer::selfTest()
             registry, entity, original, target, glm::vec3(0.0f), glm::vec3(0.0f),
             glm::vec3(1.0f), glm::vec3(1.0f)));
 
-        const glm::vec3 afterApply = registry.get<TransformComponent>(entity).translation;
+        const glm::vec3 afterApply = registry.get<TransformComponent>(entity).getTranslation();
         if (afterApply != target)
         {
             std::cerr << "[Editor] selfTest FAIL: transform not applied\n";
@@ -590,7 +698,7 @@ bool EditorLayer::selfTest()
         }
 
         stack.undo();
-        const glm::vec3 afterUndo = registry.get<TransformComponent>(entity).translation;
+        const glm::vec3 afterUndo = registry.get<TransformComponent>(entity).getTranslation();
         // 必须**精确**相等，不能有 epsilon —— 命令存的是旧值拷贝，不是增量。
         if (afterUndo != original)
         {
@@ -600,12 +708,15 @@ bool EditorLayer::selfTest()
         }
 
         stack.redo();
-        if (registry.get<TransformComponent>(entity).translation != target)
+        if (registry.get<TransformComponent>(entity).getTranslation() != target)
         {
             std::cerr << "[Editor] selfTest FAIL: redo failed\n";
             return false;
         }
 
+        // B-06 exception: this command-stack selfTest owns a standalone
+        // entt::registry, not a Scene. Production destruction must go through
+        // Scene::destroyEntity so meshes/indexes/streaming maps are cleaned up.
         registry.destroy(entity);
         stack.clear();
     }
@@ -692,6 +803,33 @@ bool EditorLayer::selfTest()
         b.material.roughnessFactor = 0.35f;
         input.entities.push_back(b);
 
+
+
+        scene::EntityDescription terrain;
+        terrain.name = "Terrain";
+        terrain.isTerrain = true;
+        terrain.terrainConfig.seed = 98765u;
+        terrain.terrainConfig.resolutionX = 33;
+        terrain.terrainConfig.resolutionZ = 31;
+        terrain.terrainConfig.sizeX = 120.0f;
+        terrain.terrainConfig.sizeZ = 80.0f;
+        terrain.terrainConfig.heightScale = 12.5f;
+        terrain.terrainConfig.octaveCount = 5;
+        terrain.terrainConfig.ridgeWeight = 0.4f;
+        terrain.terrainConfig.heightCurve = 1.35f;
+        terrain.terrainConfig.islandWeight = 0.7f;
+        terrain.terrainConfig.islandRadius = 0.55f;
+        terrain.terrainConfig.ridgeSharpness = 2.2f;
+        terrain.terrainConfig.detailFrequency = 3.1f;
+        terrain.terrainConfig.materialDetailStrength = 0.8f;
+        terrain.terrainConfig.uvTiling = 1.7f;
+        terrain.terrainConfig.chunkGridX = 3u;
+        terrain.terrainConfig.chunkGridZ = 2u;
+        terrain.terrainConfig.lodLevelCount = 2u;
+        terrain.terrainConfig.lodDistanceScale = 1.6f;
+        terrain.terrainConfig.surfaceStyle = terrain::TerrainSurfaceStyle::Alpine;
+        input.entities.push_back(terrain);
+
         scene::SceneDescription output;
         std::string error;
         if (!SceneSerializer::roundTrip(input, output, error))
@@ -700,7 +838,7 @@ bool EditorLayer::selfTest()
             return false;
         }
 
-        if (output.entities.size() != 2)
+        if (output.entities.size() != 3)
         {
             std::cerr << "[Editor] selfTest FAIL: entity count mismatch\n";
             return false;
@@ -722,9 +860,45 @@ bool EditorLayer::selfTest()
         }
         // 路径必须被还原成绝对路径（存盘时写相对，读回时拼回资源根）
         if (output.entities[0].meshPath != input.entities[0].meshPath)
+
         {
+
             std::cerr << "[Editor] selfTest FAIL: mesh path round trip mismatch: '"
+
                       << output.entities[0].meshPath << "'\n";
+
+            return false;
+
+        }
+
+        if (!output.entities[2].isTerrain ||
+            output.entities[2].terrainConfig.seed != 98765u ||
+            output.entities[2].terrainConfig.resolutionX != 33u ||
+            output.entities[2].terrainConfig.resolutionZ != 31u ||
+            output.entities[2].terrainConfig.sizeX != 120.0f ||
+            output.entities[2].terrainConfig.sizeZ != 80.0f ||
+            output.entities[2].terrainConfig.heightScale != 12.5f ||
+            output.entities[2].terrainConfig.octaveCount != 5u ||
+            output.entities[2].terrainConfig.ridgeWeight != 0.4f ||
+            output.entities[2].terrainConfig.heightCurve != 1.35f ||
+            output.entities[2].terrainConfig.islandWeight != 0.7f ||
+            output.entities[2].terrainConfig.islandRadius != 0.55f ||
+            output.entities[2].terrainConfig.ridgeSharpness != 2.2f ||
+            output.entities[2].terrainConfig.detailFrequency != 3.1f ||
+            output.entities[2].terrainConfig.materialDetailStrength != 0.8f ||
+            output.entities[2].terrainConfig.uvTiling != 1.7f ||
+            output.entities[2].terrainConfig.chunkGridX != 3u ||
+            output.entities[2].terrainConfig.chunkGridZ != 2u ||
+            output.entities[2].terrainConfig.lodLevelCount != 2u ||
+            output.entities[2].terrainConfig.lodDistanceScale != 1.6f ||
+            output.entities[2].terrainConfig.surfaceStyle != terrain::TerrainSurfaceStyle::Alpine)
+        {
+            std::cerr << "[Editor] selfTest FAIL: terrain params lost in round trip\n";
+            return false;
+        }
+        if (!output.entities[2].meshPath.empty())
+        {
+            std::cerr << "[Editor] selfTest FAIL: terrain wrote a GPU mesh path\n";
             return false;
         }
     }
@@ -743,6 +917,14 @@ bool EditorLayer::selfTestWithScene()
     if (!state.services.scene || !state.services.registry)
     {
         std::cerr << "[Editor] selfTestWithScene FAIL: no scene bound\n";
+        return false;
+    }
+
+    std::string gpuTerrainError;
+    if (!state.services.scene->selfTestTerrainCompute(gpuTerrainError))
+    {
+        std::cerr << "[Editor] selfTestWithScene FAIL: GPU terrain compute: "
+                  << gpuTerrainError << "\n";
         return false;
     }
 
@@ -798,7 +980,652 @@ bool EditorLayer::selfTestWithScene()
         return false;
     }
 
-    std::cout << "[Editor] scene selfTest PASS | create/undo/redo via command stack"
+    // ---- F2 / D-18: terrain command, snapshot redo, and regeneration ----
+    {
+        terrain::TerrainConfig config;
+        config.seed = 777u;
+        config.resolutionX = 33;
+        config.resolutionZ = 33;
+        config.sizeX = 40.0f;
+        config.sizeZ = 40.0f;
+        config.heightScale = 8.0f;
+
+        auto terrainCommand = std::make_unique<CreateTerrainCommand>(
+            registry, *state.services.scene, config, "EditorSelfTestTerrain",
+            glm::vec3(0.0f));
+        CreateTerrainCommand* terrainCommandRaw = terrainCommand.get();
+        state.commands.execute(std::move(terrainCommand));
+
+        entt::entity terrainEntity = terrainCommandRaw->currentEntity();
+        if (terrainEntity == entt::null || !registry.valid(terrainEntity))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: CreateTerrainCommand produced null entity\n";
+            return false;
+        }
+
+        auto* terrainComp = registry.try_get<TerrainComponent>(terrainEntity);
+        auto* terrainMesh = registry.try_get<MeshComponent>(terrainEntity);
+        auto* terrainBounds = registry.try_get<BoundsComponent>(terrainEntity);
+        if (!terrainComp || !terrainMesh || !terrainMesh->model || !terrainBounds ||
+            !terrainBounds->getLocal().valid)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain components incomplete\n";
+            return false;
+        }
+        const auto& terrainSubMeshes = terrainMesh->model->getSubMeshes();
+        bool chunkBoundsValid = terrainSubMeshes.size() == 12u;
+        uint32_t lodSubMeshCounts[3] = {};
+        for (const SubMesh& subMesh : terrainSubMeshes)
+        {
+            chunkBoundsValid = chunkBoundsValid && subMesh.hasBounds &&
+                subMesh.isTerrainChunk && subMesh.terrainLod < 3u &&
+                subMesh.indexCount > 0u &&
+                subMesh.terrainSurfaceIndexCount > 0u &&
+                subMesh.terrainSurfaceIndexCount <= subMesh.indexCount &&
+                subMesh.boundsMin.x <= subMesh.boundsMax.x &&
+                subMesh.boundsMin.z <= subMesh.boundsMax.z;
+            if (subMesh.terrainLod < 3u)
+                lodSubMeshCounts[subMesh.terrainLod] += 1u;
+        }
+        chunkBoundsValid = chunkBoundsValid &&
+            lodSubMeshCounts[0] == 4u && lodSubMeshCounts[1] == 4u &&
+            lodSubMeshCounts[2] == 4u;
+
+        if (!terrainComp->generated ||
+            terrainComp->vertexCount == 0u ||
+            terrainComp->indexCount == 0u ||
+            terrainMesh->model->getVertexCount() != terrainComp->vertexCount ||
+            terrainMesh->model->getIndexCount() != terrainComp->indexCount ||
+            !chunkBoundsValid)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain counts/generated state mismatch\n";
+            return false;
+        }
+        if (registry.any_of<MaterialComponent>(terrainEntity))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain unexpectedly owns a material slot\n";
+            return false;
+        }
+
+        if (!terrainComp->cpuHeightField ||
+            !terrainComp->cpuHeightField->generatedOnGpu ||
+            terrainComp->cpuHeightField->width != config.resolutionX ||
+            terrainComp->cpuHeightField->height != config.resolutionZ)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: GPU terrain collision HeightField missing\n";
+            return false;
+        }
+
+        const terrain::HeightField& collisionField = *terrainComp->cpuHeightField;
+        const float expectedCenterHeight = collisionField.worldHeightAt(0.0f, 0.0f);
+        float localHeight = 0.0f;
+        float worldHeight = 0.0f;
+        glm::vec3 terrainHit{};
+        float terrainDistance = 0.0f;
+        if (!state.services.scene->sampleTerrainHeightLocal(
+                terrainEntity, 0.0f, 0.0f, localHeight) ||
+            std::abs(localHeight - expectedCenterHeight) > 1e-4f ||
+            !state.services.scene->sampleTerrainHeightWorld(
+                terrainEntity, 0.0f, 0.0f, worldHeight) ||
+            std::abs(worldHeight - expectedCenterHeight) > 1e-2f ||
+            !state.services.scene->raycastTerrain(
+                terrainEntity, glm::vec3(0.0f, 100.0f, 0.0f),
+                glm::vec3(0.0f, -1.0f, 0.0f), terrainHit, terrainDistance) ||
+            std::abs(terrainHit.y - expectedCenterHeight) > 1e-2f ||
+            terrainDistance <= 0.0f)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain collision query mismatch\n";
+            return false;
+        }
+        if (state.services.scene->sampleTerrainHeightLocal(
+                terrainEntity, config.sizeX, 0.0f, localHeight) ||
+            state.services.scene->raycastTerrain(
+                terrainEntity, glm::vec3(config.sizeX, 100.0f, 0.0f),
+                glm::vec3(0.0f, -1.0f, 0.0f), terrainHit, terrainDistance))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain collision accepted out-of-bounds query\n";
+            return false;
+        }
+
+        const std::shared_ptr<Model> firstModel = terrainMesh->model;
+        const uint64_t firstRevision = terrainComp->revision;
+
+        state.commands.undo();
+        if (registry.valid(terrainEntity) ||
+            registry.view<MeshComponent>().size() != meshesBefore ||
+            registry.view<TransformComponent>().size() != entitiesBefore)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain undo did not remove entity\n";
+            return false;
+        }
+
+        state.commands.redo();
+        terrainEntity = terrainCommandRaw->currentEntity();
+        terrainComp = registry.try_get<TerrainComponent>(terrainEntity);
+        terrainMesh = registry.try_get<MeshComponent>(terrainEntity);
+        if (!terrainComp || !terrainMesh || terrainMesh->model != firstModel ||
+            terrainComp->revision != firstRevision)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain redo did not reuse snapshots\n";
+            return false;
+        }
+
+        // Simulate a config edit (normally SetTerrainConfigCommand), then build
+        // the new mesh outside the command and wrap both states in a command.
+        terrainComp->config.seed = 778u;
+        const TerrainComponent oldTerrain = *terrainComp;
+        const MeshComponent oldMesh = *terrainMesh;
+        auto* oldBounds = registry.try_get<BoundsComponent>(terrainEntity);
+        auto* oldTag = registry.try_get<RenderTagComponent>(terrainEntity);
+        if (!oldBounds || !oldTag)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain snapshot components missing\n";
+            return false;
+        }
+        const BoundsComponent oldBoundsSnapshot = *oldBounds;
+        const RenderTagComponent oldTagSnapshot = *oldTag;
+
+        std::string terrainError;
+        if (!state.services.scene->regenerateTerrain(terrainEntity, terrainError))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: regenerateTerrain -> "
+                      << terrainError << "\n";
+            return false;
+        }
+
+        const TerrainComponent newTerrain = registry.get<TerrainComponent>(terrainEntity);
+        const MeshComponent newMesh = registry.get<MeshComponent>(terrainEntity);
+        const BoundsComponent newBounds = registry.get<BoundsComponent>(terrainEntity);
+        const RenderTagComponent newTag = registry.get<RenderTagComponent>(terrainEntity);
+        if (newMesh.model == oldMesh.model ||
+            newTerrain.revision != oldTerrain.revision + 1u ||
+            newTerrain.generatedConfig.seed != 778u)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain was not regenerated\n";
+            return false;
+        }
+        if (state.services.scene->getRetiredModelCount() == 0u)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: old terrain Model was not deferred\n";
+            return false;
+        }
+
+        state.commands.execute(std::make_unique<RegenerateTerrainCommand>(
+            registry, *state.services.scene, terrainEntity,
+            oldTerrain, newTerrain,
+            oldMesh, newMesh,
+            oldBoundsSnapshot, newBounds,
+            oldTagSnapshot, newTag));
+
+        state.commands.undo();
+        auto* undoneMesh = registry.try_get<MeshComponent>(terrainEntity);
+        auto* undoneTerrain = registry.try_get<TerrainComponent>(terrainEntity);
+        if (!undoneMesh || !undoneTerrain || undoneMesh->model != oldMesh.model ||
+            undoneTerrain->generatedConfig.seed != 777u ||
+            undoneTerrain->cpuHeightField != oldTerrain.cpuHeightField)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: regenerate undo did not restore old mesh\n";
+            return false;
+        }
+
+        state.commands.redo();
+        auto* redoneMesh = registry.try_get<MeshComponent>(terrainEntity);
+        auto* redoneTerrain = registry.try_get<TerrainComponent>(terrainEntity);
+        if (!redoneMesh || !redoneTerrain || redoneMesh->model != newMesh.model ||
+            redoneTerrain->generatedConfig.seed != 778u)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: regenerate redo did not restore new mesh\n";
+            return false;
+        }
+
+        // Stage 7: async CPU generation, main-thread upload, and stale-result
+        // discard. Two requests are submitted back-to-back; only the newer one
+        // may install a mesh and invoke its callback.
+        auto* asyncTerrain = registry.try_get<TerrainComponent>(terrainEntity);
+        auto* asyncMeshBefore = registry.try_get<MeshComponent>(terrainEntity);
+        if (!asyncTerrain || !asyncMeshBefore || !asyncMeshBefore->model)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: async terrain pre-state missing\n";
+            return false;
+        }
+        const uint64_t asyncRevisionBefore = asyncTerrain->revision;
+        const std::shared_ptr<Model> asyncModelBefore = asyncMeshBefore->model;
+
+        bool firstCallback = false;
+        bool secondCallback = false;
+        bool secondSuccess = false;
+        asyncTerrain->config.seed = 779u;
+        const bool firstSubmitted = state.services.scene->requestRegenerateTerrain(
+            terrainEntity, [&firstCallback](bool, const std::string&)
+            {
+                firstCallback = true;
+            });
+
+        asyncTerrain->config.seed = 780u;
+        const bool secondSubmitted = state.services.scene->requestRegenerateTerrain(
+            terrainEntity, [&secondCallback, &secondSuccess](bool success, const std::string&)
+            {
+                secondCallback = true;
+                secondSuccess = success;
+            });
+
+        if (!asyncTerrain->generating)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: async request did not mark generating\n";
+            return false;
+        }
+
+        state.services.scene->waitForTerrainGeneration();
+
+        auto* asyncTerrainAfter = registry.try_get<TerrainComponent>(terrainEntity);
+        auto* asyncMeshAfter = registry.try_get<MeshComponent>(terrainEntity);
+        if (!firstSubmitted || !secondSubmitted || firstCallback ||
+            !secondCallback || !secondSuccess ||
+            !asyncTerrainAfter || !asyncMeshAfter || !asyncMeshAfter->model)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: async terrain request/callback mismatch\n";
+            return false;
+        }
+        if (asyncTerrainAfter->generating ||
+            asyncTerrainAfter->revision != asyncRevisionBefore + 1u ||
+            asyncTerrainAfter->generatedConfig.seed != 780u ||
+            asyncMeshAfter->model == asyncModelBefore ||
+            asyncTerrainAfter->lastGenerationMs <= 0.0)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: async terrain result/stale discard mismatch\n";
+            return false;
+        }
+        std::cout << "[Editor] async terrain generation PASS"
+                  << " | stale discarded, revision=" << asyncTerrainAfter->revision << "\n";
+
+        // Undo regeneration, then the terrain creation command.
+        state.commands.undo();
+        state.commands.undo();
+        state.commands.clear();
+        state.selection.clear();
+        if (registry.view<MeshComponent>().size() != meshesBefore ||
+            registry.view<TransformComponent>().size() != entitiesBefore)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: terrain test cleanup failed\n";
+            return false;
+        }
+    }
+
+    // ---- B-01: independent streaming chunks + manager serialization ----
+    {
+        Scene& scene = *state.services.scene;
+        const glm::vec3 cameraBefore = scene.getCameraTransform().getTranslation();
+
+        terrain::TerrainConfig chunkConfig;
+        chunkConfig.seed = 9001u;
+        chunkConfig.resolutionX = 17u;
+        chunkConfig.resolutionZ = 17u;
+        chunkConfig.sizeX = 16.0f;
+        chunkConfig.sizeZ = 16.0f;
+        chunkConfig.heightScale = 3.0f;
+        chunkConfig.lodLevelCount = 2u;
+        chunkConfig.localColorRange = false;
+        chunkConfig.skirtsEnabled = false;
+
+        const entt::entity manager = scene.createStreamingTerrain(
+            chunkConfig, 1, 2, "StreamingSelfTest");
+        if (manager == entt::null || !scene.hasStreamingTerrain())
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming terrain manager missing\n";
+            return false;
+        }
+        const int32_t centerX = static_cast<int32_t>(
+            std::floor(cameraBefore.x / chunkConfig.sizeX));
+        const int32_t centerZ = static_cast<int32_t>(
+            std::floor(cameraBefore.z / chunkConfig.sizeZ));
+        const auto chunkKey = [](int32_t x, int32_t z)
+        {
+            return (static_cast<int64_t>(static_cast<uint32_t>(x)) << 32) |
+                   static_cast<uint32_t>(z);
+        };
+
+        const auto countLoadedChunks = [&registry]()
+        {
+            size_t loaded = 0;
+            for (auto [entity, chunk, terrain, mesh] :
+                 registry.view<TerrainChunkComponent, TerrainComponent, MeshComponent>().each())
+            {
+                (void)entity;
+                (void)chunk;
+                if (terrain.generated && !terrain.generating && mesh.model &&
+                    terrain.meshGeneratedOnGpu &&
+                    terrain.cpuHeightField && terrain.cpuHeightField->generatedOnGpu)
+                    ++loaded;
+            }
+            return loaded;
+        };
+
+        if (scene.getInFlightTerrainGpuRequests() == 0u ||
+            countLoadedChunks() != 0u)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming heightfield stage did not stay async\n";
+            return false;
+        }
+
+        constexpr size_t expectedChunks = 9u;
+        for (uint32_t frame = 0; frame < 20 && countLoadedChunks() < expectedChunks; ++frame)
+        {
+            scene.refreshStreamingTerrain();
+            scene.waitForTerrainGeneration();
+        }
+
+        if (scene.getStreamingTerrainChunkCount() != expectedChunks ||
+            countLoadedChunks() != expectedChunks)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streamed chunk set did not settle | "
+                      << "mapped=" << scene.getStreamingTerrainChunkCount()
+                      << " loaded=" << countLoadedChunks() << "\n";
+            return false;
+        }
+
+        std::unordered_set<const Model*> chunkModels;
+        std::unordered_map<int64_t, entt::entity> chunksByKey;
+        for (auto [entity, chunk, terrain, mesh] :
+             registry.view<TerrainChunkComponent, TerrainComponent, MeshComponent>().each())
+        {
+            chunkModels.insert(mesh.model.get());
+            chunksByKey[chunkKey(chunk.chunkX, chunk.chunkZ)] = entity;
+            if (mesh.model->getSubMeshes().size() != chunkConfig.lodLevelCount)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: streamed chunk LOD count mismatch\n";
+                return false;
+            }
+        }
+        if (chunkModels.size() != expectedChunks)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streamed chunks do not own independent Models\n";
+            return false;
+        }
+
+        const auto leftIt = chunksByKey.find(chunkKey(centerX, centerZ));
+        const auto rightIt = chunksByKey.find(chunkKey(centerX + 1, centerZ));
+        if (leftIt == chunksByKey.end() || rightIt == chunksByKey.end())
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: adjacent streamed chunks missing\n";
+            return false;
+        }
+        const TerrainComponent& left = registry.get<TerrainComponent>(leftIt->second);
+        const TerrainComponent& right = registry.get<TerrainComponent>(rightIt->second);
+        for (uint32_t sample = 0; sample <= 4u; ++sample)
+        {
+            const float t = static_cast<float>(sample) / 4.0f;
+            const float leftLocalZ = -chunkConfig.sizeZ * 0.5f + t * chunkConfig.sizeZ;
+            const float globalZ = left.config.sampleOriginZ + leftLocalZ;
+            const float rightLocalZ = globalZ - right.config.sampleOriginZ;
+            const float leftHeight = left.cpuHeightField->worldHeightAt(
+                chunkConfig.sizeX * 0.5f, leftLocalZ);
+            const float rightHeight = right.cpuHeightField->worldHeightAt(
+                -chunkConfig.sizeX * 0.5f, rightLocalZ);
+            if (std::abs(leftHeight - rightHeight) > 1e-4f)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: streamed chunk seam height mismatch | "
+                          << leftHeight << " vs " << rightHeight << "\n";
+                return false;
+            }
+        }
+
+        const entt::entity pickedChunk = leftIt->second;
+        const auto* pickedTransform = registry.try_get<TransformComponent>(pickedChunk);
+        const auto* pickedWorld = registry.try_get<WorldTransformComponent>(pickedChunk);
+        const auto* pickedMesh = registry.try_get<MeshComponent>(pickedChunk);
+        float pickedDistance = 0.0f;
+        if (!pickedTransform || !pickedWorld || !pickedMesh || !pickedMesh->model ||
+            !pickedMesh->model->intersectRay(
+                pickedWorld->matrix,
+                glm::vec3(pickedTransform->getTranslation().x, 100.0f,
+                          pickedTransform->getTranslation().z),
+                glm::vec3(0.0f, -1.0f, 0.0f), pickedDistance) ||
+            pickedDistance <= 0.0f ||
+            scene.resolveTerrainChunkOwner(pickedChunk) != manager)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streamed chunk picking/owner mismatch\n";
+            return false;
+        }
+
+        const double initialStreamingMaxMs = scene.getMaxStreamingUpdateMs();
+
+        // Move three chunks: old ring must unload and the new radius must stream in.
+        scene.getCameraTransform().setTranslation(
+            cameraBefore + glm::vec3(chunkConfig.sizeX * 4.0f, 0.0f, 0.0f));
+        const int32_t movedCenterX = centerX + 4;
+        for (uint32_t frame = 0; frame < 20; ++frame)
+        {
+            scene.refreshStreamingTerrain();
+            scene.waitForTerrainGeneration();
+        }
+
+        const double movedStreamingMaxMs = scene.getMaxStreamingUpdateMs();
+        if (initialStreamingMaxMs <= 0.0 || movedStreamingMaxMs <= 0.0 ||
+            !std::isfinite(movedStreamingMaxMs))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming update timing invalid\n";
+            return false;
+        }
+
+        bool movedSetValid = scene.getStreamingTerrainChunkCount() == expectedChunks;
+        for (auto [entity, chunk] : registry.view<TerrainChunkComponent>().each())
+        {
+            (void)entity;
+            if (std::max(std::abs(chunk.chunkX - movedCenterX),
+                         std::abs(chunk.chunkZ - centerZ)) > 1)
+                movedSetValid = false;
+        }
+        if (!movedSetValid || countLoadedChunks() != expectedChunks)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming unload/reload set invalid"
+                      << " | mapped=" << scene.getStreamingTerrainChunkCount()
+                      << " loaded=" << countLoadedChunks()
+                      << " center=" << movedCenterX << "," << centerZ
+                      << " valid=" << movedSetValid << "\n";
+            for (auto [entity, chunk] : registry.view<TerrainChunkComponent>().each())
+            {
+                (void)entity;
+                std::cerr << "  chunk " << chunk.chunkX << "," << chunk.chunkZ << "\n";
+            }
+            return false;
+        }
+
+        const entt::entity serializedCharacter = scene.createCharacterEntity(
+            "B07 Serialized Character",
+            scene.getCameraTransform().getTranslation() + glm::vec3(0.0f, 2.0f, 0.0f));
+        if (serializedCharacter == entt::null)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: could not create serialized character\n";
+            return false;
+        }
+
+        const scene::SceneDescription captured = scene.captureDescription();
+        int worldManagers = 0;
+        int serializedChunks = 0;
+        int serializedCharacters = 0;
+        for (const scene::EntityDescription& entity : captured.entities)
+        {
+            if (entity.isTerrainWorld)
+                ++worldManagers;
+            if (entity.isTerrain && entity.terrainConfig.chunkGridX == 1u)
+                ++serializedChunks;
+            if (entity.isCharacter)
+            {
+                ++serializedCharacters;
+                if (std::abs(entity.characterRadius - 0.35f) > 1e-5f ||
+                    std::abs(entity.characterHeight - 1.8f) > 1e-5f)
+                {
+                    std::cerr << "[Editor] selfTestWithScene FAIL: character fields lost\n";
+                    return false;
+                }
+            }
+        }
+        scene::SceneDescription serialized;
+        std::string serializationError;
+        if (!SceneSerializer::roundTrip(captured, serialized, serializationError) ||
+            worldManagers != 1 || serializedChunks != 0 || serializedCharacters != 1)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming serialization | "
+                      << serializationError << "\n";
+            return false;
+        }
+        int roundTripManagers = 0;
+        for (const scene::EntityDescription& entity : serialized.entities)
+        {
+            if (entity.isTerrainWorld)
+            {
+                ++roundTripManagers;
+                if (entity.terrainLoadRadius != 1 ||
+                    entity.terrainMaxLoadsPerFrame != 2u ||
+                    entity.terrainWorldConfig.sizeX != chunkConfig.sizeX)
+                {
+                    std::cerr << "[Editor] selfTestWithScene FAIL: streaming manager fields lost\n";
+                    return false;
+                }
+            }
+        }
+        if (roundTripManagers != 1)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming manager round-trip missing\n";
+            return false;
+        }
+
+        // File-level save/load smoke, not only in-memory roundTrip.
+        const std::filesystem::path scenePath =
+            std::filesystem::temp_directory_path() / "sentinel_streaming_selftest.scene.json";
+        std::string fileError;
+        if (!SceneSerializer::saveToFile(serialized, scenePath.string(), fileError))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming save -> "
+                      << fileError << "\n";
+            return false;
+        }
+        scene::SceneDescription fileDescription;
+        if (!SceneSerializer::loadFromFile(scenePath.string(), fileDescription, fileError))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming load -> "
+                      << fileError << "\n";
+            return false;
+        }
+        std::error_code removeError;
+        std::filesystem::remove(scenePath, removeError);
+
+        // Rebuild the scene from the serialized manager template. This clears
+        // the old chunk set and must stream a fresh 3x3 set around the camera.
+        const glm::vec3 movedCamera = scene.getCameraTransform().getTranslation();
+        std::string rebuildError;
+        if (!scene.buildFromDescription(fileDescription, rebuildError) ||
+            !scene.hasStreamingTerrain())
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming rebuild -> "
+                      << rebuildError << "\n";
+            return false;
+        }
+
+        entt::entity restoredCharacter = entt::null;
+        for (auto [entity, controller] : registry.view<CharacterControllerComponent>().each())
+        {
+            (void)controller;
+            restoredCharacter = entity;
+            break;
+        }
+        if (restoredCharacter == entt::null)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: character missing after rebuild\n";
+            return false;
+        }
+        const auto* restoredController = registry.try_get<CharacterControllerComponent>(restoredCharacter);
+        if (!restoredController ||
+            std::abs(restoredController->radius - 0.35f) > 1e-5f ||
+            std::abs(restoredController->height - 1.8f) > 1e-5f)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: character fields changed after rebuild\n";
+            return false;
+        }
+        scene.destroyEntity(restoredCharacter);
+        for (uint32_t frame = 0; frame < 20 && countLoadedChunks() < expectedChunks; ++frame)
+        {
+            scene.refreshStreamingTerrain();
+            scene.waitForTerrainGeneration();
+        }
+        if (scene.getStreamingTerrainChunkCount() != expectedChunks ||
+            countLoadedChunks() != expectedChunks)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming rebuild chunk set invalid\n";
+            return false;
+        }
+        std::unordered_set<const Model*> rebuiltModels;
+        for (auto [entity, chunk, terrain, mesh] :
+             registry.view<TerrainChunkComponent, TerrainComponent, MeshComponent>().each())
+        {
+            (void)entity;
+            (void)chunk;
+            (void)terrain;
+            rebuiltModels.insert(mesh.model.get());
+        }
+        if (rebuiltModels.size() != expectedChunks)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming rebuild Models not independent\n";
+            return false;
+        }
+
+        const entt::entity rebuiltManager = scene.getStreamingTerrainEntity();
+        auto deleteWorld = std::make_unique<DeleteEntityCommand>(
+            registry, rebuiltManager, &scene);
+        state.commands.execute(std::move(deleteWorld));
+        if (scene.hasStreamingTerrain() ||
+            registry.view<TerrainChunkComponent>().size() != 0u ||
+            registry.valid(rebuiltManager))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: deleting streamed world leaked chunks\n";
+            return false;
+        }
+
+        state.commands.undo();
+        const entt::entity restoredManager = scene.getStreamingTerrainEntity();
+        if (restoredManager == entt::null || !scene.hasStreamingTerrain())
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming delete undo did not re-adopt manager\n";
+            return false;
+        }
+        for (uint32_t frame = 0; frame < 20 && countLoadedChunks() < expectedChunks; ++frame)
+        {
+            scene.refreshStreamingTerrain();
+            scene.waitForTerrainGeneration();
+        }
+        if (scene.getStreamingTerrainChunkCount() != expectedChunks ||
+            countLoadedChunks() != expectedChunks)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming delete undo did not restore chunks\n";
+            return false;
+        }
+
+        state.commands.redo();
+        if (scene.hasStreamingTerrain() ||
+            registry.view<TerrainChunkComponent>().size() != 0u)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming delete redo left chunks\n";
+            return false;
+        }
+        state.commands.undo();
+        state.commands.clear();
+
+        scene.destroyEntity(scene.getStreamingTerrainEntity());
+        scene.getCameraTransform().setTranslation(cameraBefore);
+        scene.refreshTransformsAndVisibility();
+        if (scene.hasStreamingTerrain() ||
+            registry.view<TerrainChunkComponent>().size() != 0u ||
+            registry.view<MeshComponent>().size() != meshesBefore)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming manager cleanup leaked chunks\n";
+            return false;
+        }
+        std::cout << "[Editor] streamed terrain PASS | chunks=9 independentModels=9 "
+                  << "seam=OK stitch=OK skirts=off gpuMesh=OK unload=OK rebuild=OK picking=OK deleteUndo=OK "
+                  << "maxUpdateMs=" << movedStreamingMaxMs << "\n";
+    }
+
+    std::cout << "[Editor] scene selfTest PASS | create/undo/redo + terrain create/generate/collision/autodirty/gpucompute/streaming"
               << " (meshes=" << meshesBefore << ")\n";
     // ---- 4) 精确拾取：射线必须命中"更近"的球，而不是把相机包在里面的 Sponza ----
     // 这是 AABB 拾取失效的典型场景：Sponza 的 AABB 把相机包住，
@@ -820,19 +1647,20 @@ bool EditorLayer::selfTestWithScene()
         // 把球放到相机前方 6 个单位
         const TransformComponent& cameraTransform = scene.getCameraTransform();
         const glm::vec3 forward = glm::vec3{
-            std::sin(cameraTransform.rotation.y) * std::cos(cameraTransform.rotation.x),
-            -std::sin(cameraTransform.rotation.x),
-            std::cos(cameraTransform.rotation.y) * std::cos(cameraTransform.rotation.x)
+            std::sin(cameraTransform.getEuler().y) * std::cos(cameraTransform.getEuler().x),
+            -std::sin(cameraTransform.getEuler().x),
+            std::cos(cameraTransform.getEuler().y) * std::cos(cameraTransform.getEuler().x)
         };
-        const glm::vec3 spherePos = cameraTransform.translation + forward * 6.0f;
-        registry.get<TransformComponent>(sphere).translation = spherePos;
-        registry.get<TransformComponent>(sphere).scale = glm::vec3(1.0f);
+        const glm::vec3 spherePos = cameraTransform.getTranslation() + forward * 6.0f;
+        registry.get<TransformComponent>(sphere).setTranslation(spherePos);
+        registry.get<TransformComponent>(sphere).setScale(glm::vec3(1.0f));
+        scene.markTransformDirty(sphere);
 
         // 刷新世界变换与包围盒，否则测试读到的是上一帧的旧数据
         scene.refreshTransformsAndVisibility();
 
         // 从相机中心朝球心打一条射线
-        const glm::vec3 rayOrigin = cameraTransform.translation;
+        const glm::vec3 rayOrigin = cameraTransform.getTranslation();
         const glm::vec3 rayDir = glm::normalize(spherePos - rayOrigin);
 
         float hitDistance = 0.0f;
@@ -876,7 +1704,9 @@ bool EditorLayer::selfTestWithScene()
 
             // 模拟一次拖拽：沿世界 +Y 平移 3 个单位
             const glm::vec3 delta{ 0.0f, 3.0f, 0.0f };
-            transform->translation += delta;
+            // No explicit markTransformDirty(): the component owner callback
+            // must schedule the Scene dirty queue by itself.
+            transform->setTranslation(transform->getTranslation() + delta);
             scene.refreshTransformsAndVisibility();
 
             const auto* boundsAfter = registry.try_get<WorldBoundsComponent>(sphere);
@@ -893,9 +1723,43 @@ bool EditorLayer::selfTestWithScene()
                           << glm::length(centerAfter - centerBefore) << ", expected 3)\n";
                 return false;
             }
+
+            if (scene.getLastWorldTransformUpdates() != 1u ||
+                scene.getLastSpatialIndexUpdates() != 1u)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: dirty transform/spatial update count mismatch\n";
+                return false;
+            }
+            scene.refreshTransformsAndVisibility();
+            if (scene.getLastWorldTransformUpdates() != 0u ||
+                scene.getLastSpatialIndexUpdates() != 0u)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: clean scene still rebuilt transforms/bounds\n";
+                return false;
+            }
+
+            // BoundsComponent::markDirty() must enqueue spatial refresh without
+            // an explicit Scene::markSpatialDirty().
+            auto* changedBounds = registry.try_get<BoundsComponent>(sphere);
+            if (!changedBounds)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: bounds missing before dirty callback test\n";
+                return false;
+            }
+            AABB changedLocal = changedBounds->getLocal();
+            changedLocal.min.y -= 1.0f;
+            changedLocal.max.y += 1.0f;
+            changedBounds->setLocal(changedLocal);
+            scene.refreshTransformsAndVisibility();
+            if (scene.getLastWorldTransformUpdates() != 0u ||
+                scene.getLastSpatialIndexUpdates() != 1u)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: bounds dirty callback did not enqueue spatial refresh\n";
+                return false;
+            }
         }
 
-        registry.destroy(sphere);
+        scene.destroyEntity(sphere);
         scene.refreshTransformsAndVisibility();
     }
 

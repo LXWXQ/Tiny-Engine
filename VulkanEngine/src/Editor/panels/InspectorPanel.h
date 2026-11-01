@@ -17,6 +17,10 @@ public:
 
 private:
     void drawTransform(EditorState& state, entt::entity entity);
+    void drawCharacter(EditorState& state, entt::entity entity);
+    void drawTerrain(EditorState& state, entt::entity entity);
+    void drawStreamingTerrain(EditorState& state, entt::entity entity);
+    void generateTerrain(EditorState& state, entt::entity entity);
     void drawMesh(EditorState& state, entt::entity entity);
     void drawMaterial(EditorState& state, entt::entity entity);
     void drawRenderTag(EditorState& state, entt::entity entity);

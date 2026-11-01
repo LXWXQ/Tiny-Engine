@@ -5,7 +5,7 @@ type: roadmap
 scope: 空
 read-when: 开新主功能之前；或判断"某个需求排在哪一阶段"
 size: ~180 行
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 # 主功能路线
@@ -64,6 +64,12 @@ Graphics: vkCmdDrawIndexedIndirect
 **目标**：高度场 chunk（64x64 或 128x128 顶点）、chunk LOD + 邻居缝合（避免 T 形裂缝）、
 多层材质混合、按相机距离流送、碰撞数据生成、编辑 API。
 
+**实施顺序**：先单块、同步、顶点色 MVP，再按 [terrain-plan](terrain-plan.md) 的
+阶段 6/7 上纹理分层、异步、chunk/LOD。不要一次做完整个 F2。
+
+**当前进展**：chunk 子网格、逐块剔除、CPU 滞回选层、抖动 cross-fade、
+裙边接缝、稳定帧 indirect 合批、GPU compute 高度场、独立 chunk 流送、8 槽异步高度场、流送交互硬化、拓扑级 LOD stitching、GPU 选层/culling、单 chunk GPU 顶点/索引组装、4 槽异步 GPU mesh 上传、4 个 Set2 地形材质集（按需外部 16 PNG/程序化回退、`materialSetIndex` 序列化）、kinematic 角色控制器与区域限定运行期雕刻已完成；无限世界、多 chunk GPU 合批与雕刻持久化仍待做。
+
 **CPU/GPU 分工**
 
 - CPU JobSystem：高度采样、chunk 网格生成、碰撞数据准备
@@ -71,8 +77,9 @@ Graphics: vkCmdDrawIndexedIndirect
 
 **必须先补的运行时能力**
 
-- `SpatialIndex` 从每帧重建升级为 chunk/区域增量更新
-- JobSystem 支持任务依赖图或至少分层 `parallelFor`（chunk 生成 -> LOD -> 上传）
+- `SpatialIndex` bucket 增量 upsert/remove、Transform/Bounds 私有字段/dirty、streaming chunk XZ region bucket 与 4 个 Set2 地形材质集已完成；下一步多 chunk GPU 批处理与无限世界
+- JobSystem 支持任务依赖图或至少分层 `parallelFor`（chunk 生成 -> LOD -> 上传）；
+  地形当前已有 Scene 级协作取消
 
 **验收**：相机跨越多个 chunk 无明显卡顿与裂缝；LOD 切换可见；顶点量增加时 FPS 不线性崩塌。
 
@@ -113,7 +120,7 @@ chunk LOD + 邻接缝合、放置/删除方块并局部重建、与地形混合�
 - 场景序列化与热重载
 
 **注意**：这些是 F2/F3 的规模化前置。当前版本能工作，但不要在地形 chunk 数量上来后
-仍保留"每帧重建全部空间索引 + 全局单队列"。
+Transform/Bounds 字段已私有并通过 setter 自动通知 Scene；streaming chunk 已有 XZ region 索引。剩余 `registry.destroy()` 约定、非 chunk 实体的统一网格与全局 JobSystem 单队列。
 
 ---
 

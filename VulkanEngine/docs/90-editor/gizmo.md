@@ -76,13 +76,13 @@ Gizmo 手柄还是 ImGui 叠加。这是有意的 —— 即使物体被挡住�
 OBB 用局部包围盒的角点乘世界矩阵，框和物体的局部轴完全一致：
 旋转、缩放、父节点变换都会正确反映。
 
-拾取用的粗筛体仍然是世界 AABB（`rebuildSpatialIndex` 里的 `WorldBoundsComponent`），
+拾取用的粗筛体仍然是世界 AABB（`refreshSpatialIndex` 里的 `WorldBoundsComponent`），
 两者用途不同：**显示用 OBB，粗筛用 AABB**。没有局部包围盒的实体才退回 AABB 显示。
 
 ## 为什么拖拽时包围盒会和物体分开（已修）
 
 UI 是在 `render()` 里构建的，而 `Scene::update()`（负责
-`updateWorldTransforms` + `rebuildSpatialIndex`）在 `update()` 里**已经跑完了**。
+`updateWorldTransforms` + `refreshSpatialIndex`）在 `update()` 里**已经跑完了**。
 
 所以 gizmo 拖拽改完 `TransformComponent` 之后，`WorldTransformComponent` 与
 `WorldBoundsComponent` 还停在上一帧 —— 白框和手柄会落后物体一帧。

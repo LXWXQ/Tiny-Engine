@@ -5,19 +5,19 @@ type: pipeline
 scope: shaders/, CMakeLists.txt 的 shader 编译段
 read-when: 增删 shader、编译报错、改 GLSL 版本或编译选项
 size: ~130 行
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 # Shader 清单与编译管线
 
-## 1. 清单（24 个）
+## 1. 清单（28 个文件）
 
 | 文件 | 阶段 | 用途 |
 |---|---|---|
-| `mrt.vert` / `mrt.frag` | vert/frag | 普通网格写 G-Buffer |
+| `mrt.vert` / `mrt.frag` | vert/frag | 普通网格 / 地形写 G-Buffer；`terrainMode` 分支采样当前地形材质集 Set2（4 个描述符集，按 `materialSetIndex` 重绑）的四层 albedo/normal/packed heightRoughness，叠加坡度权重、Surface Style、宏观噪声、切线空间法线，并在 LOD 过渡帧用 IGN 抖动 mask 混合两级 |
 | `grid_mrt.vert` / `grid_mrt.frag` | vert/frag | 网格线写 G-Buffer（当前无实体触发） |
 | `skybox_mrt.vert` / `skybox_mrt.frag` | vert/frag | 天空盒写 G-Buffer（写 `outNormal=(0,0,0)`） |
-| `ssao.frag` | frag | SSAO（视图空间遮挡判断） |
+| `ssao.frag` | frag | SSAO（视图空间遮挡判断）；Normal.w=0 的地形/网格线直接输出 1.0 |
 | `ssao_blur.frag` | frag | SSAO 模糊 |
 | `lighting.vert` / `lighting.frag` | vert/frag | HDR 光照 |
 | `bloom_bright.frag` | frag | 亮部提取 |
@@ -32,7 +32,11 @@ updated: 2026-10-30
 | `ibl_brdf_lut.frag` | frag | BRDF LUT |
 | `ibl_capture.vert` | vert | IBL 面渲染 |
 | `compute_probe.comp` | comp | D-5 compute 验收探针 |
+| `terrain_height.comp` | comp | GPU 地形高度场：Perlin/fBm、ridge/detail、island/edge mask、height curve |
+| `terrain_lod.comp` | comp | B-03：chunk frustum cull、LOD 滞回/过渡状态、indirect command/count/stats/debug 输出；stateIndex 按 4-int slot 寻址 |
+| `terrain_mesh.comp` | comp | B-04：单 chunk 顶点/索引组装；11-float tight Vertex、B-02 transition band、可选裙边 |
 | `cross_queue_probe.comp` / `.frag` | comp/frag | TD-02 跨队列探针 |
+| `editor_overlay.vert` / `.frag` | vert/frag | 编辑器选中框/辅助线叠加 |
 
 ## 2. 编译管线
 

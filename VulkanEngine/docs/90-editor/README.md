@@ -5,7 +5,7 @@ type: system
 scope: 编辑器的整体结构、分层边界与面板清单
 read-when: 要动编辑器任何部分之前，先读这一页决定该看哪份子文档
 size: small
-updated: 2026-10-30
+updated: 2026-11-01
 ---
 
 # 场景编辑器
@@ -50,6 +50,7 @@ updated: 2026-10-30
 - 占位材质：没有有效材质槽位或没有 albedo 贴图时画程序化黑白棋盘格（完整 UV 走 2D 棋盘，否则局部 3D 棋盘）
 - 三轴手柄：平移 / 旋转 / 缩放（`W`/`E`/`R`），旋转用四元数（无万向节死锁），拖拽一次 = 一条可撤销命令
 - 资产面板：扫描 `Resources/Models`，双击即通过命令栈创建实体（可撤销）
+- 程序化地形：`Create -> Terrain` / Hierarchy 按钮创建；Inspector 改参数、Generate/Reset/Randomize、High Detail 257；创建与重建都走命令栈；地形没有 MaterialComponent，顶点色 + 片元程序化材质层走既有 G-Buffer 路径
 - 纯 3D 截图：`--screenshot-viewport` 读视口纹理，不含 UI
 
 ## 启动

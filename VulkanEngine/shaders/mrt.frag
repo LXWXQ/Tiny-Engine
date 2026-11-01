@@ -7,6 +7,8 @@ layout(location = 2) in vec3 fragNormalWorld;
 layout(location = 3) in vec2 fragUV;
 layout(location = 4) in vec3 fragPosLocal;
 layout(location = 5) in vec3 fragNormalLocal;
+layout(location = 6) flat in float fragTerrainLodBlend;
+layout(location = 7) flat in uint fragTerrainLodBlendMode;
 
 // 向 4 个 G-Buffer 颜色附件输出。
 // 编号是「输出槽位」而不是附件序号 —— 动态渲染下附件集合由 GeometryPass
@@ -33,6 +35,23 @@ layout(set = 1, binding = 1) uniform sampler2D normalMaps[];
 layout(set = 1, binding = 2) uniform sampler2D metallicMaps[];
 layout(set = 1, binding = 3) uniform sampler2D roughnessMaps[];
 
+// Terrain stage 6: four fixed material layers. Layer order is sand, grass,
+// rock, snow and matches TerrainTextureGenerator / TerrainMaterial.
+layout(set = 2, binding = 0) uniform sampler2D terrainAlbedoSand;
+layout(set = 2, binding = 1) uniform sampler2D terrainAlbedoGrass;
+layout(set = 2, binding = 2) uniform sampler2D terrainAlbedoRock;
+layout(set = 2, binding = 3) uniform sampler2D terrainAlbedoSnow;
+layout(set = 2, binding = 4) uniform sampler2D terrainNormalSand;
+layout(set = 2, binding = 5) uniform sampler2D terrainNormalGrass;
+layout(set = 2, binding = 6) uniform sampler2D terrainNormalRock;
+layout(set = 2, binding = 7) uniform sampler2D terrainNormalSnow;
+// r = height, g = roughness (b/a reserved). Packing avoids four extra
+// texture fetches per terrain pixel.
+layout(set = 2, binding = 8) uniform sampler2D terrainHeightRoughnessSand;
+layout(set = 2, binding = 9) uniform sampler2D terrainHeightRoughnessGrass;
+layout(set = 2, binding = 10) uniform sampler2D terrainHeightRoughnessRock;
+layout(set = 2, binding = 11) uniform sampler2D terrainHeightRoughnessSnow;
+
 // 材质下标通过 push constant 传进来（见 SimplePushConstantData::materialId）
 layout(push_constant) uniform Push {
     mat4 modelMatrix;
@@ -47,6 +66,14 @@ layout(push_constant) uniform Push {
     float checkerScale;
     // 有 UV 时的归一化：(uv - zw) * xy
     vec4 checkerUvTransform;
+    uint terrainMode;
+    float terrainMinY;
+    float terrainHeightRange;
+    float terrainDetailStrength;
+    float terrainUvTiling;
+    uint terrainMaterialStyle;
+    float terrainLodBlend;
+    uint terrainLodBlendMode;
 } push;
 
 // 程序化棋盘格。
@@ -126,21 +153,57 @@ vec3 checkerboardFallback(vec3 localPos)
     return mix(vec3(0.03), vec3(0.85), checker3D(p));
 }
 
+// ---------------------------------------------------------------------------
+// Terrain stage 6: shared material weights + low-frequency macro modulation.
+// Per-layer albedo/normal textures live in the dedicated terrain set (set 2).
+// ---------------------------------------------------------------------------
+float terrainHash21(vec2 p)
+{
+    p = fract(p * vec2(127.1, 311.7));
+    p += dot(p, p.yx + 34.23);
+    return fract(p.x * p.y);
+}
+
+float terrainValueNoise(vec2 p)
+{
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    // Quintic fade gives a continuous second derivative, so finite-difference
+    // bump lighting does not expose square lattice cells.
+    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float a = terrainHash21(i);
+    float b = terrainHash21(i + vec2(1.0, 0.0));
+    float c = terrainHash21(i + vec2(0.0, 1.0));
+    float d = terrainHash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float terrainFbm(vec2 p)
+{
+    const vec2 r1 = vec2(0.80, 0.60);
+    const vec2 r2 = vec2(-0.60, 0.80);
+    vec2 p1 = vec2(dot(p, r1), dot(p, vec2(-r1.y, r1.x)));
+    vec2 p2 = vec2(dot(p, r2), dot(p, vec2(-r2.y, r2.x)));
+    return 0.50 * terrainValueNoise(p) +
+           0.30 * terrainValueNoise(p1 * 2.03 + vec2(17.1, 9.2)) +
+           0.20 * terrainValueNoise(p2 * 5.11 + vec2(-7.7, 23.4));
+}
+
 // 你的偏导数法线计算魔法保留在这里！
 vec3 getNormalFromMap(uint matId) {
     vec3 tangentNormal = texture(normalMaps[nonuniformEXT(matId)], fragUV).xyz * 2.0 - 1.0;
-    
+
     vec3 Q1  = dFdx(fragPosWorld);
     vec3 Q2  = dFdy(fragPosWorld);
     vec2 st1 = dFdx(fragUV);
     vec2 st2 = dFdy(fragUV);
-    
+
     vec3 N   = normalize(fragNormalWorld);
-    
-    // ✨ 核心修复：UV 接缝拦截器
-    // 正常像素间 UV 变化极小。如果跨度超过 0.5，说明跨越了贴图的 0.0~1.0 边界
-    if (abs(st1.s) > 0.5 || abs(st1.t) > 0.5 || abs(st2.s) > 0.5 || abs(st2.t) > 0.5) {
-        return N; // 遇到接缝，直接返回顶点自带的光滑法线，保平安！
+
+    // UV 接缝拦截：跨越 0/1 边界时退回几何法线。
+    if (abs(st1.s) > 0.5 || abs(st1.t) > 0.5 ||
+        abs(st2.s) > 0.5 || abs(st2.t) > 0.5) {
+        return N;
     }
 
     // 防御极点退化
@@ -159,7 +222,24 @@ vec3 getNormalFromMap(uint matId) {
     return normalize(TBN * tangentNormal);
 }
 
+float terrainBayer4(ivec2 pixel)
+{
+    // Interleaved gradient noise: deterministic per pixel, less structured than
+    // a 4x4 Bayer matrix when motion blur smears the transition.
+    const vec2 p = vec2(pixel) + vec2(0.5);
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+
 void main() {
+    if (fragTerrainLodBlendMode != 0u)
+    {
+        const float dither = terrainBayer4(ivec2(gl_FragCoord.xy));
+        if (fragTerrainLodBlendMode == 1u && dither >= fragTerrainLodBlend)
+            discard;
+        if (fragTerrainLodBlendMode == 2u && dither < fragTerrainLodBlend)
+            discard;
+    }
+
     // 1. 位置 (世界坐标)
     outPosition = vec4(fragPosWorld, 1.0);
 
@@ -183,6 +263,121 @@ void main() {
         worldNormal *= inversesqrt(worldNormal2);
     }
     outNormal = vec4(worldNormal, 1.0);
+
+
+
+    // Terrain stage 6: four material layers blended by height, slope and
+    // layer-local height maps. Texture sampling supplies albedo, normal,
+    // height and roughness detail; Surface Style biases the layer weights.
+    if (push.terrainMode != 0u) {
+        const float h = clamp((fragPosLocal.y - push.terrainMinY) /
+                              max(push.terrainHeightRange, 1e-4), 0.0, 1.0);
+        const float slope = clamp(1.0 - worldNormal.y, 0.0, 1.0);
+
+        const float sandW = 1.0 - smoothstep(0.08, 0.22, h);
+        const float slopeRockW = smoothstep(0.24, 0.60, slope);
+        const float highRockW = smoothstep(0.62, 0.84, h) * 0.55;
+        const float rockW = max(slopeRockW, highRockW);
+        const float snowW = smoothstep(0.80, 0.94, h) * (1.0 - 0.6 * rockW);
+        const float grassW = clamp(1.0 - sandW - rockW - snowW, 0.0, 1.0);
+
+        vec4 layerWeight = vec4(sandW, grassW, rockW, snowW);
+        vec4 styleBias = vec4(1.0);
+        vec3 styleTint = vec3(1.0);
+        float styleRoughness = 0.0;
+        float styleNormalScale = 1.0;
+        if (push.terrainMaterialStyle == 1u) {          // Arid
+            styleBias = vec4(1.35, 0.80, 1.05, 0.45);
+            styleTint = vec3(1.06, 1.01, 0.90);
+            styleRoughness = 0.035;
+        } else if (push.terrainMaterialStyle == 2u) {   // Alpine
+            styleBias = vec4(0.55, 0.75, 1.25, 1.30);
+            styleTint = vec3(0.94, 0.98, 1.06);
+            styleRoughness = -0.025;
+            styleNormalScale = 1.15;
+        } else if (push.terrainMaterialStyle == 3u) {   // Lush
+            styleBias = vec4(0.55, 1.40, 0.75, 0.55);
+            styleTint = vec3(0.94, 1.06, 0.90);
+            styleRoughness = 0.02;
+            styleNormalScale = 0.90;
+        }
+        layerWeight *= styleBias;
+
+        const vec2 worldXZ = fragPosWorld.xz;
+        const float uvTiling = clamp(push.terrainUvTiling, 0.01, 100.0);
+        const vec2 sandUv = worldXZ * (0.65 * uvTiling) + vec2(0.11, 0.37);
+        const vec2 grassUv = worldXZ * (0.85 * uvTiling) + vec2(0.53, 0.17);
+        const vec2 rockUv = worldXZ * (0.48 * uvTiling) + vec2(0.23, 0.71);
+        const vec2 snowUv = worldXZ * (0.36 * uvTiling) + vec2(0.61, 0.43);
+
+        const vec4 packedSand = texture(terrainHeightRoughnessSand, sandUv);
+        const vec4 packedGrass = texture(terrainHeightRoughnessGrass, grassUv);
+        const vec4 packedRock = texture(terrainHeightRoughnessRock, rockUv);
+        const vec4 packedSnow = texture(terrainHeightRoughnessSnow, snowUv);
+        const vec4 layerHeight = vec4(packedSand.r, packedGrass.r,
+                                      packedRock.r, packedSnow.r);
+        layerWeight *= mix(vec4(0.72), vec4(1.28), layerHeight);
+        const vec4 layerW = layerWeight / max(dot(layerWeight, vec4(1.0)), 1e-4);
+        const float sandN = layerW.x;
+        const float grassN = layerW.y;
+        const float rockN = layerW.z;
+        const float snowN = layerW.w;
+
+        const float patchMask = terrainFbm(worldXZ * 0.19 + vec2(3.7, 8.1));
+        const vec3 sandAlbedo = mix(
+            texture(terrainAlbedoSand, sandUv).rgb,
+            texture(terrainAlbedoSand, sandUv * 0.37 + vec2(0.43, 0.19)).rgb,
+            patchMask);
+        const vec3 grassAlbedo = mix(
+            texture(terrainAlbedoGrass, grassUv).rgb,
+            texture(terrainAlbedoGrass, grassUv * 0.39 + vec2(0.17, 0.63)).rgb,
+            patchMask);
+        const vec3 rockAlbedo = mix(
+            texture(terrainAlbedoRock, rockUv).rgb,
+            texture(terrainAlbedoRock, rockUv * 0.43 + vec2(0.71, 0.29)).rgb,
+            patchMask);
+        const vec3 snowAlbedo = mix(
+            texture(terrainAlbedoSnow, snowUv).rgb,
+            texture(terrainAlbedoSnow, snowUv * 0.41 + vec2(0.37, 0.81)).rgb,
+            patchMask);
+        vec3 albedo = sandN * sandAlbedo + grassN * grassAlbedo +
+                      rockN * rockAlbedo + snowN * snowAlbedo;
+        albedo *= styleTint;
+
+        const float macro = terrainFbm(worldXZ * 0.50 + vec2(1.3, -2.1));
+        const float materialStrength = clamp(push.terrainDetailStrength, 0.0, 1.0);
+        albedo *= mix(1.0, mix(0.82, 1.18, macro), 0.35 + materialStrength * 0.35);
+
+        const vec3 sandNormal = texture(terrainNormalSand, sandUv).xyz * 2.0 - 1.0;
+        const vec3 grassNormal = texture(terrainNormalGrass, grassUv).xyz * 2.0 - 1.0;
+        const vec3 rockNormal = texture(terrainNormalRock, rockUv).xyz * 2.0 - 1.0;
+        const vec3 snowNormal = texture(terrainNormalSnow, snowUv).xyz * 2.0 - 1.0;
+        const vec3 layerNormal = normalize(sandN * sandNormal + grassN * grassNormal +
+                                           rockN * rockNormal + snowN * snowNormal);
+
+        const vec2 footprintVec = fwidth(worldXZ);
+        const float footprint = max(footprintVec.x, footprintVec.y);
+        const float detailFade = 1.0 - smoothstep(0.04, 0.25, footprint);
+        const float normalStrength = materialStrength * mix(0.25, 1.0, detailFade) *
+                                     mix(0.75, 1.35, rockN) * styleNormalScale;
+        const vec3 tangentX = normalize(vec3(1.0, 0.0, 0.0) -
+                                        worldNormal * worldNormal.x + vec3(1e-5, 0.0, 0.0));
+        const vec3 tangentZ = normalize(cross(tangentX, worldNormal));
+        const vec3 disturbed = normalize(vec3(layerNormal.xy * normalStrength, 1.0));
+        worldNormal = normalize(tangentX * disturbed.x +
+                                tangentZ * disturbed.y +
+                                worldNormal * disturbed.z);
+        outNormal = vec4(worldNormal, 0.0);   // terrain opts out of SSAO
+
+        const vec4 layerRoughness = vec4(packedSand.g, packedGrass.g,
+                                         packedRock.g, packedSnow.g);
+        float roughness = clamp(dot(layerW, layerRoughness) +
+                                styleRoughness + (macro - 0.5) * 0.04, 0.45, 1.0);
+
+        outAlbedo = vec4(albedo, 1.0);
+        outPBR = vec4(0.0, roughness, 0.0, 1.0);
+        return;
+    }
 
     // 材质下标。y == 0 表示这个物体没有可用的材质槽位（天空盒 / 程序化网格 /
     // 编辑器里还没分配材质的网格），直接画棋盘格占位 —— 因为此时数组里那个

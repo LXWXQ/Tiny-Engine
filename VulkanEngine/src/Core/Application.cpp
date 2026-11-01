@@ -28,6 +28,11 @@
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <filesystem>
+#include <unordered_set>
+#include <stb_image_write.h>
 #include "Core/Profiler.h"
 #include "RHI/GpuProfiler.h"
 
@@ -118,20 +123,544 @@ FirstApp::FirstApp(const diag::Options& options)
 	scene = std::make_unique<Scene>();
 	// 编辑器模式默认不加载 Sponza（见 Scene::init）。--empty-scene 对运行时构建仍有效。
 const bool loadDefaultScene = !diagnosticsOptions.emptyScene && !diagnosticsOptions.editorMode;
-scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager, loadDefaultScene);
+scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager,
+		loadDefaultScene, jobSystem.get());
 	scene->getCameraController().registerCallbacks(window);
 
 	// W1：把配置应用到场景。顺序很重要 —— Scene::init 里会摆好默认相机位姿，
 	// 配置只能在那之后再覆盖，否则会被 init 的默认值抹掉。
 	scene->getSettings() = loadedSettings;
+	// B-03: --terrain-test enables the GPU-vs-CPU selection parity mirror.
+	scene->getSettings().terrainGpuSelectionSelfTest = diagnosticsOptions.terrainTest;
 	if (hasCamera)
 	{
-		scene->getCameraTransform().translation = loadedCamera.position;
+		scene->getCameraTransform().setTranslation(loadedCamera.position);
 		scene->getCameraTransform().setEuler(loadedCamera.rotation);
 		std::cout << "[Config] 已应用相机位姿 ("
 			<< loadedCamera.position.x << ", " << loadedCamera.position.y << ", " << loadedCamera.position.z << ")\n";
 	}
 
+	// --terrain-test: persistent end-to-end terrain for render/screenshot runs.
+	// Placement mirrors the editor rule: centre in front of the camera, flattened
+	// to Y=0 so TerrainConfig::baseHeight remains the visible ground elevation.
+	if (diagnosticsOptions.terrainTest)
+	{
+		std::string gpuTerrainError;
+		if (!scene->selfTestTerrainCompute(gpuTerrainError))
+			throw std::runtime_error("--terrain-test GPU compute self-test failed: " + gpuTerrainError);
+
+		terrain::TerrainConfig terrainConfig;
+		// B-02: render/screenshot regression uses stitched LOD boundaries with
+		// skirts disabled. User-created terrain keeps skirts as a fallback.
+		terrainConfig.skirtsEnabled = false;
+		const TransformComponent& cameraTransform = scene->getCameraTransform();
+		glm::vec3 forward(std::sin(cameraTransform.getEuler().y), 0.0f,
+			std::cos(cameraTransform.getEuler().y));
+		if (glm::dot(forward, forward) < 1e-8f)
+			forward = glm::vec3(0.0f, 0.0f, 1.0f);
+		else
+			forward = glm::normalize(forward);
+
+		const float distance = terrainConfig.sizeZ * 0.5f + 10.0f;
+		const glm::vec3 spawnPosition(
+			cameraTransform.getTranslation().x + forward.x * distance,
+			0.0f,
+			cameraTransform.getTranslation().z + forward.z * distance);
+
+		const entt::entity terrainEntity = scene->createTerrainEntity(
+			terrainConfig, "Terrain", spawnPosition);
+		if (terrainEntity == entt::null)
+			throw std::runtime_error("--terrain-test failed to create terrain");
+
+		const auto* terrain = scene->getRegistry().try_get<TerrainComponent>(terrainEntity);
+		const auto* terrainMesh = scene->getRegistry().try_get<MeshComponent>(terrainEntity);
+		const size_t initialChunks = static_cast<size_t>(terrainConfig.chunkGridX) *
+			static_cast<size_t>(terrainConfig.chunkGridZ);
+		const size_t initialSubMeshes = (terrainMesh && terrainMesh->model)
+			? terrainMesh->model->getSubMeshes().size() : 0u;
+		std::cout << "[Terrain] demo entity created"
+			<< " | " << terrainConfig.resolutionX << "x" << terrainConfig.resolutionZ
+			<< " vertices=" << (terrain ? terrain->vertexCount : 0u)
+			<< " indices=" << (terrain ? terrain->indexCount : 0u)
+			<< " chunks=" << initialChunks
+			<< " lods=" << terrainConfig.lodLevelCount
+			<< " submeshes=" << initialSubMeshes
+			<< " pos=(" << spawnPosition.x << ", " << spawnPosition.y << ", " << spawnPosition.z << ")\n";
+
+		// Stage 7 regression: submit the same terrain through JobSystem, wait for
+		// the main-thread upload, and verify revision/stats before screenshots.
+		bool asyncCallback = false;
+		bool asyncSuccess = false;
+		if (!scene->requestRegenerateTerrain(
+				terrainEntity,
+				[&asyncCallback, &asyncSuccess](bool success, const std::string&)
+				{
+					asyncCallback = true;
+					asyncSuccess = success;
+				}))
+		{
+			throw std::runtime_error("--terrain-test failed to submit async generation");
+		}
+		scene->waitForTerrainGeneration();
+		const auto* asyncTerrain = scene->getRegistry().try_get<TerrainComponent>(terrainEntity);
+		if (!asyncCallback || !asyncSuccess || !asyncTerrain ||
+			asyncTerrain->generating || asyncTerrain->revision < 2u)
+		{
+			throw std::runtime_error("--terrain-test async generation did not complete");
+		}
+		const auto* asyncMesh = scene->getRegistry().try_get<MeshComponent>(terrainEntity);
+		const size_t asyncChunks = static_cast<size_t>(asyncTerrain->config.chunkGridX) *
+			static_cast<size_t>(asyncTerrain->config.chunkGridZ);
+		const size_t asyncSubMeshes = (asyncMesh && asyncMesh->model)
+			? asyncMesh->model->getSubMeshes().size() : 0u;
+		std::cout << "[Terrain] async generation PASS | revision="
+			<< asyncTerrain->revision << " | " << asyncTerrain->vertexCount
+			<< " vertices, " << asyncTerrain->indexCount << " indices, "
+			<< asyncChunks << " chunks, " << asyncSubMeshes << " LOD submeshes\n";
+
+		// B-05: a 257x257 single-chunk rebuild should spend only submit/poll
+		// time on the update thread; GPU mesh assembly stays asynchronous.
+		// createTerrainEntity is intentionally synchronous and provides the
+		// before/after frame-spike baseline.
+		terrain::TerrainConfig b05Config;
+		b05Config.seed = 5150u;
+		b05Config.resolutionX = 257u;
+		b05Config.resolutionZ = 257u;
+		b05Config.sizeX = 100.0f;
+		b05Config.sizeZ = 100.0f;
+		b05Config.heightScale = 18.0f;
+		b05Config.chunkGridX = 1u;
+		b05Config.chunkGridZ = 1u;
+		b05Config.lodLevelCount = 3u;
+		b05Config.skirtsEnabled = false;
+		b05Config.localColorRange = false;
+
+		const glm::vec3 b05Position = spawnPosition +
+			glm::vec3(0.0f, 0.0f, -terrainConfig.sizeZ * 1.5f);
+		const auto b05SyncStart = std::chrono::steady_clock::now();
+		const entt::entity b05Entity = scene->createTerrainEntity(
+			b05Config, "TerrainB05AsyncUpload", b05Position);
+		const double b05SyncBaselineMs = std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - b05SyncStart).count();
+		const auto* b05Initial = b05Entity != entt::null
+			? scene->getRegistry().try_get<TerrainComponent>(b05Entity) : nullptr;
+		if (!b05Initial || !b05Initial->meshGeneratedOnGpu ||
+			b05Initial->config.chunkGridX != 1u ||
+			b05Initial->config.chunkGridZ != 1u)
+		{
+			throw std::runtime_error(
+				"--terrain-test B-05 baseline did not use the single-chunk GPU mesh path");
+		}
+
+		const TerrainGpuMeshBuilder::Stats b05StatsBefore = scene->getTerrainGpuMeshStats();
+		scene->resetTerrainPollStats();
+		bool b05Callback = false;
+		bool b05Success = false;
+		if (!scene->requestRegenerateTerrain(
+				b05Entity,
+				[&b05Callback, &b05Success](bool success, const std::string&)
+				{
+					b05Callback = true;
+					b05Success = success;
+				}))
+		{
+			throw std::runtime_error("--terrain-test failed to submit B-05 async rebuild");
+		}
+		scene->waitForTerrainGeneration();
+		const auto* b05After = scene->getRegistry().try_get<TerrainComponent>(b05Entity);
+		const TerrainGpuMeshBuilder::Stats b05StatsAfter = scene->getTerrainGpuMeshStats();
+		const uint64_t b05MeshSubmits = b05StatsAfter.submitted - b05StatsBefore.submitted;
+		const double b05MaxPollMs = scene->getMaxTerrainPollMs();
+		if (!b05Callback || !b05Success || !b05After || b05After->generating ||
+			b05After->revision < 2u || !b05After->meshGeneratedOnGpu ||
+			b05After->generationBackend.find("GPU mesh") == std::string::npos ||
+			b05MeshSubmits == 0u)
+		{
+			throw std::runtime_error(
+				"--terrain-test B-05 async GPU rebuild did not complete on the GPU path");
+		}
+		if (b05MaxPollMs >= b05SyncBaselineMs)
+		{
+			throw std::runtime_error(
+				"--terrain-test B-05 async poll exceeded the synchronous baseline");
+		}
+		const double b05SpikeRatio = b05MaxPollMs > 1e-6
+			? b05SyncBaselineMs / b05MaxPollMs : 0.0;
+		std::cout << "[Terrain] async GPU upload PASS"
+			<< " | resolution=" << b05Config.resolutionX << "x" << b05Config.resolutionZ
+			<< " chunks=1"
+			<< " syncBaseline=" << b05SyncBaselineMs << "ms"
+			<< " asyncMaxPoll=" << b05MaxPollMs << "ms"
+			<< " maxSubmit=" << b05StatsAfter.maxSubmitMs << "ms"
+			<< " generation=" << b05After->lastGenerationMs << "ms"
+			<< " spikeRatio=" << b05SpikeRatio
+			<< " revision=" << b05After->revision
+			<< " gpuMesh=1\n";
+
+		scene->destroyEntity(b05Entity);
+
+		// B-01 smoke test: independent chunk entities stream around the camera,
+		// own separate Models, unload cleanly, and sample one continuous field.
+		terrain::TerrainConfig streamingConfig;
+		streamingConfig.seed = 9001u;
+		streamingConfig.resolutionX = 17u;
+		streamingConfig.resolutionZ = 17u;
+		streamingConfig.sizeX = 16.0f;
+		streamingConfig.sizeZ = 16.0f;
+		streamingConfig.heightScale = 3.0f;
+		streamingConfig.lodLevelCount = 2u;
+streamingConfig.skirtsEnabled = false;
+		streamingConfig.localColorRange = false;
+		const entt::entity streamingManager = scene->createStreamingTerrain(
+			streamingConfig, 1, 3, "TerrainStreamingSmoke");
+		if (streamingManager == entt::null)
+			throw std::runtime_error("--terrain-test streaming manager creation failed");
+
+		const auto loadedStreamingChunks = [&]()
+		{
+			size_t loaded = 0;
+			for (auto [entity, chunk, terrain, mesh] :
+				scene->getRegistry().view<TerrainChunkComponent, TerrainComponent, MeshComponent>().each())
+			{
+				(void)entity;
+				(void)chunk;
+				if (terrain.generated && !terrain.generating && mesh.model &&
+					terrain.cpuHeightField && terrain.cpuHeightField->generatedOnGpu)
+					++loaded;
+			}
+			return loaded;
+		};
+
+		for (uint32_t frame = 0; frame < 20 && loadedStreamingChunks() < 9u; ++frame)
+		{
+			scene->refreshStreamingTerrain();
+			scene->waitForTerrainGeneration();
+		}
+		if (scene->getStreamingTerrainChunkCount() != 9u ||
+			loadedStreamingChunks() != 9u)
+			throw std::runtime_error("--terrain-test streaming chunk set did not settle");
+
+		std::unordered_set<const Model*> streamingModels;
+		for (auto [entity, chunk, terrain, mesh] :
+			scene->getRegistry().view<TerrainChunkComponent, TerrainComponent, MeshComponent>().each())
+		{
+			(void)entity;
+			(void)chunk;
+			(void)terrain;
+			streamingModels.insert(mesh.model.get());
+		}
+		if (streamingModels.size() != 9u)
+			throw std::runtime_error("--terrain-test streaming chunks are not independent Models");
+
+		scene->refreshTransformsAndVisibility();
+		const glm::vec3 streamingFocus = scene->getCameraTransform().getTranslation();
+		const int32_t centerChunkX =
+			static_cast<int32_t>(std::floor(streamingFocus.x / streamingConfig.sizeX));
+		const int32_t centerChunkZ =
+			static_cast<int32_t>(std::floor(streamingFocus.z / streamingConfig.sizeZ));
+		std::vector<entt::entity> regionChunks;
+		scene->queryTerrainChunksInRegionRange(
+			centerChunkX - 2, centerChunkZ - 2,
+			centerChunkX + 2, centerChunkZ + 2, regionChunks);
+		if (regionChunks.size() != 9u)
+			throw std::runtime_error("--terrain-test region query did not return 9 streamed chunks");
+		for (entt::entity chunkEntity : regionChunks)
+		{
+			const auto* chunk = scene->getRegistry().try_get<TerrainChunkComponent>(chunkEntity);
+			if (!chunk || chunk->world != streamingManager)
+				throw std::runtime_error("--terrain-test region query returned a non-chunk entity");
+		}
+		std::cout << "[Terrain] spatial region query PASS | chunks=9 regions=5x5\n";
+
+		// B-07: a small brush at the centre of one streamed chunk must rebuild
+		// only that chunk; untouched chunks keep their revision and Model.
+		struct ChunkSnapshot
+		{
+			entt::entity entity = entt::null;
+			uint64_t revision = 0;
+			const Model* model = nullptr;
+		};
+		std::vector<ChunkSnapshot> chunkSnapshots;
+		for (auto [entity, chunk, terrain, mesh] :
+			scene->getRegistry().view<TerrainChunkComponent, TerrainComponent, MeshComponent>().each())
+		{
+			(void)chunk;
+			chunkSnapshots.push_back({ entity, terrain.revision, mesh.model.get() });
+		}
+
+		// Pick the far row of the 3x3 streamed set. The demo 257x257 terrain
+		// overlaps the near rows, and this keeps the brush test isolated.
+		entt::entity sculptChunk = entt::null;
+		float sculptX = 0.0f;
+		float sculptZ = 0.0f;
+		for (const ChunkSnapshot& snapshot : chunkSnapshots)
+		{
+			const auto* chunk = scene->getRegistry().try_get<TerrainChunkComponent>(snapshot.entity);
+			const auto* transform = scene->getRegistry().try_get<TransformComponent>(snapshot.entity);
+			if (chunk && transform && chunk->chunkZ == centerChunkZ - 1)
+			{
+				sculptChunk = snapshot.entity;
+				sculptX = transform->getTranslation().x;
+				sculptZ = transform->getTranslation().z;
+				break;
+			}
+		}
+		if (sculptChunk == entt::null)
+			throw std::runtime_error("--terrain-test B-07 could not find an isolated streamed chunk");
+		float sculptGround = 0.0f;
+		entt::entity groundEntity = entt::null;
+		if (!scene->sampleTerrainGroundHeightWorld(sculptX, sculptZ, sculptGround, &groundEntity) ||
+			groundEntity != sculptChunk)
+			throw std::runtime_error("--terrain-test B-07 sculpt ground query failed");
+
+		terrain::TerrainBrushSettings brush;
+		brush.center = glm::vec3(sculptX, sculptGround, sculptZ);
+		brush.radius = 2.5f;
+		brush.strength = 0.45f;
+		brush.mode = terrain::TerrainBrushMode::Raise;
+		Scene::TerrainSculptResult sculptResult;
+		std::string sculptError;
+		if (!scene->sculptTerrain(brush, sculptResult, sculptError))
+			throw std::runtime_error("--terrain-test B-07 sculpt failed: " + sculptError);
+		if (sculptResult.rebuiltEntities != 1u || sculptResult.rebuilt.size() != 1u ||
+			sculptResult.rebuilt[0] != sculptChunk || sculptResult.modifiedVertices == 0u)
+			throw std::runtime_error("--terrain-test B-07 sculpt rebuilt an unexpected chunk set");
+
+		for (const ChunkSnapshot& snapshot : chunkSnapshots)
+		{
+			const auto* terrain = scene->getRegistry().try_get<TerrainComponent>(snapshot.entity);
+			const auto* mesh = scene->getRegistry().try_get<MeshComponent>(snapshot.entity);
+			if (!terrain || !mesh || !mesh->model)
+				throw std::runtime_error("--terrain-test B-07 sculpt lost a streamed chunk");
+			if (snapshot.entity == sculptChunk)
+			{
+				if (terrain->revision != snapshot.revision + 1u ||
+					mesh->model.get() == snapshot.model)
+					throw std::runtime_error("--terrain-test B-07 sculpt did not replace the target chunk");
+			}
+			else if (terrain->revision != snapshot.revision ||
+					 mesh->model.get() != snapshot.model)
+			{
+				throw std::runtime_error("--terrain-test B-07 sculpt rebuilt an untouched chunk");
+			}
+		}
+		std::cout << "[Terrain] sculpt PASS | chunks=9 rebuilt=1 vertices="
+			<< sculptResult.modifiedVertices << " radius=2.5 mode=Raise\n";
+
+		// B-07: kinematic controller falls to the sculpted ground, walks across
+		// the hill in both directions, and lands after a jump without oscillating.
+		float characterGround = 0.0f;
+		if (!scene->sampleTerrainGroundHeightWorld(sculptX, sculptZ, characterGround, nullptr))
+			throw std::runtime_error("--terrain-test B-07 character ground query failed");
+		const entt::entity character = scene->createCharacterEntity(
+			"TerrainB07Character", glm::vec3(sculptX, characterGround + 3.0f, sculptZ));
+		if (character == entt::null)
+			throw std::runtime_error("--terrain-test B-07 character creation failed");
+
+		CharacterMoveResult characterMove;
+		float maxGroundedError = 0.0f;
+		uint32_t groundedFrames = 0u;
+		for (uint32_t frame = 0; frame < 180u; ++frame)
+		{
+			if (!scene->updateCharacterController(character, glm::vec3(0.0f), false,
+												  1.0f / 60.0f, characterMove))
+				throw std::runtime_error("--terrain-test B-07 character update failed");
+			float ground = 0.0f;
+			if (scene->sampleTerrainGroundHeightWorld(characterMove.position.x,
+													  characterMove.position.z,
+													  ground, nullptr))
+			{
+				if (characterMove.grounded)
+				{
+					++groundedFrames;
+					maxGroundedError = std::max(maxGroundedError,
+						std::abs(characterMove.position.y - ground));
+				}
+			}
+		}
+		if (!characterMove.grounded || groundedFrames < 120u || maxGroundedError > 0.08f)
+			throw std::runtime_error("--terrain-test B-07 character did not settle on the ground");
+
+		const float walkStartX = characterMove.position.x;
+		float walkMaxX = walkStartX;
+		for (uint32_t frame = 0; frame < 60u; ++frame)
+		{
+			if (!scene->updateCharacterController(character, glm::vec3(1.0f, 0.0f, 0.0f),
+												  false, 1.0f / 60.0f, characterMove))
+				throw std::runtime_error("--terrain-test B-07 character walk failed");
+			walkMaxX = std::max(walkMaxX, characterMove.position.x);
+			float ground = 0.0f;
+			if (characterMove.grounded &&
+				scene->sampleTerrainGroundHeightWorld(characterMove.position.x,
+													  characterMove.position.z,
+													  ground, nullptr))
+				maxGroundedError = std::max(maxGroundedError,
+					std::abs(characterMove.position.y - ground));
+		}
+		for (uint32_t frame = 0; frame < 60u; ++frame)
+		{
+			if (!scene->updateCharacterController(character, glm::vec3(-1.0f, 0.0f, 0.0f),
+												  false, 1.0f / 60.0f, characterMove))
+				throw std::runtime_error("--terrain-test B-07 character walk failed");
+			float ground = 0.0f;
+			if (characterMove.grounded &&
+				scene->sampleTerrainGroundHeightWorld(characterMove.position.x,
+													  characterMove.position.z,
+													  ground, nullptr))
+				maxGroundedError = std::max(maxGroundedError,
+					std::abs(characterMove.position.y - ground));
+		}
+		if (walkMaxX - walkStartX < 1.0f ||
+			maxGroundedError > 0.12f)
+			throw std::runtime_error("--terrain-test B-07 character traversal was unstable");
+		float jumpGround = 0.0f;
+		scene->sampleTerrainGroundHeightWorld(characterMove.position.x,
+											  characterMove.position.z,
+											  jumpGround, nullptr);
+		float peakY = characterMove.position.y;
+		if (!scene->updateCharacterController(character, glm::vec3(0.0f), true,
+											  1.0f / 60.0f, characterMove))
+			throw std::runtime_error("--terrain-test B-07 character jump failed");
+		for (uint32_t frame = 0; frame < 150u; ++frame)
+		{
+			if (!scene->updateCharacterController(character, glm::vec3(0.0f), false,
+												  1.0f / 60.0f, characterMove))
+				throw std::runtime_error("--terrain-test B-07 character jump failed");
+			peakY = std::max(peakY, characterMove.position.y);
+		}
+		if (!characterMove.grounded || peakY < jumpGround + 0.4f)
+			throw std::runtime_error("--terrain-test B-07 character jump did not land");
+		std::cout << "[Terrain] character controller PASS | grounded=1"
+			<< " maxGroundError=" << maxGroundedError
+			<< " jumpHeight=" << (peakY - jumpGround)
+			<< " walkDistance=" << (walkMaxX - walkStartX) << std::endl;
+
+		bool characterSerialized = false;
+		for (const scene::EntityDescription& described : scene->captureDescription().entities)
+		{
+			if (!described.isCharacter)
+				continue;
+			characterSerialized =
+				std::abs(described.characterRadius - 0.35f) < 1e-5f &&
+				std::abs(described.characterHeight - 1.8f) < 1e-5f &&
+				std::abs(described.characterMoveSpeed - 6.0f) < 1e-5f;
+			break;
+		}
+		if (!characterSerialized)
+			throw std::runtime_error("--terrain-test B-07 character capture failed");
+		std::cout << "[Terrain] character serialization PASS | captured=1" << std::endl;
+
+		scene->destroyEntity(character);
+
+		// B-08: exercise the bounded material library with one real external
+		// 16-PNG set and three procedural fallbacks. The set index is part of
+		// TerrainConfig, so it must survive scene description capture.
+		const std::filesystem::path materialDir =
+			std::filesystem::path(".tmp") / "b08_material_set1";
+		std::filesystem::remove_all(materialDir);
+		std::filesystem::create_directories(materialDir);
+		const char* mapNames[] = { "albedo", "normal", "height", "roughness" };
+		const char* layerNames[] = { "sand", "grass", "rock", "snow" };
+		std::array<std::array<unsigned char, 64>, 4> mapPixels{};
+		for (uint32_t layer = 0; layer < 4; ++layer)
+		{
+			for (uint32_t pixel = 0; pixel < 16; ++pixel)
+			{
+				const uint32_t i = pixel * 4u;
+				mapPixels[0][i + 0u] = static_cast<unsigned char>(64u + layer * 40u);
+				mapPixels[0][i + 1u] = static_cast<unsigned char>(160u + layer * 12u);
+				mapPixels[0][i + 2u] = static_cast<unsigned char>(96u + layer * 8u);
+				mapPixels[0][i + 3u] = 255u;
+
+				mapPixels[1][i + 0u] = 128u;
+				mapPixels[1][i + 1u] = 128u;
+				mapPixels[1][i + 2u] = 255u;
+				mapPixels[1][i + 3u] = 255u;
+
+				mapPixels[2][i + 0u] = static_cast<unsigned char>(80u + layer * 20u);
+				mapPixels[2][i + 1u] = 128u;
+				mapPixels[2][i + 2u] = 0u;
+				mapPixels[2][i + 3u] = 255u;
+
+				mapPixels[3][i + 0u] = 220u;
+				mapPixels[3][i + 1u] = 220u;
+				mapPixels[3][i + 2u] = 220u;
+				mapPixels[3][i + 3u] = 255u;
+			}
+		}
+		for (uint32_t mapIndex = 0; mapIndex < 4; ++mapIndex)
+		{
+			for (uint32_t layer = 0; layer < 4; ++layer)
+			{
+				const std::string filename = std::string(mapNames[mapIndex]) + "_" +
+					layerNames[layer] + ".png";
+				const std::string path = (materialDir / filename).string();
+				if (stbi_write_png(path.c_str(), 4, 4, 4,
+					mapPixels[mapIndex].data(), 4 * 4) == 0)
+					throw std::runtime_error("--terrain-test B-08 could not write external PNG");
+			}
+		}
+
+		std::string materialError;
+		if (!scene->ensureTerrainMaterialSetFromDirectory(1, materialDir.string(), materialError))
+			throw std::runtime_error("--terrain-test B-08 external material set failed: " + materialError);
+		for (uint32_t materialSet = 2; materialSet < 4; ++materialSet)
+		{
+			if (!scene->ensureTerrainMaterialSet(materialSet, materialError))
+				throw std::runtime_error("--terrain-test B-08 material set failed: " + materialError);
+		}
+		const TerrainMaterial::Stats materialStats = scene->getTerrainMaterialStats();
+		if (materialStats.residentSets != 4u || materialStats.maxSets != 4u ||
+			materialStats.externalSets != 1u || materialStats.proceduralSets != 3u)
+			throw std::runtime_error("--terrain-test B-08 material set residency was unexpected");
+		if (scene->ensureTerrainMaterialSet(4, materialError))
+			throw std::runtime_error("--terrain-test B-08 accepted an out-of-range material set");
+
+		terrain::TerrainConfig materialConfig;
+		materialConfig.resolutionX = 33u;
+		materialConfig.resolutionZ = 33u;
+		materialConfig.sizeX = 24.0f;
+		materialConfig.sizeZ = 24.0f;
+		materialConfig.chunkGridX = 1u;
+		materialConfig.chunkGridZ = 1u;
+		materialConfig.lodLevelCount = 1u;
+		materialConfig.skirtsEnabled = false;
+		materialConfig.localColorRange = false;
+		materialConfig.materialSetIndex = 1u;
+		const entt::entity materialTerrain = scene->createTerrainEntity(
+			materialConfig, "B08 Material Terrain", glm::vec3(0.0f, 0.0f, -80.0f));
+		if (materialTerrain == entt::null)
+			throw std::runtime_error("--terrain-test B-08 material terrain creation failed");
+		const auto* materialTerrainComponent =
+			scene->getRegistry().try_get<TerrainComponent>(materialTerrain);
+		if (!materialTerrainComponent || materialTerrainComponent->config.materialSetIndex != 1u ||
+			!materialTerrainComponent->generated)
+			throw std::runtime_error("--terrain-test B-08 material terrain lost its set index");
+		bool materialSerialized = false;
+		for (const scene::EntityDescription& described : scene->captureDescription().entities)
+		{
+			if (described.isTerrain && described.terrainConfig.materialSetIndex == 1u)
+			{
+				materialSerialized = true;
+				break;
+			}
+		}
+		if (!materialSerialized)
+			throw std::runtime_error("--terrain-test B-08 material set index was not captured");
+		scene->destroyEntity(materialTerrain);
+		std::filesystem::remove_all(materialDir);
+		std::cout << "[Terrain] material sets PASS | resident=" << materialStats.residentSets
+			<< " max=" << materialStats.maxSets
+			<< " external=" << materialStats.externalSets
+			<< " fallback=" << materialStats.proceduralSets
+			<< " serialized=1" << std::endl;
+
+		scene->destroyEntity(streamingManager);
+		if (scene->hasStreamingTerrain() ||
+			scene->getRegistry().view<TerrainChunkComponent>().size() != 0u)
+			throw std::runtime_error("--terrain-test streaming cleanup leaked chunk entities");
+		std::cout << "[Terrain] streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9\n";
+	}
 	loadAllPBRTextures();
 
 	// 烘焙 IBL：必须在 buildGlobalSet 之前完成，因为需要把结果写进描述符集。
@@ -143,7 +672,8 @@ scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager, loadD
 	initMaterials();
 
 	auto geoPass = std::make_unique<GeometryPass>(*vulkanDevice, gBufferPtrs, *renderGraph, *renderResources,
-		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout());
+		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),
+		descriptorManager->getTerrainSetLayout());
 	auto ssaoPass = std::make_unique<SSAOPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	auto lightPass = std::make_unique<LightingPass>(*vulkanDevice, *gBuffers[0], *vulkanSwapchain,
@@ -728,8 +1258,8 @@ void FirstApp::saveConfig()
 	EngineConfig::save(scene->getSettings());
 
 	CameraState cam;
-	cam.position = scene->getCameraTransform().translation;
-	cam.rotation = scene->getCameraTransform().rotation;
+	cam.position = scene->getCameraTransform().getTranslation();
+	cam.rotation = scene->getCameraTransform().getEuler();
 	EngineConfig::save(cam);
 }
 
@@ -738,11 +1268,11 @@ void FirstApp::loadConfig()
 	EngineConfig::load(scene->getSettings());
 
 	CameraState cam;
-	cam.position = scene->getCameraTransform().translation;
-	cam.rotation = scene->getCameraTransform().rotation;
+	cam.position = scene->getCameraTransform().getTranslation();
+	cam.rotation = scene->getCameraTransform().getEuler();
 	if (EngineConfig::load(cam))
 	{
-		scene->getCameraTransform().translation = cam.position;
+		scene->getCameraTransform().setTranslation(cam.position);
 		scene->getCameraTransform().setEuler(cam.rotation);
 		// Treat a camera teleport as a cut, not as a giant motion-blur path.
 		hasPreviousViewProjection = false;
@@ -790,8 +1320,25 @@ int FirstApp::runHeadlessSelfTest(int frames)
 
 	const auto benchmarkStart = std::chrono::high_resolution_clock::now();
 	const float dt = 1.0f / 60.0f;
+	auto setTerrainTestLodScale = [this](float scale)
+	{
+		for (auto [entity, terrain] :
+			 scene->getRegistry().view<TerrainComponent>().each())
+		{
+			(void)entity;
+			terrain.config.lodDistanceScale = scale;
+		}
+	};
 	for (int i = 0; i < frames; ++i)
 	{
+		// B-03: force a real runtime LOD transition without moving the camera.
+		if (diagnosticsOptions.terrainTest && frames >= 20)
+		{
+			if (i == 3)
+				setTerrainTestLodScale(0.01f);
+			else if (i == 12)
+				setTerrainTestLodScale(1.0f);
+		}
 		if (resizeTestEnabled)
 		{
 			switch (i)
@@ -1192,6 +1739,9 @@ allowCameraInput = (editorState.viewportHovered || looking) && !ImGui::GetIO().W
 // 拖 gizmo 时也不能让相机跟着转
 if (editorState.gizmo.isDragging())
 allowCameraInput = false;
+// B-07: Play 模式下键盘归角色控制器，编辑器相机保持不动。
+if (editorState.playState != editor::PlayState::Editing)
+allowCameraInput = false;
 }
 
 scene->update(dt, window, aspect, allowCameraInput);
@@ -1216,7 +1766,7 @@ void FirstApp::render(float dt)
 		ubo.previousProjectionView = hasPreviousViewProjection
 			? previousViewProjection
 			: ubo.projectionView;
-		ubo.cameraPos = glm::vec4(scene->getCameraTransform().translation, 1.0f);
+		ubo.cameraPos = glm::vec4(scene->getCameraTransform().getTranslation(), 1.0f);
 		ubo.lightDirection = scene->getSettings().directionalLightDir;
 		ubo.lightColor = scene->getSettings().directionalLightColor;
 		ubo.numLights = 0;

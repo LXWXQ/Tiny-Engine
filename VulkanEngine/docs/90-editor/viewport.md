@@ -133,3 +133,9 @@ VulkanEngine.exe --editor --screenshot-viewport --selftest 70 \
 
 - 只有一个视口。多视口需要 `editorViewport` 从"每帧槽一张"变成"每视口每帧槽一张"。
 - 防抖窗口 2 帧，快速来回拖动时画面会短暂按旧尺寸拉伸（松手即恢复）。
+
+## 流送 chunk 拾取
+
+射线命中 `TerrainChunkComponent` 后，Viewport 调用
+`Scene::resolveTerrainChunkOwner()` 返回 manager 并选中它。这样 selection 不会
+指向下一帧可能被卸载的 runtime 实体；日志会附带命中 chunk 坐标。

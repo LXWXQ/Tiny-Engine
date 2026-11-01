@@ -30,14 +30,16 @@ public:
     SetTransformCommand(entt::registry& registry, entt::entity entity,
                         const glm::vec3& oldTranslation, const glm::vec3& newTranslation,
                         const glm::vec3& oldRotation, const glm::vec3& newRotation,
-                        const glm::vec3& oldScale, const glm::vec3& newScale);
+                        const glm::vec3& oldScale, const glm::vec3& newScale,
+                        Scene* scene = nullptr);
 
     // 四元数版本：Gizmo 拖拽时旋转不能只存欧拉角（万向节处会丢信息）。
     SetTransformCommand(entt::registry& registry, entt::entity entity,
                         const glm::vec3& oldTranslation, const glm::vec3& newTranslation,
                         const glm::vec3& oldRotation, const glm::vec3& newRotation,
                         const glm::vec3& oldScale, const glm::vec3& newScale,
-                        const glm::quat& oldOrientation, const glm::quat& newOrientation);
+                        const glm::quat& oldOrientation, const glm::quat& newOrientation,
+                        Scene* scene = nullptr);
 
     void apply() override;
     void revert() override;
@@ -47,6 +49,7 @@ public:
 
 private:
     entt::registry* registry;
+    Scene* scene;
     entt::entity entity;
     glm::vec3 oldTranslation, newTranslation;
     glm::vec3 oldRotation, newRotation;
@@ -83,7 +86,8 @@ private:
 class DeleteEntityCommand : public Command
 {
 public:
-    DeleteEntityCommand(entt::registry& registry, entt::entity entity);
+    DeleteEntityCommand(entt::registry& registry, entt::entity entity,
+                        Scene* scene = nullptr);
 
     void apply() override;
     void revert() override;
@@ -105,6 +109,7 @@ private:
     };
 
     entt::registry* registry;
+    Scene* scene;
     entt::entity rootEntity;
     std::vector<Node> snapshot;              // 父一定排在子之前
     std::vector<entt::entity> createdEntities;
@@ -151,5 +156,130 @@ private:
     std::optional<MeshComponent> meshSnapshot;
     std::optional<MaterialComponent> materialSnapshot;
 };
+
+
+// Creates a terrain through Scene::createTerrainEntity. Redo reuses the
+// MeshComponent/TerrainComponent snapshots instead of regenerating noise or
+// re-uploading GPU buffers.
+class CreateTerrainCommand : public Command
+{
+public:
+    CreateTerrainCommand(entt::registry& registry, Scene& scene,
+                         terrain::TerrainConfig config,
+                         std::string name,
+                         const glm::vec3& spawnPosition = glm::vec3(0.0f));
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Create Terrain"; }
+
+    entt::entity currentEntity() const { return entity; }
+
+private:
+    entt::registry* registry;
+    Scene* scene;
+    terrain::TerrainConfig config;
+    std::string entityName;
+    glm::vec3 spawnPosition{ 0.0f };
+    entt::entity entity = entt::null;
+
+    std::optional<MeshComponent> meshSnapshot;
+    std::optional<TerrainComponent> terrainSnapshot;
+    std::optional<RenderTagComponent> tagSnapshot;
+    std::optional<BoundsComponent> boundsSnapshot;
+};
+
+class CreateCharacterCommand : public Command
+{
+public:
+    CreateCharacterCommand(entt::registry& registry, Scene& scene,
+                           std::string name, const glm::vec3& spawnPosition);
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Create Character"; }
+    entt::entity currentEntity() const { return entity; }
+
+private:
+    entt::registry* registry;
+    Scene* scene;
+    std::string entityName;
+    glm::vec3 spawnPosition{ 0.0f };
+    entt::entity entity = entt::null;
+};
+
+// Edits only TerrainComponent::config. Mesh regeneration is a separate,
+// explicit command so dragging a slider never uploads a new terrain mesh.
+class SetTerrainConfigCommand : public Command
+{
+public:
+    SetTerrainConfigCommand(entt::registry& registry, entt::entity entity,
+                            const terrain::TerrainConfig& oldConfig,
+                            const terrain::TerrainConfig& newConfig);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Modify Terrain Config"; }
+    bool mergeWith(const Command& previous) const override;
+    void absorb(const Command& newer) override;
+
+private:
+    entt::registry* registry;
+    entt::entity entity;
+    terrain::TerrainConfig oldConfig;
+    terrain::TerrainConfig newConfig;
+};
+
+// Swaps two already-generated terrain states. The old/new MeshComponents hold
+// shared_ptr<Model>, so undo history keeps the previous GPU buffers alive.
+class RegenerateTerrainCommand : public Command
+{
+public:
+    RegenerateTerrainCommand(entt::registry& registry, Scene& scene,
+                             entt::entity entity,
+                             const TerrainComponent& oldTerrain,
+                             const TerrainComponent& newTerrain,
+                             const MeshComponent& oldMesh,
+                             const MeshComponent& newMesh,
+                             const BoundsComponent& oldBounds,
+                             const BoundsComponent& newBounds,
+                             const RenderTagComponent& oldTag,
+                             const RenderTagComponent& newTag);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Regenerate Terrain"; }
+
+private:
+    void restore(const TerrainComponent& terrain,
+                 const MeshComponent& mesh,
+                 const BoundsComponent& bounds,
+                 const RenderTagComponent& tag);
+
+    entt::registry* registry;
+    Scene* scene;
+    entt::entity entity;
+
+    TerrainComponent oldTerrain;
+    TerrainComponent newTerrain;
+    MeshComponent oldMesh;
+    MeshComponent newMesh;
+    BoundsComponent oldBounds;
+    BoundsComponent newBounds;
+    RenderTagComponent oldTag;
+    RenderTagComponent newTag;
+};
+
+// UI helper shared by the Create menu and the Hierarchy button. Returns the
+// created entity (or entt::null on failure) after executing the command.
+entt::entity createTerrainThroughCommand(entt::registry& registry,
+                                         Scene& scene,
+                                         CommandStack& commands,
+                                         const terrain::TerrainConfig& config,
+                                         const std::string& name);
+
+// Places the terrain centre in front of the camera, flattened to world Y=0 so
+// baseHeight remains the visible ground elevation.
+glm::vec3 terrainSpawnPosition(const Scene& scene,
+                               const terrain::TerrainConfig& config);
 
 } // namespace editor

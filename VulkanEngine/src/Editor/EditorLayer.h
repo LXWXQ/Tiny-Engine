@@ -85,6 +85,12 @@ private:
     void handleShortcuts();
     void updatePlayState(float dt);
 
+    // Shared top-level Create menu entry. Uses CreateTerrainCommand and selects the result.
+    entt::entity createTerrainFromUi();
+
+    // B-07: create a kinematic character at the camera's ground position.
+    entt::entity createCharacterFromUi();
+
     bool newScene();
     bool saveScene();
     bool saveSceneAs();

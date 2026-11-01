@@ -17,7 +17,8 @@ public:
     GeometryPass(Device& device, const std::array<GBuffer*, kFramesInFlight>& gBuffers,
                  RenderGraph& graph, RenderResources& resources,
                  VkDescriptorSetLayout globalSetLayout,
-                 VkDescriptorSetLayout materialSetLayout);
+                 VkDescriptorSetLayout materialSetLayout,
+                 VkDescriptorSetLayout terrainSetLayout);
     ~GeometryPass() override;
 
     void init() override;
@@ -33,6 +34,7 @@ private:
 
     VkDescriptorSetLayout globalSetLayout;
     VkDescriptorSetLayout materialSetLayout;
+    VkDescriptorSetLayout terrainSetLayout;
 
     std::unique_ptr<GeometrySystem> geometrySystem;
 };

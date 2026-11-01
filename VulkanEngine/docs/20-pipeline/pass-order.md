@@ -13,7 +13,9 @@ updated: 2026-10-30
 ## 1. 顺序
 
 ```
-GeometryPass      写 G-Buffer 5 张附件（4 颜色 + 深度，全部 CLEAR）
+TerrainGpuSelection  B-03：无附件 pass；compute 选层/剔除，写 indirect command/count
+   |
+GeometryPass      写 G-Buffer 5 张附件（4 颜色 + 深度，全部 CLEAR），消费 GPU count
    |
 SSAOPass          读 G-Buffer.Position/Normal -> 写 R8_UNORM 遮蔽图
    |
@@ -30,12 +32,24 @@ PresentPass       HDR + Bloom*intensity -> 曝光 -> ACES -> gamma(1/2.2) -> 交
 PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 ```
 
+`TerrainGpuSelection` 由 `GeometryPass::addToGraph()` 在 `Geometry` 之前注册。
 渲染图里注册的 pass 名依次是：
-`Geometry`, `SSAO`, `SSAOBlur`, `Lighting`, `Bloom.Bright`, `Bloom.Down0/1/2`,
-`Bloom.Up2/1/0`, `Present`, `PresentTransition`。
+`TerrainGpuSelection`, `Geometry`, `SSAO`, `SSAOBlur`, `Lighting`,
+`Bloom.Bright`, `Bloom.Down0/1/2`, `Bloom.Up2/1/0`, `Present`,
+`PresentTransition`。
 
 > `PresentTransition` 不是 `IRenderPass`——它是 `RenderGraph::presentTransition()`
 > 临时 `addGraphicsPass` 出来的**没有颜色/深度附件**的 pass。
+>
+> `TerrainGpuSelection` 同样没有附件，但它是 **graphics queue 上的 pre-render
+> compute**：必须放在 dynamic rendering 之外、与 `Geometry` 同一 command buffer，
+> 这样 compute 写的 indirect/count buffer 可以直接被后续 draw 消费。不能改成
+> `addComputePass` 丢到独立 compute queue，否则需要额外的跨队列所有权/信号量。
+>
+> `terrain_mesh.comp` **不是** render graph pass：它在场景 Update 阶段由
+> `TerrainGpuMeshBuilder` 的 4 个异步 slot 提交到 graphics queue，Scene 每帧
+> `poll`；完成后才把 device-local VBO/IBO 安装到 Model。submit 不在渲染线程
+> 等待 fence，也不占用 Geometry pass 的 command buffer。
 
 ## 2. 为什么是这个顺序
 

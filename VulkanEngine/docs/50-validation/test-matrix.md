@@ -5,13 +5,13 @@ type: validation
 scope: tools/Validate.ps1
 read-when: 加/改回归项，或某项失败需要知道它在测什么
 size: ~200 行
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **18 项引擎用例 + 2 项工具自测 = 20 项**；
-加 `-EnableProfiling` 时多一项（19 + 2 = 21）。
+`tools/Validate.ps1` 默认跑 **19 项引擎用例 + 2 项工具自测 = 21 项**；
+加 `-EnableProfiling` 时多一项（20 + 2 = 22）。
 
 ## 1. 每项的判据（统一）
 
@@ -28,7 +28,7 @@ updated: 2026-10-30
 |---|---|---|---|---|
 | 1 | `jobtest` | `--jobtest` | `[JobSystem] selfTest PASS` | worker pool、parallelFor、嵌套、异常传播 |
 | 2 | `td09-config-migration` | `--config-test` | `[Config] selfTest PASS` | v0->v2 迁移、备份、损坏/未来版本保护 |
-| 3 | `selftest-default` | `--selftest 120` | `[Scene] ECS/spatial selfTest PASS`、`[TD07] ComputeProbe disabled...` | 主路径 |
+| 3 | `selftest-default` | `--selftest 120` | `[Scene] ECS/spatial selfTest PASS`、`[TD07] ComputeProbe disabled...` | 主路径 + setter 自动 Transform/Bounds dirty 通知 + 增量 AABB |
 | 4 | `selftest-no-bloom` | `--no-bloom` | `[TD06] Bloom disabled: skipping Bright + Down + Up passes` | Bloom 关闭分支真跳过 |
 | 5 | `selftest-no-ssao` | `--no-ssao` | `[TD07] ...` | SSAO 关闭分支 |
 | 6 | `selftest-no-bloom-no-ssao` | 两者 | 同上两者 | 组合分支 |
@@ -44,14 +44,15 @@ updated: 2026-10-30
 | 16 | `p0-gpu-timing` | `--gpu-timing --gpu-timing-csv <path>` | `[Diag] gpu_timing.csv written:`、`[Diag] zero-overhead guard SKIP` | 每 pass 计时 |
 | 17 | `p1-screenshot` | `--screenshot <png> --screenshot-frame 30` | `[Diag] screenshot written:` | 无头截图 |
 | 18 | `p2-device-fault` | `--device-fault-test` | `[DeviceFault] selfTest PASS` | `VK_EXT_device_fault` 能力就绪 |
+| 19 | `terrain-render` | `--selftest 20 --empty-scene --terrain-test` | `[Terrain] selfTest PASS`、`[Terrain] LOD stitching PASS`、`[Terrain] GPU mesh assembly selfTest PASS`、`[Terrain] GPU selection selfTest PASS`、`[Terrain] GPU selection transition PASS`、`[Terrain] demo entity created`、`chunks=4`、`lods=3`、`submeshes=12`、`[Terrain] async generation PASS`、`[Terrain] async GPU upload PASS`、`[Terrain] spatial region query PASS | chunks=9 regions=5x5`、`[Terrain] sculpt PASS | chunks=9 rebuilt=1`、`[Terrain] character controller PASS | grounded=1`、`[Terrain] character serialization PASS | captured=1`、`[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`、`streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9` | CPU 算法/16 张源纹理缓冲 + height/roughness packing + JobSystem 异步构建 + chunk/LOD 子网格/AABB/裙边 + 稳定帧 indirect 合批 + GPU 高度场 + GPU compute 单 chunk 顶点/索引组装 + device-local VBO/IBO Model 接管 + 独立 chunk 流送 smoke + 8 槽异步高度场 + 4 槽异步 GPU mesh submit/poll + 257² 单 chunk 非阻塞重建基线 + XZ region 查询/组件私有字段/统一销毁 + 区域限定运行期雕刻 + kinematic 角色控制器/贴地/跳跃/序列化 + 4 个 Set2 材质集/按需外部 16 PNG/程序化回退/`materialSetIndex` 序列化/按材质批次重绑 + chunk→manager picking/删除撤销 + 全 LOD 邻接缝合（skirts=off） + GPU selection parity/过渡（4-int state slot） + CPU 高度/射线碰撞 + 地形 G-Buffer / 12-sampler Set2 四层 PBR 材质 / Surface Style / SSAO 策略 |
 
 ## 3. 工具自测
 
 | # | 名称 | 内容 |
 |---|---|---|
-| 19 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
-| 20 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
-| 21 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时：`--capture-frame 10` 抓帧路径 |
+| 20 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
+| 21 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
+| 22 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时：`--capture-frame 10` 抓帧路径 |
 
 ## 4. 文档一致性检查
 

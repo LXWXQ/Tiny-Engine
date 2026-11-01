@@ -5,7 +5,7 @@ type: architecture
 scope: CommandStack 的语义、合并窗口、以及"必须走命令"的硬规则
 read-when: 加任何会修改场景的交互；或撤销结果不对、撤销后数据损坏
 size: medium
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 # 撤销 / 重做
@@ -85,6 +85,32 @@ if (const auto* mesh = registry->try_get<MeshComponent>(entity))
 ```
 
 `revert()` 只销毁实体（模型仍被快照持有），`apply()` 再走快照路径重建组件，跳过加载。
+
+## 地形三命令
+
+| 命令 | 首次 apply | revert / redo |
+|---|---|---|
+| `CreateTerrainCommand` | 调 `Scene::createTerrainEntity`，快照 Mesh/Terrain/RenderTag/Bounds | revert 销毁实体；redo 复用快照，不重新生成噪声/上传 |
+| `SetTerrainConfigCommand` | 只写 `TerrainComponent::config` | 精确写回 old/new config；同实体命令在合并窗口内合并 |
+| `RegenerateTerrainCommand` | 直接恢复已有 new 快照 | 在 old/new `MeshComponent`（含 `shared_ptr<Model>`）之间切换 |
+
+`RegenerateTerrainCommand` 的 new 状态必须由 Inspector 在
+`Scene::requestRegenerateTerrain()` 的成功回调里取得：CPU 由 JobSystem 完成，
+主线程上传 Model 后再构造命令。这样生成失败/任务被更新请求 supersede 时不会
+入栈，旧网格也不会被释放。场景加载与 `selfTestWithScene()` 仍可使用同步
+`Scene::regenerateTerrain()`。
+
+阶段 7 起 `SetTransformCommand` / `DeleteEntityCommand` 接受可选 `Scene*`：
+编辑器路径传入 Scene；Transform/Bounds setter 现在通过 owner callback 自动
+通知 Scene，命令仍显式 mark 作为兼容路径；`destroyEntity()` 同步移除
+SpatialIndex，快照恢复后重新绑定回调。纯 registry 自检可不传 Scene。命令同时持有新旧 Model，撤销历史存在期间旧显存仍存活；Scene 另外对已被替换的 Model 做 4 帧延迟回收，覆盖 GPU 在途帧。`TerrainComponent::generating` 是瞬态标记，所有命令恢复时统一清成 false，避免撤销出一个没有任务却永久 generating 的组件。
+
+`DeleteEntityCommand` 的 snapshot 已包含 `std::optional<TerrainComponent>` 和
+`std::optional<TerrainStreamingComponent>`；否则删除地形再撤销会只剩 Mesh，
+参数和 generatedConfig 全丢。runtime chunk 被选中时会先解析到 manager。
+删除 manager 会级联销毁 chunk；undo 重建 manager 后调用
+`Scene::adoptStreamingTerrainManager()` 恢复流送，redo 则销毁 undo 生成的新 ID，
+而不是已经失效的原始 ID。
 
 ## 空 tag 组件
 

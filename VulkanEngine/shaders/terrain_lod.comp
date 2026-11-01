@@ -1,0 +1,352 @@
+#version 450
+
+// B-03 GPU-driven terrain selection.
+// One invocation per visible-range terrain chunk record. The shader performs
+// the same frustum-AABB and hysteresis/LOD transition math as SubMeshCulling,
+// appends indirect commands into each terrain entity's fixed command region,
+// and writes a debug mirror for the CPU parity self-test.
+
+layout(local_size_x = 64) in;
+
+struct TerrainChunkRecord
+{
+    mat4 worldMatrix;
+    vec4 boundsMin;
+    vec4 boundsMax;
+    vec4 lodParams;       // x=distanceScale, y=lodCount
+    uvec4 commandParams;  // x=commandBase, y=stateIndex, z=reset, w=entitySlot
+    uvec4 lod0;           // x=firstIndex, y=indexCount, z=valid
+    uvec4 lod1;
+    uvec4 lod2;
+};
+
+layout(set = 0, binding = 0) readonly buffer ChunkRecords
+{
+    TerrainChunkRecord records[];
+};
+
+layout(set = 0, binding = 1) buffer LodStates
+{
+    int stateValues[];
+};
+
+layout(set = 0, binding = 2) buffer IndirectCommands
+{
+    uint commandWords[];
+};
+
+layout(set = 0, binding = 3) buffer EntityCounts
+{
+    uint entityCounts[];
+};
+
+layout(set = 0, binding = 4) buffer SelectionStats
+{
+    uint stats[];
+};
+
+layout(set = 0, binding = 5) buffer DebugRecords
+{
+    uint debugValues[];
+};
+
+layout(push_constant) uniform Push
+{
+    mat4 viewProjection;
+    vec4 cameraPosition;  // xyz, w=deltaTime
+    uvec4 counts;         // x=recordCount
+    vec4 lodTiming;       // x=transitionSeconds, y=hysteresis
+} pc;
+
+const uint FLAG_LOD_PAYLOAD = 0x80000000u;
+const uint STAT_DRAW_COMMANDS = 0u;
+const uint STAT_CULLED_CHUNKS = 1u;
+const uint STAT_LOD0 = 2u;
+const uint STAT_LOD1 = 3u;
+const uint STAT_LOD2 = 4u;
+const uint STAT_BLEND_CHUNKS = 5u;
+const uint STAT_SWITCHES = 6u;
+const uint STAT_TRIANGLES = 7u;
+const uint STAT_VERTICES = 8u;
+
+float thresholdValue(uint lod, float extent, float distanceScale)
+{
+    return extent * distanceScale * 1.25 * float(1u << (lod - 1u));
+}
+
+uint rawLod(float distanceToBounds, float extent, float distanceScale, uint lodCount)
+{
+    if (lodCount <= 1u)
+        return 0u;
+    float safeExtent = max(extent, 1.0);
+    uint selected = 0u;
+    for (uint lod = 1u; lod < lodCount; ++lod)
+    {
+        float threshold = safeExtent * distanceScale * 1.25 * float(1u << (lod - 1u));
+        if (distanceToBounds <= threshold)
+            break;
+        selected = lod;
+    }
+    return selected;
+}
+
+uint hysteresisLod(float distanceToBounds, float extent, float distanceScale,
+                   uint lodCount, int currentLod)
+{
+    uint raw = rawLod(distanceToBounds, extent, distanceScale, lodCount);
+    if (currentLod < 0 || uint(currentLod) >= lodCount)
+        return raw;
+
+    float safeExtent = max(extent, 1.0);
+    float hysteresis = pc.lodTiming.y;
+    uint target = uint(currentLod);
+    if (raw > target)
+    {
+        while (target < raw)
+        {
+            float enter = thresholdValue(target + 1u, safeExtent, distanceScale) *
+                          (1.0 + hysteresis);
+            if (distanceToBounds <= enter)
+                break;
+            ++target;
+        }
+    }
+    else if (raw < target)
+    {
+        while (target > raw)
+        {
+            float exit = thresholdValue(target, safeExtent, distanceScale) *
+                         (1.0 - hysteresis);
+            if (distanceToBounds >= exit)
+                break;
+            --target;
+        }
+    }
+    return target;
+}
+
+struct WorldBounds
+{
+    vec3 minValue;
+    vec3 maxValue;
+};
+
+WorldBounds worldBoundsOf(mat4 world, vec3 localMin, vec3 localMax)
+{
+    WorldBounds bounds;
+    bounds.minValue = vec3(1e30);
+    bounds.maxValue = vec3(-1e30);
+    for (int i = 0; i < 8; ++i)
+    {
+        vec3 local = vec3(
+            (i & 1) != 0 ? localMax.x : localMin.x,
+            (i & 2) != 0 ? localMax.y : localMin.y,
+            (i & 4) != 0 ? localMax.z : localMin.z);
+        vec3 worldPos = (world * vec4(local, 1.0)).xyz;
+        bounds.minValue = min(bounds.minValue, worldPos);
+        bounds.maxValue = max(bounds.maxValue, worldPos);
+    }
+    return bounds;
+}
+
+bool intersectsFrustum(vec3 worldMin, vec3 worldMax)
+{
+    mat4 vp = pc.viewProjection;
+    vec4 planes[6];
+    vec4 row0 = vec4(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
+    vec4 row1 = vec4(vp[0][1], vp[1][1], vp[2][1], vp[3][1]);
+    vec4 row2 = vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]);
+    vec4 row3 = vec4(vp[0][3], vp[1][3], vp[2][3], vp[3][3]);
+    planes[0] = row3 + row0;
+    planes[1] = row3 - row0;
+    planes[2] = row3 + row1;
+    planes[3] = row3 - row1;
+    planes[4] = row2;
+    planes[5] = row3 - row2;
+
+    for (int i = 0; i < 6; ++i)
+    {
+        vec4 plane = planes[i];
+        vec3 positivePoint = vec3(
+            plane.x >= 0.0 ? worldMax.x : worldMin.x,
+            plane.y >= 0.0 ? worldMax.y : worldMin.y,
+            plane.z >= 0.0 ? worldMax.z : worldMin.z);
+        if (dot(plane.xyz, positivePoint) + plane.w < 0.0)
+            return false;
+    }
+    return true;
+}
+
+uvec4 lodDataAt(TerrainChunkRecord record, uint lod)
+{
+    if (lod == 0u) return record.lod0;
+    if (lod == 1u) return record.lod1;
+    return record.lod2;
+}
+
+uint packedLodPayload(float blend, uint mode)
+{
+    if (mode == 0u)
+        return 0u;
+    uint quantized = uint(clamp(blend, 0.0, 1.0) * 65535.0 + 0.5);
+    return FLAG_LOD_PAYLOAD | ((mode & 3u) << 16u) | quantized;
+}
+
+void writeDebug(uint recordIndex, bool visible, uint lodA, uint lodB,
+                float blend, uint commandCount, int stableLod, int fromLod, int toLod)
+{
+    uint base = recordIndex * 8u;
+    debugValues[base + 0u] = visible ? 1u : 0u;
+    debugValues[base + 1u] = lodA;
+    debugValues[base + 2u] = lodB;
+    debugValues[base + 3u] = floatBitsToUint(blend);
+    debugValues[base + 4u] = commandCount;
+    debugValues[base + 5u] = uint(max(stableLod, 0));
+    debugValues[base + 6u] = uint(max(fromLod, 0));
+    debugValues[base + 7u] = uint(max(toLod, 0));
+}
+
+void main()
+{
+    uint recordIndex = gl_GlobalInvocationID.x;
+    uint recordCount = pc.counts.x;
+    if (recordIndex >= recordCount)
+        return;
+
+    TerrainChunkRecord record = records[recordIndex];
+    WorldBounds world = worldBoundsOf(record.worldMatrix, record.boundsMin.xyz,
+                                      record.boundsMax.xyz);
+    bool visible = intersectsFrustum(world.minValue, world.maxValue);
+    uint stateIndex = record.commandParams.y;
+    // CPU allocates four ints per chunk state; stateIndex is a chunk-slot
+    // index, not a scalar word offset.
+    const uint stateBase = stateIndex * 4u;
+    int stableLod = stateValues[stateBase + 0u];
+    int fromLod = stateValues[stateBase + 1u];
+    int toLod = stateValues[stateBase + 2u];
+    float elapsed = uintBitsToFloat(uint(stateValues[stateBase + 3u]));
+
+    if (record.commandParams.z != 0u ||
+        stableLod < 0 || uint(stableLod) >= uint(record.lodParams.y))
+    {
+        stableLod = -1;
+        fromLod = -1;
+        toLod = -1;
+        elapsed = 0.0;
+    }
+
+    if (!visible)
+    {
+        // Persist the reset even when culled so the next visible frame does not
+        // observe an uninitialised state slot.
+        stateValues[stateBase + 0u] = stableLod;
+        stateValues[stateBase + 1u] = fromLod;
+        stateValues[stateBase + 2u] = toLod;
+        stateValues[stateBase + 3u] = int(floatBitsToUint(elapsed));
+        atomicAdd(stats[STAT_CULLED_CHUNKS], 1u);
+        writeDebug(recordIndex, false, 0u, 0u, 1.0, 0u,
+                   stableLod, fromLod, toLod);
+        return;
+    }
+
+    vec3 closest = clamp(pc.cameraPosition.xyz, world.minValue, world.maxValue);
+    float distanceToBounds = length(pc.cameraPosition.xyz - closest);
+    float extent = max(world.maxValue.x - world.minValue.x,
+                       world.maxValue.z - world.minValue.z);
+    uint lodCount = uint(max(record.lodParams.y, 1.0));
+    float distanceScale = max(record.lodParams.x, 0.01);
+
+    if (stableLod < 0 || uint(stableLod) >= lodCount)
+    {
+        stableLod = int(rawLod(distanceToBounds, extent, distanceScale, lodCount));
+        fromLod = stableLod;
+        toLod = stableLod;
+        elapsed = 0.0;
+    }
+
+    uint lodA = uint(stableLod);
+    uint lodB = uint(stableLod);
+    float blend = 1.0;
+    bool blending = false;
+    uint switchCount = 0u;
+
+    if (fromLod >= 0 && fromLod != toLod)
+    {
+        elapsed += pc.cameraPosition.w;
+        blend = min(elapsed / max(pc.lodTiming.x, 1e-5), 1.0);
+        if (blend >= 1.0)
+        {
+            stableLod = toLod;
+            fromLod = stableLod;
+            toLod = stableLod;
+            elapsed = 0.0;
+            blend = 1.0;
+        }
+        else
+        {
+            lodA = uint(fromLod);
+            lodB = uint(toLod);
+            blending = true;
+        }
+    }
+
+    if (!blending)
+    {
+        uint target = hysteresisLod(distanceToBounds, extent, distanceScale,
+                                    lodCount, stableLod);
+        if (int(target) != stableLod)
+        {
+            fromLod = stableLod;
+            toLod = int(target);
+            elapsed = 0.0;
+            lodA = uint(fromLod);
+            lodB = uint(toLod);
+            blend = 0.0;
+            blending = true;
+            ++switchCount;
+        }
+        else
+        {
+            lodA = uint(stableLod);
+            lodB = uint(stableLod);
+            blend = 1.0;
+        }
+    }
+
+    stateValues[stateBase + 0u] = stableLod;
+    stateValues[stateBase + 1u] = fromLod;
+    stateValues[stateBase + 2u] = toLod;
+    stateValues[stateBase + 3u] = int(floatBitsToUint(elapsed));
+
+    uint commandCount = blending ? 2u : 1u;
+    writeDebug(recordIndex, true, lodA, lodB, blend, commandCount,
+               stableLod, fromLod, toLod);
+
+    atomicAdd(stats[STAT_LOD0 + uint(clamp(stableLod, 0, 2))], 1u);
+    if (blending)
+    {
+        atomicAdd(stats[STAT_BLEND_CHUNKS], 1u);
+        atomicAdd(stats[STAT_SWITCHES], switchCount);
+    }
+
+    uint entitySlot = record.commandParams.w;
+    uint commandBase = record.commandParams.x;
+    uint written = atomicAdd(entityCounts[entitySlot], commandCount);
+    for (uint n = 0u; n < commandCount; ++n)
+    {
+        uint lod = (n == 0u) ? lodA : lodB;
+        uint mode = blending ? (n == 0u ? 1u : 2u) : 0u;
+        uvec4 lodData = lodDataAt(record, lod);
+        uint commandIndex = commandBase + written + n;
+        uint wordBase = commandIndex * 5u;
+        commandWords[wordBase + 0u] = lodData.y; // indexCount
+        commandWords[wordBase + 1u] = 1u;       // instanceCount
+        commandWords[wordBase + 2u] = lodData.x; // firstIndex
+        commandWords[wordBase + 3u] = 0u;       // vertexOffset
+        commandWords[wordBase + 4u] = packedLodPayload(blend, mode);
+
+        atomicAdd(stats[STAT_DRAW_COMMANDS], 1u);
+        atomicAdd(stats[STAT_TRIANGLES], lodData.y / 3u);
+        atomicAdd(stats[STAT_VERTICES], lodData.y);
+    }
+}

@@ -2,15 +2,15 @@
 id: architecture/descriptors
 title: 描述符布局与 bindless 材质
 type: architecture
-scope: src/Core/DescriptorManager.h, src/Core/DescriptorManager.cpp, src/Render/GeometrySystem.cpp, shaders/mrt.frag
-read-when: 修改材质系统、描述符布局、材质槽位分配或回收
-size: ~250 行
-updated: 2026-10-30
+scope: src/Core/DescriptorManager.*, src/Render/TerrainMaterial.*, src/Terrain/TerrainTextureGenerator.*, src/Render/GeometrySystem.cpp, shaders/mrt.frag
+read-when: 修改材质/地形纹理系统、描述符布局、材质槽位分配或回收
+size: ~330 行
+updated: 2026-11-01
 ---
 
 # 描述符布局与 bindless 材质
 
-整个引擎只有**两个主描述符布局**（`DescriptorManager`），其余 Pass 用自己的局部布局。
+`DescriptorManager` 管理**三个主描述符布局**（Set 0 全局、Set 1 bindless 材质、Set 2 地形纹理），其余 Pass 用自己的局部布局。
 
 ## 1. Set 0 —— 全局（10 个 binding）
 
@@ -38,7 +38,7 @@ updated: 2026-10-30
 | binding | 内容 | 着色器用法 |
 |---|---|---|
 | 0 | `sampler2D albedoMaps[]` | `texture(albedoMaps[nonuniformEXT(matId)], uv)` |
-| 1 | `sampler2D normalMaps[]` | **当前未采样**（见 §5） |
+| 1 | `sampler2D normalMaps[]` | 模型材质仍**未采样**；地形 normal 走 Set 2（见 §3/§7） |
 | 2 | `sampler2D metallicMaps[]` | `.b` 取金属度 |
 | 3 | `sampler2D roughnessMaps[]` | `.g` 取粗糙度 |
 
@@ -48,7 +48,31 @@ updated: 2026-10-30
 实测：`desc binds` 104 -> **1**；FPS 452 -> 498（+10%）。
 **draw call 数不变（104）** —— bindless 省的是绑定与状态切换，不是 draw call。
 
-## 3. 变长数组的规矩
+## 3. Set 2 —— 地形四层纹理（16 个固定 binding）
+
+阶段 6 后续新增。地形每帧一次 draw 需要同时访问四组 albedo/normal，
+但现有 `Texture` 是单张 2D 纹理，没有 texture array 接口；因此没有把它们
+硬塞进 bindless 材质槽，而是新增一个专用的固定布局：
+
+| binding | 类型 | 内容 |
+|---|---|---|
+| 0~3 | `COMBINED_IMAGE_SAMPLER` | 沙地 / 草地 / 岩石 / 雪 albedo |
+| 4~7 | `COMBINED_IMAGE_SAMPLER` | 沙地 / 草地 / 岩石 / 雪 normal |
+| 8~11 | `COMBINED_IMAGE_SAMPLER` | 沙地 / 草地 / 岩石 / 雪 packed height(R)+roughness(G) |
+
+- `TerrainTextureGenerator` 生成 16 张 256² CPU 源纹素；`TerrainMaterial`
+  把每层 height/roughness 打包成一张 RGBA，GPU 只上传 12 张纹理；
+- `DescriptorManager::createTerrainLayout()` 固定 12 个 fragment sampler；
+- `updateTerrainTextures()` 在 Scene 初始化时一次性写入；
+- `GeometrySystem` 的 pipeline layout 现在包含 `{Set0, Set1, Set2}`，
+  每帧一次 `vkCmdBindDescriptorSets(..., 3, sets, ...)`，`desc binds` 仍是 1；
+- 地形实体仍然没有 `MaterialComponent`，不消耗 bindless 槽位；
+- Surface Style 只改 shader 权重/色调，不重建 12 张 GPU 纹理。
+
+与 Set 1 分离的收益是：不会破坏材质数组的变长描述符规则，也不会让地形
+纹理更新和 bindless 槽位回收互相干扰。代价是 shader 必须固定知道有 4 层。
+
+## 4. 变长数组的规矩
 
 容量 256 槽（`descriptorManager->init(*vulkanDevice, 256)`），长度在**分配时**用
 `VkDescriptorSetVariableDescriptorCountAllocateInfo` 指定，布局不用改。
@@ -66,7 +90,7 @@ updated: 2026-10-30
 `VkDeviceCreateInfo::pEnabledFeatures` 必须为 `nullptr`**（`VUID-VkDeviceCreateInfo-pNext-04748`）。
 特性链是 `1.3 -> 1.2`。
 
-## 4. 槽位管理
+## 5. 槽位管理
 
 ```
 allocateMaterialSet(material) -> slot       // 从 freeSlots 栈弹一个
@@ -74,7 +98,7 @@ releaseMaterialSet(slot)                    // 进延迟回收队列，不立即
 kInvalidMaterialSlot = UINT32_MAX           // 哨兵
 ```
 
-### 4.1 为什么哨兵不是 0
+### 5.1 为什么哨兵不是 0
 
 0 是**合法槽位号**。原来默认 0 导致"没有材质的物体"（天空盒、程序化网格）
 悄悄绑到第 0 号材质上——只是恰好那槽已分配才没崩。这是典型的"靠巧合工作"。
@@ -83,7 +107,7 @@ kInvalidMaterialSlot = UINT32_MAX           // 哨兵
 同理 `GeometrySystem::render` 的 `lastBoundSlot` 初值也是 `kInvalidMaterialSlot`，
 保证第一个子网格一定会真正 bind 一次。
 
-### 4.2 延迟回收（TD-04）
+### 5.2 延迟回收（TD-04）
 
 bindless 之后"回收再复用"意味着**改写 GPU 可能正在读的数组项**。当前做法：
 
@@ -97,7 +121,7 @@ releaseMaterialSet(slot)
 配合 `descriptorBindingSampledImageUpdateAfterBind` + `UPDATE_AFTER_BIND_POOL`，
 允许向已绑定的数组写新槽位。空闲槽不足时只等待最老的可能引用者，不 `vkDeviceWaitIdle`。
 
-## 5. `materialValid` 为什么走 push constant
+## 6. `materialValid` 为什么走 push constant
 
 天空盒 / 程序化网格不采材质数组，它们的槽位可能压根没写过内容。
 `descriptorBindingPartiallyBound` 允许数组尾部未绑定，但**采它就是未定义行为**。
@@ -105,7 +129,7 @@ releaseMaterialSet(slot)
 所以 push constant 里带一个有效性标记，着色器先看 `push.material.y`，
 为 0 就直接输出顶点色 + 默认 PBR。
 
-## 6. 已知浪费：`normalMaps` 未被采样
+## 7. 模型材质 `normalMaps` 仍未采样
 
 切线空间法线贴图仍是"有意关闭"状态（`mrt.frag::getNormalFromMap()` 保留待用，
 因为模型还不能提供可靠切线）。所以每个材质白占一个描述符 + 一次 `vkUpdateDescriptorSets`，
@@ -114,7 +138,7 @@ releaseMaterialSet(slot)
 **重新权衡的时机**：启用切线空间法线贴图时（要么模型提供可靠切线，
 要么用偏导数构造 TBN 并处理 UV 接缝——那个函数已经写好了）。
 
-## 7. 其他局部 set
+## 8. 其他局部 set
 
 | 使用者 | layout 来源 | 内容 | 数量 |
 |---|---|---|---|
@@ -122,15 +146,18 @@ releaseMaterialSet(slot)
 | `BloomPass` | 自己建 | binding 0 = 一张 sampler2D | 7（1 bright + 3 down + 3 up） |
 | `PresentPass` | 自己建 | Bloom 开：`hdrScene` + `bloomResult`；关：只有 `hdrScene` | 1（两套布局） |
 
-池容量按这个账算：`maxSets = maxMaterials + 64`，`COMBINED_IMAGE_SAMPLER = maxMaterials*4 + 96`。
+池容量按这个账算：`maxSets = maxMaterials + 72`，
+`COMBINED_IMAGE_SAMPLER = maxMaterials*4 + 144`。地形占用其中 1 个 set 和
+12 个固定 sampler；余量留给 SSAO/Bloom/诊断等局部 set。
 
-> 这两个魔法数（+64 / +96）**与 Bloom 级数耦合**：把 `BloomPass::kLevelCount`
-> 从 4 调大很多时要回来同步加余量。
+> 这两个魔法数（+72 / +144）**与 Bloom 级数、地形 set 耦合**：新增固定
+> descriptor set 或把 `BloomPass::kLevelCount` 调大很多时要回来同步加余量。
 
-## 8. 检查清单
+## 9. 检查清单
 
 - [ ] 新 binding 的 stage 和类型与 shader 一致？
 - [ ] 变长数组标志只在最大 binding 上？
 - [ ] 新槽位是否可能被 GPU 正在读？（需要延迟回收）
-- [ ] 描述符集是否按帧槽开了两份？
+- [ ] 描述符集是否按帧槽开了两份？（Set 2 terrain 是场景级单份、只读）
+- [ ] 使用新纹理前是否已经调用 `updateTerrainTextures()`？
 - [ ] 跑 `--material-stress` 与 `--validation-features gpuav`（后者专抓 bindless 越界）

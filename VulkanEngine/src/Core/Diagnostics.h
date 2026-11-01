@@ -59,6 +59,9 @@ bool screenshotViewport = false;
 // 会干扰"点选/包围盒/手柄"这类交互的观察。
 bool emptyScene = false;
 
+// --terrain-test：启动时创建一块持久地形，用于渲染/截图回归。
+bool terrainTest = false;
+
 // 是否以编辑器模式启动。编辑器默认不加载 Sponza（见 Scene::init 的说明），
 // 但 VulkanEngine.exe 的常规运行仍然加载，视觉回归基线不受影响。
 bool editorMode = false;

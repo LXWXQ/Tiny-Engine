@@ -5,7 +5,7 @@ type: system
 scope: 没有有效材质槽位 / 没有 albedo 贴图时的程序化棋盘格
 read-when: 新建物体显示纯白、棋盘格发白、改 G-Buffer 着色或加材质相关逻辑
 size: small
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 # 占位材质的棋盘格着色
@@ -123,7 +123,7 @@ dpdy.x -= round(dpdy.x);
 
 `glm::vec4` 在 C++ 里默认只有 4 字节对齐，而 GLSL std430 的 `vec4` 要求 16 字节，
 所以字段必须写 `alignas(16)`，否则着色器读到的偏移会错 8 字节，表现为材质全乱。
-`FrameInfo.h` 里有 `offsetof` 静态断言钉住偏移和总大小（176 字节）。
+`FrameInfo.h` 里有 `offsetof` 静态断言钉住偏移和总大小（阶段 6 纹理版 208 字节：`terrainMode` + minY/range/detail/uvTiling + 3 个 padding）。
 
 ## 为什么必须 clamp
 
@@ -154,3 +154,8 @@ dpdy.x -= round(dpdy.x);
 - 改格子密度只要改一个常数。
 
 代价是它不受材质系统控制 —— 这是**调试用的占位表现**，不是正式材质特性。
+## 地形分支不是棋盘格
+
+`mrt.frag` 的 `push.terrainMode != 0` 分支发生在材质下标判断之前。
+地形没有 `MaterialComponent`，但会采样启动时创建的 Set2 四层 albedo/normal/heightRoughness 纹理，并计算自己的高度坡度权重与 Surface Style；
+因此它不会落入没有材质槽位时的棋盘格路径，也不会触发对应的单次警告。

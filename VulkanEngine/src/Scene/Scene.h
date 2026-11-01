@@ -10,11 +10,22 @@
 #include "Core/FrameInfo.h"
 #include "RHI/Device.h"
 #include "RHI/Texture.h"
+#include "Render/TerrainMaterial.h"
+#include "Render/TerrainComputeGenerator.h"
+#include "Render/TerrainGpuMeshBuilder.h"
+#include "Terrain/TerrainBrush.h"
 
 #include <GLFW/glfw3.h>
 #include <entt/entt.hpp>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+class TerrainMaterial;
+class JobSystem;
 
 class Scene
 {
@@ -23,7 +34,8 @@ public:
     // bindless material slots while the scene is being loaded.
     // loadDefaultContent=false 时只创建相机实体，不加载 Sponza / 天空盒。
     void init(Device& device, VkCommandPool commandPool, DescriptorManager& descriptorManager,
-              bool loadDefaultContent = true);
+              bool loadDefaultContent = true, JobSystem* jobSystem = nullptr);
+    ~Scene();
     // allowCameraInput=false 时相机不接受键鼠输入（编辑器在鼠标位于面板上、
     // 正在输入文字、或正在拖 gizmo 时用）。仍然会把内部状态写回 transform。
     void update(float dt, GLFWwindow* window, float aspectRatio, bool allowCameraInput = true);
@@ -49,6 +61,16 @@ public:
     EngineSettings& getSettings() { return engineSettings; }
     RenderTelemetry& getTelemetry() { return currentTelemetry; }
     const RenderTelemetry& getDisplayTelemetry() const { return displayTelemetry; }
+    uint32_t getLastWorldTransformUpdates() const { return lastWorldTransformUpdates; }
+    uint32_t getLastSpatialIndexUpdates() const { return lastSpatialIndexUpdates; }
+    size_t getRetiredModelCount() const { return retiredModels.size(); }
+
+    // Dirty notification remains public for bulk/diagnostic paths. Normal
+    // Transform/Bounds mutations notify Scene automatically through the
+    // component owner callback installed by attachDirtyTracking().
+    void markTransformDirty(entt::entity entity);
+    void markSpatialDirty(entt::entity entity);
+    void attachDirtyTracking(entt::entity entity);
 
     // Called once at the start of a render frame, before the UI is built.
     // The previous frame's counts are complete and safe to display while the
@@ -85,18 +107,187 @@ private:
 
 public:
     // 供编辑器按路径实例化一个网格实体（会自动分配材质槽位并设置包围盒）。
+
     // 返回 entt::null 表示失败。
+
     entt::entity createMeshEntity(const std::string& absolutePath, const std::string& name);
 
+
+
+    // ---- Terrain (F2 / D-18) ----
+    // The CPU heightfield/mesh is built first; GPU upload and ECS mutation only
+    // happen after generation succeeds. spawnPosition is world-space.
+    entt::entity createTerrainEntity(const terrain::TerrainConfig& config,
+                                     const std::string& name,
+                                     const glm::vec3& spawnPosition);
+
+    // B-07: terrain sculpting. The brush is applied to every intersecting
+    // terrain entity (streamed chunks are selected through the region index),
+    // and only entities whose heightfield actually changed get a new Model.
+    struct TerrainSculptResult
+    {
+        uint32_t modifiedVertices = 0;
+        uint32_t rebuiltEntities = 0;
+        std::vector<entt::entity> rebuilt;
+    };
+    bool sculptTerrain(const terrain::TerrainBrushSettings& brush,
+                       TerrainSculptResult& outResult,
+                       std::string& errorMessage);
+
+    // B-07: lightweight kinematic character. The transform is the feet position.
+    entt::entity createCharacterEntity(const std::string& name,
+                                       const glm::vec3& spawnPosition);
+    bool updateCharacterController(entt::entity entity,
+                                   const glm::vec3& worldMoveDirection,
+                                   bool jump,
+                                   float dt,
+                                   CharacterMoveResult& outResult);
+
+    // B-01: camera-centred streamed terrain. The manager entity owns no mesh;
+    // chunk entities are independent TerrainComponent + MeshComponent entities
+    // generated asynchronously around the camera.
+    entt::entity createStreamingTerrain(const terrain::TerrainConfig& chunkConfig,
+                                        int32_t loadRadius,
+                                        uint32_t maxLoadsPerFrame,
+                                        const std::string& name);
+    bool hasStreamingTerrain() const;
+    entt::entity getStreamingTerrainEntity() const { return terrainStreamingEntity; }
+    size_t getStreamingTerrainChunkCount() const { return streamingTerrainChunks.size(); }
+    uint32_t getInFlightTerrainGpuRequests() const;
+    entt::entity resolveTerrainChunkOwner(entt::entity entity) const;
+    // B-06: query streamed terrain chunk entities through the coarse XZ region
+    // index instead of scanning every entity. Entities with TerrainChunkComponent
+    // are filtered out of the generic spatial result.
+    void queryTerrainChunksInRegion(int32_t regionX, int32_t regionZ,
+                                    std::vector<entt::entity>& outEntities) const;
+    void queryTerrainChunksInRegionRange(int32_t minRegionX, int32_t minRegionZ,
+                                         int32_t maxRegionX, int32_t maxRegionZ,
+                                         std::vector<entt::entity>& outEntities) const;
+    bool adoptStreamingTerrainManager(entt::entity entity);
+    double getLastStreamingUpdateMs() const { return lastStreamingUpdateMs; }
+    double getMaxStreamingUpdateMs() const { return maxStreamingUpdateMs; }
+    // Test/tool entry point; Scene::update() calls this automatically after the
+    // camera transform is advanced.
+    void refreshStreamingTerrain();
+
+    // Rebuild the entity's MeshComponent from its current config. On failure the
+    // previous mesh and generatedConfig are preserved and lastError is set.
+    // This synchronous entry point remains for scene loading, command tests and
+    // diagnostic capture.
+    bool regenerateTerrain(entt::entity entity, std::string& errorMessage);
+
+    using TerrainGenerationCallback = std::function<void(bool, const std::string&)>;
+
+    // Stage 7: submit only CPU heightfield/mesh generation to JobSystem.
+    // Scene::update() performs the GPU upload on the main thread. A newer request
+    // for the same entity supersedes older results. The callback always runs on
+    // the main thread for the latest request; superseded jobs are discarded.
+    bool requestRegenerateTerrain(entt::entity entity,
+                                  TerrainGenerationCallback onComplete = {});
+    void waitForTerrainGeneration();
+    bool hasPendingTerrainGeneration() const { return !pendingTerrainBuilds.empty(); }
+
+    // B-05: main-thread cost of terrain generation polling only. GPU heightfield
+    // and mesh assembly happen asynchronously; Model adoption still occurs on
+    // the update thread and is included here.
+    double getMaxTerrainPollMs() const { return maxTerrainPollMs; }
+    uint64_t getTerrainPollCount() const { return terrainPollCount; }
+    void resetTerrainPollStats() { maxTerrainPollMs = 0.0; terrainPollCount = 0; }
+    TerrainGpuMeshBuilder::Stats getTerrainGpuMeshStats() const;
+
+    // Compare the GPU compute heightfield against the CPU reference. Used by
+    // --terrain-test / editor self-tests; not part of the render hot path.
+    bool selfTestTerrainCompute(std::string& errorMessage);
+
+    // CPU collision queries. local coordinates are terrain-grid space before
+    // the entity transform; world coordinates use the current WorldTransform.
+    bool sampleTerrainHeightLocal(entt::entity entity, float localX, float localZ,
+                                  float& outHeight) const;
+    bool sampleTerrainHeightWorld(entt::entity entity, float worldX, float worldZ,
+                                  float& outHeight) const;
+    // B-07: efficient world-space ground query using the CPU heightfield and
+    // entity transform, not per-triangle picking. Returns the highest terrain.
+    bool sampleTerrainGroundHeightWorld(float worldX, float worldZ,
+                                        float& outHeight,
+                                        entt::entity* outEntity = nullptr) const;
+    bool raycastTerrain(entt::entity entity, const glm::vec3& rayOrigin,
+                        const glm::vec3& rayDirection, glm::vec3& outHitPoint,
+                        float& outDistance) const;
+    // B-07: nearest terrain hit across manual and streamed terrain entities.
+    // Used by the editor sculpt brush; picking still uses Model::intersectRay.
+    bool raycastTerrainWorld(const glm::vec3& rayOrigin,
+                             const glm::vec3& rayDirection,
+                             glm::vec3& outHitPoint,
+                             entt::entity& outEntity,
+                             float& outDistance) const;
+
+    // Pure build helper exposed for editor commands and scene self-tests.
+    // outHeightField is optional; when supplied it receives the same CPU grid
+    // used to build the mesh.
+    bool buildTerrainModel(const terrain::TerrainConfig& config,
+                           std::shared_ptr<Model>& outModel,
+                           uint32_t& outVertexCount,
+                           uint32_t& outIndexCount,
+                           double& outGenerationMs,
+                           std::string& errorMessage,
+                           std::shared_ptr<terrain::HeightField>* outHeightField = nullptr,
+                           bool* outMeshGeneratedOnGpu = nullptr);
+
+    // B-07: rebuild a Model from an already-modified heightfield. Used by
+    // sculpting; does not regenerate procedural heights.
+    bool buildTerrainModelFromHeightField(
+        const terrain::TerrainConfig& config,
+        const std::shared_ptr<terrain::HeightField>& heightField,
+        std::shared_ptr<Model>& outModel,
+        uint32_t& outVertexCount,
+        uint32_t& outIndexCount,
+        double& outGenerationMs,
+        std::string& errorMessage,
+        bool* outMeshGeneratedOnGpu = nullptr);
+
+    // B-08: bounded terrain material-set residency. Sets are loaded on demand
+    // and cached; set 0 is created eagerly in Scene::init().
+    bool ensureTerrainMaterialSet(uint32_t materialSetIndex, std::string& errorMessage);
+    bool ensureTerrainMaterialSetFromDirectory(uint32_t materialSetIndex,
+                                               const std::string& directoryOverride,
+                                               std::string& errorMessage);
+    TerrainMaterial::Stats getTerrainMaterialStats() const;
+
 private:
+    struct PendingTerrainBuild;
+
+    void processTerrainGeneration();
+    bool queryGroundAtWorld(float worldX, float worldZ, float& outHeight,
+                            entt::entity& outEntity, float* outSlopeDegrees = nullptr) const;
+    void recordTerrainPollMs(double ms);
+    void updateTerrainStreaming();
+    void discardPendingTerrainCallbacks();
+    void cancelPendingTerrainGenerations();
+    struct RetiredModel
+    {
+        std::shared_ptr<Model> model;
+        uint64_t releaseFrame = 0;
+    };
+
+    void markAllTransformsDirty();
+    void markAllSpatialDirty();
     void updateWorldTransforms();
-    void rebuildSpatialIndex();
+    void refreshSpatialIndex();
+    void retireModel(const std::shared_ptr<Model>& model);
+    void collectRetiredModels();
     void updateVisibility(const glm::mat4& viewProjection);
 
     entt::registry registry;
     entt::entity cameraEntity = entt::null;
     SpatialIndex spatialIndex{ 16.0f };
+    std::unordered_map<entt::entity, AABB> indexedBounds;
+    std::unordered_set<entt::entity> dirtyTransformEntities;
+    std::unordered_set<entt::entity> dirtySpatialEntities;
     std::vector<entt::entity> visibleEntities;
+    uint32_t lastWorldTransformUpdates = 0;
+    uint32_t lastSpatialIndexUpdates = 0;
+    uint64_t frameCounter = 0;
+    std::vector<RetiredModel> retiredModels;
 
     VulkanCamera camera{};
     CameraController cameraController{};
@@ -105,4 +296,20 @@ private:
     RenderTelemetry currentTelemetry;
     RenderTelemetry displayTelemetry;
     MaterialSystem materialSystem;
+    std::unique_ptr<TerrainMaterial> terrainMaterial;
+    std::unique_ptr<TerrainComputeGenerator> terrainComputeGenerator;
+    std::unique_ptr<TerrainGpuMeshBuilder> terrainGpuMeshBuilder;
+
+    JobSystem* jobSystem = nullptr;
+    std::vector<std::shared_ptr<PendingTerrainBuild>> pendingTerrainBuilds;
+    std::unordered_map<entt::entity, uint64_t> latestTerrainRequest;
+    uint64_t nextTerrainRequestSerial = 0;
+
+    entt::entity terrainStreamingEntity = entt::null;
+    std::unordered_map<int64_t, entt::entity> streamingTerrainChunks;
+    std::unordered_set<int64_t> pendingStreamingTerrainChunks;
+    double lastStreamingUpdateMs = 0.0;
+    double maxStreamingUpdateMs = 0.0;
+    double maxTerrainPollMs = 0.0;
+    uint64_t terrainPollCount = 0;
 };

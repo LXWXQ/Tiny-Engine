@@ -190,6 +190,9 @@ $tests = @(
     # ---- P1: screenshot ----
     @{ Name = "p1-screenshot"; Args = @("--selftest", "40", "--screenshot", (Join-Path $logDir "screenshot.png"), "--screenshot-frame", "30");
        MustContain = @("[Diag] screenshot written:") },
+    # ---- F2 / D-18: terrain CPU + G-Buffer path ----
+    @{ Name = "terrain-render"; Args = @("--selftest", "20", "--empty-scene", "--terrain-test");
+       MustContain = @("[Terrain] selfTest PASS", "[Terrain] LOD stitching PASS", "[Terrain] GPU mesh assembly selfTest PASS", "[Terrain] GPU selection selfTest PASS", "[Terrain] GPU selection transition PASS", "[Terrain] demo entity created", "chunks=4", "lods=3", "submeshes=12", "[Terrain] async generation PASS", "streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9", "[Terrain] spatial region query PASS | chunks=9 regions=5x5", "[Terrain] sculpt PASS | chunks=9 rebuilt=1", "[Terrain] character controller PASS | grounded=1", "[Terrain] character serialization PASS | captured=1", "[Terrain] material sets PASS | resident=4 max=4") },
     # ---- P2 ----
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }

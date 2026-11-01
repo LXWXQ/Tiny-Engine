@@ -145,8 +145,8 @@ void AssetBrowserPanel::draw(EditorState& state)
                     // 相机离原点可能很远，落在原点会让用户以为"没生成"。
                     const TransformComponent& cameraTransform =
                         state.services.scene->getCameraTransform();
-                    const glm::vec3 forward = cameraForward(cameraTransform.rotation);
-                    const glm::vec3 spawn = cameraTransform.translation + forward * 4.0f;
+                    const glm::vec3 forward = cameraForward(cameraTransform.getEuler());
+                    const glm::vec3 spawn = cameraTransform.getTranslation() + forward * 4.0f;
 
                     auto command = std::make_unique<CreateEntityCommand>(
                         *state.services.registry, *state.services.scene,

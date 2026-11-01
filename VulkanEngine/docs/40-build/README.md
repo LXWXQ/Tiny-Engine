@@ -5,7 +5,7 @@ type: build
 scope: CMakeLists.txt, cmake/, tools/SetupDependencies.ps1, 3rdParty/
 read-when: 每次构建；或构建失败、换机器、加依赖
 size: ~45 行
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 # 40-build 构建与环境
@@ -22,4 +22,4 @@ updated: 2026-10-30
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/Validate.ps1
 ```
 
-它做四件事：准备依赖 -> 全新 configure/build -> 跑 20 项回归 -> 检查文档一致性。
+它做四件事：准备依赖 -> 全新 configure/build -> 跑 21 项回归 -> 检查文档一致性。

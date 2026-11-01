@@ -14,6 +14,8 @@
 // 实体 ID 是运行期分配的，跨进程没有意义。
 // ===========================================================================
 
+#include "Terrain/TerrainConfig.h"
+
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
@@ -56,6 +58,31 @@ struct EntityDescription
     bool isSkybox = false;
     bool isGrid = false;
     bool isCamera = false;
+
+    // Terrain is serialized as parameters only. Mesh vertices, indices and
+    // GPU handles are never written; loading regenerates the mesh.
+    bool isTerrain = false;
+    terrain::TerrainConfig terrainConfig;
+
+    // Runtime streamed terrain manager. Chunk entities are derived from this
+    // template and are intentionally not serialized as individual entities.
+    bool isTerrainWorld = false;
+    terrain::TerrainConfig terrainWorldConfig;
+    int32_t terrainLoadRadius = 1;
+    int32_t terrainUnloadPadding = 1;
+    uint32_t terrainMaxLoadsPerFrame = 1;
+
+    // B-07 kinematic character. Runtime velocity/ground state are derived on
+    // load and intentionally not serialized.
+    bool isCharacter = false;
+    float characterRadius = 0.35f;
+    float characterHeight = 1.8f;
+    float characterMoveSpeed = 6.0f;
+    float characterJumpSpeed = 6.0f;
+    float characterGravity = 18.0f;
+    float characterMaxSlopeAngle = 50.0f;
+    float characterStepHeight = 0.5f;
+    float characterGroundSnapDistance = 0.4f;
 
     MaterialDescription material;
 };

@@ -394,9 +394,9 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
     bool usedLocalCenter = false;
     if (const auto* localBounds = registry.try_get<BoundsComponent>(entity))
     {
-        if (localBounds->local.valid)
+        if (localBounds->getLocal().valid)
         {
-            origin = glm::vec3(world->matrix * glm::vec4(localBounds->local.center(), 1.0f));
+            origin = glm::vec3(world->matrix * glm::vec4(localBounds->getLocal().center(), 1.0f));
             usedLocalCenter = true;
         }
     }
@@ -499,10 +499,10 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         dragging = true;
         activeAxis = hovered;
         dragEntity = entity;
-        startTranslation = transform->translation;
-        startRotation = transform->rotation;
-        startScale = transform->scale;
-        startOrientation = transform->orientation;
+        startTranslation = transform->getTranslation();
+        startRotation = transform->getEuler();
+        startScale = transform->getScale();
+        startOrientation = transform->getOrientation();
         dragOrigin = origin;
 
         const int axisIndex = (int)hovered - 1;
@@ -624,7 +624,8 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
             startTranslation, newTranslation,
             startRotation, newRotation,
             startScale, newScale,
-            startOrientation, newOrientation));
+            startOrientation, newOrientation,
+            state.services.scene));
         state.markDirty();
 
         // 立刻重算世界变换与包围盒，否则本帧画出来的包围盒/手柄还是旧位置
@@ -643,10 +644,10 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
                 bool refreshedLocalCenter = false;
                 if (const auto* refreshedLocalBounds = registry.try_get<BoundsComponent>(dragEntity))
                 {
-                    if (refreshedLocalBounds->local.valid)
+                    if (refreshedLocalBounds->getLocal().valid)
                     {
                         origin = glm::vec3(refreshedWorld->matrix *
-                                           glm::vec4(refreshedLocalBounds->local.center(), 1.0f));
+                                           glm::vec4(refreshedLocalBounds->getLocal().center(), 1.0f));
                         refreshedLocalCenter = true;
                     }
                 }

@@ -20,6 +20,14 @@ public:
 
 	VkDescriptorSetLayout getGlobalSetLayout() const { return globalSetLayout; }
 	VkDescriptorSetLayout getMaterialSetLayout() const { return materialSetLayout; }
+	// Terrain stage 6: fixed 12-sampler PBR texture set (set 2).
+	// B-08: four bounded material sets; the renderer binds one per terrain batch.
+	static constexpr uint32_t kTerrainSetCount = 4;
+	VkDescriptorSetLayout getTerrainSetLayout() const { return terrainSetLayout; }
+	VkDescriptorSet getTerrainSet(uint32_t index = 0) const
+	{
+		return index < kTerrainSetCount ? terrainSets[index] : terrainSets[0];
+	}
 
 	VkDescriptorSetLayout createSetLayout(const std::vector<VkDescriptorSetLayoutBinding>& bindings);
 
@@ -82,6 +90,12 @@ public:
 	VkDescriptorSet getMaterialSet() const { return materialSet; }
 	VkDescriptorSet getMaterialSet(uint32_t /*index*/) const { return materialSet; }
 
+	void updateTerrainTextures(
+		uint32_t setIndex,
+		const std::array<VkDescriptorImageInfo, 4>& albedoInfos,
+		const std::array<VkDescriptorImageInfo, 4>& normalInfos,
+		const std::array<VkDescriptorImageInfo, 4>& heightRoughnessInfos);
+
 	// 槽位是否真的被绑定过内容。数组尾部允许部分未绑定
 	//（descriptorBindingPartiallyBound），着色器那边靠 materialSet.alpha
 	// 的守卫跳过——这里只用于 CPU 侧自检。
@@ -104,6 +118,7 @@ public:
 private:
 	void createGlobalLayout();
 	void createMaterialLayout(uint32_t capacity);
+	void createTerrainLayout();
 	void writeMaterialSet(uint32_t slot,
 		const VkDescriptorImageInfo& albedo,
 		const VkDescriptorImageInfo& normal,
@@ -122,6 +137,7 @@ private:
 
 	VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE;
 	VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
+	VkDescriptorSetLayout terrainSetLayout = VK_NULL_HANDLE;
 
 	std::vector<VkDescriptorSet> globalSets;
 
@@ -129,6 +145,7 @@ private:
 	// 数组长度（材质容量）在分配时通过 variable descriptor count 指定，
 	// 所以布局里不写死 —— 想调容量只需改 init 的 maxMaterials。
 	VkDescriptorSet materialSet = VK_NULL_HANDLE;
+	std::array<VkDescriptorSet, kTerrainSetCount> terrainSets{};
 	uint32_t materialCapacity = 0;
 
 	std::vector<bool> slotInUse;                 // 槽位占用标记（含等待回收）

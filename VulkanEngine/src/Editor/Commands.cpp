@@ -3,10 +3,38 @@
 #include "Scene/Scene.h"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 namespace editor
 {
+namespace
+{
+TerrainComponent restorableTerrain(TerrainComponent terrain)
+{
+    // generating is a transient runtime flag; undo/redo snapshots must never
+    // resurrect a pending-job marker that no longer has a job behind it.
+    terrain.generating = false;
+    return terrain;
+}
+
+TransformComponent restorableTransform(TransformComponent transform)
+{
+    // The snapshot may outlive the original entity ID. Never fire a callback
+    // from the copy; Scene::attachDirtyTracking() rebinds after emplace.
+    transform.clearDirtyOwner();
+    transform.markDirty();
+    return transform;
+}
+
+BoundsComponent restorableBounds(BoundsComponent bounds)
+{
+    bounds.clearDirtyOwner();
+    bounds.markDirty();
+    return bounds;
+}
+} // namespace
+
 
 // ---------------------------------------------------------------------------
 // SetTransformCommand
@@ -14,13 +42,15 @@ namespace editor
 SetTransformCommand::SetTransformCommand(entt::registry& registry, entt::entity entity,
                                          const glm::vec3& oldTranslation, const glm::vec3& newTranslation,
                                          const glm::vec3& oldRotation, const glm::vec3& newRotation,
-                                         const glm::vec3& oldScale, const glm::vec3& newScale)
+                                         const glm::vec3& oldScale, const glm::vec3& newScale,
+                                         Scene* scene)
     : SetTransformCommand(registry, entity,
                           oldTranslation, newTranslation,
                           oldRotation, newRotation,
                           oldScale, newScale,
                           TransformComponent::quatFromEuler(oldRotation),
-                          TransformComponent::quatFromEuler(newRotation))
+                          TransformComponent::quatFromEuler(newRotation),
+                          scene)
 {
 }
 
@@ -28,8 +58,9 @@ SetTransformCommand::SetTransformCommand(entt::registry& registry, entt::entity 
                                          const glm::vec3& oldTranslation, const glm::vec3& newTranslation,
                                          const glm::vec3& oldRotation, const glm::vec3& newRotation,
                                          const glm::vec3& oldScale, const glm::vec3& newScale,
-                                         const glm::quat& oldOrientation, const glm::quat& newOrientation)
-    : registry(&registry), entity(entity),
+                                         const glm::quat& oldOrientation, const glm::quat& newOrientation,
+                                         Scene* scene)
+    : registry(&registry), scene(scene), entity(entity),
       oldTranslation(oldTranslation), newTranslation(newTranslation),
       oldRotation(oldRotation), newRotation(newRotation),
       oldScale(oldScale), newScale(newScale),
@@ -43,10 +74,9 @@ void SetTransformCommand::apply()
         return;
     if (auto* transform = registry->try_get<TransformComponent>(entity))
     {
-        transform->translation = newTranslation;
-        transform->rotation = newRotation;
-        transform->orientation = newOrientation;
-        transform->scale = newScale;
+        transform->setPose(newTranslation, newRotation, newScale, newOrientation);
+        if (scene)
+            scene->markTransformDirty(entity);
     }
 }
 
@@ -56,10 +86,9 @@ void SetTransformCommand::revert()
         return;
     if (auto* transform = registry->try_get<TransformComponent>(entity))
     {
-        transform->translation = oldTranslation;
-        transform->rotation = oldRotation;
-        transform->orientation = oldOrientation;
-        transform->scale = oldScale;
+        transform->setPose(oldTranslation, oldRotation, oldScale, oldOrientation);
+        if (scene)
+            scene->markTransformDirty(entity);
     }
 }
 
@@ -126,11 +155,24 @@ void RenameEntityCommand::absorb(const Command& newer)
 // ---------------------------------------------------------------------------
 // DeleteEntityCommand
 // ---------------------------------------------------------------------------
-DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity entity)
-    : registry(&registry), rootEntity(entity)
+DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity entity,
+                                         Scene* scene)
+    : registry(&registry), scene(scene), rootEntity(entity)
 {
     if (!registry.valid(entity))
         return;
+
+    // Deleting a runtime chunk would desynchronise the streaming manager.
+    // Resolve the selection to its manager before snapshotting.
+    if (scene)
+    {
+        const entt::entity owner = scene->resolveTerrainChunkOwner(entity);
+        if (owner != entt::null && owner != entity && registry.valid(owner))
+        {
+            entity = owner;
+            rootEntity = owner;
+        }
+    }
 
     // 记录它原来的父节点，撤销时挂回去
     if (const auto* hierarchy = registry.try_get<HierarchyComponent>(entity))
@@ -161,6 +203,8 @@ DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity 
             std::optional<MaterialComponent>    material;
             std::optional<RenderTagComponent>   tag;
             std::optional<BoundsComponent>      bounds;
+            std::optional<TerrainComponent>    terrain;
+            std::optional<TerrainStreamingComponent> streaming;
             bool hasCamera = false;
         };
         Snapshot snap;
@@ -170,23 +214,29 @@ DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity 
         if (const auto* p = registry.try_get<MaterialComponent>(current))   snap.material = *p;
         if (const auto* p = registry.try_get<RenderTagComponent>(current))  snap.tag = *p;
         if (const auto* p = registry.try_get<BoundsComponent>(current))     snap.bounds = *p;
+        if (const auto* p = registry.try_get<TerrainComponent>(current))    snap.terrain = *p;
+        if (const auto* p = registry.try_get<TerrainStreamingComponent>(current)) snap.streaming = *p;
         // CameraComponent 是空 tag：查存在性要用 any_of，不能 try_get 取指针。
         snap.hasCamera = registry.any_of<CameraComponent>(current);
 
         Node node;
         node.original = current;
         node.parentIndex = parentIndex;
-        node.rebuild = [&registry, snap](entt::entity created)
+        node.rebuild = [&registry, snap, scene](entt::entity created)
         {
-            if (snap.transform) registry.emplace<TransformComponent>(created, *snap.transform);
+            if (snap.transform) registry.emplace<TransformComponent>(created, restorableTransform(*snap.transform));
             if (snap.name)      registry.emplace<NameComponent>(created, *snap.name);
             if (snap.mesh)      registry.emplace<MeshComponent>(created, *snap.mesh);
             if (snap.material)  registry.emplace<MaterialComponent>(created, *snap.material);
             if (snap.tag)       registry.emplace<RenderTagComponent>(created, *snap.tag);
-            if (snap.bounds)    registry.emplace<BoundsComponent>(created, *snap.bounds);
+            if (snap.bounds)    registry.emplace<BoundsComponent>(created, restorableBounds(*snap.bounds));
+            if (snap.terrain)   registry.emplace<TerrainComponent>(created, restorableTerrain(*snap.terrain));
+            if (snap.streaming) registry.emplace<TerrainStreamingComponent>(created, *snap.streaming);
             if (snap.hasCamera) registry.emplace<CameraComponent>(created);
             // get_or_emplace 标了 [[nodiscard]]，这里只关心"组件存在"，显式丢弃返回值。
             (void)registry.get_or_emplace<HierarchyComponent>(created);
+            if (scene)
+                scene->attachDirtyTracking(created);
         };
         snapshot.push_back(std::move(node));
 
@@ -206,11 +256,36 @@ void DeleteEntityCommand::apply()
     if (!captured)
         return;
 
+    // After undo, destroy the rebuilt copies rather than the original IDs
+    // (which are already invalid). This makes redo symmetric with the generic
+    // delete command and mandatory for runtime streaming managers.
+    const entt::entity rootToRemove =
+        (restoredRootEntity != entt::null && registry->valid(restoredRootEntity))
+            ? restoredRootEntity : rootEntity;
+
     // 先把它从父节点的 children 里摘掉，否则父节点会留下悬空 ID
-    if (registry->valid(rootEntity) && restoredParent != entt::null && registry->valid(restoredParent))
+    if (registry->valid(rootToRemove) && restoredParent != entt::null &&
+        registry->valid(restoredParent))
     {
         auto& siblings = registry->get<HierarchyComponent>(restoredParent).children;
-        siblings.erase(std::remove(siblings.begin(), siblings.end(), rootEntity), siblings.end());
+        siblings.erase(std::remove(siblings.begin(), siblings.end(), rootToRemove), siblings.end());
+    }
+
+    if (!createdEntities.empty())
+    {
+        for (auto it = createdEntities.rbegin(); it != createdEntities.rend(); ++it)
+        {
+            if (registry->valid(*it))
+            {
+                if (scene)
+                    scene->destroyEntity(*it);
+                else
+                    registry->destroy(*it);
+            }
+        }
+        createdEntities.clear();
+        restoredRootEntity = entt::null;
+        return;
     }
 
     // 从叶子往根销毁。snapshot 是父先子后的顺序，所以反序遍历即可，
@@ -218,7 +293,12 @@ void DeleteEntityCommand::apply()
     for (auto it = snapshot.rbegin(); it != snapshot.rend(); ++it)
     {
         if (registry->valid(it->original))
-            registry->destroy(it->original);
+        {
+            if (scene)
+                scene->destroyEntity(it->original);
+            else
+                registry->destroy(it->original);
+        }
     }
 
     createdEntities.clear();
@@ -238,6 +318,11 @@ void DeleteEntityCommand::revert()
     {
         const entt::entity created = registry->create();
         snapshot[i].rebuild(created);
+        if (scene)
+        {
+            scene->markTransformDirty(created);
+            scene->markSpatialDirty(created);
+        }
         createdEntities.push_back(created);
         if (snapshot[i].parentIndex < 0)
             restoredRootEntity = created;
@@ -263,6 +348,21 @@ void DeleteEntityCommand::revert()
     {
         registry->get<HierarchyComponent>(restoredRootEntity).parent = restoredParent;
         registry->get<HierarchyComponent>(restoredParent).children.push_back(restoredRootEntity);
+    }
+
+    // A restored streaming manager must be re-adopted by Scene so its runtime
+    // chunk set can stream back in around the camera.
+    if (scene)
+    {
+        for (entt::entity created : createdEntities)
+        {
+            if (registry->valid(created) &&
+                registry->any_of<TerrainStreamingComponent>(created))
+            {
+                scene->adoptStreamingTerrainManager(created);
+                break;
+            }
+        }
     }
 }
 
@@ -291,7 +391,9 @@ void CreateEntityCommand::apply()
         registry->emplace<NameComponent>(entity, NameComponent{ entityName });
         registry->emplace<RenderTagComponent>(entity);
         if (auto* transform = registry->try_get<TransformComponent>(entity))
-            transform->translation = spawnPosition;
+            transform->setTranslation(spawnPosition);
+        scene->markTransformDirty(entity);
+        scene->markSpatialDirty(entity);
         return;
     }
 
@@ -303,7 +405,7 @@ void CreateEntityCommand::apply()
     // 不这样做的话，新建的物体会堆在世界原点 —— 而相机可能离原点很远，
     // 用户会以为"没生成"。
     if (auto* transform = registry->try_get<TransformComponent>(entity))
-        transform->translation = spawnPosition;
+        transform->setTranslation(spawnPosition);
 
     // 快照：shared_ptr 拷贝，Model 的 GPU 缓冲因此活到命令被丢弃为止。
     if (const auto* mesh = registry->try_get<MeshComponent>(entity))
@@ -318,8 +420,210 @@ void CreateEntityCommand::revert()
         return;
 
     // 只销毁实体；Model 仍被 meshSnapshot 持有，所以 redo 不用重新加载。
-    registry->destroy(entity);
+    scene->destroyEntity(entity);
     entity = entt::null;
+}
+
+
+// ---------------------------------------------------------------------------
+// Terrain commands
+// ---------------------------------------------------------------------------
+CreateTerrainCommand::CreateTerrainCommand(entt::registry& registry, Scene& scene,
+                                           terrain::TerrainConfig config,
+                                           std::string name,
+                                           const glm::vec3& spawnPosition)
+    : registry(&registry), scene(&scene), config(std::move(config)),
+      entityName(std::move(name)), spawnPosition(spawnPosition)
+{
+}
+
+void CreateTerrainCommand::apply()
+{
+    // Redo: restore from snapshots, never regenerate noise or upload again.
+    if (meshSnapshot.has_value() && terrainSnapshot.has_value())
+    {
+        entity = scene->createEntity();
+        if (auto* transform = registry->try_get<TransformComponent>(entity))
+            transform->setTranslation(spawnPosition);
+
+        registry->emplace_or_replace<NameComponent>(entity, NameComponent{ entityName });
+        registry->emplace_or_replace<MeshComponent>(entity, *meshSnapshot);
+        registry->emplace_or_replace<TerrainComponent>(entity, restorableTerrain(*terrainSnapshot));
+        if (tagSnapshot.has_value())
+            registry->emplace_or_replace<RenderTagComponent>(entity, *tagSnapshot);
+        if (boundsSnapshot.has_value())
+            registry->emplace_or_replace<BoundsComponent>(entity, restorableBounds(*boundsSnapshot));
+        scene->markTransformDirty(entity);
+        scene->markSpatialDirty(entity);
+        scene->refreshTransformsAndVisibility();
+        return;
+    }
+
+    entity = scene->createTerrainEntity(config, entityName, spawnPosition);
+    if (entity == entt::null || !registry->valid(entity))
+    {
+        entity = entt::null;
+        return;
+    }
+
+    if (const auto* mesh = registry->try_get<MeshComponent>(entity))
+        meshSnapshot = *mesh;
+    if (const auto* terrain = registry->try_get<TerrainComponent>(entity))
+        terrainSnapshot = *terrain;
+    if (const auto* tag = registry->try_get<RenderTagComponent>(entity))
+        tagSnapshot = *tag;
+    if (const auto* bounds = registry->try_get<BoundsComponent>(entity))
+        boundsSnapshot = *bounds;
+}
+
+void CreateTerrainCommand::revert()
+{
+    if (entity == entt::null || !registry->valid(entity))
+        return;
+
+    // Keep snapshots alive; Scene::destroyEntity only removes the ECS entity.
+    scene->destroyEntity(entity);
+    entity = entt::null;
+    scene->refreshTransformsAndVisibility();
+}
+
+CreateCharacterCommand::CreateCharacterCommand(entt::registry& registry, Scene& scene,
+                                               std::string name,
+                                               const glm::vec3& spawnPosition)
+    : registry(&registry), scene(&scene), entityName(std::move(name)),
+      spawnPosition(spawnPosition)
+{
+}
+
+void CreateCharacterCommand::apply()
+{
+    entity = scene->createCharacterEntity(entityName, spawnPosition);
+}
+
+void CreateCharacterCommand::revert()
+{
+    if (entity == entt::null || !registry->valid(entity))
+        return;
+    scene->destroyEntity(entity);
+    entity = entt::null;
+}
+
+// ---------------------------------------------------------------------------
+SetTerrainConfigCommand::SetTerrainConfigCommand(entt::registry& registry,
+                                                 entt::entity entity,
+                                                 const terrain::TerrainConfig& oldConfig,
+                                                 const terrain::TerrainConfig& newConfig)
+    : registry(&registry), entity(entity), oldConfig(oldConfig), newConfig(newConfig)
+{
+}
+
+void SetTerrainConfigCommand::apply()
+{
+    if (!registry->valid(entity))
+        return;
+    if (auto* terrain = registry->try_get<TerrainComponent>(entity))
+        terrain->config = newConfig;
+}
+
+void SetTerrainConfigCommand::revert()
+{
+    if (!registry->valid(entity))
+        return;
+    if (auto* terrain = registry->try_get<TerrainComponent>(entity))
+        terrain->config = oldConfig;
+}
+
+bool SetTerrainConfigCommand::mergeWith(const Command& previous) const
+{
+    const auto* other = dynamic_cast<const SetTerrainConfigCommand*>(&previous);
+    return other && other->entity == entity;
+}
+
+void SetTerrainConfigCommand::absorb(const Command& newer)
+{
+    const auto* other = dynamic_cast<const SetTerrainConfigCommand*>(&newer);
+    if (other == nullptr || other->entity != entity)
+        return;
+    newConfig = other->newConfig;
+}
+
+// ---------------------------------------------------------------------------
+RegenerateTerrainCommand::RegenerateTerrainCommand(entt::registry& registry, Scene& scene,
+                                                   entt::entity entity,
+                                                   const TerrainComponent& oldTerrain,
+                                                   const TerrainComponent& newTerrain,
+                                                   const MeshComponent& oldMesh,
+                                                   const MeshComponent& newMesh,
+                                                   const BoundsComponent& oldBounds,
+                                                   const BoundsComponent& newBounds,
+                                                   const RenderTagComponent& oldTag,
+                                                   const RenderTagComponent& newTag)
+    : registry(&registry), scene(&scene), entity(entity),
+      oldTerrain(oldTerrain), newTerrain(newTerrain),
+      oldMesh(oldMesh), newMesh(newMesh),
+      oldBounds(oldBounds), newBounds(newBounds),
+      oldTag(oldTag), newTag(newTag)
+{
+}
+
+void RegenerateTerrainCommand::restore(const TerrainComponent& terrain,
+                                       const MeshComponent& mesh,
+                                       const BoundsComponent& bounds,
+                                       const RenderTagComponent& tag)
+{
+    if (!registry->valid(entity))
+        return;
+
+    registry->emplace_or_replace<TerrainComponent>(entity, restorableTerrain(terrain));
+    registry->emplace_or_replace<MeshComponent>(entity, mesh);
+    registry->emplace_or_replace<BoundsComponent>(entity, restorableBounds(bounds));
+    registry->emplace_or_replace<RenderTagComponent>(entity, tag);
+    scene->attachDirtyTracking(entity);
+    scene->markSpatialDirty(entity);
+    scene->refreshTransformsAndVisibility();
+}
+
+void RegenerateTerrainCommand::apply()
+{
+    restore(newTerrain, newMesh, newBounds, newTag);
+}
+
+void RegenerateTerrainCommand::revert()
+{
+    restore(oldTerrain, oldMesh, oldBounds, oldTag);
+}
+
+// ---------------------------------------------------------------------------
+glm::vec3 terrainSpawnPosition(const Scene& scene,
+                               const terrain::TerrainConfig& config)
+{
+    const TransformComponent& cameraTransform = scene.getCameraTransform();
+    glm::vec3 forward(std::sin(cameraTransform.getEuler().y), 0.0f,
+                      std::cos(cameraTransform.getEuler().y));
+    if (glm::dot(forward, forward) < 1e-8f)
+        forward = glm::vec3(0.0f, 0.0f, 1.0f);
+    else
+        forward = glm::normalize(forward);
+
+    const float distance = config.sizeZ * 0.5f + 10.0f;
+    return {
+        cameraTransform.getTranslation().x + forward.x * distance,
+        0.0f,
+        cameraTransform.getTranslation().z + forward.z * distance
+    };
+}
+
+entt::entity createTerrainThroughCommand(entt::registry& registry,
+                                         Scene& scene,
+                                         CommandStack& commands,
+                                         const terrain::TerrainConfig& config,
+                                         const std::string& name)
+{
+    auto command = std::make_unique<CreateTerrainCommand>(
+        registry, scene, config, name, terrainSpawnPosition(scene, config));
+    CreateTerrainCommand* raw = command.get();
+    commands.execute(std::move(command));
+    return raw->currentEntity();
 }
 
 } // namespace editor

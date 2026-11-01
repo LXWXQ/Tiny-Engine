@@ -48,6 +48,80 @@ glm::vec4 vec4From(const json& j, const glm::vec4& fallback)
     return glm::vec4(j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>());
 }
 
+void readTerrainConfig(const json& t, terrain::TerrainConfig& cfg)
+{
+    cfg.seed = static_cast<uint32_t>(t.value("seed", cfg.seed));
+    cfg.resolutionX = static_cast<uint32_t>(t.value("resolutionX", cfg.resolutionX));
+    cfg.resolutionZ = static_cast<uint32_t>(t.value("resolutionZ", cfg.resolutionZ));
+    cfg.sizeX = t.value("sizeX", cfg.sizeX);
+    cfg.sizeZ = t.value("sizeZ", cfg.sizeZ);
+    cfg.sampleOriginX = t.value("sampleOriginX", cfg.sampleOriginX);
+    cfg.sampleOriginZ = t.value("sampleOriginZ", cfg.sampleOriginZ);
+    cfg.baseHeight = t.value("baseHeight", cfg.baseHeight);
+    cfg.heightScale = t.value("heightScale", cfg.heightScale);
+    cfg.noiseFrequency = t.value("noiseFrequency", cfg.noiseFrequency);
+    cfg.octaveCount = static_cast<uint32_t>(t.value("octaveCount", cfg.octaveCount));
+    cfg.persistence = t.value("persistence", cfg.persistence);
+    cfg.lacunarity = t.value("lacunarity", cfg.lacunarity);
+    cfg.ridgeWeight = t.value("ridgeWeight", cfg.ridgeWeight);
+    cfg.detailWeight = t.value("detailWeight", cfg.detailWeight);
+    cfg.edgeFalloff = t.value("edgeFalloff", cfg.edgeFalloff);
+    cfg.heightCurve = t.value("heightCurve", cfg.heightCurve);
+    cfg.islandWeight = t.value("islandWeight", cfg.islandWeight);
+    cfg.islandRadius = t.value("islandRadius", cfg.islandRadius);
+    cfg.ridgeSharpness = t.value("ridgeSharpness", cfg.ridgeSharpness);
+    cfg.detailFrequency = t.value("detailFrequency", cfg.detailFrequency);
+    cfg.materialDetailStrength = t.value("materialDetailStrength", cfg.materialDetailStrength);
+    cfg.uvTiling = t.value("uvTiling", cfg.uvTiling);
+    cfg.localColorRange = t.value("localColorRange", cfg.localColorRange);
+    cfg.skirtsEnabled = t.value("skirtsEnabled", cfg.skirtsEnabled);
+    cfg.chunkGridX = static_cast<uint32_t>(t.value("chunkGridX", cfg.chunkGridX));
+    cfg.chunkGridZ = static_cast<uint32_t>(t.value("chunkGridZ", cfg.chunkGridZ));
+    cfg.lodLevelCount = static_cast<uint32_t>(t.value("lodLevelCount", cfg.lodLevelCount));
+    cfg.lodDistanceScale = t.value("lodDistanceScale", cfg.lodDistanceScale);
+    cfg.surfaceStyle = static_cast<terrain::TerrainSurfaceStyle>(
+        t.value("surfaceStyle", static_cast<uint32_t>(cfg.surfaceStyle)));
+    cfg.materialSetIndex = t.value("materialSetIndex", cfg.materialSetIndex);
+}
+
+json writeTerrainConfig(const terrain::TerrainConfig& cfg)
+{
+    json t;
+    t["version"] = 5;
+    t["seed"] = cfg.seed;
+    t["resolutionX"] = cfg.resolutionX;
+    t["resolutionZ"] = cfg.resolutionZ;
+    t["sizeX"] = cfg.sizeX;
+    t["sizeZ"] = cfg.sizeZ;
+    t["sampleOriginX"] = cfg.sampleOriginX;
+    t["sampleOriginZ"] = cfg.sampleOriginZ;
+    t["baseHeight"] = cfg.baseHeight;
+    t["heightScale"] = cfg.heightScale;
+    t["noiseFrequency"] = cfg.noiseFrequency;
+    t["octaveCount"] = cfg.octaveCount;
+    t["persistence"] = cfg.persistence;
+    t["lacunarity"] = cfg.lacunarity;
+    t["ridgeWeight"] = cfg.ridgeWeight;
+    t["detailWeight"] = cfg.detailWeight;
+    t["edgeFalloff"] = cfg.edgeFalloff;
+    t["heightCurve"] = cfg.heightCurve;
+    t["islandWeight"] = cfg.islandWeight;
+    t["islandRadius"] = cfg.islandRadius;
+    t["ridgeSharpness"] = cfg.ridgeSharpness;
+    t["detailFrequency"] = cfg.detailFrequency;
+    t["materialDetailStrength"] = cfg.materialDetailStrength;
+    t["uvTiling"] = cfg.uvTiling;
+    t["localColorRange"] = cfg.localColorRange;
+    t["skirtsEnabled"] = cfg.skirtsEnabled;
+    t["chunkGridX"] = cfg.chunkGridX;
+    t["chunkGridZ"] = cfg.chunkGridZ;
+    t["lodLevelCount"] = cfg.lodLevelCount;
+    t["lodDistanceScale"] = cfg.lodDistanceScale;
+    t["surfaceStyle"] = static_cast<uint32_t>(cfg.surfaceStyle);
+    t["materialSetIndex"] = cfg.materialSetIndex;
+    return t;
+}
+
 scene::SceneDescription fromJson(const json& root)
 {
     scene::SceneDescription description;
@@ -66,8 +140,45 @@ scene::SceneDescription fromJson(const json& root)
         entity.parentIndex = e.value("parent", -1);
         entity.meshPath = toAbsolute(e.value("mesh", std::string()));
         entity.isSkybox = e.value("skybox", false);
+
         entity.isGrid = e.value("grid", false);
+
         entity.isCamera = e.value("camera", false);
+
+
+
+        // Terrain exists only as an optional parameter object. Unknown fields
+        // and old scene files without it continue to load with defaults.
+        if (e.contains("terrain") && e["terrain"].is_object())
+        {
+            entity.isTerrain = true;
+            readTerrainConfig(e["terrain"], entity.terrainConfig);
+        }
+
+        if (e.contains("terrainWorld") && e["terrainWorld"].is_object())
+        {
+            const json& w = e["terrainWorld"];
+            entity.isTerrainWorld = true;
+            readTerrainConfig(w.value("chunkConfig", json::object()), entity.terrainWorldConfig);
+            entity.terrainLoadRadius = w.value("loadRadius", entity.terrainLoadRadius);
+            entity.terrainUnloadPadding = w.value("unloadPadding", entity.terrainUnloadPadding);
+            entity.terrainMaxLoadsPerFrame = static_cast<uint32_t>(
+                w.value("maxLoadsPerFrame", entity.terrainMaxLoadsPerFrame));
+        }
+
+        if (e.contains("character") && e["character"].is_object())
+        {
+            const json& c = e["character"];
+            entity.isCharacter = true;
+            entity.characterRadius = c.value("radius", entity.characterRadius);
+            entity.characterHeight = c.value("height", entity.characterHeight);
+            entity.characterMoveSpeed = c.value("moveSpeed", entity.characterMoveSpeed);
+            entity.characterJumpSpeed = c.value("jumpSpeed", entity.characterJumpSpeed);
+            entity.characterGravity = c.value("gravity", entity.characterGravity);
+            entity.characterMaxSlopeAngle = c.value("maxSlopeAngle", entity.characterMaxSlopeAngle);
+            entity.characterStepHeight = c.value("stepHeight", entity.characterStepHeight);
+            entity.characterGroundSnapDistance = c.value("groundSnapDistance", entity.characterGroundSnapDistance);
+        }
 
         if (e.contains("material") && e["material"].is_object())
         {
@@ -105,11 +216,41 @@ json toJson(const scene::SceneDescription& description)
         j["scale"] = toJson(e.scale);
         j["parent"] = e.parentIndex;
 
-        if (!e.meshPath.empty())
+        if (!e.isTerrain && !e.meshPath.empty())
             j["mesh"] = toRelative(e.meshPath);
         if (e.isSkybox) j["skybox"] = true;
         if (e.isGrid)   j["grid"] = true;
         if (e.isCamera) j["camera"] = true;
+
+
+
+        if (e.isTerrain)
+        {
+            j["terrain"] = writeTerrainConfig(e.terrainConfig);
+        }
+        if (e.isTerrainWorld)
+        {
+            json w;
+            w["chunkConfig"] = writeTerrainConfig(e.terrainWorldConfig);
+            w["loadRadius"] = e.terrainLoadRadius;
+            w["unloadPadding"] = e.terrainUnloadPadding;
+            w["maxLoadsPerFrame"] = e.terrainMaxLoadsPerFrame;
+            j["terrainWorld"] = std::move(w);
+        }
+
+        if (e.isCharacter)
+        {
+            json c;
+            c["radius"] = e.characterRadius;
+            c["height"] = e.characterHeight;
+            c["moveSpeed"] = e.characterMoveSpeed;
+            c["jumpSpeed"] = e.characterJumpSpeed;
+            c["gravity"] = e.characterGravity;
+            c["maxSlopeAngle"] = e.characterMaxSlopeAngle;
+            c["stepHeight"] = e.characterStepHeight;
+            c["groundSnapDistance"] = e.characterGroundSnapDistance;
+            j["character"] = std::move(c);
+        }
 
         if (e.material.present)
         {

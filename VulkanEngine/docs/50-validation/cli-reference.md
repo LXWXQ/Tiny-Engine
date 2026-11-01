@@ -5,7 +5,7 @@ type: validation
 scope: main.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
 size: ~170 行
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 # 命令行参数全表
@@ -48,6 +48,7 @@ updated: 2026-10-30
 | `--screenshot-frame <n>` | 指定帧号（隐含 `--screenshot`） | 同上 |
 | `--screenshot-viewport` | 截图拍编辑器离屏视口（纯 3D，不含 UI）；需配合 `--editor` | 0 |
 | `--empty-scene` | 不加载 Sponza / 天空盒，只留相机（调试单物体交互） | 0 |
+| `--terrain-test` | 启动时在相机前方创建一块持久地形，用于端到端渲染/截图回归；常与 `--empty-scene --selftest` 配合 | 0（不传时不生成、不分摊） |
 | `--capture-frame <n>` | RenderDoc 在第 n 帧抓帧（需注入） | 0（不调 `RENDERDOC_GetAPI`） |
 
 `--validation-features` 的取值：
@@ -77,6 +78,10 @@ updated: 2026-10-30
 
 # GPU 计时 + 截图 + 验证层落盘
 .\\build\\Debug\\VulkanEngine.exe --selftest 90 --gpu-timing --screenshot shot.png --validation-jsonl val.jsonl
+
+# 地形 G-Buffer 端到端 + 截图
+.\\build\\Debug\\VulkanEngine.exe --selftest 30 --empty-scene --terrain-test `
+  --screenshot terrain.png --screenshot-frame 20
 
 # 独立 compute 回归
 .\\build\\Debug\\VulkanEngine.exe --selftest 20 --compute-test

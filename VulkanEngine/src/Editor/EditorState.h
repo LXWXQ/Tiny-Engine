@@ -15,6 +15,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/Gizmo.h"
 #include "Scene/SceneDescription.h"
+#include "Terrain/TerrainBrush.h"
 
 #include <deque>
 #include <string>
@@ -90,6 +91,11 @@ struct EditorState
     // "拖动时白色包围盒和物体分开、手柄也跟着漂"。
     // 置位后由 EditorLayer::drawUI() 在本帧结束前统一刷新一次。
     bool transformRefreshPending = false;
+
+    // ---- B-07 地形笔刷 ----
+    // 视口中 Ctrl+左键应用；中心点由射线命中地形决定。
+    bool terrainBrushEnabled = false;
+    terrain::TerrainBrushSettings terrainBrush;
 
     // 本帧对应的 frame-in-flight 槽位。视口纹理按槽位各一张，
     // ViewportPanel 需要用它挑出正确的那张。

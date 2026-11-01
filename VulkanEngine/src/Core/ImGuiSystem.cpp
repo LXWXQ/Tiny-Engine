@@ -131,6 +131,13 @@ void ImGuiSystem::renderPerformancePanel(float dt, const RenderTelemetry& teleme
 	ImGui::Text("Draw Calls : %u", telemetry.drawCalls);
 	ImGui::Text("Triangles  : %u", telemetry.triangles);
 	ImGui::Text("Vertices   : %u", telemetry.vertices);
+	ImGui::Text("Chunks culled: %u", telemetry.subMeshesCulled);
+	ImGui::Text("LOD skips  : %u", telemetry.lodSubMeshesSkipped);
+	ImGui::Text("LOD blends : %u | switches: %u", telemetry.terrainLodBlends,
+		telemetry.terrainLodSwitches);
+	ImGui::Text("Terrain indirect groups: %u", telemetry.terrainIndirectGroups);
+	ImGui::Text("Terrain LOD: %u / %u / %u", telemetry.terrainLod0Chunks,
+		telemetry.terrainLod1Chunks, telemetry.terrainLod2Chunks);
 	// D-3 bindless 的收益只体现在这一行：draw call 数不变，但绑定次数从
 	// "每个子网格一次"降到"每帧一次"。看着不起眼，它是后面实例化的前提。
 	ImGui::Text("Desc. Binds: %u", telemetry.descriptorBinds);
@@ -203,9 +210,11 @@ void ImGuiSystem::renderCameraPanel(TransformComponent& cameraTransform, CameraC
 	if (!ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
 		return;
 
-	ImGui::DragFloat3("Position", &cameraTransform.translation.x, 0.1f);
+	glm::vec3 position = cameraTransform.getTranslation();
+	if (ImGui::DragFloat3("Position", &position.x, 0.1f))
+		cameraTransform.setTranslation(position);
 
-	glm::vec3 eulerAngles = glm::degrees(cameraTransform.rotation);
+	glm::vec3 eulerAngles = glm::degrees(cameraTransform.getEuler());
 	if (ImGui::DragFloat3("Rotation", &eulerAngles.x, 1.0f))
 		cameraTransform.setEuler(glm::radians(eulerAngles));
 

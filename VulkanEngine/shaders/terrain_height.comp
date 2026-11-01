@@ -1,0 +1,185 @@
+#version 450
+
+// GPU heightfield evaluation. Keep this byte-for-byte aligned with
+// TerrainNoise.cpp: same integer mixer, gradients, octave seeding, ridge/detail
+// modulation, island/edge masks and height curve.
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) buffer HeightBuffer
+{
+    float values[];
+} heightBuffer;
+
+layout(push_constant) uniform Push
+{
+    uint resolutionX;
+    uint resolutionZ;
+    float sizeX;
+    float sizeZ;
+    float sampleOriginX;
+    float sampleOriginZ;
+    uint seed;
+    uint octaveCount;
+    float noiseFrequency;
+    float persistence;
+    float lacunarity;
+    float ridgeWeight;
+    float detailWeight;
+    float edgeFalloff;
+    float heightCurve;
+    float islandWeight;
+    float islandRadius;
+    float ridgeSharpness;
+    float detailFrequency;
+} pc;
+
+uint mix32(uint value)
+{
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+uint hash2D(int x, int z, uint seed)
+{
+    uint h = seed;
+    h ^= uint(x) * 0x9e3779b1u;
+    h = mix32(h);
+    h ^= uint(z) * 0x85ebca77u;
+    return mix32(h);
+}
+
+float fade(float t)
+{
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+float gradientDot(uint hash, float x, float z)
+{
+    const float invSqrt2 = 0.70710678118654752440;
+    const uint g = hash & 7u;
+    if (g == 0u) return x;
+    if (g == 1u) return -x;
+    if (g == 2u) return z;
+    if (g == 3u) return -z;
+    if (g == 4u) return invSqrt2 * x + invSqrt2 * z;
+    if (g == 5u) return -invSqrt2 * x + invSqrt2 * z;
+    if (g == 6u) return invSqrt2 * x - invSqrt2 * z;
+    return -invSqrt2 * x - invSqrt2 * z;
+}
+
+float perlin(float x, float z, uint seed)
+{
+    const float floorX = floor(x);
+    const float floorZ = floor(z);
+    const int ix = int(floorX);
+    const int iz = int(floorZ);
+    const float fx = x - floorX;
+    const float fz = z - floorZ;
+
+    const uint h00 = hash2D(ix,     iz,     seed);
+    const uint h10 = hash2D(ix + 1, iz,     seed);
+    const uint h01 = hash2D(ix,     iz + 1, seed);
+    const uint h11 = hash2D(ix + 1, iz + 1, seed);
+
+    const float n00 = gradientDot(h00, fx,        fz);
+    const float n10 = gradientDot(h10, fx - 1.0, fz);
+    const float n01 = gradientDot(h01, fx,        fz - 1.0);
+    const float n11 = gradientDot(h11, fx - 1.0, fz - 1.0);
+
+    const float u = fade(fx);
+    const float v = fade(fz);
+    const float nx0 = n00 + u * (n10 - n00);
+    const float nx1 = n01 + u * (n11 - n01);
+    return clamp(nx0 + v * (nx1 - nx0), -1.0, 1.0);
+}
+
+float fbm(float x, float z)
+{
+    float sum = 0.0;
+    float amplitudeSum = 0.0;
+    float amplitude = 1.0;
+    float frequency = pc.noiseFrequency;
+
+    for (uint octave = 0u; octave < pc.octaveCount; ++octave)
+    {
+        const uint octaveSeed = mix32(pc.seed ^ (0x9e3779b9u * (octave + 1u)));
+        float n = perlin(x * frequency, z * frequency, octaveSeed);
+
+        if (pc.ridgeWeight > 0.0)
+        {
+            const float ridge = pow(max(0.0, 1.0 - abs(n)), pc.ridgeSharpness);
+            n = n * (1.0 - pc.ridgeWeight) + ridge * pc.ridgeWeight;
+        }
+
+        if (pc.detailWeight > 0.0 && octave > 0u)
+        {
+            const uint detailSeed = mix32(octaveSeed ^ 0xa511e9b3u);
+            const float detail = perlin(x * frequency * pc.detailFrequency + 19.19,
+                                        z * frequency * pc.detailFrequency - 7.73,
+                                        detailSeed);
+            n *= 1.0 + pc.detailWeight * 0.35 * detail;
+            n = clamp(n, -1.0, 1.0);
+        }
+
+        sum += n * amplitude;
+        amplitudeSum += amplitude;
+        amplitude *= pc.persistence;
+        frequency *= pc.lacunarity;
+    }
+
+    const float weightedAverage = sum / max(amplitudeSum, 1e-8);
+    float height = clamp(0.5 + 0.5 * weightedAverage, 0.0, 1.0);
+    if (pc.heightCurve != 1.0)
+        height = pow(height, pc.heightCurve);
+    return clamp(height, 0.0, 1.0);
+}
+
+float smoothstep01(float edge0, float edge1, float value)
+{
+    const float t = clamp((value - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+void main()
+{
+    const uint index = gl_GlobalInvocationID.x;
+    const uint count = pc.resolutionX * pc.resolutionZ;
+    if (index >= count)
+        return;
+
+    const uint x = index % pc.resolutionX;
+    const uint z = index / pc.resolutionX;
+    const float stepX = pc.sizeX / float(pc.resolutionX - 1u);
+    const float stepZ = pc.sizeZ / float(pc.resolutionZ - 1u);
+    const float localX = -pc.sizeX * 0.5 + float(x) * stepX;
+    const float localZ = -pc.sizeZ * 0.5 + float(z) * stepZ;
+    const float worldX = pc.sampleOriginX + localX;
+    const float worldZ = pc.sampleOriginZ + localZ;
+    float normalized = fbm(worldX, worldZ);
+
+    if (pc.islandWeight > 0.0)
+    {
+        const float nx = worldX / (pc.sizeX * 0.5);
+        const float nz = worldZ / (pc.sizeZ * 0.5);
+        const float radial = sqrt(nx * nx + nz * nz);
+        const float islandMask = 1.0 - smoothstep01(pc.islandRadius, 1.0, radial);
+        normalized *= (1.0 - pc.islandWeight) + pc.islandWeight * islandMask;
+        normalized = clamp(normalized, 0.0, 1.0);
+    }
+
+    if (pc.edgeFalloff > 0.0)
+    {
+        const float nx = abs(worldX) / (pc.sizeX * 0.5);
+        const float nz = abs(worldZ) / (pc.sizeZ * 0.5);
+        const float edgeDistance = clamp(1.0 - max(nx, nz), 0.0, 1.0);
+        const float mask = smoothstep01(0.0, 0.35, edgeDistance);
+        normalized *= (1.0 - pc.edgeFalloff) + pc.edgeFalloff * mask;
+        normalized = clamp(normalized, 0.0, 1.0);
+    }
+
+    heightBuffer.values[index] = normalized;
+}

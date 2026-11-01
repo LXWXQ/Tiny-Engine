@@ -9,3 +9,5 @@ build/
 
 # 忽略 VS Code 自己的配置（可选）
 .vscode/
+node_modules/
+node_modules.orig/

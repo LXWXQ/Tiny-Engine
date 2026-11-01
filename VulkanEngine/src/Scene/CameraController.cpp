@@ -33,29 +33,29 @@ void CameraController::applyExternalTransformEdits(const TransformComponent& cam
 {
 if (!hasAppliedState)
 {
-smoothPosition = cameraTransform.translation;
-yaw = smoothYaw = cameraTransform.rotation.y;
-pitch = smoothPitch = glm::clamp(cameraTransform.rotation.x,
+smoothPosition = cameraTransform.getTranslation();
+yaw = smoothYaw = cameraTransform.getEuler().y;
+pitch = smoothPitch = glm::clamp(cameraTransform.getEuler().x,
 -glm::half_pi<float>() + 0.01f, glm::half_pi<float>() - 0.01f);
 focusPoint = smoothPosition + cameraForward(smoothYaw, smoothPitch) * distance;
 hasAppliedState = true;
 return;
 }
 
-const glm::vec3 positionDelta = cameraTransform.translation - lastAppliedPosition;
+const glm::vec3 positionDelta = cameraTransform.getTranslation() - lastAppliedPosition;
 const bool positionEdited = glm::dot(positionDelta, positionDelta) > kPositionEpsilonSq;
-const bool yawEdited = std::abs(cameraTransform.rotation.y - lastAppliedYaw) > kRotationEpsilon;
-const bool pitchEdited = std::abs(cameraTransform.rotation.x - lastAppliedPitch) > kRotationEpsilon;
+const bool yawEdited = std::abs(cameraTransform.getEuler().y - lastAppliedYaw) > kRotationEpsilon;
+const bool pitchEdited = std::abs(cameraTransform.getEuler().x - lastAppliedPitch) > kRotationEpsilon;
 
 // The ImGui camera panel may edit the transform between frames. Adopt
 // those values so the controller does not snap the camera back to stale
 // internal state.
 if (positionEdited)
-smoothPosition = cameraTransform.translation;
+smoothPosition = cameraTransform.getTranslation();
 if (yawEdited)
-yaw = smoothYaw = cameraTransform.rotation.y;
+yaw = smoothYaw = cameraTransform.getEuler().y;
 if (pitchEdited)
-pitch = smoothPitch = glm::clamp(cameraTransform.rotation.x,
+pitch = smoothPitch = glm::clamp(cameraTransform.getEuler().x,
 -glm::half_pi<float>() + 0.01f, glm::half_pi<float>() - 0.01f);
 
 if (positionEdited || yawEdited || pitchEdited)
@@ -78,11 +78,11 @@ cursorCaptured = false;
 }
 firstMouse = true;
 
-cameraTransform.translation = smoothPosition;
+cameraTransform.setTranslation(smoothPosition);
 cameraTransform.setEuler({ smoothPitch, smoothYaw, 0.0f });
-lastAppliedPosition = cameraTransform.translation;
-lastAppliedYaw = cameraTransform.rotation.y;
-lastAppliedPitch = cameraTransform.rotation.x;
+lastAppliedPosition = cameraTransform.getTranslation();
+lastAppliedYaw = cameraTransform.getEuler().y;
+lastAppliedPitch = cameraTransform.getEuler().x;
 return;
 }
 
@@ -174,11 +174,11 @@ smoothPosition = focusPoint - cameraForward(smoothYaw, smoothPitch) * distance;
 
 // Write back the actually rendered state. The next frame can then tell
 // controller updates apart from external edits.
-cameraTransform.translation = smoothPosition;
+cameraTransform.setTranslation(smoothPosition);
 cameraTransform.setEuler({ smoothPitch, smoothYaw, 0.0f });
-lastAppliedPosition = cameraTransform.translation;
-lastAppliedYaw = cameraTransform.rotation.y;
-lastAppliedPitch = cameraTransform.rotation.x;
+lastAppliedPosition = cameraTransform.getTranslation();
+lastAppliedYaw = cameraTransform.getEuler().y;
+lastAppliedPitch = cameraTransform.getEuler().x;
 }
 
 void CameraController::onScroll(double, double yoffset)

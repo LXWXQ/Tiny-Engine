@@ -39,8 +39,10 @@ void main()
 
     // G-Buffer 里存的是「世界空间」法线。
     // 长度为 0 是本引擎约定的"非几何"标记（天空盒写的就是 0），用来跳过遮蔽计算。
-    vec3 normalWorld = texture(texNormal, inUV).xyz;
-    if (length(normalWorld) < 0.1) {
+    vec4 normalSample = texture(texNormal, inUV);
+    vec3 normalWorld = normalSample.xyz;
+    // .w is an SSAO policy mask: 0 = terrain / grid / skybox opt out.
+    if (normalSample.w < 0.5 || length(normalWorld) < 0.1) {
         outFragColor = vec4(1.0);
         return;
     }

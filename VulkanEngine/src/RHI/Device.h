@@ -41,6 +41,8 @@ public:
 	VkQueue getPresentQueue() { return presentQueue; }
 	VkQueue getComputeQueue() { return computeQueue; }
 	bool hasDedicatedComputeQueue() const { return dedicatedComputeQueue; }
+	bool supportsMultiDrawIndirect() const { return multiDrawIndirectSupported; }
+	bool supportsDrawIndirectCount() const { return drawIndirectCountSupported; }
 	VkInstance getInstance() { return instance; }
 
 // P2-4：VK_EXT_device_fault。设备不支持时 reportDeviceFault() 返回 false。
@@ -89,6 +91,8 @@ private:
 	VkQueue presentQueue;
 	VkQueue computeQueue;
 	bool dedicatedComputeQueue = false;
+	bool multiDrawIndirectSupported = false;
+	bool drawIndirectCountSupported = false;
 bool deviceFaultSupported = false;
 // P2-4：扩展函数必须经 vkGetDeviceProcAddr 获取（导入库不导出它）。
 PFN_vkGetDeviceFaultInfoEXT pfnGetDeviceFaultInfoEXT = nullptr;

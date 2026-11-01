@@ -21,7 +21,7 @@ void DescriptorManager::init(Device& dev, uint32_t maxMaterials)
 	// 描述符总数不变（还是 maxMaterials * 4），但 **set 数从 maxMaterials 降到 1**。
 	std::vector<VkDescriptorPoolSize> poolSizes = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         maxMaterials + 16 },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxMaterials * 4 + 96 },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxMaterials * 4 + 144 },
 		// D-5：compute pass 的 SSBO。数量很小，但要显式计入，否则
 		// ComputeProbePass 在 vkAllocateDescriptorSets 时会直接失败。
 		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         64 },
@@ -33,7 +33,7 @@ void DescriptorManager::init(Device& dev, uint32_t maxMaterials)
 	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	// TD-04: required for descriptor arrays marked UPDATE_AFTER_BIND.
 	poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-	poolInfo.maxSets = maxMaterials + 64;
+	poolInfo.maxSets = maxMaterials + 72;
 	poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
 	poolInfo.pPoolSizes = poolSizes.data();
 
@@ -42,6 +42,7 @@ void DescriptorManager::init(Device& dev, uint32_t maxMaterials)
 
 	createGlobalLayout();
 	createMaterialLayout(maxMaterials);
+	createTerrainLayout();
 
 	// ---- D-3：材质 set 只申请一个，长度 = 材质容量 ----
 	//
@@ -67,6 +68,11 @@ void DescriptorManager::init(Device& dev, uint32_t maxMaterials)
 	if (vkAllocateDescriptorSets(device->getDevice(), &allocInfo, &materialSet) != VK_SUCCESS)
 		throw std::runtime_error("DescriptorManager: bindless 材质 set 分配失败");
 
+	// Terrain sets: four bounded sets, each with 12 sampler bindings
+	// (4 albedo + 4 normal + 4 packed height/roughness). B-08 loads them lazily.
+	for (uint32_t i = 0; i < kTerrainSetCount; ++i)
+		terrainSets[i] = allocateSet(terrainSetLayout);
+
 	// 倒序压栈：这样第一次 allocate 拿到的是槽位 0，便于调试时对照
 	for (uint32_t i = maxMaterials; i > 0; --i)
 		freeSlots.push_back(i - 1);
@@ -74,6 +80,7 @@ void DescriptorManager::init(Device& dev, uint32_t maxMaterials)
 	std::cout << "[DescriptorManager] Bindless arena ready: 1 set, "
 		<< maxMaterials << " material slots ("
 		<< (maxMaterials * 4) << " sampler descriptors in 4 arrays).\n";
+	std::cout << "[DescriptorManager] Terrain layer sets ready: 4 sets x 12 fixed sampler bindings.\n";
 }
 
 void DescriptorManager::cleanup()
@@ -88,10 +95,12 @@ void DescriptorManager::cleanup()
 	lastSubmittedFrameQuery = nullptr;
 	globalSets.clear();
 	materialSet = VK_NULL_HANDLE;
+	terrainSets.fill(VK_NULL_HANDLE);
 	materialCapacity = 0;
 
 	if (globalSetLayout) vkDestroyDescriptorSetLayout(device->getDevice(), globalSetLayout, nullptr);
 	if (materialSetLayout) vkDestroyDescriptorSetLayout(device->getDevice(), materialSetLayout, nullptr);
+	if (terrainSetLayout) vkDestroyDescriptorSetLayout(device->getDevice(), terrainSetLayout, nullptr);
 	if (pool) vkDestroyDescriptorPool(device->getDevice(), pool, nullptr);
 }
 
@@ -180,6 +189,60 @@ void DescriptorManager::createMaterialLayout(uint32_t capacity)
 
 	if (vkCreateDescriptorSetLayout(device->getDevice(), &layoutInfo, nullptr, &materialSetLayout) != VK_SUCCESS)
 		throw std::runtime_error("DescriptorManager: bindless 材质布局创建失败");
+}
+
+void DescriptorManager::createTerrainLayout()
+{
+	// Set 2 is deliberately separate from the bindless material arena. Terrain
+	// needs four different albedo+normal pairs in one draw call; packing them
+	// into one material slot would require a texture array that Texture does not
+	// expose. Fixed bindings keep the normal material path untouched.
+	std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
+	for (uint32_t i = 0; i < bindings.size(); ++i)
+	{
+		bindings[i].binding = i;
+		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		bindings[i].descriptorCount = 1;
+		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	}
+
+	VkDescriptorSetLayoutCreateInfo layoutInfo{};
+	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+	layoutInfo.pBindings = bindings.data();
+	if (vkCreateDescriptorSetLayout(device->getDevice(), &layoutInfo, nullptr, &terrainSetLayout) != VK_SUCCESS)
+		throw std::runtime_error("DescriptorManager: terrain layer layout failed!");
+}
+
+void DescriptorManager::updateTerrainTextures(
+uint32_t setIndex,
+const std::array<VkDescriptorImageInfo, 4>& albedoInfos,
+const std::array<VkDescriptorImageInfo, 4>& normalInfos,
+const std::array<VkDescriptorImageInfo, 4>& heightRoughnessInfos)
+{
+if (setIndex >= kTerrainSetCount || terrainSets[setIndex] == VK_NULL_HANDLE)
+throw std::runtime_error("DescriptorManager: terrain set is not allocated");
+const VkDescriptorSet terrainSet = terrainSets[setIndex];
+
+std::array<VkDescriptorImageInfo, 12> infos{};
+for (uint32_t i = 0; i < 4; ++i)
+{
+infos[i] = albedoInfos[i];
+infos[i + 4] = normalInfos[i];
+infos[i + 8] = heightRoughnessInfos[i];
+}
+
+std::array<VkWriteDescriptorSet, 12> writes{};
+for (uint32_t i = 0; i < writes.size(); ++i)
+{
+writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+writes[i].dstSet = terrainSet;
+writes[i].dstBinding = i;
+writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+writes[i].descriptorCount = 1;
+writes[i].pImageInfo = &infos[i];
+}
+vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 VkDescriptorSetLayout DescriptorManager::createSetLayout(const std::vector<VkDescriptorSetLayoutBinding>& bindings)

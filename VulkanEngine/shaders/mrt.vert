@@ -16,6 +16,10 @@ layout(location = 4) out vec3 fragPosLocal;
 // 必须用 local normal（不是 world normal）：物体旋转时棋盘格应该"贴在物体上"，
 // 而不是跟着世界轴换投影方向。
 layout(location = 5) out vec3 fragNormalLocal;
+// B-03: GPU-selected indirect draws encode per-command LOD blend/mode in
+// firstInstance; pass it flat to the fragment dither path.
+layout(location = 6) flat out float fragTerrainLodBlend;
+layout(location = 7) flat out uint fragTerrainLodBlendMode;
 
 layout(set = 0, binding = 0) uniform GlobalUbo
 {
@@ -40,6 +44,14 @@ layout(push_constant) uniform Push
     uint albedoFallback;
     float checkerScale;
     vec4 checkerUvTransform;
+    uint terrainMode;
+    float terrainMinY;
+    float terrainHeightRange;
+    float terrainDetailStrength;
+    float terrainUvTiling;
+    uint terrainMaterialStyle;
+    float terrainLodBlend;
+    uint terrainLodBlendMode;
 } push;
 
 void main() 

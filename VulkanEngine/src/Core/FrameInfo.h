@@ -93,6 +93,20 @@ float checkerScale = 1.0f;
 	// 默认只有 4 字节对齐。不加这个会悄悄错开 8 字节，材质字段全乱。
 	alignas(16) glm::vec4 checkerUvTransform{ 1.0f, 1.0f, 0.0f, 0.0f };
 
+	// 1 = 顶点色程序化地形。该分支在 G-Buffer 法线写入之后、材质采样之前生效。
+	uint32_t terrainMode = 0;
+
+	// Stage 6 terrain material parameters fill the 32-byte aligned tail.
+	float terrainMinY = 0.0f;
+	float terrainHeightRange = 1.0f;
+	float terrainDetailStrength = 0.65f;
+	float terrainUvTiling = 1.0f;
+	uint32_t terrainMaterialStyle = 0;
+	// Dither-based LOD transition: blend is incoming coverage. Mode 0 = off,
+	// 1 = outgoing LOD, 2 = incoming LOD.
+	float terrainLodBlend = 1.0f;
+	uint32_t terrainLodBlendMode = 0;
+
 	// 偏移必须在编译期钉死，否则"某个字段悄悄移位"会导致材质错乱，
 	// 而且这类错乱看起来像"贴图加载错了"，极难往回追。
 	static constexpr size_t kMaterialOffset = 2 * sizeof(glm::mat4);
@@ -109,7 +123,23 @@ static_assert(offsetof(SimplePushConstantData, checkerScale) == SimplePushConsta
 "checkerScale must follow albedoFallback");
 static_assert(offsetof(SimplePushConstantData, checkerUvTransform) == SimplePushConstantData::kMaterialOffset + 32,
 	"checkerUvTransform must be 16-byte aligned after checkerScale");
-static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 48,
+static_assert(offsetof(SimplePushConstantData, terrainMode) == SimplePushConstantData::kMaterialOffset + 48,
+"terrainMode must be at the end of the material push block");
+static_assert(offsetof(SimplePushConstantData, terrainMinY) == SimplePushConstantData::kMaterialOffset + 52,
+"terrainMinY must follow terrainMode");
+static_assert(offsetof(SimplePushConstantData, terrainHeightRange) == SimplePushConstantData::kMaterialOffset + 56,
+"terrainHeightRange must follow terrainMinY");
+static_assert(offsetof(SimplePushConstantData, terrainDetailStrength) == SimplePushConstantData::kMaterialOffset + 60,
+"terrainDetailStrength must follow terrainHeightRange");
+static_assert(offsetof(SimplePushConstantData, terrainUvTiling) == SimplePushConstantData::kMaterialOffset + 64,
+"terrainUvTiling must follow terrainDetailStrength");
+static_assert(offsetof(SimplePushConstantData, terrainMaterialStyle) == SimplePushConstantData::kMaterialOffset + 68,
+"terrainMaterialStyle must follow terrainUvTiling");
+static_assert(offsetof(SimplePushConstantData, terrainLodBlend) == SimplePushConstantData::kMaterialOffset + 72,
+"terrainLodBlend must follow terrainMaterialStyle");
+static_assert(offsetof(SimplePushConstantData, terrainLodBlendMode) == SimplePushConstantData::kMaterialOffset + 76,
+"terrainLodBlendMode must follow terrainLodBlend");
+static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 80,
 	"push constant size must match GLSL layout");
 
 struct EngineSettings
@@ -125,6 +155,9 @@ struct EngineSettings
 
 	bool ssrEnabled = false;
 	bool shadowEnabled = false;
+	// B-03: compare GPU-selected LOD/visibility against a CPU mirror. Enabled
+	// only by --terrain-test; production frames skip the mirror entirely.
+	bool terrainGpuSelectionSelfTest = false;
 
 	glm::vec4 directionalLightDir{ -1.0f, -1.0f, 1.0f, 0.0f };
 	glm::vec4 directionalLightColor{ 1.0f, 1.0f, 1.0f, 1.0f };
@@ -168,6 +201,17 @@ struct RenderTelemetry
 	uint32_t drawCalls = 0;
 	uint32_t triangles = 0;
 	uint32_t vertices = 0;
+	uint32_t subMeshesCulled = 0;
+	uint32_t lodSubMeshesSkipped = 0;
+	uint32_t terrainLod0Chunks = 0;
+	uint32_t terrainLod1Chunks = 0;
+	uint32_t terrainLod2Chunks = 0;
+	uint32_t terrainLodBlends = 0;
+	uint32_t terrainLodSwitches = 0;
+	uint32_t terrainIndirectGroups = 0;
+	uint32_t terrainMaterialBatches = 0;
+	uint32_t terrainMaterialSwitches = 0;
+	uint32_t terrainMaterialFallbacks = 0;
 
 	// D-3：描述符集绑定次数。
 	// 单列一个计数器是因为 bindless 的收益**只体现在这个数字上** ——
@@ -180,6 +224,17 @@ struct RenderTelemetry
 		drawCalls = 0;
 		triangles = 0;
 		vertices = 0;
+		subMeshesCulled = 0;
+		lodSubMeshesSkipped = 0;
+		terrainLod0Chunks = 0;
+		terrainLod1Chunks = 0;
+		terrainLod2Chunks = 0;
+		terrainLodBlends = 0;
+		terrainLodSwitches = 0;
+		terrainIndirectGroups = 0;
+		terrainMaterialBatches = 0;
+		terrainMaterialSwitches = 0;
+		terrainMaterialFallbacks = 0;
 		descriptorBinds = 0;
 	}
 };

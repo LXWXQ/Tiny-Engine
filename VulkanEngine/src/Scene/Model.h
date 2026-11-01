@@ -98,6 +98,20 @@ struct SubMesh
     // 该子网格的材质没有 albedo 贴图（会采样到默认白纹理）。
     // 渲染时用程序化棋盘格代替，避免"没有纹理的网格"变成一坨纯白。
     bool albedoFallback = false;
+
+    // Optional local-space bounds for per-submesh frustum culling. Terrain
+    // chunks set these; ordinary OBJ/glTF submeshes leave hasBounds=false.
+    bool hasBounds = false;
+    glm::vec3 boundsMin{ 0.0f };
+    glm::vec3 boundsMax{ 0.0f };
+
+    // Terrain LOD grouping. GeometrySystem draws exactly one terrainLod per
+    // (terrainChunkX, terrainChunkZ) pair. Other submeshes leave this false.
+    bool isTerrainChunk = false;
+    uint32_t terrainChunkX = 0;
+    uint32_t terrainChunkZ = 0;
+    uint32_t terrainLod = 0;
+    uint32_t terrainSurfaceIndexCount = 0;
 };
 
 class Model
@@ -115,6 +129,18 @@ public:
     Model(Device& device, VkCommandPool commandPool, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
     Model(Device& device, VkCommandPool commandPool, const Model::Builder& builder);
     ~Model();
+
+    // B-04: adopt device-local buffers produced by TerrainGpuMeshBuilder.
+    // Ownership of both VMA allocations transfers to the returned Model.
+    static std::shared_ptr<Model> createFromGpuMesh(
+        Device& device,
+        VkBuffer vertexBuffer, VmaAllocation vertexAllocation, uint32_t vertexCount,
+        VkBuffer indexBuffer, VmaAllocation indexAllocation, uint32_t indexCount,
+        std::vector<SubMesh> subMeshes,
+        std::vector<glm::vec3> pickingPositions,
+        std::vector<uint32_t> pickingIndices,
+        const glm::vec3& boundsMin, const glm::vec3& boundsMax,
+        const glm::vec2& uvMin, const glm::vec2& uvMax, bool uvValid);
 
     Model(const Model&) = delete;
     Model& operator=(const Model&) = delete;
@@ -163,6 +189,16 @@ public:
     glm::vec2 getUvMax() const { return uvMax; }
 
 private:
+    struct GpuMeshTag {};
+    Model(Device& device, GpuMeshTag,
+          VkBuffer vertexBuffer, VmaAllocation vertexAllocation, uint32_t vertexCount,
+          VkBuffer indexBuffer, VmaAllocation indexAllocation, uint32_t indexCount,
+          std::vector<SubMesh> subMeshes,
+          std::vector<glm::vec3> pickingPositions,
+          std::vector<uint32_t> pickingIndices,
+          const glm::vec3& boundsMin, const glm::vec3& boundsMax,
+          const glm::vec2& uvMin, const glm::vec2& uvMax, bool uvValid);
+
     void createVertexBuffers(const std::vector<Vertex>& vertices, VkCommandPool commandPool);
     void createIndexBuffers(const std::vector<uint32_t>& indices, VkCommandPool commandPool);
     void uploadViaStaging(VkBuffer dstBuffer, const void* srcData, VkDeviceSize size,

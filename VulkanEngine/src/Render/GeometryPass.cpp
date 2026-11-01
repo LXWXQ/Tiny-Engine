@@ -5,9 +5,11 @@
 GeometryPass::GeometryPass(Device& device, const std::array<GBuffer*, kFramesInFlight>& gBuffers,
                            RenderGraph& graph, RenderResources& resources,
                            VkDescriptorSetLayout globalSetLayout,
-                           VkDescriptorSetLayout materialSetLayout)
+                           VkDescriptorSetLayout materialSetLayout,
+                           VkDescriptorSetLayout terrainSetLayout)
     : vulkanDevice(device), gBuffers(gBuffers), renderGraph(graph), resources(resources),
-      globalSetLayout(globalSetLayout), materialSetLayout(materialSetLayout)
+      globalSetLayout(globalSetLayout), materialSetLayout(materialSetLayout),
+      terrainSetLayout(terrainSetLayout)
 {
 }
 
@@ -42,7 +44,7 @@ void GeometryPass::init()
 
     // 所有 G-Buffer 的格式相同，几何管线只建一份。
     geometrySystem = std::make_unique<GeometrySystem>(vulkanDevice, gBuffers[0]->getDepth().format,
-                                                      globalSetLayout, materialSetLayout);
+                                                      globalSetLayout, materialSetLayout, terrainSetLayout);
 }
 
 void GeometryPass::resize(VkExtent2D extent)
@@ -77,6 +79,15 @@ void GeometryPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     clearColor.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
     VkClearValue clearDepth{};
     clearDepth.depthStencil = { 1.0f, 0 };
+
+    // B-03: dispatch GPU terrain selection before dynamic rendering begins.
+    // This pass has no attachments, so RenderGraph executes it outside a render
+    // pass while still recording onto the graphics command buffer.
+    auto& selectionPass = graph.addGraphicsPass("TerrainGpuSelection");
+    selectionPass.execute([this, &frameInfo](VkCommandBuffer cmd)
+    {
+        geometrySystem->prepareTerrainGpuSelection(cmd, frameInfo);
+    });
 
     auto& pass = graph.addGraphicsPass("Geometry");
     pass.writeColor(resources.gbPosition[frame], VK_ATTACHMENT_LOAD_OP_CLEAR, clearColor);

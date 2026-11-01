@@ -5,7 +5,7 @@ type: meta
 scope: docs/
 read-when: 第一次接触本项目、或要新增/移动/删除文档
 size: ~200 行
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 # 文档系统总纲
 
@@ -81,7 +81,8 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     │   ├── scene-ecs.md         EnTT / Transform 层级 / 空间索引
     │   ├── jobsystem.md         worker pool / parallelFor / 限制
     │   ├── config.md            EngineConfig v2 / 迁移 / 原子写
-    │   └── imgui.md             面板 / 后端 / ASCII 约束
+    │   ├── imgui.md             面板 / 后端 / ASCII 约束
+    │   └── terrain.md           程序化地形：参数 / 生成 / 渲染 / 存读
     ├── 40-build/
     │   ├── README.md
     │   ├── dependencies.md      8 个固定版本 / 目录布局 / setup 脚本
@@ -90,7 +91,7 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     ├── 50-validation/
     │   ├── README.md
     │   ├── cli-reference.md     全部命令行参数
-    │   ├── test-matrix.md       20 项回归矩阵与判据
+    │   ├── test-matrix.md       21 项回归矩阵与判据
     │   └── acceptance.md        验收标准与"结果可信度"三规则
     ├── 60-debug-profiling/
     │   ├── README.md
@@ -101,11 +102,14 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     ├── 70-status/
     │   ├── README.md
     │   ├── milestones.md        里程碑与实测基线
+    │   ├── milestones-archive.md 历史里程碑归档（D-8～D-20）
+    │   ├── backlog.md          后续任务台账
     │   ├── tech-debt.md         当前技术债
     │   └── known-limits.md      已知边界
     └── 80-roadmap/
         ├── README.md
-        └── roadmap.md           F1~F7 主功能路线
+        ├── roadmap.md           F1~F7 主功能路线
+        └── terrain-plan.md      程序化地形实施方案（F2 / D-18）
 ```
 
 **层次约束**
@@ -184,6 +188,7 @@ updated: 2026-10-30
 | systems | [jobsystem](30-systems/jobsystem.md) | 用或改并行任务 |
 | systems | [config](30-systems/config.md) | 改可调参数 / 配置格式 |
 | systems | [imgui](30-systems/imgui.md) | 改面板 |
+| systems | [terrain](30-systems/terrain.md) | 改地形生成 / 网格 / 顶点色 / 地形存读 |
 | build | [dependencies](40-build/dependencies.md) | 换机器 / 加依赖 |
 | build | [build](40-build/build.md) | 每次构建 |
 | build | [troubleshooting](40-build/troubleshooting.md) | 编不过 / 跑不起来 |
@@ -195,9 +200,12 @@ updated: 2026-10-30
 | debug | [diagnostics](60-debug-profiling/diagnostics.md) | 改验证层/计时/截图 |
 | debug | [pitfalls](60-debug-profiling/pitfalls.md) | **改代码前必读** |
 | status | [milestones](70-status/milestones.md) | 对照基线 |
+| status | [milestones-archive](70-status/milestones-archive.md) | 回看历史逐轮记录 |
+| status | [backlog](70-status/backlog.md) | 下一项做什么 |
 | status | [tech-debt](70-status/tech-debt.md) | 决定下一步 |
 | status | [known-limits](70-status/known-limits.md) | 判断需求可行性 |
 | roadmap | [roadmap](80-roadmap/roadmap.md) | 开新主功能前 |
+| roadmap | [terrain-plan](80-roadmap/terrain-plan.md) | 做地形 F2 / D-18 |
 | editor | [editor](90-editor/README.md) | **做编辑器任何改动前** |
 | editor | [architecture](90-editor/architecture.md) | 加面板 / 改接缝 |
 | editor | [commands](90-editor/commands.md) | 加可撤销操作 |

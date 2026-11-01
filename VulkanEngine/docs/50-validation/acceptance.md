@@ -5,7 +5,7 @@ type: validation
 scope: 空（判据与方法论）
 read-when: 要判断"这次改动算不算通过"，或怀疑回归结论不可信
 size: ~140 行
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 # 验收标准与结果可信度
@@ -17,7 +17,7 @@ updated: 2026-10-30
 | # | 判据 |
 |---|---|
 | 1 | 构建**零警告** |
-| 2 | `tools/Validate.ps1` **20 项全 PASS** |
+| 2 | `tools/Validate.ps1` **21 项全 PASS** |
 | 3 | 每项 **stderr 0 字节** |
 | 4 | 每项 `[Validation] errors=0 warnings=0` |
 | 5 | 涉及画质/性能时：`Baseline.ps1 -Action Diff` 无回归 |

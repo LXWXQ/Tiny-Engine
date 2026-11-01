@@ -4,8 +4,8 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~170 行
-updated: 2026-10-31
+size: ~430 行
+updated: 2026-11-02
 ---
 
 # 里程碑与实测基线
@@ -41,7 +41,7 @@ updated: 2026-10-31
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 20 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 21 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒 = `draw calls 104` | `[Perf]` 行 |
@@ -68,181 +68,529 @@ updated: 2026-10-31
 2. **成对更新**本文件 §2 与根 [`README.md`](../../README.md) §6；
 3. 记录测法（帧数、是否剔除预热、构建配置），否则数字无法复现。
 
-## D-8：场景编辑器框架
+> D-8～D-20 的逐轮细节已归档到 [milestones-archive](milestones-archive.md)；
+> 本页保留 D-21 起的近期里程碑与当前实测基线。
+## D-21：地形阶段 6 收尾（height/roughness + Surface Style）
 
-- **目标**：把引擎层和编辑器层分开，让后续加编辑功能不必再动 RHI/Render。
-- **产出**
-  - `src/Editor/` 独立层：`EditorContext`（EngineServices 回调）/ `EditorState` /
-    `EditorLayer` / `CommandStack` / `Commands` / `SceneSerializer` / 三个面板
-  - `scene::SceneDescription` 纯数据结构，作为`registry <-> JSON` 的中间层
-  - `NameComponent`、`Model::getSourcePath()`、`Texture::getPath()` 用于序列化
-  - `--editor` 开关；关闭时运行时行为与改造前一致
-- **实测**
-  - `--editor --selftest 70`：`[Editor] selfTest PASS`，`[Validation] errors=0 warnings=0`
-  - 运行时 `--selftest 40`：同样 0 error / 0 warning，无回归
-- **自检抓到的真 bug**：`DeleteEntityCommand` 的 `rebuild` 闭包捕获了
-  `registry.try_get` 返回的**指针**，`apply()` 销毁实体后悬空，撤销删除失效。
-  改为 `std::optional<T>` 值拷贝后通过。见 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 24。
+- **PBR 纹理层**：`TerrainTextureGenerator` 在每层 albedo/normal 之外再生成
+  height 与 roughness；`TerrainMaterial` 上传 16 张 256² 纹理。
+  Terrain Set 2 扩展为 16 个固定 sampler：
+  `0~3 albedo / 4~7 normal / 8~11 height / 12~15 roughness`。
+- **Shader**：height 对四层基础权重做 0.72~1.28 调制并重新归一化；
+  roughness 按层采样后混合，再叠加低频噪声。albedo 的双尺度抗平铺、
+  normal 切线基和地形 SSAO opt-out 保持不变。
+- **材质变体**：`TerrainConfig::surfaceStyle` 支持
+  Natural / Arid / Alpine / Lush；只调整层权重、色调、法线强度和粗糙度，
+  不重建纹理或网格。Inspector 增加 `Surface Style` 下拉框。
+- **布局/序列化**：push constant 的 `terrainMaterialStyle` 填入原 padding，
+  总大小仍为 208 字节。地形 JSON version 升到 3，新增 `surfaceStyle`；
+  旧 v1/v2 由默认值 Natural 补齐。
+- **测试**：
+  - `TerrainSelfTest` 覆盖非法 Style、16 张纹理的尺寸/确定性/非恒定，
+    以及三个 shader-only 字段不触发 geometry equality；
+  - 编辑器 roundTrip 覆盖 `surfaceStyle=Alpine`、`uvTiling=1.7`；
+  - `terrain-render` 覆盖 16-sampler Set 2 与 257² 输出。
+- **验证（2026-11-01）**：
+  - `[TerrainMaterial] 4 procedural layers ready | albedo+normal+height+roughness 256x256`
+  - `[Terrain] selfTest PASS`
+  - `[Editor] scene selfTest PASS | create/undo/redo + terrain create/generate`
+  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，
+    stderr 全 0 字节，`[Validation] errors=0 warnings=0`。
+  - p3 baseline（60 帧、warmup 30）通过；首轮 Present 计时抖动在同代码
+    复跑时消失（Present -0.45%）。
+- **阶段状态**：阶段 6 当前范围已完成。后续为外部美术纹理替换接口，
+  以及阶段 7 的 JobSystem 异步 / chunk / LOD / 增量 SpatialIndex。
+## D-22：地形外部纹理覆盖接口
 
-## D-9：编辑器可用性补完
+- **加载规则**：`TerrainMaterial` 检查 `Resources/Texture/Terrain/` 下是否
+  同时存在 16 张 PNG：
+  `albedo/normal/height/roughness` × `sand/grass/rock/snow`。
+  全部存在时优先加载外部资产；缺任意一张则整套回退到内置程序化纹理，
+  避免部分覆盖造成层间风格/UV 不一致。
+- **格式**：albedo 按 sRGB 加载；normal/height/roughness 按线性 UNORM 加载。
+  命名与要求写在 `Resources/Texture/Terrain/README.txt`。
+- **范围**：这是全局地形材质覆盖，不进入场景 JSON，也不支持每个地形独立
+  贴图路径；Level 级风格仍由 `surfaceStyle` 控制。
+- **验证（2026-11-01）**：
+  - 临时生成 16 张 8×8 RGBA PNG 后启动：
+    `[TerrainMaterial] 4 external PBR layers ready | .../Resources/Texture/Terrain/`
+    `[Validation] errors=0 warnings=0`，stderr 0 字节；
+  - 删除测试 PNG 后启动：回到
+    `[TerrainMaterial] 4 procedural layers ready | albedo+normal+height+roughness 256x256`；
+  - `terrain-render` 与编辑器 roundTrip 继续通过；
+  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，
+    stderr 全 0 字节，`[Validation] errors=0 warnings=0`。
+- **未附带**：仓库不附带外部美术纹理，默认仍使用确定性程序化纹理。
+## D-23：地形阶段 7 第一轮（JobSystem 异步生成）
 
-- **离屏视口（TD-09）**：PresentPass 写视口纹理，UiCompositePass 只画 ImGui 到交换链。
-  相机纵横比改用视口尺寸（此前按窗口算会横向拉伸）。
-- **尺寸防抖**：连续 2 帧不变才重建纹理；重建走 `resizeOwnedTexture` 原地进行
-  （最初每次 `createTexture` 会以约 270MB/s 泄漏显存）。
-- **资产面板**：扫描 `Resources/Models`（实测 7 个模型），双击通过
-  `CreateEntityCommand` 创建实体。redo 复用模型快照，不重新读盘。
-- **纯 3D 截图**：`--screenshot-viewport`，输出视口纹理（1300x861）。
-- **实测**
-  - `--editor --selftest 40`：`[Editor] scene selfTest PASS | create/undo/redo via command stack`
-  - `--editor --screenshot-viewport`：`[Validation] errors=0 warnings=0`
-  - `tools/Validate.ps1`：20/20 PASS，stderr 0 字节
+- **CPU 异步**：新增 `Scene::requestRegenerateTerrain()`。主线程复制不可变
+  `TerrainConfig`，把 `HeightField` + `TerrainMeshBuilder` 提交给 JobSystem；
+  worker 不触碰 Vulkan 对象。
+- **主线程上传**：`Scene::update()` 每帧检查 `JobHandle::isComplete()`，
+  完成后才构造 `Model`（staging 上传）、替换 `MeshComponent`、刷新 Bounds 与
+  SpatialIndex。生成期间旧网格继续渲染。
+- **版本令牌**：每次请求分配全局递增 request serial；同一实体可以被新请求
+  supersede，旧任务结果与回调静默丢弃，避免慢任务覆盖新参数。
+- **命令栈**：Inspector Generate 不再同步等待；成功回调在主线程构造
+  `RegenerateTerrainCommand`，保留 old/new Mesh 的 undo/redo 语义。生成中按钮
+  禁用并显示 `Generating on JobSystem...`。
+- **生命周期**：`TerrainComponent::generating` 供 UI 状态；`clearEntities()` 丢弃
+  待完成回调；`Scene::cleanup()` 等待所有 worker 完成后再销毁 Scene 依赖。
+  `waitForTerrainGeneration()` 仅供自检/诊断使用。
+- **保留同步 API**：`createTerrainEntity()`、`regenerateTerrain()`、
+  场景加载和 `--terrain-test` 初始化仍可同步执行；异步目前只覆盖显式重建。
+- **验证（2026-11-01）**：
+  - `[Editor] async terrain generation PASS | stale discarded, revision=3`：
+    连续两个请求只安装最新结果；
+  - `[Terrain] async generation PASS | revision=2 | 66049 vertices, 393216 indices`：
+    `--terrain-test` 覆盖 JobSystem + 主线程 Model 上传；
+  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，
+    stderr 全 0 字节，`[Validation] errors=0 warnings=0`。
+- **下一轮**：chunk/LOD/邻接缝合、增量 SpatialIndex、GPU compute 生成；
+  当前无任务取消，supersede 的 CPU job 会跑完，GPU 上传仍有短帧尖峰。
+## D-24：阶段 7 第二轮（协作取消 + 增量空间索引）
 
-## D-10：视口交互（点选 + 三轴手柄）
+- **地形协作取消**：`PendingTerrainBuild::cancelRequested` 使用 `atomic<bool>`；
+  新请求 supersede 旧任务时置位，`HeightField::build()` 与
+  `TerrainMeshBuilder::build()` 每个顶点行检查并尽早退出。即使旧任务已接近
+  完成，request serial 仍保证其结果与回调被丢弃。
+- **编辑器**：Generate 在生成期间仍可再次点击；新请求使用当前参数 supersede
+  旧任务，状态显示 `Generating on JobSystem... press Generate to replace.`。
+  旧网格一直保留到最新任务完成。
+- **SpatialIndex 增量更新**：`SpatialIndex` 为每个 entity 记录占用 cell，
+  新增 `remove()`，`insert()` 变成 upsert（先移除旧 bucket）。`Scene` 维护
+  `indexedBounds`，只在世界 AABB 变化时更新 grid，并删除 destroyed/skybox
+  的旧候选。
+- **仍未全量 dirty**：世界变换与逐实体 AABB 计算仍每帧扫描全部 Mesh；
+  后续 D-27/D-28 已加入 Transform/Bounds dirty 与显式 dirty 队列。
+- **验证（2026-11-01）**：
+  - `[Terrain] selfTest PASS` 新增取消标志早退断言；
+  - `[Scene] ECS/spatial selfTest PASS` 新增 SpatialIndex upsert 无残留 bucket、
+    remove 幂等与 entryCount 断言；
+  - `[Editor] async terrain generation PASS | stale discarded` 继续覆盖
+    supersede；
+  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，stderr 全 0，
+    `[Validation] errors=0 warnings=0`。
+- **下一轮**：chunk/LOD/邻接缝合、Transform dirty flag / 区域 SpatialIndex、
+  GPU compute 生成。
 
-- **点选**：屏幕 → 世界射线，与 `WorldBoundsComponent` 做 ray-AABB，取最近命中。
-  天空盒跳过（相机跟随巨球会吞掉所有射线）。点空白处取消选中。
-- **三轴手柄**：`W`/`E`/`R` 切换平移/旋转/缩放；平移用世界轴，旋转/缩放用局部轴。
-  手柄屏幕尺寸恒定 ~90px；拖拽一次经命令栈合并成**一条**可撤销命令。
-- **实测**：三种模式截图确认手柄正确绘制；`[Editor] selfTest PASS` 含
-  Gizmo 数学往返（投影→反投影、射线-轴最近点、射线-平面求交）。
-- **抓到的真 bug**：Vulkan 投影矩阵 `m[1][1]` 为负，导致 `tanHalfFov` 为负、
-  手柄长度被钳到 1e-4，三个箭头叠成一点。见 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 26。
+## D-25：阶段 7 第三轮（chunked submeshes + 逐块剔除）
 
-## D-11：视口交互修正
+- **配置**：`TerrainConfig` 新增 `chunkGridX/chunkGridZ`，默认 2×2，
+  校验 `[1,4]`；属于几何参数，修改后需要 Generate。地形 JSON version 升到 4。
+- **网格**：`TerrainMeshBuilder` 仍使用一份共享顶点缓冲，但索引按 chunk
+  连续重排；每个 `TerrainSubMesh` 记录 `firstIndex/indexCount`、chunk 坐标和
+  局部 AABB。边界顶点共享，所以同 LOD chunk 没有裂缝。
+- **渲染**：`SubMesh` 新增可选局部 bounds；`GeometrySystem` 通过
+  `SubMeshCuller` 对每个 chunk 做世界 AABB -> frustum 测试，不可见 chunk
+  直接跳过 draw。`RenderTelemetry` 增加 `subMeshesCulled`，内置 Stats 显示
+  `Chunks culled`。
+- **测试**：
+  - `TerrainSelfTest` 覆盖非法 chunk grid、chunk 数、索引区间连续覆盖与
+    AABB 有效性；
+  - `Scene::selfTest` 覆盖 SubMeshCuller 可见/不可见用例；
+  - 编辑器 roundTrip 覆盖 `chunkGridX=3 / chunkGridZ=2`，并检查默认地形
+    Model 有 4 个子网格且都带 bounds；
+  - `terrain-render` 的 MustContain 增加 `chunks=4`。
+- **验证（2026-11-01）**：
+  - 正常视角截图：`Draw Calls: 5`，`Chunks culled: 0`；
+  - 跨 chunk 边界视角：`Draw Calls: 3`（skybox + 2 个可见 chunk），
+    `Chunks culled: 2`，画面无洞/裂缝；
+  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，stderr 全 0，
+    `[Validation] errors=0 warnings=0`。
+- **下一轮**：LOD 选择、邻接缝合/T 形裂缝处理、独立 chunk 实体与流送；
+  当前仍是单个地形实体和一个总 SpatialIndex AABB。
 
-用户反馈四个问题，逐条修：
+## D-26：阶段 7 第四轮（chunk LOD + 裙边接缝）
 
-1. **"为什么我可以拖动视角"** —— `CameraController` 直接读 GLFW，不知道 ImGui
-   在捕获键鼠。在资产过滤框里敲 "wasd" 相机会跑。已加 `allowCameraInput` 门控
-   （鼠标在视口内 / 正在按住右键看 / 未在输入文字 / 未在拖 gizmo）。
-2. **"双击球没生成在视角正前方"** —— 新建实体落点从世界原点改为
-   `相机位置 + 前向 * 4`。
-3. **"点球却选中 Sponza"** —— 实体级 AABB 被相机包住，入射距离恒为 0。
-   改为 AABB 粗筛 + Möller-Trumbore 三角形精确求交。
-   见 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 27。
-4. **"应该有白色包围盒线框 / 手柄要对齐包围盒中心"** —— 新增选中实体世界 AABB
-   白色 12 边线框；gizmo 中心改用 `WorldBoundsComponent.world.center()`。
+- **配置**：`TerrainConfig` 新增 `lodLevelCount`（1~3，默认 3）和
+  `lodDistanceScale`（0.25~4，默认 1）；Chunk/LOD 层级属于几何参数，
+  改后需要 Generate，距离倍率只影响运行时选层。地形 JSON version 升到 5。
+- **网格**：每个 chunk 按 `1/2/4` cell 步长生成 LOD0/1/2，全部索引区间仍在
+  同一个 Model 中；每个 LOD 独立生成顶点切片和局部 AABB。每个 chunk/LOD
+  生成一圈向下 `heightScale * 0.08` 的裙边，用来遮住相邻 chunk 选择不同 LOD
+  时的 T 形裂缝。
+- **运行时**：GeometrySystem 按相机到 chunk 世界 AABB 的距离只提交一个
+  `terrainLod`；其他 LOD 计入 `LOD skips`，不可见 chunk 计入 `Chunks culled`。
+  Stats 增加 `Terrain LOD: lod0 / lod1 / lod2`。
+- **拾取**：`SubMesh` 记录 `terrainSurfaceIndexCount`；Model 的 CPU 射线拾取
+  只使用 LOD0 的 surface 区间，不把其他 LOD 的重复三角形或裙边当成地面。
+- **测试**：
+  - `TerrainSelfTest` 覆盖非法 LOD 配置、每 chunk/LOD 索引覆盖、LOD 索引
+    数量递减、surface/裙边分离、AABB 与法线/绕序；
+  - `Scene::selfTest` 增加 `selectTerrainLod()` 的 0/1/2 距离断言；
+  - 编辑器 roundTrip 覆盖 `lodLevelCount=2 / lodDistanceScale=1.6`，并检查
+    默认 2×2×3 = 12 个地形子网格；
+  - `terrain-render` MustContain 增加 `lods=3` 与 `submeshes=12`。
+- **验证（2026-11-01）**：
+  - 近景：`Draw Calls: 5`，`Terrain LOD: 4 / 0 / 0`，`LOD skips: 8`；
+  - 中景：`Draw Calls: 5`，`Terrain LOD: 0 / 4 / 0`；
+  - 远景：`Draw Calls: 5`，`Terrain LOD: 0 / 0 / 4`；
+  - 混合层级：`Terrain LOD: 0 / 2 / 2`，画面无可见裂缝；
+  - 跨 chunk 边界：`Draw Calls: 3`，`Chunks culled: 2`；
+  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，stderr 全 0，
+    `[Validation] errors=0 warnings=0`。
+- **下一轮**：拓扑级 stitching / LOD cross-fade、流送、独立 chunk 实体、
+  GPU LOD/indirect 与 GPU compute 生成。当前 LOD 全部预生成，显存随层级增长。
 
-- **自检**：`selfTestWithScene()` 新增"射线必须命中近侧物体"断言
-  （距离 6 处的立方体，命中应 < 6）。这条断言正是靠它发现了
-  `sphere.obj` 其实是半径 1000 的天空盒球。
+## D-27：阶段 7 第五轮（Transform dirty + 增量 SpatialIndex）
 
-## D-12：视口交互修复（第二轮反馈）
+- Transform/Bounds 增加 revision+dirty；setter 对未变化值早退。
+- 世界变换只重建脏子树；父变化强制整棵子树，干净帧更新数为 0。
+- SpatialIndex 只对 dirty bounds 重算世界 AABB/upsert；新增 world/spatial 更新计数。
+- 命令恢复、CameraController、ImGui 相机面板均走 dirty setter。
+- 测试覆盖 dirty 子树计数、sourceRevision、移动对象 1/1 更新、干净帧 0/0。
+- `tools/Validate.ps1 -Incremental -SkipSetup`：21/21 PASS，stderr 全 0。
+- **当时仍保留** O(N) dirty 标志扫描、stale sweep；D-28 已改成显式 dirty 集合（历史记录保留）。
 
-1. **"拖动时把视口拖动了"** —— `Viewport` 窗口缺 `NoMove`/`NoResize`，
-   在视口里按住左键拖拽会把整块面板拖走，位置还会被 `imgui.ini` 记住。
-   已补三个标志，布局改用 `ImGuiCond_Always`。
-2. **"拖动时包围盒和物体不在一起"** —— UI 在 `render()` 构建，而
-   `Scene::update()` 早已跑完，`WorldBoundsComponent` 落后一帧。
-   改为拖拽提交后**立刻**刷新世界变换并当场重算手柄锚点与局部轴。
-   回归守卫：`selfTestWithScene()` 断言"平移 3 单位后包围盒中心也移动 3 单位"。
+## D-28：阶段 7 第六轮（显式 dirty 队列 + destroy 同步索引）
 
-## D-13：包围盒跟随（第三轮反馈）
+- Scene 新增 `dirtyTransformEntities` / `dirtySpatialEntities`；
+  `markTransformDirty()` / `markSpatialDirty()` 由创建、移动、命令恢复、
+  地形上传和销毁路径显式调用。
+- `updateWorldTransforms()` 只从 dirty 集合找根节点，更新脏节点及其后代；
+  干净帧不再扫描全部 Transform。
+- `refreshSpatialIndex()` 只消费 dirty spatial 集合；干净帧不扫描 Mesh/Bounds，
+  也不再做 indexedBounds stale sweep。
+- `Scene::destroyEntity()` 同步从 SpatialIndex、indexedBounds 和 dirty 集合移除。
+- `SetTransformCommand` / `DeleteEntityCommand` 接受可选 Scene*；编辑器路径传入
+  并通知 dirty 队列。创建/地形/删除命令恢复也会 mark。
+- 测试：Scene dirty 子树计数、Editor 移动对象 world/spatial=1、再次刷 0/0。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` 21/21 PASS，stderr 全 0，
+  `[Validation] errors=0 warnings=0`。
+- 仍保留：dirty 通知是显式契约，直接写 public 字段或 registry.destroy 可绕过；
+  只有统一网格，无 chunk/区域索引。
 
-用户反馈"拖动时球体和包围盒还是分离"。上一轮只修了一半：
+## D-29：阶段 7 第七轮（地形纹理打包 + 旧 Model 延迟回收）
 
-1. **刷新时机**（D-12 已修）：改完 transform 立刻 `refreshTransformsAndVisibility()`。
-2. **绘制顺序**（本轮修，更隐蔽）：包围盒原本在 `gizmo.manipulate()` **之前**
-   就画完了，而 gizmo 是在同一帧稍后才改 transform 的 —— 所以框永远用旧数据。
-   把 gizmo 拆成 `interact()` / `draw()`，调用方按
-   **交互 → 画框 → 画手柄** 的顺序走。
+- TerrainMaterial 在 CPU 侧把每层 height.r 与 roughness.r 打包成 RGBA：
+  R=height、G=roughness、B/A 预留。外部 16 张 PNG 约定不变，但同层
+  height/roughness 必须同分辨率。
+- GPU Set2 从 16 个 sampler 降到 12 个（4 albedo + 4 normal + 4 packed）；
+  片元采样从约 20 次/像素降到 16 次。
+- 内置程序化路径与外部 PNG 全量覆盖路径都验证通过；
+  `[TerrainMaterial] ... packed(height/roughness)` 为稳定日志。
+- Scene 新增 4 帧旧 Model 延迟回收队列：同步/异步地形重建、destroy、clear
+  都会把被替换 Model 先保留 4 帧，避免 GPU 在途帧访问已销毁缓冲。
+- 编辑器自检断言 regenerate 后旧 Model 已进入退休队列。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` 21/21 PASS，stderr 全 0，
+  `[Validation] errors=0 warnings=0`；外部 16 PNG 临时覆盖启动测试 PASS。
+- 仍保留：地形 Set2 仍有 12 个固定 sampler；LOD/流送/GPU compute 等阶段 7
+  项未完成。
 
-同时按用户建议新增 `--empty-scene`：不加载 Sponza / 天空盒，只留相机，
-方便单独观察交互（Sponza 的巨大包围盒会干扰判断）。
+## D-30：阶段 7 第八轮（LOD 滞回 + 抖动 cross-fade）
 
-- **验证**：`--empty-scene` + 程序化放置一个球，截图确认球 / 白框 / 手柄三者同心。
-- **回归**：`tools/Validate.ps1` 20/20 PASS，stderr 0 字节。
+- `SubMeshCulling` 新增 LOD 滞回与过渡状态机：
+  - 粗化需超过 enter 阈值 15%，细化需低于 exit 阈值 15%；
+  - 换层持续 0.24s，稳定层只在过渡完成后切换。
+- GeometrySystem 按 `(entity, model, revision)` 缓存每 chunk 状态；
+  过渡期同时提交 from/to 两个子网格，其余 LOD 仍计入 `LOD skips`。
+- fragment 用 interleaved gradient noise 生成屏幕空间互补 mask：
+  outgoing 保留 `noise >= blend`，incoming 保留 `noise < blend`；
+  push constant 使用原有尾部 padding，大小仍为 208 字节。
+- Stats 新增 `LOD blends` 与 `LOD switches`；过渡帧 draw call 会暂时增加。
+- 测试：
+  - Scene selfTest 覆盖 15% 滞回边界、初始选层、0.24s 过渡中间值与完成态；
+  - shader 自动编译/SPIR-V 校验通过；诊断动画帧出现 `LOD blends: 2`，
+    过渡完成后回到 `0`。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，stderr 全 0，
+  `[Validation] errors=0 warnings=0`。
+- 首次回归仅 `p3-baseline-diff` 的 Present timing 抖动超阈值（视觉 diff 0.008），
+  重跑通过；其余 20 项一次通过。
+- 仍保留（B-02/D-38 已用拓扑级 stitching 取代裙边缝隙方案）：抖动过渡在强运动模糊下可能有短暂噪声；
+  流送、GPU LOD/indirect 与 GPU compute 生成仍未做。
 
-## D-14：屏幕坐标 Y 方向修正（第四轮反馈）
+## D-31：阶段 7 第九轮（地形 indirect 合批）
 
-用户反馈"拖动时物体和包围盒的移动方向像相反"。
+- Device 按物理设备支持启用 `multiDrawIndirect`；不支持时 GeometrySystem
+  自动回退逐子网格直绘。
+- GeometrySystem 为每个在飞帧创建 host-visible
+  `INDIRECT_BUFFER|STORAGE_BUFFER`，容量 4096 条
+  `VkDrawIndexedIndirectCommand`。
+- 稳定 LOD 帧把每个可见 chunk 的一个命令写入 buffer，每地形实体只调用
+  一次 `vkCmdDrawIndexedIndirect`；过渡帧仍逐 from/to 子网格直绘，保留
+  逐 chunk 的 dither blend。
+- Stats 新增 `Terrain indirect groups`；逻辑 drawCalls 仍按命令数统计。
+- 诊断近景：`Draw Calls: 5`（skybox + 1 个地形 indirect group），
+  `Terrain indirect groups: 1`，`Terrain LOD: 4 / 0 / 0`，画面与直绘一致。
+- 首次验证暴露 `multiDrawIndirect` feature 未启用和 VMA 持久映射析构错误；
+  已修复并补 fallback。最终 `tools/Validate.ps1 -Incremental -SkipSetup`
+  **21/21 PASS**，stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 仍保留：LOD/可见性选择仍在 CPU；GPU 选层与 compute 写 indirect 参数、
+  流送、拓扑级 stitching 尚未做。
+## D-32：阶段 7 第十轮（CPU 地形碰撞查询）
 
-**根因**：`VulkanCamera::setPerspectiveProjection` 里有 `projectionMatrix[1][1] *= -1`
-（Vulkan 的 NDC Y 向下）。而 `projectToScreen` / `screenToRay` 都按"NDC Y 向上"
-写的，于是投影与反投影一起多翻了一次 —— 两者互相抵消，所以：
+- `TerrainComponent` 新增运行期 `shared_ptr<terrain::HeightField> cpuHeightField`：
+  - 与高度场/网格在同一 JobSystem 任务中构建；
+  - GPU 上传成功后才随 `TerrainComponent` 原子替换；
+  - 不参与序列化，但无 GPU 句柄，可安全进入撤销/重做快照。
+- `Scene` 新增查询 API：
+  - `sampleTerrainHeightLocal()`：局部 XZ 双线性采样，O(1)，越界拒绝；
+  - `sampleTerrainHeightWorld()`：从世界包围盒上方垂直 raycast，支持实体旋转/缩放；
+  - `raycastTerrain()`：任意世界空间射线，返回最近命中点/距离。
+- 世界查询复用 LOD0 picking 三角形，排除裙边与其他 LOD。
+- 同步创建、`regenerateTerrain()`、异步生成完成路径均维护碰撞高度场；
+  重生成撤销会恢复旧 `HeightField` 与旧 Model 的同代数据。
+- `selfTestWithScene()` 新增：
+  - 33×33 HeightField 尺寸与非空断言；
+  - 局部高度与高度场采样一致；
+  - 世界垂直采样与 raycast 命中中心高度；
+  - 越界局部/世界查询拒绝；
+  - 重生成 undo 恢复旧碰撞高度场。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 未做：物理引擎/角色控制器接入、运行期雕刻、地形专用空间加速结构。
 
-- 包围盒/手柄相对真实渲染**垂直镜像**（物体上移、框下移）；
-- 拾取射线也镜像（点 A 选中 B）；
-- **往返自检照样通过**（两次翻转抵消），只有"世界 +Y 必须投影到更小屏幕 y"
-  这类**方向不变量**才能抓到。
+## D-33：阶段 7 第十一轮（自动 dirty 通知）
 
-修了四处：`Gizmo::projectToScreen`、`Gizmo::screenToRay`、
-`ViewportPanel::projectPoint`、`ViewportPanel::screenToRay`。
+- `TransformComponent` / `BoundsComponent` 增加 owner callback：
+  - `setTranslation()` / `setScale()` / `setEuler()` / `setOrientation()` /
+    `markDirty()` 直接通知所属 Scene；
+  - `Scene::attachDirtyTracking()` 在实体创建、场景加载、重生成后绑定；
+  - 快照恢复函数先 `clearDirtyOwner()`，emplace 后再重新绑定，避免撤销到
+    新实体时回调仍指向旧 entity ID。
+- Scene 创建路径全部接入：相机、默认场景实体、`createEntity()`、
+  `createMeshEntity()`、`createTerrainEntity()`、`BuildFromDescription()`、
+  异步地形完成与命令恢复。
+- 编辑器回归删除显式 `markTransformDirty()`，验证 setter 能自动入队；
+  新增 Bounds `markDirty()` 自动 spatial 更新断言。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 仍保留：public 字段直写与 `registry.destroy()` 可绕过回调；后续流送阶段
+  应改为组件私有字段 + 区域索引 + 统一销毁 API。
 
-自检也补强了：投影矩阵改成和引擎一致（含 `[1][1] *= -1`），
-并新增上下/左右方向断言。
+## D-34：阶段 7 第十二轮（GPU compute 高度场）
 
-- **验证**：`--empty-scene` 放一个偏离中心的球，截图确认球与白框同侧、
-  绿色 Y 轴指向上方。
-- **回归**：`tools/Validate.ps1` 20/20 PASS，stderr 0 字节。
+- 新增 `TerrainComputeGenerator` 与 `shaders/terrain_height.comp`：
+  - GPU 执行 Perlin/fBm、octave seed、ridge/detail、island/edge mask 与 height curve；
+  - storage buffer 输出 normalized heightfield，fence 同步后 readback 到 `HeightField`；
+  - `HeightField::generatedOnGpu` 记录来源，CPU 路径仍作为失败 fallback。
+- 生成路径：
+  - 同步创建 / 场景加载 / `regenerateTerrain()` 先 GPU 高度场，再 CPU MeshBuilder；
+  - `requestRegenerateTerrain()` 主线程完成 GPU 高度场，CPU 网格仍提交 JobSystem；
+  - `--terrain-test` 与编辑器自检断言同步/异步均使用 GPU 高度场。
+- GPU/CPU 参考（33×33，含 ridge/detail/island/edge falloff）：
+  `maxDiff=2.98023e-07`，阈值 `5e-4`。
+- 新增 [backlog](../70-status/backlog.md) 后续任务台账，下一项为 B-01 独立 chunk
+  实体与流送。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 仍保留：GPU dispatch/fence/readback 在主线程等待；顶点/索引组装与 GPU 上传
+  仍在 CPU。
 
-## D-15：包围盒深度测试 + 占位材质棋盘格
+## D-35：B-01a（独立 chunk 实体 + 流送基础）
 
-用户反馈两条：
+- `TerrainConfig` 新增 `sampleOriginX/Z` 与 `localColorRange`：
+  - 独立 chunk 以世界中心作为噪声采样原点，边界高度连续；
+  - 流送 chunk 关闭局部颜色范围拉伸，避免跨 chunk 色带。
+- 新增 `TerrainStreamingComponent` manager 与 `TerrainChunkComponent` 运行期标记：
+  - manager 只存 chunk 模板、loadRadius、unloadPadding、maxLoadsPerFrame；
+  - 每个 chunk 是独立 ECS 实体，拥有独立 Model/Mesh/Bounds；
+  - 相机 3×3 半径、最近优先、每帧加载预算、卸载滞回。
+- 场景描述支持可选 `terrainWorld`，chunk 实体不逐项序列化，加载后按 manager
+  模板重建。
+- `--terrain-test` 内置 smoke：9 chunks / 9 independent Models / 清理后无残留；
+  编辑器自测覆盖接缝高度 `< 1e-4`、移动卸载/重载、manager JSON round-trip。
+- 修复流送卸载时在遍历 map 中调用 `destroyEntity()` 导致 map 迭代器失效的崩溃；
+  改为先收集、循环结束后统一销毁。
+- 诊断截图：可见 5 chunks -> `Draw Calls 6`、`Terrain indirect groups 5`、
+  `Terrain LOD 5/0/0`，画面无明显边界裂缝。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 下一项 B-01b：GPU 高度场流送异步化、场景描述实际重建流送、任务预算基线。
 
-1. **"包围盒没被深度测试，始终画在最前面"** —— ImGui 的 draw list 是纯 2D 叠加，
-   没有深度概念。新增 `EditorOverlayPass`：`LINE_LIST` 拓扑、世界空间顶点、
-   深度附件复用 G-Buffer 深度图（`LOAD_OP_LOAD` + `depthWriteEnable = FALSE`，
-   只测不写），颜色目标 `editorViewport`（`LOAD_OP_LOAD` 保住画面）。
-   顺序在 Present 之后、UiComposite 之前。手柄仍用 ImGui 画在最前面（刻意，
-   否则物体被挡住时抓不到手柄）。
-2. **"没有有效材质时应该是黑白棋盘格"** —— `mrt.frag` 加程序化棋盘格，
-   两种情况启用：完全没材质（`material.y == 0`）、有材质但没 albedo 贴图
-   （`push.albedoFallback`）。后者由 `GeometrySystem` 判断，且**只认实体自己的
-   材质** —— glTF 的材质在子网格槽位里，误判会让 Sponza 整片变格子。
+## D-36：B-01b（流送异步化 + 加载硬化）
 
-附带修了一个 UV 退化问题：`debug_cube.obj` 没有有效 UV，棋盘格会退化成纯色。
-用 `dFdx/dFdy` 判断 UV 是否退化，退化时改用世界坐标按法线主轴投影。
+- `TerrainComputeGenerator` 改为 **8 个独立 in-flight slot**：
+  - 每槽独立 command buffer/fence/storage buffer/readback/descriptor set；
+  - `submit()` 异步提交，`poll()` 只查 fence，`release()` 标记废弃，
+    `collectFinished()` 回收 fence 完成的废弃槽位，`waitAll()` 仅用于清理。
+- `PendingTerrainBuild` 改为三阶段：
+  1. GPU heightfield pending（主线程只 poll）
+  2. CPU mesh JobSystem pending（fence 完成后才提交）
+  3. main-thread upload/ECS install
+- 手动异步 Generate 与流送共用同一条异步高度场流水线；主线程不再
+  `vkWaitForFences` 等高度场。同步场景加载仍保留阻塞 `generate()`。
+- 覆盖请求 / 卸载 chunk 会把 GPU 请求标记 abandoned，槽位在 fence 完成后回收。
+- 编辑器自检：
+  - 创建 manager 后立即断言 GPU 请求已 in-flight，且本帧还没有 generated chunk；
+  - 捕获 `terrainWorld` 描述后实际 `buildFromDescription()`，重新流送 9 个独立
+    chunk/Model，验证 `rebuild=OK`。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 下一项 B-01c：跨 chunk picking/删除撤销语义、JSON 文件加载 smoke、
+  跨 chunk 帧时间基线。
 
-- **验证**：空场景放"遮挡方块(3m) + 被选中的球(8m)"，截图确认包围盒被完全挡住、
-  手柄仍可见；遮挡方块显示棋盘格。
-- **回归**：`tools/Validate.ps1` 20/20 PASS，stderr 0 字节。
+## D-37：B-01c（流送交互与性能硬化）
 
-## D-16：占位棋盘格修复
+- Viewport 拾取命中 runtime `TerrainChunkComponent` 后，通过
+  `Scene::resolveTerrainChunkOwner()` 解析到 streaming manager；日志保留命中
+  chunk 坐标。Hierarchy 隐藏 runtime chunks，避免选择下一帧可能卸载的实体。
+- Inspector 新增 `Streamed Terrain`：半径、卸载 padding、每帧预算、mapped chunks、
+  in-flight GPU height 请求、last/max streaming update ms。
+- `DeleteEntityCommand`：
+  - 若目标是 runtime chunk，先解析 manager；
+  - snapshot 包含 `TerrainStreamingComponent`；
+  - undo 重建 manager 后调用 `Scene::adoptStreamingTerrainManager()` 重新流送；
+  - redo 修复为销毁 undo 新建的实体 ID，而不是已失效的原始 ID。
+- `terrainWorld` 覆盖真实 JSON 文件 save/load，再由 `buildFromDescription()` 重建
+  9 个独立 chunk/Model。
+- 编辑器跨 4 chunk 移动样例记录 `maxStreamingUpdateMs=0.6123`
+  （Debug/本机基线，不作为跨机性能门槛）。
+- 编辑器 PASS：
+  `chunks=9 independentModels=9 seam=OK unload=OK rebuild=OK picking=OK
+  deleteUndo=OK maxUpdateMs=0.6123`
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 下一项 B-02：拓扑级 LOD stitching；先做可关闭裙边的 A/B 与索引/绕序断言。
 
-用户反馈两条：没有有效材质的子网格每帧往 stderr 刷警告；棋盘格整片发白，
-只剩格子缝是暗的。
+## D-38：B-02（拓扑级 LOD stitching）
 
-1. **警告刷屏**：`GeometrySystem` 优先读 `Material::descriptorSetIndex`，
-   而编辑器实体只写了 `MaterialComponent::materialSetIndex`，于是每帧都误判成
-   "没有材质"。改为只认实体组件字段；提示改成每个实体最多一行，且走 `stdout`
-   （`stderr` 必须保持 0 字节）。
-2. **棋盘格发白**：盒式滤波在窗口小于格子时外插到 `[-1.5, 2.5]`，负 albedo
-   写进 HDR G-Buffer 后，PresentPass 的 ACES 会把负输入 clamp 成**白色**。
-   修法是把 pattern clamp 到 `[0,1]`，并改成局部空间三平面投影
-   （球面不再有选轴接缝、不依赖 UV）；fallback 的 PBR 固定为金属度 0、粗糙度 1。
-3. **立方体侧面变条纹**：`debug_cube.obj` 没有 `vn`，`Model.cpp` 原来把缺失法线
-   填成 `(0,1,0)`，导致所有面都按 +Y 投影。改成零法线，片元着色器在零法线时
-   用屏幕导数重建几何法线（同时补上这类模型的 G-Buffer 法线）。
-4. **覆盖到 glTF 子网格**：`SubMesh` 增加 `albedoFallback`，`GLTFLoader` 在材质
-   没有 `baseColorTexture` 时置位。这样"一切没有纹理的网格"都会走棋盘格，
-   而不只是编辑器新建的实体。
-5. **验证**：`--empty-scene` + 资产面板创建 `Quad-Sphere.obj` / `plane.obj` /
-   立方体，截图都是清晰黑白格（立方体六个面都正确）；`tools/Validate.ps1`
-   20/20 PASS，stderr 0 字节。
+- 每个 chunk/LOD 的 chunk 外边界固定为**全高度场分辨率**，内部仍按
+  LOD 1/2/4 cell 步长降采样。
+- 四条过渡环带按归一化段参数把全分辨率外环与粗网格内环三角化：
+  - 外环四个角与内环共享索引；
+  - 每个四边形只生成一组不重叠三角形；
+  - +Y 绕序由 `windingFacesPositiveY` 断言；
+  - 相邻 chunk 的任意 LOD 组合共享同一组边界位置、法线、UV 与色。
+- 极小 chunk/LOD 自动回退到全分辨率网格，保持边界契约。
+- `TerrainConfig::skirtsEnabled` 新增并进入 `geometryEquals()`/JSON；默认 true
+  作为保守回退，`--terrain-test` 与流送 smoke 使用 `skirts=false`。
+- `TerrainSelfTest` 新增：
+  - skirts=off 时 `surfaceIndexCount == indexCount`；
+  - 3×3 LOD 邻接组合、18 条边界的位置/法线/UV/色一致断言。
+- 预编译截图：`.tmp/terrain_b02_noskirt.png`（1920×1061，无裙边渲染，
+  stderr 0，validation 0/0）。
+- 编辑器 PASS：
+  `chunks=9 independentModels=9 seam=OK stitch=OK skirts=off ...`
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 日志：`build/validation/20261101-195549`。
+- 下一项 B-03：GPU LOD 选择 / GPU-driven culling。
 
-## D-17：OBB 选中框 + 四元数旋转 + 3D 棋盘
+## D-39：B-03（GPU LOD 选择 / GPU-driven culling）
 
-用户反馈三条：旋转时包围盒不跟着转；某些旋转方向相反；球体的黑白格着色有明显
-问题。
+- `GeometryPass::addToGraph()` 在 `Geometry` 之前注册无附件
+  `TerrainGpuSelection` pass：
+  - 仍录制在 graphics command buffer；
+  - dispatch 位于 dynamic rendering 之外；
+  - 不引入独立 compute queue 的跨队列 ownership/信号量。
+- 每帧上传最多 1024 条 chunk record，容量 64 terrain entities：
+  - world matrix、局部 bounds、distanceScale、lodCount；
+  - commandBase、stateIndex、reset、entitySlot；
+  - lod0/lod1/lod2 firstIndex/indexCount。
+- `terrain_lod.comp` 在 GPU 上完成：
+  - world AABB + 六平面 frustum cull；
+  - LOD 距离、15% 滞回、0.24s transition 状态；
+  - per-entity atomic command count；
+  - indirect command / stats / debug SSBO 输出。
+- 每个 terrain entity 预留 32 条 `VkDrawIndexedIndirectCommand`。Graphics
+  每实体调用一次 `vkCmdDrawIndexedIndirectCount`，draw count 完全由 GPU 写、
+  GPU 读，不回读 CPU。
+- 过渡命令的 blend/mode 量化为 `firstInstance` payload；`mrt.vert` 解码成
+  flat varying，`mrt.frag` 继续用 Bayer dither 做 from/to 互补覆盖。GPU
+  indirect 过渡不再依赖逐 draw push constant。
+- 每 frame-slot 独立 state/count/stats/debug buffer；无 `drawIndirectCount`
+  设备保留 CPU selection/command-building fallback。
+- `--terrain-test` 启用 CPU parity mirror，并临时切换
+  `lodDistanceScale=0.01 -> 1.0` 强制过渡：
+  - `[Terrain] GPU selection selfTest PASS | matches=3 records=4`
+  - `[Terrain] GPU selection transition PASS | records=4`
+- 过渡期截图：`.tmp/terrain_b03_blend.png`
+  - `Draw Calls: 5`
+  - `LOD blends: 2`
+  - `Terrain indirect groups: 1`
+  - validation 0/0。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 日志：`build/validation/20261101-203943`。
+- 下一项 B-04：GPU compute 网格组装与 GPU 上传。
 
-1. **包围盒必须是 OBB**：`EditorOverlayPass` 原来用 `WorldBoundsComponent`
-   的轴对齐 AABB，旋转后框会被包大且不跟着转。改为 `BoundsComponent.local`
-   的 8 个角点乘 `WorldTransformComponent.matrix`；Gizmo 手柄锚点同样用
-   `matrix * local.center()`。没有局部包围盒的实体才退回世界 AABB。
-2. **旋转改用四元数**：`TransformComponent` 新增 `orientation`，`localMatrix()`
-   由它生成；欧拉角 `rotation` 只做 Inspector / JSON / 相机显示。Gizmo 拖拽
-   从"直接加欧拉分量"改成 `startOrientation * angleAxis(delta, 局部轴)`，
-   方向由 `buildPlaneBasis` 的右手系保证，pitch 到 ±90° 不再万向节死锁。
-   `SetTransformCommand` 同时保存欧拉角与四元数，撤销/重做写回 `orientation`；
-   `CommandStack` 合并时由上一条命令 `absorb()` 新值，重做能回到拖拽最后一帧。
-3. **棋盘格**：三平面在球面 45° 过渡带会把黑白混成灰带，UV 图集子区间强行
-   拉伸又会接缝/扭曲。改为两条路径：UV 完整时用 8 格 UV 棋盘（导数跨接缝
-   折回）；无 UV 或 UV 只占图集子区间时用局部空间 3D 棋盘（周期 1、加非整数
-   偏移避免整面落在格子边界、屏幕导数抗锯齿）。`Quad-Sphere.obj` 的 UV 只占
-   0.05~0.43，走 3D 路径；`debug_cube` 六个面仍清晰。
-4. **验证**：`--empty-scene` 截图确认立方体/球体都是干净黑白格；Inspector
-   拖 Rotation X 后白框跟着立方体倾斜；Gizmo 拖 Z 环后框与手柄同步旋转；
-   `tools/Validate.ps1` 20/20 PASS，stderr 0 字节；`--selftest` 里新增
-   四元数/欧拉矩阵等价、万向节有限性、单轴反解断言。
+## D-40：B-04（GPU compute 网格组装与 GPU 上传）
+
+- 新增 `TerrainGpuMeshBuilder` + `shaders/terrain_mesh.comp`，把单 chunk
+  terrain 的顶点/索引组装迁到 compute：
+  - 顶点输出 11 个 tight float（position/color/normal/uv），与 CPU
+    `Vertex` 的 44-byte 布局逐字节对齐；
+  - 索引输出覆盖 B-02 全分辨率外边界、粗内部、四条 transition band 与可选裙边；
+  - 参数/高度场走 host-visible SSBO，顶点/索引直接写 device-local buffer。
+- `Model::createFromGpuMesh()` 接管外部 VMA 顶点/索引 allocation；渲染路径不再
+  经过 staging copy。CPU 只生成全分辨率 picking mirror 和 submesh 元数据。
+- `Scene` 同步/异步生成都接入 GPU mesh；`TerrainComponent` 增加
+  `meshGeneratedOnGpu`，流送 9 个 chunk 全部标记 GPU 生成。多 chunk 手动地形与
+  无 compute 设备继续走 CPU builder fallback。
+- GPU/CPU parity selfTest 逐顶点、逐索引、逐 submesh 校验：
+  - `[Terrain] GPU mesh assembly selfTest PASS | vertices=6691 indices=37824
+    lods=3 skirts=on localColor=on maxPosError=0 maxAttrError=8.27056e-07`
+  - `[Terrain] streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9`
+- 修复 B-03 持久 LOD state 索引：`stateIndex` 是 chunk slot，不是 scalar word
+  offset；shader 统一用 `stateIndex * 4` 访问 4 个 int，并在 slot 复用时清理
+  所有 frame slot、补 `COMPUTE -> COMPUTE` barrier。否则 stateIndex≥1 的 chunk
+  在 LOD 过渡时会读写相邻槽，造成 from/to 翻转。
+- 编辑器 PASS：
+  `chunks=9 independentModels=9 seam=OK stitch=OK skirts=off gpuMesh=OK
+  unload=OK rebuild=OK picking=OK deleteUndo=OK`。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`。
+- 增强同步校验：`--validation-features sync` 的 terrain smoke 保持
+  `errors=0 warnings=0`。
+- 日志：`build/validation/20261101-213544`。
+- B-05 已完成，见下一条 D-41。
+
+## D-41：B-05（异步 GPU 上传管线）
+
+- `TerrainGpuMeshBuilder` 从 B-04 的单命令缓冲 + 同步 fence 等待改为 4 个异步
+  slot。每个 slot 拥有独立 command buffer、fence、descriptor set、host-visible
+  height/params buffer 和输出 VBO/IBO；`submit()` 只做 buffer 准备、参数上传、
+  compute 录制与 `vkQueueSubmit`，立即返回 request id。
+- `poll()` 用 `vkGetFenceStatus` 查询完成；`release()` 标记 abandoned，
+  `collectFinished()` 在 fence 完成后回收，`waitAll()` 供取消/关闭使用。
+  `build()` 保留为同步加载包装器，内部仍走 submit/poll。
+- 全分辨率 CPU picking mirror 移出 `prepareBuild()`：新增
+  `buildPickingMirror()` 在 `std::async` 工作线程生成 positions/indices，
+  与 GPU assembly 并行。`poll()` 对 future 做零等待检查，未完成返回
+  `Pending`，不在主线程等待；`destroySlotResult()`/`waitAll()` 才等待 future。
+- `Scene` 新增 `PendingTerrainBuild::gpuMeshRequest` 与三阶段逻辑：
+  - Stage 2a：poll 正在执行的 GPU mesh 请求；
+  - Stage 2b：有空闲 slot 才 submit；slot 满时任务保持 pending，不再回退
+    主线程同步构建；
+  - Stage 2c：GPU 不可用或 submit/poll 失败才提交 CPU JobSystem fallback。
+  替换、取消、删除与 Scene 关闭路径会 release 请求或 `waitAll()`。
+- 新增 Scene 遥测：`getMaxTerrainPollMs()`、`getTerrainPollCount()`、
+  `resetTerrainPollStats()`、`getTerrainGpuMeshStats()`；`Scene::update()` 与
+  `waitForTerrainGeneration()` 都记录 poll 耗时。
+- `--terrain-test` 新增 257×257 单 chunk 回归（skirt off、绝对色域）：
+  - 同步 `createTerrainEntity()` 提供 baseline；
+  - 异步 `requestRegenerateTerrain()` 后断言 callback、revision≥2、
+    `meshGeneratedOnGpu`、`generationBackend` 含 GPU mesh、submit 计数增加，
+    且 `maxPoll < syncBaseline`；
+  - 实测日志：
+    `[Terrain] async GPU upload PASS | resolution=257x257 chunks=1
+    syncBaseline=8.3553ms asyncMaxPoll=0.9878ms maxSubmit=0.3255ms
+    generation=7.6449ms spikeRatio=8.45849 revision=2 gpuMesh=1`
+    （Debug/本机，数值随机器波动）。
+- GPU mesh selfTest 保持：
+  `vertices=6691 indices=37824 lods=3 skirts=on localColor=on
+  maxPosError=0 maxAttrError=8.27056e-07`。
+- 流送 9 chunk 全部 GPU mesh：`chunks=9 independentModels=9 gpuMesh=9`；
+  17×17 流送也验证了多 slot 并发提交/回收路径。
+- 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
+  stderr 全 0，`[Validation] errors=0 warnings=0`；日志
+  `build/validation/20261101-222753`。
+- 下一项 B-06：组件私有字段 + 统一销毁 + 区域索引。
+
+## D-42：B-06（组件私有字段 + 统一销毁 + 区域索引）
+- `TransformComponent`/`BoundsComponent` 私有 + getter/`setPose`；`SpatialIndex` 增加 XZ region bucket，Scene 对齐 chunk size 并提供 chunk 查询。
+- `clearEntities()` 与相机复用改走 `Scene::destroyEntity()`；生产代码只剩该函数内一处 `registry.destroy()`，`--terrain-test` 覆盖 5×5 region 查询。
+- 自检 `spatial region query PASS | chunks=9 regions=5x5`、`gpuMesh=OK`；验证 `21/21 PASS`，stderr 0，`errors=0 warnings=0`，日志 `20261101-225723`。下一项 B-07。
+
+## D-43：B-07（物理/角色控制器 + 地形雕刻）
+- `terrain::TerrainBrush` 支持 Raise/Lower/Smooth/Flatten；`Scene::sculptTerrain()` 用 B-06 region 查询只重建相交 chunk，9 chunk smoke 仅重建 1 个，其余 revision/Model 不变。
+- 新增 `CharacterControllerComponent`/`createCharacterEntity()`/`updateCharacterController()`/`sampleTerrainGroundHeightWorld()`/`raycastTerrainWorld()`；编辑器 Sculpt Brush、Create Character、Play WASD 驱动，角色组件可序列化。
+- `[Terrain] sculpt PASS ... rebuilt=1`、`character controller PASS ... maxGroundError=0`、`character serialization PASS | captured=1`；`21/21 PASS`，日志 `20261101-234432`。B-08 下一项；雕刻仍为运行期状态。
+
+## D-44：B-08（地形内容资产与大规模材质）
+- `TerrainMaterial` 最多 4 个 Set2 材质集；set 0 启动加载根目录，set 1~3 按需 `setN/`，16 PNG 不齐全套程序化回退。
+- `DescriptorManager` 分配 4 个 terrain descriptor set；`TerrainConfig::materialSetIndex` 序列化，`geometryEquals()` 忽略材质切换。
+- 渲染按相邻地形实体材质集变化重绑 Set2，统计 `terrainMaterialBatches`/`Switches`/`Fallbacks`；Inspector 增加材质集下拉。
+- 实测 `[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`；`21/21 PASS`，stderr 0，`errors=0 warnings=0`，日志 `build/validation/20261102-001837`。

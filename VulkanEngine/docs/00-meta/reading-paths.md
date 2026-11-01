@@ -5,7 +5,7 @@ type: meta
 scope: 空（纯索引）
 read-when: 新会话开始，或接到一个具体任务时
 size: ~120 行
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 # 阅读路径
@@ -60,6 +60,13 @@ updated: 2026-10-30
 
 1. [scene-ecs](../30-systems/scene-ecs.md)
 2. [known-limits](../70-status/known-limits.md)（glTF 节点层级、空间索引每帧重建）
+
+### 1.6.1 "我要改程序化地形"
+
+1. [terrain](../30-systems/terrain.md) ← 算法、ECS、渲染、编辑器与存读
+2. [scene-ecs](../30-systems/scene-ecs.md) ← Mesh/Bounds/材质槽位与剔除
+3. [gbuffer](../20-pipeline/gbuffer.md) ← 顶点色从 mrt 写入同一组附件
+4. [test-matrix](../50-validation/test-matrix.md) ← `terrain-render` 回归
 
 ### 1.7 "我要加一个调试能力 / 剖析工具"
 

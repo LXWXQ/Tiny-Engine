@@ -70,7 +70,7 @@ void main() {
     outAlbedo = vec4(envColor, 1.0);
     
     // 4. 给 Lighting Pass 留下接头暗号：法线为 0
-    outNormal = vec4(0.0, 0.0, 0.0, 1.0);
+    outNormal = vec4(0.0, 0.0, 0.0, 0.0);
     
     // 5. 其余通道填 0 确保安全
     // 5. Store a far point along the sky direction so the motion-blur

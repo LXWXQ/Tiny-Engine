@@ -149,9 +149,9 @@ void EditorOverlayPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     }
 
     glm::vec3 corners[8];
-    if (localBounds != nullptr && localBounds->local.valid && worldTransform != nullptr)
+    if (localBounds != nullptr && localBounds->getLocal().valid && worldTransform != nullptr)
     {
-        const AABB& box = localBounds->local;
+        const AABB& box = localBounds->getLocal();
         const glm::vec3 localCorners[8] = {
             { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
             { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },

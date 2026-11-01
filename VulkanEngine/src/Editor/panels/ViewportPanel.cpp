@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 
 namespace editor
@@ -210,7 +211,7 @@ void ViewportPanel::draw(EditorState& state)
     {
         gizmoView.view = state.services.scene->getCamera().getView();
         gizmoView.projection = state.services.scene->getCamera().getProjection();
-        gizmoView.cameraPosition = state.services.scene->getCameraTransform().translation;
+        gizmoView.cameraPosition = state.services.scene->getCameraTransform().getTranslation();
     }
     // ---- 顺序很重要：交互 -> 画包围盒 -> 画手柄 ----
     //
@@ -226,16 +227,71 @@ void ViewportPanel::draw(EditorState& state)
 
     state.gizmo.draw(gizmoView);
 
+    // ---- B-07 地形雕刻 ----
+    // Ctrl+左键把当前笔刷作用到射线命中的地形上。普通左键仍然用于选中，
+    // 避免"只想选地形却改了高度"。
+    bool terrainBrushConsumed = false;
+    if (!gizmoConsumed && imageHovered && state.terrainBrushEnabled &&
+        ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        state.services.scene != nullptr)
+    {
+        glm::vec3 rayOrigin, rayDir;
+        screenToRay(ImGui::GetIO().MousePos, rectMin, rectMax,
+                    gizmoView.view, gizmoView.projection, rayOrigin, rayDir);
+
+        glm::vec3 hitPoint{ 0.0f };
+        entt::entity hitTerrain = entt::null;
+        float hitDistance = 0.0f;
+        if (state.services.scene->raycastTerrainWorld(
+                rayOrigin, rayDir, hitPoint, hitTerrain, hitDistance))
+        {
+            terrain::TerrainBrushSettings brush = state.terrainBrush;
+            brush.center = hitPoint;
+
+            Scene::TerrainSculptResult result;
+            std::string errorMessage;
+            if (state.services.scene->sculptTerrain(brush, result, errorMessage))
+            {
+                state.terrainBrush.center = hitPoint;
+                char buffer[320];
+                std::snprintf(buffer, sizeof(buffer),
+                              "[Sculpt] %s | rebuilt=%u vertices=%u radius=%.2f "
+                              "center=(%.2f, %.2f, %.2f)",
+                              terrain::terrainBrushModeLabel(brush.mode),
+                              result.rebuiltEntities, result.modifiedVertices,
+                              brush.radius, hitPoint.x, hitPoint.y, hitPoint.z);
+                state.pushLog(LogEntry::Level::Info, buffer);
+                state.transformRefreshPending = true;
+            }
+            else
+            {
+                state.pushLog(LogEntry::Level::Error,
+                              "[Sculpt] failed: " + errorMessage);
+            }
+        }
+        else
+        {
+            state.pushLog(LogEntry::Level::Warning, "[Sculpt] ray missed terrain");
+        }
+        terrainBrushConsumed = true;
+    }
+
     // ---- 点选 ----
     // 只有"手柄没吃掉这次点击"时才做拾取，否则拖拽手柄会顺手改掉选中。
-    if (!gizmoConsumed && imageHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+    if (!gizmoConsumed && !terrainBrushConsumed && imageHovered &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         state.services.registry != nullptr && state.services.scene != nullptr)
     {
         glm::vec3 rayOrigin, rayDir;
         screenToRay(ImGui::GetIO().MousePos, rectMin, rectMax,
                     gizmoView.view, gizmoView.projection, rayOrigin, rayDir);
 
-        const entt::entity hit = pickEntity(*state.services.registry, rayOrigin, rayDir);
+        const entt::entity picked = pickEntity(*state.services.registry, rayOrigin, rayDir);
+        // Streamed chunks are runtime-derived; select their manager so delete/
+        // undo/transform semantics stay stable across unload/reload.
+        const entt::entity hit = picked == entt::null
+            ? entt::null
+            : state.services.scene->resolveTerrainChunkOwner(picked);
 
         // 点到空白处 = 取消选中（与主流编辑器一致）
         state.selection.select(hit);
@@ -243,8 +299,16 @@ void ViewportPanel::draw(EditorState& state)
         if (hit != entt::null)
         {
             const auto* name = state.services.registry->try_get<NameComponent>(hit);
-            state.pushLog(LogEntry::Level::Info,
-                "[Viewport] selected: " + (name ? name->name : std::string("entity")));
+            std::string message = "[Viewport] selected: " +
+                (name ? name->name : std::string("entity"));
+            if (picked != hit)
+            {
+                if (const auto* chunk =
+                        state.services.registry->try_get<TerrainChunkComponent>(picked))
+                    message += " (chunk " + std::to_string(chunk->chunkX) + "," +
+                               std::to_string(chunk->chunkZ) + ")";
+            }
+            state.pushLog(LogEntry::Level::Info, message);
         }
     }
 

@@ -28,6 +28,7 @@
 //   --editor                      以场景编辑器模式启动（默认关闭，行为与运行时一致）
 //   --screenshot-viewport         截图拍编辑器离屏视口（纯 3D，不含 UI）；需配合 --editor
 //   --empty-scene                 不加载 Sponza / 天空盒，只留相机（编辑器调试单物体时用）
+//   --terrain-test                启动时创建持久地形，用于地形 G-Buffer/截图回归
 //
 // 本文件被编译两次，产出两个可执行文件（见 CMakeLists.txt）：
 //   VulkanEngine.exe   运行时模式
@@ -124,6 +125,7 @@ int main(int argc, char** argv)
         else if (arg == "--editor") editorMode = true;
         else if (arg == "--screenshot-viewport") diagOptions.screenshotViewport = true;
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
+        else if (arg == "--terrain-test") diagOptions.terrainTest = true;
         else if (arg == "--build-info") diagOptions.printBuildInfo = true;
         else if (arg == "--gpu-timing") diagOptions.gpuTiming = true;
         else if (arg == "--gpu-timing-csv" && i + 1 < argc)

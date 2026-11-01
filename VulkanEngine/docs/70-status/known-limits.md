@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 判断某个需求现在能不能做
 size: ~100 行
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 # 已知边界
@@ -20,7 +20,7 @@ updated: 2026-10-30
 ## 2. 渲染特性缺失
 
 无：阴影（CSM）、SSR、自动曝光、TAA/超分、动画、骨骼、粒子、后处理抗锯齿、
-体积光、透明排序、实例化、LOD、GPU culling、间接绘制。
+体积光、透明排序、实例化、通用 GPU LOD/网格组装；地形单 chunk 子集已接 GPU culling、indirect count 与 GPU 顶点/索引组装。
 
 ## 3. 架构限制
 
@@ -28,7 +28,7 @@ updated: 2026-10-30
 |---|---|---|
 | 跨队列资源走 `CONCURRENT` sharing | 未实现 ownership transfer；带宽不是最优 | [weak-points](../10-architecture/weak-points.md) #1 |
 | glTF 几何烘焙到世界空间 | Sponza 内部节点不是独立 entity，不能局部动 | 决策 13 |
-| SpatialIndex 每帧重建 | 实体多时 CPU 成本线性上升 | [scene-ecs](../30-systems/scene-ecs.md) §3 |
+| SpatialIndex 仅 streamed chunk 有 XZ region bucket | 非 chunk 实体仍走统一 3D 网格；大世界仍需分块剔除 | [scene-ecs](../30-systems/scene-ecs.md) §3 |
 | 线性渲染图 | 无自动重排/别名化/死代码剔除 | 决策 2 |
 | 材质槽位只增不减 | 反复换场景会吃满 256 槽 | [tech-debt](tech-debt.md) #3 |
 | 单场景单相机 | 无多视口 / 分屏 | — |
@@ -86,3 +86,38 @@ updated: 2026-10-30
 - **yaw 不做归一化**：长时间转视角后 `rotation.y` 会累积成很大的数值
   （实测出现过 -1101 rad）。功能上无影响（三角函数是周期性的），
   但配置文件里看着很怪。
+## 程序化地形（D-18 ~ D-25）
+
+- 手动地形是单实体；B-01 manager 支持相机中心有限半径的独立 chunk 实体流送，
+  每 chunk 有自己的 Model。异步 Generate/流送使用 8 槽 GPU 高度场请求，
+  主线程只 poll；同步场景加载仍阻塞。选择/删除/撤销以 manager 为单位，
+  runtime chunk 不单独编辑；流送半径有限。LOD 边界已用全分辨率外环 +
+  粗内部过渡带做拓扑级缝合， skirts 只是可关闭的保守回退。地形 LOD/可见性
+  由 GPU selection pass 生成 indirect count；容量 64 entities / 1024 records。
+- B-04 起单 chunk 顶点/索引由 `terrain_mesh.comp` 直接写 device-local buffer，
+  Model 接管 VMA allocation；多 chunk 手动地形仍走 CPU builder。B-05 已把单
+  chunk GPU mesh 改为 4 槽异步 submit/poll，CPU picking mirror 也在 worker 线程
+  生成；默认 257² 异步重建主线程 poll 约 1ms，但同步场景加载仍阻塞。
+- 场景加载仍同步；重复 Generate 会触发 Scene 级协作取消，但取消粒度是顶点行，不是硬中断。
+- 地形材质最多 4 个 Set2 材质集，每个 set 固定 12 张纹理（height/roughness
+  已打包）。set 0 启动时加载根目录，set 1~3 按需从 `setN/` 加载；16 张 PNG
+  不齐就整套回退程序化纹理，仓库不附带美术资产。
+- `TerrainConfig::materialSetIndex` 随场景 JSON 保存；渲染按相邻地形实体的
+  material set 变化重绑 Set2，但未按材质集排序/合批，交替材质会增加
+  descriptor switch。
+- 地形片元当前约 16 次纹理采样/像素（8 albedo + 4 normal + 4 packed height/roughness）；
+  后续可把四层 albedo 收进 texture array 或降低双尺度采样。
+- 地形 Normal.w=0，不参与 SSAO；局部接触阴影留待后续。
+- 地形高度场可由 GPU compute 生成；单 chunk 网格组装也在 GPU，但多 chunk
+  仍由 CPU builder 生成。CPU 侧保留全分辨率 picking mirror 和 HeightField
+  collision 源。B-07 已接入 kinematic 角色控制器与运行期雕刻：角色用局部包围盒
+  + 双线性高度采样，笔刷只重建相交 chunk；但雕刻只改运行期 HeightField/Model，
+  不写场景 JSON，Play 停止或保存重载会丢失；世界空间高度查询每次遍历地形实体。
+- Transform/Bounds 字段已私有，setter / `markDirty()` 通过 owner callback
+  自动通知 Scene，干净帧不做 Mesh/Bounds 扫描；`setPose()` 用于命令快照。
+  `SpatialIndex` 增加 streaming chunk 的 XZ region bucket，但非 chunk 实体
+  仍走统一网格；生产销毁统一走 `Scene::destroyEntity()`，独立命令栈自检
+  的局部 registry 是唯一例外。地形实体只贡献一个总 AABB，chunk 剔除发生在
+  GeometrySystem 子网格级。
+- Scene 有 4 帧旧 Model 延迟回收队列；撤销历史仍会额外持有新旧 Model，
+  历史上限 256 条，会占用显存。

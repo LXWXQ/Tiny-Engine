@@ -1,0 +1,496 @@
+#version 450
+
+// B-04: single-chunk terrain mesh assembly.
+// Vertex pass writes the exact 44-byte Vertex layout through a float SSBO;
+// index pass mirrors TerrainMeshBuilder's stitched topology and skirt order.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) readonly buffer Heights { float heights[]; };
+layout(set = 0, binding = 1) writeonly buffer Vertices { float vertices[]; };
+layout(set = 0, binding = 2) writeonly buffer Indices { uint indices[]; };
+layout(set = 0, binding = 3) readonly buffer Params
+{
+    uvec4 sizes;               // resX,resZ,lodCount,pad
+    vec4 world;                // sizeX,sizeZ,baseHeight,heightScale
+    vec4 colorParams;          // min,max,skirtDepth,uvTiling
+    uvec4 flags;               // skirts,localColorRange,chunkCellsX,chunkCellsZ
+    uvec4 lodVertexOffset;     // per-LOD global vertex offsets
+    uvec4 lodVertexCount;      // per-LOD vertex count (surface + skirt)
+    uvec4 lodIndexOffset;      // per-LOD global index offsets
+    uvec4 lodIndexCount;       // per-LOD index count (surface + skirt)
+    uvec4 lodSurfaceIndexCount; // per-LOD surface-only index count
+} p;
+
+layout(push_constant) uniform Push
+{
+    uint mode;      // 0=vertices, 1=indices
+    uint itemCount;
+} pc;
+
+uint lodCount() { return p.sizes.z; }
+uint chunkCellsX() { return p.flags.z; }
+uint chunkCellsZ() { return p.flags.w; }
+
+uint stepForLod(uint lod) { return 1u << lod; }
+
+bool canStitch(uint lod)
+{
+    const uint step = stepForLod(lod);
+    return chunkCellsX() > 2u * step && chunkCellsZ() > 2u * step;
+}
+
+uint innerSpanX(uint lod)
+{
+    return chunkCellsX() - 2u * stepForLod(lod);
+}
+
+uint innerSpanZ(uint lod)
+{
+    return chunkCellsZ() - 2u * stepForLod(lod);
+}
+
+uint innerSegmentsX(uint lod)
+{
+    const uint step = stepForLod(lod);
+    const uint span = innerSpanX(lod);
+    return clamp((span + step / 2u) / step, 1u, span);
+}
+
+uint innerSegmentsZ(uint lod)
+{
+    const uint step = stepForLod(lod);
+    const uint span = innerSpanZ(lod);
+    return clamp((span + step / 2u) / step, 1u, span);
+}
+
+uint innerVertexCount(uint lod)
+{
+    return (innerSegmentsX(lod) + 1u) * (innerSegmentsZ(lod) + 1u);
+}
+
+uint outerRingCount()
+{
+    return 2u * (chunkCellsX() + chunkCellsZ());
+}
+
+uint surfaceVertexCount(uint lod)
+{
+    return canStitch(lod)
+        ? innerVertexCount(lod) + outerRingCount()
+        : (chunkCellsX() + 1u) * (chunkCellsZ() + 1u);
+}
+
+uint surfaceIndexCount(uint lod)
+{
+    if (canStitch(lod))
+    {
+        const uint nX = chunkCellsX();
+        const uint nZ = chunkCellsZ();
+        const uint ix = innerSegmentsX(lod);
+        const uint iz = innerSegmentsZ(lod);
+        const uint quads = ix * iz * 6u;
+        const uint transition = 2u * (nX + nZ + ix + iz) * 3u;
+        return quads + transition;
+    }
+    return chunkCellsX() * chunkCellsZ() * 6u;
+}
+
+bool findVertexLod(uint global, out uint lod, out uint local)
+{
+    for (uint i = 0u; i < lodCount(); ++i)
+    {
+        const uint offset = p.lodVertexOffset[i];
+        const uint count = p.lodVertexCount[i];
+        if (global >= offset && global < offset + count)
+        {
+            lod = i;
+            local = global - offset;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool findIndexLod(uint global, out uint lod, out uint local)
+{
+    for (uint i = 0u; i < lodCount(); ++i)
+    {
+        const uint offset = p.lodIndexOffset[i];
+        const uint count = p.lodIndexCount[i];
+        if (global >= offset && global < offset + count)
+        {
+            lod = i;
+            local = global - offset;
+            return true;
+        }
+    }
+    return false;
+}
+
+float heightAt(uint x, uint z)
+{
+    const uint rx = uint(p.sizes.x);
+    const uint rz = uint(p.sizes.y);
+    x = min(x, rx - 1u);
+    z = min(z, rz - 1u);
+    return heights[z * rx + x];
+}
+
+float smoothstep01(float edge0, float edge1, float value)
+{
+    const float t = clamp((value - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+vec3 terrainColor(float normalizedHeight, float normalY)
+{
+    // Same linear colors as TerrainMeshBuilder::terrainColor.
+    const vec3 sand = vec3(0.5394795, 0.4452012, 0.2158605);
+    const vec3 grass = vec3(0.07818742, 0.19461783, 0.04231141);
+    const vec3 rock = vec3(0.14702727, 0.13013648, 0.11697067);
+    const vec3 snow = vec3(0.8069523, 0.8468732, 0.8879231);
+
+    const float sandWeight = 1.0 - smoothstep01(0.08, 0.22, normalizedHeight);
+    vec3 color = mix(grass, sand, sandWeight);
+    const float slope = clamp(1.0 - normalY, 0.0, 1.0);
+    const float slopeRock = smoothstep01(0.24, 0.60, slope);
+    const float highRock = smoothstep01(0.62, 0.84, normalizedHeight) * 0.55;
+    const float rockWeight = max(slopeRock, highRock);
+    color = mix(color, rock, rockWeight);
+    const float snowWeight = smoothstep01(0.80, 0.94, normalizedHeight) *
+                             (1.0 - 0.6 * rockWeight);
+    return mix(color, snow, snowWeight);
+}
+
+void writeVertex(uint lod, uint local, uint cellX, uint cellZ, bool skirt)
+{
+    const uint rx = uint(p.sizes.x);
+    const uint rz = uint(p.sizes.y);
+    const float stepX = p.world.x / float(rx - 1u);
+    const float stepZ = p.world.y / float(rz - 1u);
+    const float worldX = -p.world.x * 0.5 + float(cellX) * stepX;
+    const float worldZ = -p.world.y * 0.5 + float(cellZ) * stepZ;
+    const float h = heightAt(cellX, cellZ);
+    const float hLeft = heightAt(cellX > 0u ? cellX - 1u : 0u, cellZ);
+    const float hRight = heightAt(cellX + 1u, cellZ);
+    const float hBack = heightAt(cellX, cellZ > 0u ? cellZ - 1u : 0u);
+    const float hFront = heightAt(cellX, cellZ + 1u);
+
+    vec3 normal = vec3(
+        -1.0 * (hRight - hLeft) * p.world.w / (2.0 * stepX),
+        1.0,
+        -1.0 * (hFront - hBack) * p.world.w / (2.0 * stepZ));
+    const float normalLengthSq = dot(normal, normal);
+    normal = normalLengthSq > 1e-12 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+
+    const bool localColor = p.flags.y != 0u;
+    const float colorBase = localColor ? p.colorParams.x : 0.0;
+    const float colorRange = localColor
+        ? p.colorParams.y - p.colorParams.x : 1.0;
+    const float normalizedHeight = colorRange > 1e-6
+        ? clamp((h - colorBase) / colorRange, 0.0, 1.0)
+        : 0.5;
+
+    vec3 color = terrainColor(normalizedHeight, normal.y);
+    vec3 position = vec3(worldX, p.world.z + p.world.w * h, worldZ);
+    if (skirt)
+    {
+        position.y -= p.colorParams.z;
+        color *= 0.72;
+    }
+
+    const vec2 uv = vec2(
+        (worldX + p.world.x * 0.5) / p.world.x * p.colorParams.w,
+        (worldZ + p.world.y * 0.5) / p.world.y * p.colorParams.w);
+
+    const uint base = (p.lodVertexOffset[lod] + local) * 11u;
+    vertices[base + 0u] = position.x;
+    vertices[base + 1u] = position.y;
+    vertices[base + 2u] = position.z;
+    vertices[base + 3u] = color.r;
+    vertices[base + 4u] = color.g;
+    vertices[base + 5u] = color.b;
+    vertices[base + 6u] = normal.x;
+    vertices[base + 7u] = normal.y;
+    vertices[base + 8u] = normal.z;
+    vertices[base + 9u] = uv.x;
+    vertices[base + 10u] = uv.y;
+}
+void decodeOuterRing(uint ringIndex, out uint cellX, out uint cellZ)
+{
+    const uint nX = chunkCellsX();
+    const uint nZ = chunkCellsZ();
+    if (ringIndex <= nX)
+    {
+        cellX = ringIndex;
+        cellZ = 0u;
+    }
+    else if (ringIndex <= nX + nZ)
+    {
+        cellX = nX;
+        cellZ = ringIndex - nX;
+    }
+    else if (ringIndex <= 2u * nX + nZ)
+    {
+        cellX = nX - (ringIndex - (nX + nZ));
+        cellZ = nZ;
+    }
+    else
+    {
+        cellX = 0u;
+        cellZ = nZ - (ringIndex - (2u * nX + nZ));
+    }
+}
+
+uint topVertexForRing(uint lod, uint ringIndex)
+{
+    if (canStitch(lod))
+        return innerVertexCount(lod) + ringIndex;
+    uint cellX;
+    uint cellZ;
+    decodeOuterRing(ringIndex, cellX, cellZ);
+    return cellZ * (chunkCellsX() + 1u) + cellX;
+}
+
+void assembleVertex(uint global)
+{
+    uint lod;
+    uint local;
+    if (!findVertexLod(global, lod, local))
+        return;
+
+    const uint nX = chunkCellsX();
+    const uint nZ = chunkCellsZ();
+    const uint surfaceCount = surfaceVertexCount(lod);
+    if (local < surfaceCount)
+    {
+        if (canStitch(lod))
+        {
+            const uint innerCount = innerVertexCount(lod);
+            if (local < innerCount)
+            {
+                const uint innerRow = innerSegmentsX(lod) + 1u;
+                const uint ix = local % innerRow;
+                const uint iz = local / innerRow;
+                const uint step = stepForLod(lod);
+                const uint spanX = innerSpanX(lod);
+                const uint spanZ = innerSpanZ(lod);
+                const uint cellX = step + ix * spanX / innerSegmentsX(lod);
+                const uint cellZ = step + iz * spanZ / innerSegmentsZ(lod);
+                writeVertex(lod, local, cellX, cellZ, false);
+            }
+            else
+            {
+                uint cellX;
+                uint cellZ;
+                decodeOuterRing(local - innerCount, cellX, cellZ);
+                writeVertex(lod, local, cellX, cellZ, false);
+            }
+        }
+        else
+        {
+            const uint row = nX + 1u;
+            writeVertex(lod, local, local % row, local / row, false);
+        }
+    }
+    else
+    {
+        uint cellX;
+        uint cellZ;
+        decodeOuterRing(local - surfaceCount, cellX, cellZ);
+        writeVertex(lod, local, cellX, cellZ, true);
+    }
+}
+
+uint ringVertexForSide(uint side, uint index)
+{
+    if (side == 0u) return index;                       // top
+    if (side == 1u) return chunkCellsX() + index;       // right
+    if (side == 2u) return chunkCellsX() + chunkCellsZ() + index; // bottom
+    if (index == chunkCellsZ())
+        return 0u;                                      // left closes at TL
+    return 2u * chunkCellsX() + chunkCellsZ() + index;  // left
+}
+
+uint innerVertexForSide(uint lod, uint side, uint index)
+{
+    const uint ix = innerSegmentsX(lod);
+    const uint iz = innerSegmentsZ(lod);
+    const uint row = ix + 1u;
+    if (side == 0u) return index;
+    if (side == 1u) return index * row + ix;
+    if (side == 2u) return iz * row + (ix - index);
+    return (iz - index) * row;
+}
+
+void sideSegments(uint lod, uint side, out uint outerSegments, out uint innerSegments)
+{
+    if (side == 0u || side == 2u)
+    {
+        outerSegments = chunkCellsX();
+        innerSegments = innerSegmentsX(lod);
+    }
+    else
+    {
+        outerSegments = chunkCellsZ();
+        innerSegments = innerSegmentsZ(lod);
+    }
+}
+
+void transitionTriangle(uint lod, uint side, uint triangle,
+                        out uint a, out uint b, out uint c)
+{
+    uint outerSegments;
+    uint innerSegments;
+    sideSegments(lod, side, outerSegments, innerSegments);
+
+    uint oi = 0u;
+    uint ii = 0u;
+    for (uint step = 0u; step < triangle; ++step)
+    {
+        const bool advanceOuter = oi < outerSegments &&
+            (ii >= innerSegments ||
+             (oi + 1u) * innerSegments <= (ii + 1u) * outerSegments);
+        if (advanceOuter) ++oi; else ++ii;
+    }
+    const bool advanceOuter = oi < outerSegments &&
+        (ii >= innerSegments ||
+         (oi + 1u) * innerSegments <= (ii + 1u) * outerSegments);
+    const uint ringBase = canStitch(lod) ? innerVertexCount(lod) : 0u;
+    if (advanceOuter)
+    {
+        a = ringBase + ringVertexForSide(side, oi);
+        b = innerVertexForSide(lod, side, ii);
+        c = ringBase + ringVertexForSide(side, oi + 1u);
+    }
+    else
+    {
+        a = ringBase + ringVertexForSide(side, oi);
+        b = innerVertexForSide(lod, side, ii);
+        c = innerVertexForSide(lod, side, ii + 1u);
+    }
+}
+
+uint quadIndex(uint lod, uint local)
+{
+    const uint corner = local % 6u;
+    const uint triangle = local / 6u;
+    uint a;
+    uint b;
+    uint c;
+    uint d;
+    if (canStitch(lod))
+    {
+        const uint ix = innerSegmentsX(lod);
+        const uint row = ix + 1u;
+        const uint qx = triangle % ix;
+        const uint qz = triangle / ix;
+        a = qz * row + qx;
+        b = (qz + 1u) * row + qx;
+        c = qz * row + qx + 1u;
+        d = (qz + 1u) * row + qx + 1u;
+    }
+    else
+    {
+        const uint row = chunkCellsX() + 1u;
+        const uint qx = triangle % chunkCellsX();
+        const uint qz = triangle / chunkCellsX();
+        a = qz * row + qx;
+        b = (qz + 1u) * row + qx;
+        c = qz * row + qx + 1u;
+        d = (qz + 1u) * row + qx + 1u;
+    }
+
+    if (corner == 0u) return a;
+    if (corner == 1u) return b;
+    if (corner == 2u) return c;
+    if (corner == 3u) return b;
+    if (corner == 4u) return d;
+    return c;
+}
+
+uint assembleIndex(uint global)
+{
+    uint lod;
+    uint local;
+    if (!findIndexLod(global, lod, local))
+        return global;
+
+    const uint base = p.lodVertexOffset[lod];
+    const bool stitched = canStitch(lod);
+    const uint quadCount = stitched
+        ? innerSegmentsX(lod) * innerSegmentsZ(lod) * 6u
+        : chunkCellsX() * chunkCellsZ() * 6u;
+
+    if (local < quadCount)
+        return base + quadIndex(lod, local);
+
+    const uint surfaceCount = surfaceIndexCount(lod);
+    if (stitched && local < surfaceCount)
+    {
+        const uint transition = local - quadCount;
+        const uint topCount = chunkCellsX() + innerSegmentsX(lod);
+        const uint rightCount = chunkCellsZ() + innerSegmentsZ(lod);
+        uint side = 0u;
+        uint triangle = 0u;
+        uint corner = transition % 3u;
+        uint triWithinSide = transition / 3u;
+        if (triWithinSide < topCount)
+        {
+            side = 0u;
+            triangle = triWithinSide;
+        }
+        else if (triWithinSide < topCount + rightCount)
+        {
+            side = 1u;
+            triangle = triWithinSide - topCount;
+        }
+        else if (triWithinSide < 2u * topCount + rightCount)
+        {
+            side = 2u;
+            triangle = triWithinSide - topCount - rightCount;
+        }
+        else
+        {
+            side = 3u;
+            triangle = triWithinSide - 2u * topCount - rightCount;
+        }
+        uint a;
+        uint b;
+        uint c;
+        transitionTriangle(lod, side, triangle, a, b, c);
+        if (corner == 0u) return base + a;
+        if (corner == 1u) return base + b;
+        return base + c;
+    }
+
+    // Skirt ring index order mirrors the CPU builder's perimeter.
+    const uint skirtLocal = local - surfaceCount;
+    const uint ringTriangle = skirtLocal / 6u;
+    const uint corner = skirtLocal % 6u;
+    const uint ringCount = outerRingCount();
+    const uint next = (ringTriangle + 1u) % ringCount;
+    const uint topCurrent = topVertexForRing(lod, ringTriangle);
+    const uint topNext = topVertexForRing(lod, next);
+    const uint bottomBase = surfaceVertexCount(lod);
+    const uint bottomCurrent = bottomBase + ringTriangle;
+    const uint bottomNext = bottomBase + next;
+    if (corner == 0u) return base + topCurrent;
+    if (corner == 1u) return base + bottomCurrent;
+    if (corner == 2u) return base + bottomNext;
+    if (corner == 3u) return base + topCurrent;
+    if (corner == 4u) return base + bottomNext;
+    return base + topNext;
+}
+
+void main()
+{
+    const uint global = gl_GlobalInvocationID.x;
+    if (global >= pc.itemCount)
+        return;
+    if (pc.mode == 0u)
+        assembleVertex(global);
+    else
+        indices[global] = assembleIndex(global);
+}
