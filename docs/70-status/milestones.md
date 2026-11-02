@@ -569,24 +569,19 @@ updated: 2026-11-02
 **可观测**：`[SceneGpu] GPU batch ready | instancesPerFrame=256 models=32 drawIndirectCount=1`、`[SceneGpu] indirect batch | models=1 instances=103`；遥测 `drawCalls/triangles/vertices` 与 F1 前基线一致（104 / 270459 / 811377）。
 
 **回归**：`--selftest 120` errors=0 warnings=0；`Validate.ps1` 新增 `f1-gpu-scene`；像素级比对（相机 `[0,6,45]`）GPU 路径与 CPU 路径 `max diff = 0`。
-
 **性能**：300 帧多轮 default 248.1/248.0、cpu 237.7/257.1、forced 248.1/228.2 —— 噪声大于差异，当前 103 实例下两条路径相当，收益留给实例数上来之后。
 
 ## F1-b：合并顶点/索引缓冲（一次 multidraw）
 **问题**：F1-a 按模型分组、每个子网格一条间接命令，103 个子网格仍是 103 条命令；multidraw 的收益要等命令能跨模型才拿得到，而间接命令本身不带顶点缓冲绑定。
 
 **实现**：`Model` 为可批模型保留完整 CPU 顶点/索引（地形不留）；`ensureMergedMesh()` 按模型集合算 FNV 签名（指针 + 顶点数 + 索引数），顶点/索引分别拼进一份 device-local 缓冲、索引保持原样、每模型记 `baseVertex` 并填进间接命令的 `vertexOffset`（等价 `vkCmdDrawIndexed` 语义），所有实例共用 `ranges[0]`/`counts[0]`，一条 `vkCmdDrawIndexedIndirectCount` 画完；重建走自建 `uploadPool` + staging + 单次命令（屏障 TRANSFER_WRITE -> VERTEX_ATTRIBUTE_READ|INDEX_READ）。F1-d 起回退直接落到 CPU 路径（`--no-merged-buffers` 强制）。
-
 **可观测**：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时遥测 `draw calls 2 / triangles 270459 / vertices 811377`（合并前 104）。
-
 **回归**：`Validate.ps1` 新增 `f1b-merged-buffers` 与 `f1b-merged-off`，全套 24 项 ALL PASS；三路像素比对（合并 / 每模型 / CPU）相机 `[0,6,45]` 下 `max diff = 0`。
-
-**性能**：300 帧两轮 cpu 185.2/209.6、merged 209.6/227.6、per-model 218.9/219.6 —— 同模式轮间波动 24 FPS，仍以噪声为主；确定收益是 draw call 数 104 -> 2，不是本机 FPS。
+**性能**：同模式轮间波动约 24 FPS，仍以噪声为主；确定收益是 draw call 104 -> 2，不是本机 FPS。
 
 ## F1-c：按组实例化 + 材质排序 + Hi-Z 遮挡剔除
 **实现**：分组键改成 `(模型, 子网格)`（实例连续，`instanceCount = N`，一条命令画完所有实例）；去掉 counters 缓冲（组自己那 5 个 uint 直接写，被剔除写 0）；组按并集世界 AABB 剔除；合并模式按 `materialSlot` 排序、非合并按 `(model, materialSlot)`；包围盒缓存改用 `Model::getGeometryId()`（600 帧/64 条淘汰）；Hi-Z 金字塔从 `GBuffer.Position` 反算线性视深度（`R32_SFLOAT`、`floor(log2(max(w,h)))+1` 级、布局恒 GENERAL、手动屏障），`HiZBuild` 挂在 `Geometry` 之后写另一槽（错帧一帧），剔除时投影成屏幕矩形、按矩形像素选级、4 角 `textureLod` 取最大值，`nearest > farthest + 0.05` 判遮挡；`--no-hiz` 可关。
 **可观测与回归**：`[SceneGpu] cull stats | groups=103 visible=103 culled=0 instances=103 hiz=1 hizLevels=11 hizEnabled=1 hizTests=103 hizCulled=0`（每 60 帧一行）；新增 `f1c-hiz-off`，全套 25 项 ALL PASS、stderr 0 字节；`--resize-test` / `--render-scale 0.5` 验证层 0/0（顺带修掉 G-Buffer 重建后遗留旧 `VkImageView` 导致描述符写入崩溃、录制期 `vkUpdateDescriptorSets` 让命令缓冲失效两个 bug）。
-
 **Hi-Z 有效性**：当前 `hizCulled = 0` 是正确结果 —— Sponza 的 103 个子网格各自覆盖整栋建筑一大块，组级保守剔除几乎不命中；把 `kOcclusionBias` 临时改成 -100000 可验证全链路（`hizTests=103 hizCulled=103`、`visible=0`）。收益等大量小实例（粒子/植被/体素 chunk）。
 ## F1-d：稳定帧快速路径 + 同步校验 0 错误
 **问题**：从 F1-a 起每帧都重新摊平实例（世界矩阵 + 每组并集 AABB），静态场景实测 439µs/帧；`--validation-features sync` 跑出 180 条同步危害，全部来自 Hi-Z 的跨帧读写与屏障。
@@ -598,3 +593,8 @@ updated: 2026-11-02
 **可观测**：`[SceneGpu] external instances | count=<n> source=debug-injection`、`cull stats` 尾部 `screenTests=.. screenCulled=.. external=..`；`--gpu-scene-min-px 400` 时 `screenTests=103 screenCulled=103`（整屏剔空），`--gpu-scene-external 4` 时 `instances=107`。
 **回归**：新增 `f1e-screen-space` 与 `f1e-external-instances`，全套 **29 项 ALL PASS**（`build/validation/20261102-160351`）；`--no-merged-buffers` 仍走 CPU 路径 `104 / 270459 / 811377`。
 **边界**：SSE 只做剔除、不是 LOD 选级（模型没有 LOD 链）；外部实例与 ECS 共用分组，同子网格不同材质会归到一组；粒子每帧变化会击穿结构签名 —— 数据确实变了，这是预期行为。
+
+## F2-a：流送世界模式（可持续运行的载体）
+**问题**：流送地形此前只在 `--terrain-test` 冒烟块里创建（17x17、半径 1），正常运行与编辑器里没有流送世界 —— 「无限世界」缺一个能跑的载体。
+**实现**：`--streaming-world [radius]` 在构造期 `createStreamingTerrain(seed 9001, 33x33, chunk 32, heightScale 12, lod 3, 半径 1..8, maxLoadsPerFrame 4)`；`--streaming-fly [speed]` 让相机沿半径 220 的圆周前移（yaw = -a，与 forward=(sin y,0,cos y) 一致），把加载/卸载从「一次性」变成「持续发生」；`Scene` 新增 loaded/unloaded 累计与 lastFrame 增量计数。半径 3 = 49 个 chunk 实体，低于地形 GPU 选择的 64 slot 上限。顺带把配置自检的临时目录改成「建目录 + 写探针」并在不可写时退回工作目录 `.tiny-config-selftest/`（只读 TEMP 的受限环境里不再假失败）。
+**可观测**：`[Streaming] world ready | radius=..`、`[Streaming] chunks=<n> loaded=<n> unloaded=<n> maxUpdateMs=<ms>`；静态半径 2 → `chunks=25`；飞行 150 帧 → `chunks=35 loaded=54 unloaded=19`（带 unloadPadding 的滞回环），验证层 0/0。**回归**：新增 `f2-streaming-world`（要求 `chunks=25`）与 `f2-streaming-fly`（要求 `unloaded=`），全套 **31 项**。

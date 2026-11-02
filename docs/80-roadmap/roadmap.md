@@ -65,7 +65,7 @@ Graphics: vkCmdDrawIndexedIndirect
 - F1-e：非合并模式的逐模型 bind 中间路径删除（合并缓冲是唯一 GPU 提交路径，否则整帧回 CPU）；`FrameData` 加 `vec4 screen` 做屏幕空间误差剔除（`stats[2]` 记 `screenTests/screenCulled`）；新增 `ExternalInstance` 入口，粒子/体素与 ECS 实例共用分组、合并缓冲与同一条 indirect 命令。
 - 阈值 256 实例：小场景仍走 CPU 路径，`--gpu-scene` 强制、`--no-gpu-scene` 关闭、`--no-merged-buffers` 整条退回 CPU、`--gpu-scene-min-px` 开屏幕空间误差剔除、`--gpu-scene-external` 注入外部实例。
 - 验收状态：draw call 104 -> 2、CPU 不再逐实体决定绘制（只摊平一次，之后靠签名跳过）、验证层 0 字节、`--validation-features sync` 0 errors —— 均已达成。
-- 未完成：GPU 端 LOD 选级（需要模型 LOD 链，SSE 现在只用来剔除）、粒子/体素真实接入引擎侧（入口 `setExternalInstances()` 已就位，等 Effect 系统来喂数据）。
+- 留待需要时：**GPU 端 LOD 选级**（需要模型 LOD 链；SSE 判据已就位，目前只用来剔除，等 F4 资产管线给出 LOD 后再改成选级）与 **粒子/体素真实接入**（`ExternalInstance` 入口已就位，等 F3 体素 / F6 特效系统来喂数据）。两条都记在 [tech-debt](../70-status/tech-debt.md) 的未关闭表里，不占 F1 的完成度。
 - Hi-Z 在当前 Sponza 场景 `hizCulled = 0`：103 个子网格各自覆盖整栋建筑一大块，组级保守剔除几乎不命中；收益等大量小实例（见 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md) §9）。
 
 ---
@@ -79,7 +79,7 @@ Graphics: vkCmdDrawIndexedIndirect
 阶段 6/7 上纹理分层、异步、chunk/LOD。不要一次做完整个 F2。
 
 **当前进展**：chunk 子网格、逐块剔除、CPU 滞回选层、抖动 cross-fade、
-裙边接缝、稳定帧 indirect 合批、GPU compute 高度场、独立 chunk 流送、8 槽异步高度场、流送交互硬化、拓扑级 LOD stitching、GPU 选层/culling、单 chunk GPU 顶点/索引组装、4 槽异步 GPU mesh 上传、4 个 Set2 地形材质集（按需外部 16 PNG/程序化回退、`materialSetIndex` 序列化）、kinematic 角色控制器与区域限定运行期雕刻已完成；无限世界、多 chunk GPU 合批与雕刻持久化仍待做。
+裙边接缝、稳定帧 indirect 合批、GPU compute 高度场、独立 chunk 流送、8 槽异步高度场、流送交互硬化、拓扑级 LOD stitching、GPU 选层/culling、单 chunk GPU 顶点/索引组装、4 槽异步 GPU mesh 上传、4 个 Set2 地形材质集（按需外部 16 PNG/程序化回退、`materialSetIndex` 序列化）、kinematic 角色控制器与区域限定运行期雕刻已完成；**F2-a（2026-11-02）**：新增可持续运行的流送世界入口 `--streaming-world [radius]`（构造期建 manager，半径 1~8，chunk 32 单位 / 33x33 顶点 / 3 级 LOD）与 `--streaming-fly [speed]`（相机沿圆周飞，验证持续加载/卸载），并在 `Scene` 里补 loaded/unloaded 累计统计。剩下的是真正的无限世界：多 chunk GPU 合批（目前每 chunk 一次 indirect）与浮动原点（float 坐标 + 半径上限 8）。雕刻持久化仍待做。
 
 **CPU/GPU 分工**
 

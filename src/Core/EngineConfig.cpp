@@ -584,15 +584,53 @@ bool EngineConfig::selfTest()
 {
 	namespace fs = std::filesystem;
 	const std::string originalPath = g_configPath;
-	const fs::path tempRoot = fs::temp_directory_path() / "tiny-config-selftest";
+	// 自检目录优先用系统临时目录；受限环境（沙箱、只读 TEMP、被策略重定向）
+	// 下那里可能写不进去，于是退回工作目录下的隐藏目录。自检仍然自包含（跑完即删），
+	// 不会因为外部环境的写权限而假失败。
 	std::error_code ec;
-	fs::remove_all(tempRoot, ec);
-	fs::create_directories(tempRoot, ec);
+	// 只建目录不够：受限环境里 create_directories 能成功，但写文件被拒绝。
+	// 所以再写一个探针文件，确认这个目录真的可写。
+	const auto prepareRoot = [&ec](const fs::path& root)
+	{
+		ec.clear();
+		fs::remove_all(root, ec);
+		fs::create_directories(root, ec);
+		if (ec)
+			return false;
+		const fs::path probe = root / "probe.txt";
+		{
+			std::ofstream out(probe, std::ios::binary | std::ios::trunc);
+			out << "ok";
+			if (!out.good())
+			{
+				ec.assign(static_cast<int>(std::errc::permission_denied),
+					std::generic_category());
+				return false;
+			}
+		}
+		fs::remove(probe, ec);
+		ec.clear();
+		return true;
+	};
+	fs::path tempRoot = fs::temp_directory_path(ec);
 	if (ec)
 	{
-		setStatus("config selfTest FAIL: cannot create temp directory");
-		std::cerr << "[Config] " << g_lastStatus << "\n";
-		return false;
+		ec.clear();
+		tempRoot = fs::current_path(ec);
+	}
+	tempRoot /= "tiny-config-selftest";
+	if (!prepareRoot(tempRoot))
+	{
+		const std::string firstError = ec.message();
+		ec.clear();
+		tempRoot = fs::current_path(ec) / ".tiny-config-selftest";
+		if (ec || !prepareRoot(tempRoot))
+		{
+			setStatus("config selfTest FAIL: cannot create temp directory " +
+				tempRoot.string() + " (" + firstError + ")");
+			std::cerr << "[Config] " << g_lastStatus << "\n";
+			return false;
+		}
 	}
 
 	auto writeText = [](const fs::path& path, const std::string& text)

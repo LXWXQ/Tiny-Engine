@@ -210,6 +210,10 @@ $tests = @(
        MustContain = @("[SceneGpu] cull stats |", "screenTests=", "[Validation] errors=0 warnings=0") },
     @{ Name = "f1e-external-instances"; Args = @("--selftest", "$([Math]::Max($Frames, 40))", "--gpu-scene", "--gpu-scene-external", "4");
        MustContain = @("[SceneGpu] external instances | count=4", "external=4", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f2-streaming-world"; Args = @("--selftest", "$([Math]::Max($Frames, 90))", "--streaming-world", "2");
+       MustContain = @("[Streaming] world ready | radius=2", "[Streaming] chunks=25", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f2-streaming-fly"; Args = @("--selftest", "$([Math]::Max($Frames, 150))", "--streaming-world", "2", "--streaming-fly", "60");
+       MustContain = @("[Streaming] chunks=", "unloaded=", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

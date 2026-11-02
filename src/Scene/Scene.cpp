@@ -2069,6 +2069,8 @@ bool Scene::adoptStreamingTerrainManager(entt::entity entity)
 void Scene::refreshStreamingTerrain()
 {
     const auto start = std::chrono::steady_clock::now();
+    streamingLoadsLastFrame = 0;
+    streamingUnloadsLastFrame = 0;
     updateTerrainStreaming();
     const double elapsedMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start).count();
@@ -2159,6 +2161,11 @@ void Scene::updateTerrainStreaming()
     }
     for (entt::entity entity : chunksToDestroy)
         destroyEntity(entity);
+    if (!chunksToDestroy.empty())
+    {
+        streamingUnloadsLastFrame += static_cast<uint32_t>(chunksToDestroy.size());
+        streamingChunksUnloadedTotal += chunksToDestroy.size();
+    }
 
     struct Candidate
     {
@@ -2246,6 +2253,8 @@ void Scene::updateTerrainStreaming()
         }
 
         streamingTerrainChunks.emplace(candidate.key, entity);
+        ++streamingLoadsLastFrame;
+        ++streamingChunksLoadedTotal;
         pendingStreamingTerrainChunks.insert(candidate.key);
     }
 }

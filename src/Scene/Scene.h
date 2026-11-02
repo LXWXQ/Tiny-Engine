@@ -166,6 +166,12 @@ public:
     bool adoptStreamingTerrainManager(entt::entity entity);
     double getLastStreamingUpdateMs() const { return lastStreamingUpdateMs; }
     double getMaxStreamingUpdateMs() const { return maxStreamingUpdateMs; }
+    // F2-a：流送统计。loaded/unloaded 是累计值，*LastFrame 是上一帧的增量，
+    // 用来在自检里断言"相机飞行时真的发生了加载与卸载"。
+    uint64_t getStreamingChunksLoadedTotal() const { return streamingChunksLoadedTotal; }
+    uint64_t getStreamingChunksUnloadedTotal() const { return streamingChunksUnloadedTotal; }
+    uint32_t getStreamingLoadsLastFrame() const { return streamingLoadsLastFrame; }
+    uint32_t getStreamingUnloadsLastFrame() const { return streamingUnloadsLastFrame; }
     // Test/tool entry point; Scene::update() calls this automatically after the
     // camera transform is advanced.
     void refreshStreamingTerrain();
@@ -328,6 +334,10 @@ private:
     std::unordered_map<int64_t, entt::entity> streamingTerrainChunks;
     std::unordered_set<int64_t> pendingStreamingTerrainChunks;
     double lastStreamingUpdateMs = 0.0;
+    uint64_t streamingChunksLoadedTotal = 0;
+    uint64_t streamingChunksUnloadedTotal = 0;
+    uint32_t streamingLoadsLastFrame = 0;
+    uint32_t streamingUnloadsLastFrame = 0;
     double maxStreamingUpdateMs = 0.0;
     double maxTerrainPollMs = 0.0;
     uint64_t terrainPollCount = 0;

@@ -860,6 +860,31 @@ streamingConfig.skirtsEnabled = false;
 		renderer->getCommandPool());
 	presentPassPtr->setImGuiSystem(imguiSystem.get());
 
+	// F2-a：流送世界。与 --terrain-test 的区别是这里给的是可持续运行的世界入口：
+	// 半径 3 = 7x7 = 49 个 chunk 实体，chunk 32 单位见方、33x33 顶点、3 级 LOD。
+	// 49 低于地形 GPU 选择的 64 个 slot 上限，所以整圈都能走 GPU 选层路径。
+	if (options.streamingWorld)
+	{
+		terrain::TerrainConfig config;
+		config.seed = 9001u;
+		config.resolutionX = 33u;
+		config.resolutionZ = 33u;
+		config.sizeX = 32.0f;
+		config.sizeZ = 32.0f;
+		config.heightScale = 12.0f;
+		config.lodLevelCount = 3u;
+		config.skirtsEnabled = false;
+		config.localColorRange = false;
+		streamingWorldRadius = std::clamp(options.streamingRadius, 1, 8);
+		streamingWorldEntity = scene->createStreamingTerrain(
+			config, streamingWorldRadius, 4, "StreamingWorld");
+		if (streamingWorldEntity == entt::null)
+			throw std::runtime_error("--streaming-world manager creation failed");
+		streamingWorldEnabled = true;
+		std::cout << "[Streaming] world ready | radius=" << streamingWorldRadius
+			<< " chunk=32 resolution=33 maxLoadsPerFrame=4" << std::endl;
+	}
+
 	currentTime = std::chrono::high_resolution_clock::now();
 	lastPerfLog = currentTime;
 
@@ -1390,6 +1415,18 @@ void FirstApp::setGpuSceneExternalDebugCount(uint32_t count)
 	scene->getSettings().gpuSceneExternalDebugCount = count;
 }
 
+void FirstApp::setStreamingWorldEnabled(bool enabled, int32_t radius)
+{
+	streamingWorldEnabled = enabled;
+	streamingWorldRadius = std::clamp(radius, 1, 8);
+}
+
+void FirstApp::setStreamingFly(bool enabled, float speed)
+{
+	streamingFlyEnabled = enabled;
+	streamingFlySpeed = speed > 0.0f ? speed : 12.0f;
+}
+
 void FirstApp::setCrossQueueTestEnabled(bool enabled)
 {
 	crossQueueProbePassPtr->setEnabled(enabled);
@@ -1530,6 +1567,23 @@ int FirstApp::runHeadlessSelfTest(int frames)
 			<< " | triangles " << perfTelemetry.triangles
 			<< " | vertices " << perfTelemetry.vertices << std::endl;
 	}
+
+// F2-a：流送统计。飞行时相机跨过多个 chunk 边界，加载与卸载都必须发生；
+// 原地不动时 chunk 数应当刚好填满环形（(2r+1)^2）。
+if (streamingWorldEnabled)
+{
+	const uint32_t chunks = static_cast<uint32_t>(scene->getStreamingTerrainChunkCount());
+	std::cout << "[Streaming] chunks=" << chunks
+		<< " loaded=" << scene->getStreamingChunksLoadedTotal()
+		<< " unloaded=" << scene->getStreamingChunksUnloadedTotal()
+		<< " maxUpdateMs=" << scene->getMaxStreamingUpdateMs() << std::endl;
+	const uint32_t expected = static_cast<uint32_t>(
+		(2 * streamingWorldRadius + 1) * (2 * streamingWorldRadius + 1));
+	if (!streamingFlyEnabled && chunks != expected)
+		throw std::runtime_error("streaming world did not fill its ring");
+	if (streamingFlyEnabled && scene->getStreamingChunksUnloadedTotal() == 0u)
+		throw std::runtime_error("streaming world never unloaded a chunk while flying");
+}
 
 	if (materialStressEnabled && materialStressPendingSlot != kInvalidMaterialSlot)
 	{
@@ -1911,6 +1965,18 @@ allowCameraInput = false;
 // B-07: Play 模式下键盘归角色控制器，编辑器相机保持不动。
 if (editorState.playState != editor::PlayState::Editing)
 allowCameraInput = false;
+}
+
+// F2-a：--streaming-fly。相机沿半径 220 的圆周前移，让流送中心跨越 chunk
+// 边界，从而真的触发加载与卸载；不飞的话只会加载原地那一圈。
+if (streamingFlyEnabled)
+{
+	streamingFlyAngle += streamingFlySpeed * dt / 220.0f;
+	constexpr float radius = 220.0f;
+	scene->getCameraTransform().setTranslation(glm::vec3(
+		std::cos(streamingFlyAngle) * radius, 14.0f, std::sin(streamingFlyAngle) * radius));
+	// 圆周切线：forward = (sin(yaw), 0, cos(yaw))，切线 = (-sin a, 0, cos a)，故 yaw = -a。
+	scene->getCameraTransform().setEuler(glm::vec3(0.0f, -streamingFlyAngle, 0.0f));
 }
 
 scene->update(dt, window, aspect, allowCameraInput);

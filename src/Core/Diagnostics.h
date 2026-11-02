@@ -62,6 +62,15 @@ bool emptyScene = false;
 // --terrain-test：启动时创建一块持久地形，用于渲染/截图回归。
 bool terrainTest = false;
 
+// --streaming-world [radius]：启动即创建流送地形世界（相机周围按块加载）。
+// 与 --terrain-test 的区别：那个是固定的单块地形，这个是一圈独立 chunk。
+bool streamingWorld = false;
+int32_t streamingRadius = 3;
+// --streaming-fly [speed]：自检/无人值守时让相机沿圆周自动飞行，
+// 用来验证 chunk 的加载与卸载（不飞就只会在原地加载一圈）。
+bool streamingFly = false;
+float streamingFlySpeed = 12.0f;
+
 // 是否以编辑器模式启动。编辑器默认不加载 Sponza（见 Scene::init 的说明），
 // 但 TinyEngine.exe 的常规运行仍然加载，视觉回归基线不受影响。
 bool editorMode = false;

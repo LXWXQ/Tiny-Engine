@@ -55,6 +55,8 @@ public:
 	void setHiZEnabled(bool enabled);
 	void setGpuSceneMinScreenPixels(float pixels);
 	void setGpuSceneExternalDebugCount(uint32_t count);
+	void setStreamingWorldEnabled(bool enabled, int32_t radius);
+	void setStreamingFly(bool enabled, float speed);
 	void setCrossQueueTestEnabled(bool enabled);
 	void setResizeTestEnabled(bool enabled);
 	void setMaterialStressEnabled(bool enabled);
@@ -173,6 +175,14 @@ private:
 	uint64_t viewportDebounceClock = 0;
 
 	bool suppressAutoSave = false;
+	// F2-a：流送世界。streamingWorldEntity 是 TerrainStreamingComponent 的持有者，
+	// 换成坐标后 Scene::refreshStreamingTerrain 会按它增删 chunk 实体。
+	bool streamingWorldEnabled = false;
+	int32_t streamingWorldRadius = 3;
+	bool streamingFlyEnabled = false;
+	float streamingFlySpeed = 12.0f;
+	float streamingFlyAngle = 0.0f;
+	entt::entity streamingWorldEntity = entt::null;
 	bool resizeTestEnabled = false;
 	bool materialStressEnabled = false;
 	uint32_t materialStressPendingSlot = kInvalidMaterialSlot;

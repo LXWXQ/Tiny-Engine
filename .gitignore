@@ -22,5 +22,7 @@ out/
 /bundles/
 /baseline/
 /.tmp/
+# Config 自检在受限环境（TEMP 不可写）会退回到工作目录下的隐藏目录
+.tiny-config-selftest/
 node_modules/
 node_modules.orig/

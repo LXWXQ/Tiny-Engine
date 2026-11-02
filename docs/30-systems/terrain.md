@@ -48,8 +48,11 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
   manager + 多个独立 chunk 实体，每个 chunk 拥有自己的 Model/Mesh/Bounds，
   在相机周围有限半径内加载/卸载；
 - GPU compute 已负责高度场噪声与单 chunk 顶点/索引组装；多 chunk 手动地形仍由
-  CPU builder 生成。LOD 选择/剔除走 GPU selection；流送半径有限，尚不是无缝
+  CPU builder 生成。LOD 选择/剔除走 GPU selection；流送半径有限（1~8），尚不是无缝
   无限世界。
+- F2-a 起有可持续运行的载体：`--streaming-world [radius]` 在构造期建立 manager，
+  半径 3 时 49 个 chunk 实体（低于地形 GPU 选择的 64 个 slot 上限）；
+  `--streaming-fly [speed]` 让相机沿半径 220 的圆周前移，使加载/卸载持续发生。
 
 ## 2. 文件与职责
 

@@ -74,6 +74,11 @@ int main(int argc, char** argv)
     uint32_t gpuSceneExternal = 0u;
     bool noMergedBuffers = false;
     bool noHiZ = false;
+    // F2-a：流送世界。radius 默认 3（7x7=49 个 chunk 实体，低于地形 GPU 选择的 64 个 slot 上限）。
+    bool streamingWorld = false;
+    int32_t streamingRadius = 3;
+    bool streamingFly = false;
+    float streamingFlySpeed = 12.0f;
     bool jobTest = false;
     bool crossQueueTest = false;
     bool resizeTest = false;
@@ -130,6 +135,31 @@ int main(int argc, char** argv)
             try { gpuSceneExternal = static_cast<uint32_t>(std::stoul(argv[i + 1])); }
             catch (...) { /* 参数不是数字就忽略 */ }
             ++i;
+        }
+        else if (arg == "--streaming-world")
+        {
+            streamingWorld = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                try { streamingRadius = std::stoi(argv[i + 1]); }
+                catch (...) { /* 参数不是数字就忽略 */ }
+                ++i;
+            }
+            // 世界必须在 FirstApp 构造里创建（Scene 已就绪），所以同时写进 Options。
+            diagOptions.streamingWorld = true;
+            diagOptions.streamingRadius = streamingRadius;
+        }
+        else if (arg == "--streaming-fly")
+        {
+            streamingFly = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                try { streamingFlySpeed = std::stof(argv[i + 1]); }
+                catch (...) { /* 参数不是数字就忽略 */ }
+                ++i;
+            }
+            diagOptions.streamingFly = true;
+            diagOptions.streamingFlySpeed = streamingFlySpeed;
         }
         else if (arg == "--jobtest")  jobTest = true;
         else if (arg == "--cross-queue-test") crossQueueTest = true;
@@ -255,6 +285,8 @@ int main(int argc, char** argv)
         if (noHiZ) app.setHiZEnabled(false);
         if (gpuSceneMinPixels > 0.0f) app.setGpuSceneMinScreenPixels(gpuSceneMinPixels);
         if (gpuSceneExternal > 0u) app.setGpuSceneExternalDebugCount(gpuSceneExternal);
+        if (streamingWorld) app.setStreamingWorldEnabled(true, streamingRadius);
+        if (streamingFly) app.setStreamingFly(true, streamingFlySpeed);
         if (crossQueueTest) app.setCrossQueueTestEnabled(true);
         if (resizeTest) app.setResizeTestEnabled(true);
         if (materialStress) app.setMaterialStressEnabled(true);
