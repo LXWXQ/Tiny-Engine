@@ -28,7 +28,7 @@ updated: 2026-11-02
 |---|---|---|---|---|
 | 1 | `jobtest` | `--jobtest` | `[JobSystem] selfTest PASS` | worker pool、parallelFor、嵌套、异常传播 |
 | 2 | `td09-config-migration` | `--config-test` | `[Config] selfTest PASS` | v0->v2 迁移、备份、损坏/未来版本保护 |
-| 3 | `selftest-default` | `--selftest 120` | `[Scene] ECS/spatial selfTest PASS`、`[TD07] ComputeProbe disabled...` | 主路径 + setter 自动 Transform/Bounds dirty 通知 + 增量 AABB |
+| 3 | `selftest-default` | `--selftest 120` | `[Scene] ECS/spatial selfTest PASS`、`[TD07] ComputeProbe disabled...`、`[RenderGraph] setPassEnabled selfTest PASS` | 主路径 + setter 自动 Transform/Bounds dirty 通知 + 增量 AABB |
 | 4 | `selftest-no-bloom` | `--no-bloom` | `[TD06] Bloom disabled: skipping Bright + Down + Up passes` | Bloom 关闭分支真跳过 |
 | 5 | `selftest-no-ssao` | `--no-ssao` | `[TD07] ...` | SSAO 关闭分支 |
 | 6 | `selftest-no-bloom-no-ssao` | 两者 | 同上两者 | 组合分支 |

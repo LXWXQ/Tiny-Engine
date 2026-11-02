@@ -525,3 +525,22 @@ updated: 2026-11-02
   `async GPU upload PASS ... gpuMesh=1`、`material sets PASS ... resident=4`、
   `streaming chunk test PASS ... gpuMesh=9`）；`tools/Validate.ps1 -Incremental -SkipSetup`
   21/21 PASS，日志 `build/validation/20261102-101809`。
+
+## D-46：实现 `RenderGraph::setPassEnabled`（跨帧 Pass 开关）
+
+- **问题**：`passes` 每帧重建（`beginFrame` 与 `endFrame` 末尾都会 `reset + clear`），
+  旧实现遍历当前帧的 `passes`，帧间调用时列表为空 → 静默无效（tech-debt TD-13 /
+  weak-points 原第 10 条）。
+- **实现**：新增与 Vulkan 无关的 `PassSwitchboard`（精确匹配 / `*` 前缀匹配 / 最近设置优先 /
+  未命中诊断），`addGraphicsPass`、`addComputePass` 注册时 `resolve` 重放；同帧内已注册的
+  Pass 只按命中的规则重放，避免覆盖别处 `setEnabled(false)` 的反例写法。新增
+  `clearPassOverrides()` / `isPassEnabled()` / `getPassSwitchboard()` 与
+  `getLastFrameExecutedPasses()` / `getLastFrameSkippedPasses()` / `wasPassSkippedLastFrame()`。
+- **可观测**：未命中规则在 `endFrame` 末尾打印一次（stdout，不破坏 stderr 0 字节基线）；
+  簿记清单让"关掉的 Pass 真的没录"可断言，也给调试面板留了口子。
+- **回归**：`[RenderGraph] setPassEnabled selfTest PASS | prefix + exact + last-wins + diagnostic`；
+  `[RenderGraph] pass bookkeeping selfTest PASS | executed=14 skipped=0`（`--no-bloom` 为 7）；
+  `--selftest 120` 245 FPS、验证层 0/0；21 项 `Validate.ps1` ALL PASS
+  （`build/validation/20261102-132535`）；DocCheck PASS。
+- **文档**：rendergraph.md 新增 §2.2（跨帧语义 + 禁用会跳过屏障声明的代价与原错误串）；
+  tech-debt 增 TD-13 并从"未关闭"表移除；weak-points 删除该条；test-matrix 第 3 项补标记。

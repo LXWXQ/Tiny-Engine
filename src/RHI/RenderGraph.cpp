@@ -160,13 +160,23 @@ void RenderGraph::endFrame()
     // 而不是让画面先花一帧。
     validateWriteCoverage();
 
+    // 本帧 Pass 执行 / 跳过清单：setPassEnabled 的语义靠它可断言，
+    // 调试面板也能直接显示这一帧到底跑了哪些 Pass。
+    lastFrameExecutedPasses.clear();
+    lastFrameSkippedPasses.clear();
+
     // P0-4：只对 graphics pass 计时；compute 队列的时间戳另算。
     uint32_t timedPassIndex = 0;
 
     for (std::unique_ptr<Pass>& passPtr : passes)
     {
         Pass& pass = *passPtr;
-        if (!pass.enabled) continue;
+        if (!pass.enabled)
+        {
+            lastFrameSkippedPasses.push_back(pass.name);
+            continue;
+        }
+        lastFrameExecutedPasses.push_back(pass.name);
 
         const VkCommandBuffer passCmd = pass.isCompute ? computeCmd : cmd;
 
@@ -381,6 +391,8 @@ void RenderGraph::endFrame()
             be.lastAccessQueue = pass.isCompute ? 1 : 0;
         }
     }
+
+    reportUnmatchedPassOverrides();
 
     for (std::unique_ptr<Pass>& p : passes)
         p.reset();
@@ -747,10 +759,142 @@ void RenderGraph::emitBufferBarrierIfNeeded(const BufferAccess& acc, VkCommandBu
     vkCmdPipelineBarrier2(target, &dep);
 }
 
+void PassSwitchboard::set(const std::string& pattern, bool enabled)
+{
+    if (pattern.empty())
+        return;
+
+    for (auto it = entries.begin(); it != entries.end(); ++it)
+    {
+        if (it->pattern != pattern)
+            continue;
+
+        Entry updated = *it;
+        updated.enabled = enabled;
+        updated.reported = false;
+        entries.erase(it);
+        entries.push_back(updated);
+        return;
+    }
+
+    Entry entry;
+    entry.pattern = pattern;
+    entry.enabled = enabled;
+    entries.push_back(entry);
+}
+
+void PassSwitchboard::clear()
+{
+    entries.clear();
+}
+
+bool PassSwitchboard::patternMatches(const std::string& pattern, const std::string& passName)
+{
+    if (pattern.empty())
+        return false;
+    if (pattern.back() != 0x2a)
+        return pattern == passName;
+
+    const std::string prefix = pattern.substr(0, pattern.size() - 1);
+    return passName.rfind(prefix, 0) == 0;
+}
+
+bool PassSwitchboard::resolve(const std::string& passName)
+{
+    bool enabled = true;
+    for (Entry& entry : entries)
+    {
+        if (!patternMatches(entry.pattern, passName))
+            continue;
+        entry.matched = true;
+        enabled = entry.enabled;
+    }
+    return enabled;
+}
+
+bool PassSwitchboard::resolveQuiet(const std::string& passName) const
+{
+    bool enabled = true;
+    for (const Entry& entry : entries)
+    {
+        if (patternMatches(entry.pattern, passName))
+            enabled = entry.enabled;
+    }
+    return enabled;
+}
+
+std::vector<std::string> PassSwitchboard::takeUnmatchedPatterns()
+{
+    std::vector<std::string> unmatched;
+    for (Entry& entry : entries)
+    {
+        if (entry.matched || entry.reported)
+            continue;
+        entry.reported = true;
+        unmatched.push_back(entry.pattern);
+    }
+    return unmatched;
+}
+
+bool renderGraphSwitchboardSelfTest()
+{
+    const auto fail = [](const char* what)
+    {
+        std::cout << "[RenderGraph] setPassEnabled selfTest FAIL: " << what << std::endl;
+        return false;
+    };
+
+    PassSwitchboard board;
+    if (!board.resolve("Bloom.Down0"))
+        return fail("default should be enabled");
+
+    board.set("Bloom.Down*", false);
+    if (board.resolve("Bloom.Down0"))
+        return fail("prefix rule did not disable Bloom.Down0");
+    if (board.resolve("Bloom.Down12"))
+        return fail("prefix rule did not cover Bloom.Down12");
+    if (!board.resolve("Bloom.Up0"))
+        return fail("prefix rule leaked to Bloom.Up0");
+
+    board.set("Present", false);
+    if (board.resolve("Present"))
+        return fail("exact rule did not disable Present");
+    if (!board.resolve("PresentTransition"))
+        return fail("exact rule leaked to PresentTransition");
+
+    board.set("Bloom.*", true);
+    board.set("Bloom.Down*", false);
+    if (board.resolve("Bloom.Down0"))
+        return fail("last set should win for Bloom.Down0");
+    if (!board.resolve("Bloom.Up3"))
+        return fail("Bloom.Up3 should stay enabled");
+
+    PassSwitchboard diag;
+    diag.set("Nope.*", false);
+    if (!diag.resolve("Geometry"))
+        return fail("unmatched pattern must not disable Geometry");
+    const std::vector<std::string> first = diag.takeUnmatchedPatterns();
+    if (first.size() != 1 || first.front() != "Nope.*")
+        return fail("unmatched pattern should be reported once");
+    if (!diag.takeUnmatchedPatterns().empty())
+        return fail("unmatched pattern reported twice");
+
+    diag.clear();
+    if (!diag.empty())
+        return fail("clear should drop all rules");
+    if (!diag.resolve("Nope.Match"))
+        return fail("clear should restore enabled");
+
+    std::cout << "[RenderGraph] setPassEnabled selfTest PASS | prefix + exact + last-wins + diagnostic" << std::endl;
+    return true;
+}
+
 RenderGraph::Pass& RenderGraph::addGraphicsPass(const std::string& name)
 {
     passes.push_back(std::make_unique<Pass>(name));
     passes.back()->isCompute = false;
+    // 跨帧开关在注册时重放：passes 每帧重建，这是唯一可靠的时机。
+    passes.back()->enabled = passSwitchboard.resolve(name);
     return *passes.back();
 }
 
@@ -758,6 +902,7 @@ RenderGraph::Pass& RenderGraph::addComputePass(const std::string& name)
 {
     passes.push_back(std::make_unique<Pass>(name));
     passes.back()->isCompute = true;
+    passes.back()->enabled = passSwitchboard.resolve(name);
     return *passes.back();
 }
 
@@ -1041,13 +1186,43 @@ void RenderGraph::presentTransition(TextureHandle handle)
 
 void RenderGraph::setPassEnabled(const std::string& passName, bool enabled)
 {
+    passSwitchboard.set(passName, enabled);
+
+    // 同一帧内已经注册过的 Pass 立即生效（先注册后调用是常见写法）。
+    // 只碰被这条规则命中的 Pass：其余的 enabled 保持它们自己 setEnabled 的结果，
+    // 否则 TINY_SIMULATE_SSAO_SKIP 这种「故意关掉某个 Pass」的反例会被悄悄打开。
     for (std::unique_ptr<Pass>& p : passes)
-        if (p->name == passName) p->enabled = enabled;
+    {
+        if (!PassSwitchboard::patternMatches(passName, p->name))
+            continue;
+        p->enabled = passSwitchboard.resolveQuiet(p->name);
+    }
 }
 
-// ============================================================================
-// Pass 的资源访问声明
-// ============================================================================
+void RenderGraph::clearPassOverrides()
+{
+    passSwitchboard.clear();
+}
+
+bool RenderGraph::isPassEnabled(const std::string& passName) const
+{
+    return passSwitchboard.resolveQuiet(passName);
+}
+
+bool RenderGraph::wasPassSkippedLastFrame(const std::string& passName) const
+{
+    return std::find(lastFrameSkippedPasses.begin(), lastFrameSkippedPasses.end(), passName)
+        != lastFrameSkippedPasses.end();
+}
+
+void RenderGraph::reportUnmatchedPassOverrides()
+{
+    for (const std::string& pattern : passSwitchboard.takeUnmatchedPatterns())
+    {
+        std::cout << "[RenderGraph] setPassEnabled: 模式 " << pattern
+                  << " 本帧没有匹配任何 Pass（拼写错误？以 * 结尾表示前缀匹配）" << std::endl;
+    }
+}
 
 RenderGraph::Pass& RenderGraph::Pass::transitionTo(TextureHandle t, VkImageLayout layout,
                                                   VkPipelineStageFlags2 stage, VkAccessFlags2 access,

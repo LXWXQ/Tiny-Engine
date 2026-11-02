@@ -6,6 +6,7 @@
 class GpuProfiler;   // P1-1：Tracy GPU zone（前置声明，避免头文件污染）
 #include <vulkan/vulkan.h>
 #include <string>
+#include <cstddef>
 #include <vector>
 #include <functional>
 #include <memory>
@@ -32,6 +33,53 @@ class GpuProfiler;   // P1-1：Tracy GPU zone（前置声明，避免头文件�
 // 每个 Pass 只是 vkCmdBeginRendering + 一组 imageView —— 也就不会再出现
 // 「Framebuffer 生命周期」那一类坑。
 // ============================================================================
+// ---------------------------------------------------------------------------
+// 跨帧 Pass 开关。
+//
+// RenderGraph::passes 每帧重建（endFrame 末尾 reset + clear，录制时再注册），
+// 所以「开关」不能只写在 Pass 上，必须按名字记住意图，在注册时重放。
+// 旧版 setPassEnabled 只遍历当前帧的 passes —— 帧间调用时列表是空的，
+// 于是静默无效（tech-debt #9）。
+//
+// 规则：
+//   - 精确名字匹配；以星号结尾时按前缀匹配（Bloom.Down* 覆盖 Down0..DownN）。
+//   - 规则按「最近一次设置」排序，后设置的覆盖先设置的。
+//   - 某条规则整帧没有命中任何 Pass 时，endFrame 打印一次诊断，
+//     避免名字拼错之后只表现为「开关没反应」。
+//   - 不碰 Vulkan，可独立单测：开关匹配错了不该等到跑起来才发现。
+// ---------------------------------------------------------------------------
+class PassSwitchboard
+{
+public:
+    void set(const std::string& pattern, bool enabled);
+    void clear();
+    bool empty() const { return entries.empty(); }
+    std::size_t size() const { return entries.size(); }
+
+    static bool patternMatches(const std::string& pattern, const std::string& passName);
+
+    // 按「最近一次设置」的顺序遍历，最后命中的规则生效；命中会记录到规则上。
+    bool resolve(const std::string& passName);
+
+    // 只查询，不改变任何状态。
+    bool resolveQuiet(const std::string& passName) const;
+
+    // 取走「从未命中过任何 Pass」的规则（每条规则只报一次）。
+    std::vector<std::string> takeUnmatchedPatterns();
+
+private:
+    struct Entry
+    {
+        std::string pattern;
+        bool enabled = true;
+        bool matched = false;
+        bool reported = false;
+    };
+    std::vector<Entry> entries;
+};
+
+// 纯逻辑自检：不创建设备、不录命令。覆盖精确/前缀/最近优先/诊断去重。
+bool renderGraphSwitchboardSelfTest();
 class RenderGraph
 {
 public:
@@ -303,14 +351,35 @@ public:
     };
     const CrossQueueDependencies& getCrossQueueDependencies() const { return crossQueueDependencies; }
 
-    // 供 ImGui 面板开关某个 Pass
+    // 供 ImGui 面板 / 配置开关某个 Pass。语义见 PassSwitchboard：
+    // 跨帧保存，注册时重放；同一帧内已注册的 Pass 立即生效。
+    // 名字以星号结尾时按前缀匹配（Bloom.Up*）。
+    // 注意：禁用整个 Pass 会把它的屏障声明一起跳过 —— 后面还有 Pass 读它写的
+    // 瞬时资源时，validateWriteCoverage 会在提交前报「该子资源这一帧没人写」，
+    // 并指出它本来由哪个 Pass 写。成组关闭要连消费者一起关。
     void setPassEnabled(const std::string& passName, bool enabled);
+    // 清空全部开关（测试与恢复默认用）。
+    void clearPassOverrides();
+    // 当前意图（没有规则命中时为 true）；不改变任何状态。
+    bool isPassEnabled(const std::string& passName) const;
+    const PassSwitchboard& getPassSwitchboard() const { return passSwitchboard; }
+
+    // 上一帧实际录制 / 被跳过的 Pass 名（登记顺序）。
+    // 自检用它断言关掉的 Pass 真的没录，调试面板可以直接显示。
+    const std::vector<std::string>& getLastFrameExecutedPasses() const { return lastFrameExecutedPasses; }
+    const std::vector<std::string>& getLastFrameSkippedPasses() const { return lastFrameSkippedPasses; }
+    bool wasPassSkippedLastFrame(const std::string& passName) const;
 
     // 把某个纹理转到 PRESENT_SRC_KHR，必须在本帧最后一个 Pass 之后调用。
     // 渲染图不应该知道「哪张图要被 present」，所以由应用显式声明。
     void presentTransition(TextureHandle handle);
 
 private:
+    PassSwitchboard passSwitchboard;
+    std::vector<std::string> lastFrameExecutedPasses;
+    std::vector<std::string> lastFrameSkippedPasses;
+    void reportUnmatchedPassOverrides();
+
     struct TextureEntry
     {
         TextureDesc desc;

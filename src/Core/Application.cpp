@@ -1417,6 +1417,11 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!Scene::selfTest())
 		throw std::runtime_error("Scene ECS/spatial selfTest failed");
 
+	// 整理+还债：RenderGraph 的跨帧 Pass 开关是纯逻辑，不依赖设备，
+	// 所以先把匹配规则本身证伪，再靠帧循环后的簿记断言确认真的生效。
+	if (!renderGraphSwitchboardSelfTest())
+		throw std::runtime_error("RenderGraph setPassEnabled selfTest failed");
+
 	// D-8：编辑器自检（命令栈 / 删除撤销 / 序列化往返）。
 	// 放在场景自检之后：它只依赖 entt 与 JSON，不需要 Vulkan 设备。
 	if (!editor::EditorLayer::selfTest())
@@ -1511,6 +1516,21 @@ int FirstApp::runHeadlessSelfTest(int frames)
 			<< " capacity=" << descriptorManager->getMaterialSlotCapacity() << "\n";
 	}
 
+	// 整理+还债：Pass 开关的簿记断言。默认配置下 Geometry 必须真的录进这一帧，
+	// 且同一帧内不允许既算执行又算跳过。这条断言保护的是「清单与实际录制一致」
+	// 这个契约，而不是某个具体 Pass 的可见性。
+	{
+		const std::vector<std::string>& executed = renderGraph->getLastFrameExecutedPasses();
+		const std::vector<std::string>& skipped = renderGraph->getLastFrameSkippedPasses();
+		const bool geometryExecuted = std::find(executed.begin(), executed.end(), std::string("Geometry")) != executed.end();
+		bool overlap = false;
+		for (const std::string& name : skipped)
+			overlap = overlap || std::find(executed.begin(), executed.end(), name) != executed.end();
+		if (!geometryExecuted || overlap || renderGraph->wasPassSkippedLastFrame("Geometry"))
+			throw std::runtime_error("RenderGraph pass bookkeeping selfTest failed");
+		std::cout << "[RenderGraph] pass bookkeeping selfTest PASS | executed=" << executed.size()
+			<< " skipped=" << skipped.size() << std::endl;
+	}
 	std::cout << "[SelfTest] 完成 " << frames << " 帧（验证层不再写 stderr；见 [Validation] 摘要 / --validation-jsonl）\n";
 	return 0;
 }

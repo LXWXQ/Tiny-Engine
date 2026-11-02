@@ -5,7 +5,7 @@ type: architecture
 scope: src/RHI/RenderGraph.h, src/RHI/RenderGraph.cpp, src/Render/IRenderPass.h
 read-when: 修改任何 Pass 的资源声明、新增资源、调整 Pass 顺序、调试 layout/hazard 报错
 size: ~400 行
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 # 渲染图：屏障推导与语义校验
@@ -60,9 +60,41 @@ pass.writeBuffer(handle, BufferRange{offset, size});
 `importTexture` 会把"初始布局 != `UNDEFINED` ⇒ 常驻资源"这个结论**回写**进
 `TextureDesc::persistent`。这个回写是 W2 语义校验豁免的依据——**同一事实只能有一个来源**。
 
+### 2.2 Pass 开关（跨帧）
+
+`setPassEnabled(name, enabled)` 的意图**不写在这一帧的 `Pass` 上**：`passes` 每帧重建
+（`beginFrame` 与 `endFrame` 末尾都会 `reset + clear`），所以帧间调用时遍历 `passes`
+只会走空（tech-debt TD-13 之前的行为就是静默无效）。
+
+现在由 `PassSwitchboard` 记住规则，在 `addGraphicsPass` / `addComputePass` 注册时重放：
+
+| 能力 | 语义 |
+|---|---|
+| 名字匹配 | 精确相等；以 `*` 结尾按前缀匹配（`Bloom.Down*` 覆盖 `Down0..DownN`） |
+| 优先级 | 最近一次设置优先（同一个 pattern 重新设置会移到规则表末尾） |
+| 同帧生效 | 只按命中这条规则的已注册 Pass 重放，不覆盖别处 `setEnabled(false)` 的结果 |
+| 未命中诊断 | 整帧没命中任何 Pass 的规则在 `endFrame` 末尾打印一次（stdout，不是 stderr） |
+| 可断言 | `getLastFrameExecutedPasses()` / `getLastFrameSkippedPasses()` / `wasPassSkippedLastFrame()` |
+
+**代价（必须知道）**：禁用整个 Pass 会把它的屏障声明一起跳过。后续 Pass 若读它写的
+瞬时资源，`validateWriteCoverage()` 会在提交前抛：
+
+```
+RenderGraph 语义错误: Pass "<P>" 读取了瞬时纹理 "<T>" 的 mip <m> / layer <l>，
+但该子资源这一帧到目前为止没有任何 Pass 写过它。它本来是由 Pass "<W>" 写的。
+```
+
+所以"关掉一条链中间的某个 Pass"不成立，要关就成组关（把消费者一起关掉）。`Bloom` 现在
+仍是"不注册"而不是 `setEnabled(false)`（`BloomPass.cpp` 提前 return），`SSAO` 也刻意不关
+（`Lighting` 会乘未定义内容）。
+
+自检：`renderGraphSwitchboardSelfTest()`（纯逻辑，不建设备）覆盖精确/前缀/最近优先/诊断去重；
+帧循环后再断言 `Geometry` 确实在 `executed` 里、且没有 Pass 同时出现在两张清单。
+
 ---
 
 ## 3. 屏障推导
+
 
 ### 3.1 每张图记住的状态
 
