@@ -180,6 +180,11 @@ public:
     const std::vector<glm::vec3>& getPickingPositions() const { return pickingPositions; }
     const std::vector<uint32_t>& getPickingIndices() const { return pickingIndices; }
 
+    // F1-b：合并顶点/索引缓冲要用完整顶点（法线/UV/颜色），拾取数据只有位置。
+    // 地形模型不保留（LOD+裙边会成倍占内存），它们本来也不参与 GPU 批。
+    const std::vector<Vertex>& getCpuVertices() const { return cpuVertices; }
+    const std::vector<uint32_t>& getCpuIndices() const { return cpuIndices; }
+
     // 顶点包围盒（AABB）：用来给场景自动摆放相机、做粗略剔除等
     glm::vec3 getBoundsMin() const { return boundsMin; }
     glm::vec3 getBoundsMax() const { return boundsMax; }
@@ -225,6 +230,10 @@ private:
 
     std::vector<SubMesh> subMeshes;
     std::string sourcePath;
+
+    // F1-b：合并缓冲的源数据（地形模型留空）
+    std::vector<Vertex> cpuVertices;
+    std::vector<uint32_t> cpuIndices;
 
     // 拾取用的 CPU 侧几何
     std::vector<glm::vec3> pickingPositions;

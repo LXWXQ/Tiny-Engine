@@ -1370,6 +1370,11 @@ void FirstApp::setGpuSceneForced(bool forced)
 	scene->getSettings().gpuSceneForce = forced;
 }
 
+void FirstApp::setGpuMergedBuffers(bool enabled)
+{
+	scene->getSettings().gpuMergedBuffers = enabled;
+}
+
 void FirstApp::setCrossQueueTestEnabled(bool enabled)
 {
 	crossQueueProbePassPtr->setEnabled(enabled);

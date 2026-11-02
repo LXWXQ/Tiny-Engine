@@ -196,6 +196,10 @@ $tests = @(
     # ---- P2 ----
     @{ Name = "f1-gpu-scene"; Args = @("--selftest", "$([Math]::Max($Frames, 40))", "--gpu-scene");
        MustContain = @("[SceneGpu] GPU batch ready", "[SceneGpu] indirect batch | models=", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f1b-merged-buffers"; Args = @("--selftest", "$([Math]::Max($Frames, 40))", "--gpu-scene");
+       MustContain = @("[SceneGpu] merged buffers built", "[SceneGpu] indirect batch | models=", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f1b-merged-off"; Args = @("--selftest", "$([Math]::Max($Frames, 40))", "--gpu-scene", "--no-merged-buffers");
+       MustContain = @("[SceneGpu] GPU batch ready", "[SceneGpu] indirect batch | models=", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

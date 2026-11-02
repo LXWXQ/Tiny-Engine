@@ -20,6 +20,8 @@ Model::Model(Device& device, VkCommandPool commandPool, const std::vector<Vertex
     computeBounds(vertices);
     computeUvBounds(vertices);
     finalizeSubMeshes({});
+    cpuVertices = vertices;
+    cpuIndices = indices;
 }
 
 Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& builder)
@@ -30,6 +32,15 @@ Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& bu
     computeBounds(builder.vertices);
     computeUvBounds(builder.vertices);
     finalizeSubMeshes(builder.subMeshes);
+    // 地形模型每块 LOD 都是独立几何，保留 CPU 副本太贵；它们不走 GPU 批。
+    const bool keepCpuGeometry = std::none_of(
+        builder.subMeshes.begin(), builder.subMeshes.end(),
+        [](const SubMesh& subMesh) { return subMesh.isTerrainChunk; });
+    if (keepCpuGeometry)
+    {
+        cpuVertices = builder.vertices;
+        cpuIndices = builder.indices;
+    }
 
     // 保留一份 CPU 侧几何用于编辑器点选。
     // 只拷位置：法线/UV 对射线求交没有意义，Sponza 那种规模能省下 2/3 内存。

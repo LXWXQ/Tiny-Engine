@@ -163,6 +163,9 @@ struct EngineSettings
 	uint32_t gpuSceneMinInstances = 256;
 	// 调试/验证用：忽略阈值，强制走 GPU 路径（缩略场景也能覆盖这条路径）。
 	bool gpuSceneForce = false;
+	// F1-b：把可批模型合并进一份全局顶点/索引缓冲，一次 multidraw 提交。
+	// 关掉退回 F1-a 的「每模型一次 bind + 一组建 indirect 命令」。
+	bool gpuMergedBuffers = true;
 
 	bool ssaoEnabled = true;
 	float ssaoRadius = 0.5f;

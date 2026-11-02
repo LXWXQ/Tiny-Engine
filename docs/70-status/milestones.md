@@ -41,10 +41,10 @@ updated: 2026-11-02
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 22 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 24 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
-| 场景 | 103 子网格 + 天空盒 = `draw calls 104`（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
+| 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
 | 三角形 / 顶点 | 270459 / 811377（`vertices` 实际统计的是索引数） | 同上 |
 | 描述符绑定 | `desc binds 2`（Set0/1/2 一次 + Set3 实例 SSBO 一次；后者由所有图形管线静态使用，GPU 批关闭时也要绑） | `[SelfTest] telemetry` / `[Perf]` 行 |
 | 帧率 | `--selftest 300` 约 240~260 FPS（Debug，随相机/场景内容变化） | 同上 |
@@ -572,3 +572,20 @@ updated: 2026-11-02
 **回归**：`--selftest 120` errors=0 warnings=0；`Validate.ps1` 新增 `f1-gpu-scene`；像素级比对（相机 `[0,6,45]`）GPU 路径与 CPU 路径 `max diff = 0`。
 
 **性能**：300 帧多轮 default 248.1/248.0、cpu 237.7/257.1、forced 248.1/228.2 —— 噪声大于差异，当前 103 实例下两条路径相当，收益留给实例数上来之后。
+
+## F1-b：合并顶点/索引缓冲（一次 multidraw）
+
+**问题**：F1-a 按模型分组、每个子网格一条间接命令，103 个子网格仍是 103 条命令；multidraw 的收益要等命令能跨模型才拿得到，而间接命令本身不带顶点缓冲绑定。
+
+**实现**：
+- `Model` 为可批模型保留一份完整 CPU 顶点/索引（`getCpuVertices()/getCpuIndices()`）；地形模型（含 `isTerrainChunk` 子网格）不留，它们本来不走 GPU 批；
+- `SceneGpuBatch::ensureMergedMesh()`：按模型集合算 FNV 签名（指针 + 顶点数 + 索引数），变了才重建；顶点/索引分别拼进一份 device-local 缓冲，索引保持原样，每个模型记 `baseVertex`；
+- 绘制时把 `baseVertex` 填进间接命令的 `vertexOffset`（等价 `vkCmdDrawIndexed` 语义），所有实例共用 `ranges[0]`/`counts[0]`，一条 `vkCmdDrawIndexedIndirectCount` 画完；
+- 重建走自建 `uploadPool` + staging + `cmdBeginSingleTime/cmdEndSingleTime`，屏障 TRANSFER_WRITE -> VERTEX_ATTRIBUTE_READ|INDEX_READ；
+- 回退：任一可批模型没有 CPU 几何 -> `ensureMergedMesh` 返回 false，退回 F1-a 每模型路径；`--no-merged-buffers` 可强制回退。
+
+**可观测**：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时遥测 `draw calls 2 / triangles 270459 / vertices 811377`（合并前 104）。
+
+**回归**：`Validate.ps1` 新增 `f1b-merged-buffers` 与 `f1b-merged-off`，全套 24 项 ALL PASS；三路像素比对（合并 / 每模型 / CPU）相机 `[0,6,45]` 下 `max diff = 0`。
+
+**性能**：300 帧两轮 cpu 185.2/209.6、merged 209.6/227.6、per-model 218.9/219.6 —— 同模式轮间波动 24 FPS，仍以噪声为主；确定收益是 draw call 数 104 -> 2，不是本机 FPS。

@@ -108,6 +108,10 @@ private:
         uint32_t commandBase = 0;
         uint32_t modelSlot = 0;
         bool eligible = false;
+        // F1-b：合并缓冲里的落点（该模型顶点/索引在全局缓冲中的起始位置）。
+        uint32_t mergedFirstIndex = 0;
+        int32_t mergedBaseVertex = 0;
+        bool merged = false;
     };
 
     struct SubMeshBounds
@@ -129,7 +133,24 @@ private:
         VkDescriptorSet graphicsSet = VK_NULL_HANDLE;
     };
 
+    struct MergedPlacement
+    {
+        uint32_t firstIndex = 0;
+        uint32_t baseVertex = 0;
+    };
+
+    struct MergedMesh
+    {
+        GpuBuffer vertices;
+        GpuBuffer indices;
+        uint64_t signature = 0;
+        bool valid = false;
+    };
+
     void createLayoutsAndPipeline();
+    bool ensureMergedMesh(const std::vector<const Model*>& models);
+    void destroyMergedMesh();
+    void uploadDeviceLocal(GpuBuffer& destination, const void* data, VkDeviceSize size);
     void destroyResources();
 
     void ensureCapacity(uint32_t instanceCapacity, uint32_t modelCapacity);
@@ -165,6 +186,13 @@ private:
     std::unordered_set<uint32_t> warnedFallback;        // 缺材质槽位的实体只提示一次
 
     std::unordered_map<const Model*, std::vector<SubMeshBounds>> modelBoundsCache;
+
+    // F1-b：全局合并顶点/索引缓冲。签名 = 模型集合，变了才重建（低频）。
+    MergedMesh mergedMesh;
+    std::unordered_map<const Model*, MergedPlacement> mergedPlacements;
+    VkCommandPool uploadPool = VK_NULL_HANDLE;
+    bool mergedActive = false;
+    bool warnedNoMergedData = false;
 
     Stats stats;
 

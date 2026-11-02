@@ -57,11 +57,11 @@ Graphics: vkCmdDrawIndexedIndirect
 - CPU 不再逐个遍历实体决定是否绘制；`GeometrySystem::render` 耗时显著下降
 - 验证层 0 字节；`--validation-features sync` 0 errors
 
-**进度（2026-11-02，F1-a）**
-
-- 已完成：实例缓冲摊平（224B/条）、compute 视锥剔除、`vkCmdDrawIndexedIndirectCount` 按模型提交、set 3 实例 SSBO、GPU 批遥测回读；详见 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md)。
-- 默认阈值 256 实例：小场景仍走 CPU 路径，`--gpu-scene` 强制、`--no-gpu-scene` 关闭。
-- 未完成：全局合并顶点/索引缓冲（真正的 multidraw）、Hi-Z 遮挡剔除、按材质排序合批、`forgetModel()` 调用方（见 [tech-debt](../70-status/tech-debt.md) 13/14）。
+**进度（2026-11-02）**
+- F1-a：实例缓冲摊平（224B/条）、compute 视锥剔除、`vkCmdDrawIndexedIndirectCount` 按模型提交、set 3 实例 SSBO、GPU 批遥测回读；详见 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md)。
+- F1-b：可批模型合并进全局顶点/索引缓冲，单 range/单 counter，一条 `vkCmdDrawIndexedIndirectCount` 画完；Sponza 的 draw call 104 -> 2，三路像素比对 `max diff = 0`。
+- 阈值 256 实例：小场景仍走 CPU 路径，`--gpu-scene` 强制、`--no-gpu-scene` 关闭、`--no-merged-buffers` 退回每模型 indirect。
+- 未完成：Hi-Z 遮挡剔除、按材质排序合批、实例化（把顶点属性也搬进缓冲，彻底摆脱每模型绑定）、`forgetModel()` 调用方（见 [tech-debt](../70-status/tech-debt.md) 13）。
 
 ---
 

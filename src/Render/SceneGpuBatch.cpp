@@ -3,6 +3,7 @@
 #include "Scene/Model.h"
 #include "Core/MaterialSlot.h"
 #include "AssetPaths.h"
+#include "RHI/CommandUtils.h"
 
 #include <algorithm>
 #include <cstring>
@@ -41,6 +42,13 @@ SceneGpuBatch::SceneGpuBatch(Device& device)
         return;
     }
 
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    poolInfo.queueFamilyIndex = vulkanDevice.findPhysicalQueueFamilies().graphicsFamily.value();
+    if (vkCreateCommandPool(vulkanDevice.getDevice(), &poolInfo, nullptr, &uploadPool) != VK_SUCCESS)
+        throw std::runtime_error("SceneGpuBatch: command pool creation failed");
+
     createLayoutsAndPipeline();
     std::cout << "[SceneGpu] GPU batch ready | instancesPerFrame=" << instanceCapacity
               << " models=" << modelCapacity << " drawIndirectCount=1\n";
@@ -58,6 +66,12 @@ bool SceneGpuBatch::useGpuPath(const FrameInfo& frameInfo) const
 SceneGpuBatch::~SceneGpuBatch()
 {
     destroyResources();
+
+    if (uploadPool != VK_NULL_HANDLE)
+    {
+	vkDestroyCommandPool(vulkanDevice.getDevice(), uploadPool, nullptr);
+	uploadPool = VK_NULL_HANDLE;
+    }
 }
 
 void SceneGpuBatch::createBuffer(GpuBuffer& buffer, VkDeviceSize size,
@@ -295,6 +309,7 @@ void SceneGpuBatch::destroyFrameBuffers()
 
 void SceneGpuBatch::destroyResources()
 {
+    destroyMergedMesh();
     destroyFrameBuffers();
     cullPipeline.reset();
     if (computePipelineLayout != VK_NULL_HANDLE)
@@ -367,11 +382,150 @@ void SceneGpuBatch::forgetModel(const Model* model)
     modelBoundsCache.erase(model);
 }
 
+void SceneGpuBatch::uploadDeviceLocal(GpuBuffer& destination, const void* data, VkDeviceSize size)
+{
+    GpuBuffer staging{};
+    createBuffer(staging, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+    std::memcpy(staging.mapped, data, static_cast<size_t>(size));
+    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), staging.allocation, 0, VK_WHOLE_SIZE);
+
+    VkCommandBuffer commandBuffer = cmdBeginSingleTime(
+        vulkanDevice.getDevice(), uploadPool);
+    VkBufferCopy copy{};
+    copy.size = size;
+    vkCmdCopyBuffer(commandBuffer, staging.buffer, destination.buffer, 1, &copy);
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1, &barrier,
+                         0, nullptr, 0, nullptr);
+    cmdEndSingleTime(vulkanDevice.getDevice(), vulkanDevice.getGraphicsQueue(),
+                    uploadPool, commandBuffer);
+    destroyBuffer(staging);
+}
+
+void SceneGpuBatch::destroyMergedMesh()
+{
+    destroyBuffer(mergedMesh.vertices);
+    destroyBuffer(mergedMesh.indices);
+    mergedMesh.signature = 0;
+    mergedMesh.valid = false;
+    mergedPlacements.clear();
+    mergedActive = false;
+}
+
+bool SceneGpuBatch::ensureMergedMesh(const std::vector<const Model*>& models)
+{
+    if (models.empty())
+        return false;
+
+    // 签名覆盖模型集合与顶点/索引规模：换了模型或规模变了才重建。
+    uint64_t signature = 1469598103934665603ull;
+    for (const Model* model : models)
+    {
+        const uint64_t values[] = {
+            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(model)),
+            static_cast<uint64_t>(model->getVertexCount()),
+            static_cast<uint64_t>(model->getIndexCount())
+        };
+        for (uint64_t value : values)
+        {
+            signature ^= value;
+            signature *= 1099511628211ull;
+        }
+    }
+    if (mergedMesh.valid && mergedMesh.signature == signature)
+        return true;
+
+    size_t totalVertices = 0;
+    size_t totalIndices = 0;
+    for (const Model* model : models)
+    {
+        if (model->getCpuVertices().size() != model->getVertexCount() ||
+            model->getCpuIndices().size() != model->getIndexCount() ||
+            model->getCpuVertices().empty())
+        {
+            if (!warnedNoMergedData)
+            {
+                warnedNoMergedData = true;
+                std::cout << "[SceneGpu] merged buffers unavailable | model without CPU geometry;"
+                             " falling back to per-model indirect draws" << std::endl;
+            }
+            destroyMergedMesh();
+            return false;
+        }
+        totalVertices += model->getCpuVertices().size();
+        totalIndices += model->getCpuIndices().size();
+    }
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    vertices.reserve(totalVertices);
+    indices.reserve(totalIndices);
+    mergedPlacements.clear();
+    for (const Model* model : models)
+    {
+        MergedPlacement placement{};
+        placement.firstIndex = static_cast<uint32_t>(indices.size());
+        placement.baseVertex = static_cast<uint32_t>(vertices.size());
+        mergedPlacements.emplace(model, placement);
+        vertices.insert(vertices.end(), model->getCpuVertices().begin(),
+                        model->getCpuVertices().end());
+        indices.insert(indices.end(), model->getCpuIndices().begin(),
+                       model->getCpuIndices().end());
+    }
+
+    destroyBuffer(mergedMesh.vertices);
+    destroyBuffer(mergedMesh.indices);
+    createBuffer(mergedMesh.vertices, sizeof(Vertex) * vertices.size(),
+                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, false);
+    createBuffer(mergedMesh.indices, sizeof(uint32_t) * indices.size(),
+                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, false);
+    uploadDeviceLocal(mergedMesh.vertices, vertices.data(),
+                      sizeof(Vertex) * vertices.size());
+    uploadDeviceLocal(mergedMesh.indices, indices.data(),
+                      sizeof(uint32_t) * indices.size());
+    mergedMesh.signature = signature;
+    mergedMesh.valid = true;
+
+    std::cout << "[SceneGpu] merged buffers built | vertices=" << vertices.size()
+              << " indices=" << indices.size()
+              << " vertexMB=" << (sizeof(Vertex) * vertices.size()) / (1024u * 1024u)
+              << " indexMB=" << (sizeof(uint32_t) * indices.size()) / (1024u * 1024u)
+              << std::endl;
+    return true;
+}
+
 void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
 {
     instanceScratch.clear();
     modelGroups.clear();
     buckets.clear();
+
+
+    // F1-b：先收集本帧要批的模型集合。合并缓冲只在集合变化时重建。
+    std::vector<const Model*> batchModels;
+    {
+        std::unordered_set<const Model*> seenModels;
+        auto collectView = frameInfo.registry.view<MeshComponent, WorldTransformComponent>();
+        for (entt::entity entity : collectView)
+        {
+            const MeshComponent& mesh = collectView.get<MeshComponent>(entity);
+            const WorldTransformComponent& worldTransform =
+                collectView.get<WorldTransformComponent>(entity);
+            if (!mesh.model || !worldTransform.valid || mesh.model->getIndexCount() == 0)
+                continue;
+            const RenderTagComponent* tag =
+                frameInfo.registry.try_get<RenderTagComponent>(entity);
+            if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
+                continue;
+            if (seenModels.insert(mesh.model.get()).second)
+                batchModels.push_back(mesh.model.get());
+        }
+    }
+    mergedActive = frameInfo.settings.gpuMergedBuffers && ensureMergedMesh(batchModels);
 
     std::unordered_map<const Model*, uint32_t> groupIndex;
     auto view = frameInfo.registry.view<MeshComponent, WorldTransformComponent>();
@@ -398,6 +552,17 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
             ModelGroup newGroup{};
             newGroup.model = model;
             newGroup.modelSlot = group;
+            if (mergedActive)
+            {
+                const auto placement = mergedPlacements.find(model);
+                if (placement != mergedPlacements.end())
+                {
+                    newGroup.merged = true;
+                    newGroup.mergedFirstIndex = placement->second.firstIndex;
+                    newGroup.mergedBaseVertex =
+                        static_cast<int32_t>(placement->second.baseVertex);
+                }
+            }
             modelGroups.push_back(newGroup);
             buckets.emplace_back();
         }
@@ -407,6 +572,8 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
         }
 
         std::vector<InstanceRecord>& bucket = buckets[group];
+        const ModelGroup& activeGroup = modelGroups[group];
+        const bool mergedGroup = mergedActive && activeGroup.merged;
         const std::vector<SubMeshBounds>& boundsList = subMeshBoundsFor(*model);
         const std::vector<SubMesh>& subMeshes = model->getSubMeshes();
 
@@ -475,7 +642,19 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
                 record.boundsMin = glm::vec4(model->getBoundsMin(), 1.0f);
                 record.boundsMax = glm::vec4(model->getBoundsMax(), 0.0f);
             }
-            record.draw = glm::uvec4(subMesh.firstIndex, subMesh.indexCount, 0u, group);
+            if (mergedGroup)
+            {
+                // 合并缓冲里索引保持原样，靠 vertexOffset 施加 baseVertex；
+                // 所有实例共用第 0 个 range / counter。
+                record.draw = glm::uvec4(
+                    activeGroup.mergedFirstIndex + subMesh.firstIndex,
+                    subMesh.indexCount,
+                    static_cast<uint32_t>(activeGroup.mergedBaseVertex), 0u);
+            }
+            else
+            {
+                record.draw = glm::uvec4(subMesh.firstIndex, subMesh.indexCount, 0u, group);
+            }
             bucket.push_back(record);
         }
     }
@@ -548,7 +727,12 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.counters.allocation, 0, VK_WHOLE_SIZE);
 
     glm::uvec4* ranges = static_cast<glm::uvec4*>(res.ranges.mapped);
-    for (size_t i = 0; i < modelGroups.size(); ++i)
+    if (mergedActive)
+    {
+        // 合并模式：所有实例共用第 0 个 range / counter。
+        ranges[0] = glm::uvec4(0u, static_cast<uint32_t>(instanceScratch.size()), 0u, 0u);
+    }
+    for (size_t i = 0; i < modelGroups.size() && !mergedActive; ++i)
     {
         const ModelGroup& group = modelGroups[i];
         ranges[i] = glm::uvec4(group.commandBase, group.instanceCount, group.modelSlot, 0u);
@@ -615,6 +799,24 @@ void SceneGpuBatch::recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameIn
         return;
 
     const FrameResources& res = frames[frameInfo.frameInFlightIndex];
+    if (mergedActive && mergedMesh.valid)
+    {
+        const VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mergedMesh.vertices.buffer, &offset);
+        vkCmdBindIndexBuffer(commandBuffer, mergedMesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexedIndirectCount(commandBuffer, res.commands.buffer, 0,
+                                      res.counters.buffer, 0,
+                                      static_cast<uint32_t>(instanceScratch.size()),
+                                      5u * sizeof(uint32_t));
+        stats.drawCalls += 1;
+        // 与三角形/顶点同源（两帧前的回读）：这一帧真的提交了可见实例才算一次绘制。
+        if (stats.visible > 0u)
+            frameInfo.telemetry.drawCalls += 1;
+        frameInfo.telemetry.triangles += stats.visibleTriangles;
+        frameInfo.telemetry.vertices += stats.visibleVertices;
+        return;
+    }
+
     for (const ModelGroup& group : modelGroups)
     {
         if (!group.eligible || group.model == nullptr)
