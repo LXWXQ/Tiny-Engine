@@ -92,7 +92,7 @@ Graphics: vkCmdDrawIndexedIndirect
 - JobSystem 支持任务依赖图或至少分层 `parallelFor`（chunk 生成 -> LOD -> 上传）；
   地形当前已有 Scene 级协作取消
 
-**进度（2026-11-02，F2-a / F2-b）**：`--streaming-world [radius]` 给出可运行的流送世界（chunk 32、33x33、3 级 LOD，半径 1~8，每帧最多 4 个），`--streaming-fly [speed]` 圆周飞行验证加载/卸载滞回；多 chunk 合批已落地：`TerrainMeshArena`（96 槽）+ set 3 chunk 实例表 + 一条 `vkCmdDrawIndexedIndirect` 覆盖 2048 条命令，半径 2 的 `draw calls` 从 13 降到 2，两路截图逐像素一致。仍未完成：**浮动原点 / 无限世界**（当前世界坐标是 float、流送半径上限 8，相机走远后精度与 chunk 上限都会顶到）、**GPU 端 LOD 选级**（需要模型 LOD 链，等 F4 资产管线）、**粒子/体素真实接入**（`ExternalInstance` 入口已就位）。
+**进度（2026-11-02，F2-a / F2-b）**：`--streaming-world [radius]` 给出可运行的流送世界（chunk 32、33x33、3 级 LOD，半径 1~8，每帧最多 4 个），`--streaming-fly [speed]` 圆周飞行验证加载/卸载滞回；多 chunk 合批已落地：`TerrainMeshArena`（96 槽）+ set 3 chunk 实例表 + 一条 `vkCmdDrawIndexedIndirect` 覆盖 2048 条命令，半径 2 的 `draw calls` 从 13 降到 2，两路截图逐像素一致。F2-c 浮动原点已落地：registry 只存局部坐标、绝对位移记在 `Scene::worldOrigin`（double），相机超过 `--origin-threshold`（默认 1024）时整场景吸到整块 chunk 回原点，地形噪声锚点保持绝对所以接缝不受影响；`--streaming-fly` 改成直线巡航（圆周半径恒定会让 rebase 每帧触发）。仍未完成：**无限世界**（流送半径上限 8、chunk 索引 int32）、**GPU 端 LOD 选级**（需要模型 LOD 链，等 F4 资产管线）、**粒子/体素真实接入**（`ExternalInstance` 入口已就位）。
 
 **验收**：相机跨越多个 chunk 无明显卡顿与裂缝；LOD 切换可见；顶点量增加时 FPS 不线性崩塌。
 

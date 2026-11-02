@@ -39,7 +39,7 @@ updated: 2026-11-02
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 33 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 35 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -226,7 +226,6 @@ updated: 2026-11-02
 - 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 未做：物理引擎/角色控制器接入、运行期雕刻、地形专用空间加速结构。
-
 ## D-33：阶段 7 第十一轮（自动 dirty 通知）
 
 - `TransformComponent` / `BoundsComponent` 增加 owner callback：
@@ -244,7 +243,6 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 仍保留：public 字段直写与 `registry.destroy()` 可绕过回调；后续流送阶段
   应改为组件私有字段 + 区域索引 + 统一销毁 API。
-
 ## D-34：阶段 7 第十二轮（GPU compute 高度场）
 
 - 新增 `TerrainComputeGenerator` 与 `shaders/terrain_height.comp`：
@@ -263,7 +261,6 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 仍保留：GPU dispatch/fence/readback 在主线程等待；顶点/索引组装与 GPU 上传
   仍在 CPU。
-
 ## D-35：B-01a（独立 chunk 实体 + 流送基础）
 
 - `TerrainConfig` 新增 `sampleOriginX/Z` 与 `localColorRange`：
@@ -284,7 +281,6 @@ updated: 2026-11-02
 - 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 下一项 B-01b：GPU 高度场流送异步化、场景描述实际重建流送、任务预算基线。
-
 ## D-36：B-01b（流送异步化 + 加载硬化）
 
 - `TerrainComputeGenerator` 改为 **8 个独立 in-flight slot**：
@@ -306,7 +302,6 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 下一项 B-01c：跨 chunk picking/删除撤销语义、JSON 文件加载 smoke、
   跨 chunk 帧时间基线。
-
 ## D-37：B-01c（流送交互与性能硬化）
 
 - Viewport 拾取命中 runtime `TerrainChunkComponent` 后，通过
@@ -329,7 +324,6 @@ updated: 2026-11-02
 - 验证：`tools/Validate.ps1 -Incremental -SkipSetup` **21/21 PASS**，
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 下一项 B-02：拓扑级 LOD stitching；先做可关闭裙边的 A/B 与索引/绕序断言。
-
 ## D-38：B-02（拓扑级 LOD stitching）
 
 - 每个 chunk/LOD 的 chunk 外边界固定为**全高度场分辨率**，内部仍按
@@ -353,7 +347,6 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 日志：`build/validation/20261101-195549`。
 - 下一项 B-03：GPU LOD 选择 / GPU-driven culling。
-
 ## D-39：B-03（GPU LOD 选择 / GPU-driven culling）
 
 - `GeometryPass::addToGraph()` 在 `Geometry` 之前注册无附件
@@ -391,7 +384,6 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 日志：`build/validation/20261101-203943`。
 - 下一项 B-04：GPU compute 网格组装与 GPU 上传。
-
 ## D-40：B-04（GPU compute 网格组装与 GPU 上传）
 
 - 新增 `TerrainGpuMeshBuilder` + `shaders/terrain_mesh.comp`，把单 chunk
@@ -422,7 +414,6 @@ updated: 2026-11-02
   `errors=0 warnings=0`。
 - 日志：`build/validation/20261101-213544`。
 - B-05 已完成，见下一条 D-41。
-
 ## D-41：B-05（异步 GPU 上传管线）
 
 - `TerrainGpuMeshBuilder` 从 B-04 的单命令缓冲 + 同步 fence 等待改为 4 个异步
@@ -464,23 +455,19 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`；日志
   `build/validation/20261101-222753`。
 - 下一项 B-06：组件私有字段 + 统一销毁 + 区域索引。
-
 ## D-42：B-06（组件私有字段 + 统一销毁 + 区域索引）
 - `TransformComponent`/`BoundsComponent` 私有 + getter/`setPose`；`SpatialIndex` 增加 XZ region bucket，Scene 对齐 chunk size 并提供 chunk 查询。
 - `clearEntities()` 与相机复用改走 `Scene::destroyEntity()`；生产代码只剩该函数内一处 `registry.destroy()`，`--terrain-test` 覆盖 5×5 region 查询。
 - 自检 `spatial region query PASS | chunks=9 regions=5x5`、`gpuMesh=OK`；验证 `21/21 PASS`，stderr 0，`errors=0 warnings=0`，日志 `20261101-225723`。下一项 B-07。
-
 ## D-43：B-07（物理/角色控制器 + 地形雕刻）
 - `terrain::TerrainBrush` 支持 Raise/Lower/Smooth/Flatten；`Scene::sculptTerrain()` 用 B-06 region 查询只重建相交 chunk，9 chunk smoke 仅重建 1 个，其余 revision/Model 不变。
 - 新增 `CharacterControllerComponent`/`createCharacterEntity()`/`updateCharacterController()`/`sampleTerrainGroundHeightWorld()`/`raycastTerrainWorld()`；编辑器 Sculpt Brush、Create Character、Play WASD 驱动，角色组件可序列化。
 - `[Terrain] sculpt PASS ... rebuilt=1`、`character controller PASS ... maxGroundError=0`、`character serialization PASS | captured=1`；`21/21 PASS`，日志 `20261101-234432`。B-08 下一项；雕刻仍为运行期状态。
-
 ## D-44：B-08（地形内容资产与大规模材质）
 - `TerrainMaterial` 最多 4 个 Set2 材质集；set 0 启动加载根目录，set 1~3 按需 `setN/`，16 PNG 不齐全套程序化回退。
 - `DescriptorManager` 分配 4 个 terrain descriptor set；`TerrainConfig::materialSetIndex` 序列化，`geometryEquals()` 忽略材质切换。
 - 渲染按相邻地形实体材质集变化重绑 Set2，统计 `terrainMaterialBatches`/`Switches`/`Fallbacks`；Inspector 增加材质集下拉。
 - 实测 `[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`；`21/21 PASS`，stderr 0，`errors=0 warnings=0`，日志 `build/validation/20261102-001837`。
-
 ## D-45：代码/文档审查修复（异步任务生命周期 + Set2 描述符 + 工具链）
 
 - **P0 use-after-free**：`Scene::processTerrainGeneration()` 在任务被取代或实体销毁时
@@ -515,7 +502,6 @@ updated: 2026-11-02
   `async GPU upload PASS ... gpuMesh=1`、`material sets PASS ... resident=4`、
   `streaming chunk test PASS ... gpuMesh=9`）；`tools/Validate.ps1 -Incremental -SkipSetup`
   21/21 PASS，日志 `build/validation/20261102-101809`。
-
 ## D-46：实现 `RenderGraph::setPassEnabled`（跨帧 Pass 开关）
 
 - **问题**：`passes` 每帧重建（`beginFrame` 与 `endFrame` 末尾都会 `reset + clear`），
@@ -534,7 +520,6 @@ updated: 2026-11-02
   （`build/validation/20261102-132535`）；DocCheck PASS。
 - **文档**：rendergraph.md 新增 §2.2（跨帧语义 + 禁用会跳过屏障声明的代价与原错误串）；
   tech-debt 增 TD-13 并从"未关闭"表移除；weak-points 删除该条；test-matrix 第 3 项补标记。
-
 ## D-47：还清 TD-14（writeDepth 隐式改写）并修正过期技术债
 
 - **TD-14**：`RenderGraph::Pass::writeDepth` 删掉"`depth==0 && stencil==0` 视为未设置、
@@ -545,7 +530,6 @@ updated: 2026-11-02
   （`Scene::clearEntities()` 先归还槽位再销毁实体），tech-debt 原第 3 条已不成立，删除。
 - **回归**：`--selftest 120` 236 FPS、验证层 0/0、pass bookkeeping `executed=14 skipped=0`；
   21 项 `Validate.ps1` ALL PASS；DocCheck PASS。
-
 ## F1-a：GPU 驱动提交第一刀（SceneGpuBatch）
 **问题**：几何提交仍是 `for (entity : visibleEntities)` 逐实体逐子网格的 CPU 决策，实例数一多就成瓶颈，也是 F6（阴影/SSR）的前置。
 
@@ -560,14 +544,12 @@ updated: 2026-11-02
 
 **回归**：`--selftest 120` errors=0 warnings=0；`Validate.ps1` 新增 `f1-gpu-scene`；像素级比对（相机 `[0,6,45]`）GPU 路径与 CPU 路径 `max diff = 0`。
 **性能**：300 帧多轮 default 248.1/248.0、cpu 237.7/257.1、forced 248.1/228.2 —— 噪声大于差异，当前 103 实例下两条路径相当，收益留给实例数上来之后。
-
 ## F1-b：合并顶点/索引缓冲（一次 multidraw）
 **问题**：F1-a 按模型分组、每个子网格一条间接命令，103 个子网格仍是 103 条命令；multidraw 的收益要等命令能跨模型才拿得到，而间接命令本身不带顶点缓冲绑定。
 **实现**：`Model` 为可批模型保留完整 CPU 顶点/索引（地形不留）；`ensureMergedMesh()` 按模型集合算 FNV 签名（指针 + 顶点数 + 索引数），顶点/索引分别拼进一份 device-local 缓冲、索引保持原样、每模型记 `baseVertex` 并填进间接命令的 `vertexOffset`（等价 `vkCmdDrawIndexed` 语义），所有实例共用 `ranges[0]`/`counts[0]`，一条 `vkCmdDrawIndexedIndirectCount` 画完；重建走自建 `uploadPool` + staging + 单次命令（屏障 TRANSFER_WRITE -> VERTEX_ATTRIBUTE_READ|INDEX_READ）。F1-d 起回退直接落到 CPU 路径（`--no-merged-buffers` 强制）。
 **可观测**：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时遥测 `draw calls 2 / triangles 270459 / vertices 811377`（合并前 104）。
 **回归**：`Validate.ps1` 新增 `f1b-merged-buffers` 与 `f1b-merged-off`，全套 24 项 ALL PASS；三路像素比对（合并 / 每模型 / CPU）相机 `[0,6,45]` 下 `max diff = 0`。
 **性能**：同模式轮间波动约 24 FPS，仍以噪声为主；确定收益是 draw call 104 -> 2，不是本机 FPS。
-
 ## F1-c：按组实例化 + 材质排序 + Hi-Z 遮挡剔除
 **实现**：分组键改成 `(模型, 子网格)`（实例连续，`instanceCount = N`，一条命令画完所有实例）；去掉 counters 缓冲（组自己那 5 个 uint 直接写，被剔除写 0）；组按并集世界 AABB 剔除；合并模式按 `materialSlot` 排序、非合并按 `(model, materialSlot)`；包围盒缓存改用 `Model::getGeometryId()`（600 帧/64 条淘汰）；Hi-Z 金字塔从 `GBuffer.Position` 反算线性视深度（`R32_SFLOAT`、`floor(log2(max(w,h)))+1` 级、布局恒 GENERAL、手动屏障），`HiZBuild` 挂在 `Geometry` 之后写另一槽（错帧一帧），剔除时投影成屏幕矩形、按矩形像素选级、4 角 `textureLod` 取最大值，`nearest > farthest + 0.05` 判遮挡；`--no-hiz` 可关。
 **可观测与回归**：`[SceneGpu] cull stats | groups=103 visible=103 culled=0 instances=103 hiz=1 hizLevels=11 hizEnabled=1 hizTests=103 hizCulled=0`（每 60 帧一行）；新增 `f1c-hiz-off`，全套 25 项 ALL PASS、stderr 0 字节；`--resize-test` / `--render-scale 0.5` 验证层 0/0（顺带修掉 G-Buffer 重建后遗留旧 `VkImageView` 导致描述符写入崩溃、录制期 `vkUpdateDescriptorSets` 让命令缓冲失效两个 bug）。
@@ -582,7 +564,6 @@ updated: 2026-11-02
 **可观测**：`[SceneGpu] external instances | count=<n> source=debug-injection`、`cull stats` 尾部 `screenTests=.. screenCulled=.. external=..`；`--gpu-scene-min-px 400` 时 `screenTests=103 screenCulled=103`（整屏剔空），`--gpu-scene-external 4` 时 `instances=107`。
 **回归**：新增 `f1e-screen-space` 与 `f1e-external-instances`，全套 **29 项 ALL PASS**（`build/validation/20261102-160351`）；`--no-merged-buffers` 仍走 CPU 路径 `104 / 270459 / 811377`。
 **边界**：SSE 只做剔除、不是 LOD 选级（模型没有 LOD 链）；外部实例与 ECS 共用分组，同子网格不同材质会归到一组；粒子每帧变化会击穿结构签名 —— 数据确实变了，这是预期行为。
-
 ## F2-a：流送世界模式（可持续运行的载体）
 **问题**：流送地形此前只在 `--terrain-test` 冒烟块里创建（17x17、半径 1），正常运行与编辑器里没有流送世界 —— 「无限世界」缺一个能跑的载体。
 **实现**：`--streaming-world [radius]` 在构造期 `createStreamingTerrain(seed 9001, 33x33, chunk 32, heightScale 12, lod 3, 半径 1..8, maxLoadsPerFrame 4)`；`--streaming-fly [speed]` 让相机沿半径 220 的圆周前移（yaw = -a，与 forward=(sin y,0,cos y) 一致），把加载/卸载从「一次性」变成「持续发生」；`Scene` 新增 loaded/unloaded 累计与 lastFrame 增量计数。半径 3 = 49 个 chunk 实体，低于地形 GPU 选择的 64 slot 上限。顺带把配置自检的临时目录改成「建目录 + 写探针」并在不可写时退回工作目录 `.tiny-config-selftest/`（只读 TEMP 的受限环境里不再假失败）。
@@ -593,3 +574,8 @@ updated: 2026-11-02
 **可观测**：`[Terrain] mesh arena ready | slots=96 vertexMB=16 indexMB=7`、`[Terrain] batched draw | chunks=<n> arenaSlots=<n> commandSpan=2048`、`[Terrain] terrain batching disabled | falling back to per-chunk draws`；`--streaming-world 2` 遥测从 `draw calls 13 / groups 12 / binds 2` 变为 `draw calls 2 / groups 1 / binds 3`，`triangles 22464 / vertices 67392` 不变。
 **回归**：新增 `f2b-terrain-batch` 与 `f2b-terrain-batch-off`，全套 **33 项**；批量 vs `--no-terrain-batch` 两路截图逐像素一致（忽略 ImGui 面板 `max diff = 0`）；`--streaming-fly 60` 150 帧 `chunks=35 loaded=54 unloaded=19`、0/0；`--validation-features sync` 0/0。
 **坑**：实例表的 `misc` 是 `vec4` 浮点，写 `uint` 位模式 1 会变成 1.4e-45，着色器取整后 terrainMode 变 0、整块地形走棋盘格占位——必须写 `1.0f` 并在着色器里 `uint(x + 0.5)`。
+## F2-c：浮动原点（场景坐标不再随相机走远而抖）
+**问题**：世界坐标一直是 `float`，相机走到万米量级后矩阵与深度开始抖；流送世界也没有「原点会移动」的概念。
+**实现**：registry 里所有 `TransformComponent` 只存局部坐标，绝对位移记在 `Scene::worldOrigin`（`glm::dvec3`）。相机局部水平距离超过 `originRebaseThreshold`（默认 1024）时，位移吸到整块 chunk（`floor(local / chunkSize) * chunkSize`），一次性平移所有 Transform、调 `CameraController::offsetWorldPosition` 把平滑状态（`smoothPosition` / `focusPoint` / `lastAppliedPosition`）一起挪、重排流送 chunk 的 `chunkX/Z` 与两张 key 表，`worldOrigin += delta`。地形噪声锚点 `sampleOrigin` **保持绝对**（rebase 后新建 chunk 写 `worldOrigin + 局部中心`），`HeightField::sample()` 本来就不读它，所以查询/碰撞/接缝都不受影响。`--streaming-fly` 从圆周改成直线巡航：圆周半径恒定会让 rebase 每帧触发一次。
+**可观测**：`[Origin] rebased | delta=(x, y, z) origin=(X, Y, Z) rebases=<n>`、`[Origin] stats | rebases=<n> origin=(X, Y, Z) maxLocal=<f> threshold=<f>`；自检断言「飞行距离超过两倍阈值时必须 rebase」「`maxLocal` 不得超过阈值 +128」，关闭 rebase 时这两条自动跳过。
+**回归**：新增 `f2c-origin-rebase` 与 `f2c-origin-off`，全套 **35 项**；`--streaming-world 2 --streaming-fly 60 --origin-threshold 64` 240 帧 4 次 rebase、`chunks=35`；600 帧 13 次 rebase、`loaded=138 unloaded=103`、`chunks=35` 稳定；rebase 与不 rebase 两路截图逐像素对比 `max 14 / mean 0.9`（只差 float 光栅化）、地形几何一致；`--validation-features sync` 0/0。

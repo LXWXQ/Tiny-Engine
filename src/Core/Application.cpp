@@ -1432,6 +1432,21 @@ void FirstApp::setStreamingFly(bool enabled, float speed)
 	streamingFlySpeed = speed > 0.0f ? speed : 12.0f;
 }
 
+void FirstApp::setStreamingFlyRadius(float radius)
+{
+	streamingFlyRadius = radius > 1.0f ? radius : 220.0f;
+}
+
+void FirstApp::setOriginRebaseEnabled(bool enabled)
+{
+	scene->getSettings().originRebaseEnabled = enabled;
+}
+
+void FirstApp::setOriginRebaseThreshold(float threshold)
+{
+	scene->getSettings().originRebaseThreshold = threshold > 1.0f ? threshold : 1024.0f;
+}
+
 void FirstApp::setCrossQueueTestEnabled(bool enabled)
 {
 	crossQueueProbePassPtr->setEnabled(enabled);
@@ -1589,6 +1604,27 @@ if (streamingWorldEnabled)
 	if (streamingFlyEnabled && scene->getStreamingChunksUnloadedTotal() == 0u)
 		throw std::runtime_error("streaming world never unloaded a chunk while flying");
 }
+
+	// F2-c：浮动原点统计。rebase 由 Scene::update 在相机超过阈值时触发。
+	if (streamingWorldEnabled)
+	{
+		const float threshold = scene->getSettings().originRebaseThreshold;
+		const glm::dvec3 origin = scene->getWorldOrigin();
+		std::cout << "[Origin] stats | rebases=" << scene->getOriginRebaseCount()
+			<< " origin=(" << origin.x << ", " << origin.y << ", " << origin.z
+			<< ") maxLocal=" << scene->getMaxLocalCameraDistance()
+			<< " threshold=" << threshold << std::endl;
+		// 关掉 rebase 时相机本来就会一直往外走，这两条只对启用状态成立。
+		if (scene->getSettings().originRebaseEnabled)
+		{
+			const float travel = static_cast<float>(streamingFlyTravel);
+			if (streamingFlyEnabled && travel > threshold * 2.0f &&
+				scene->getOriginRebaseCount() == 0u)
+				throw std::runtime_error("origin rebase never triggered while flying");
+			if (scene->getMaxLocalCameraDistance() > threshold + 128.0f)
+				throw std::runtime_error("origin rebase let the camera drift too far");
+		}
+	}
 
 	if (materialStressEnabled && materialStressPendingSlot != kInvalidMaterialSlot)
 	{
@@ -1976,12 +2012,16 @@ allowCameraInput = false;
 // 边界，从而真的触发加载与卸载；不飞的话只会加载原地那一圈。
 if (streamingFlyEnabled)
 {
-	streamingFlyAngle += streamingFlySpeed * dt / 220.0f;
-	constexpr float radius = 220.0f;
-	scene->getCameraTransform().setTranslation(glm::vec3(
-		std::cos(streamingFlyAngle) * radius, 14.0f, std::sin(streamingFlyAngle) * radius));
-	// 圆周切线：forward = (sin(yaw), 0, cos(yaw))，切线 = (-sin a, 0, cos a)，故 yaw = -a。
-	scene->getCameraTransform().setEuler(glm::vec3(0.0f, -streamingFlyAngle, 0.0f));
+	// F2-c：直线巡航而不是绕圈。绕圈时相机到原点的距离始终等于半径，rebase
+	// 之后下一帧又被拉回半径处，会每帧触发一次；直线巡航才能让局部坐标
+	// 反复「走到阈值 -> 被 rebase 拉回原点附近」，原点也才真的在前进。
+	streamingFlyTravel += static_cast<double>(streamingFlySpeed) * static_cast<double>(dt);
+	const glm::dvec3 absolute(streamingFlyTravel, 0.0,
+		std::sin(static_cast<float>(streamingFlyTravel) * 0.05f) * streamingFlyRadius * 0.08);
+	const glm::dvec3 local = absolute - scene->getWorldOrigin();
+	scene->getCameraTransform().setTranslation(glm::vec3(local.x, 14.0f, local.z));
+	// forward = (sin(yaw), 0, cos(yaw))，朝 +X 前进即 yaw = pi/2。
+	scene->getCameraTransform().setEuler(glm::vec3(0.0f, glm::half_pi<float>(), 0.0f));
 }
 
 scene->update(dt, window, aspect, allowCameraInput);

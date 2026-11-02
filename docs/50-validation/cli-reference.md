@@ -40,7 +40,10 @@ updated: 2026-11-02
 | `--gpu-scene-min-px <px>` | 屏幕空间误差剔除阈值（像素）；投影包围球半径小于它就直接剔除，0 = 关闭 |
 | `--gpu-scene-external <n>` | 调试注入：复制第一个可批子网格 n 份当外部实例（粒子/体素替身），验证共用分组与单条提交 |
 | `--streaming-world [radius]` | 构造期创建流送地形世界（半径 1~8，默认 3；chunk 32 单位、33x33 顶点、3 级 LOD），是「无限世界」的可运行载体 |
-| `--streaming-fly [speed]` | 相机沿半径 220 的圆周前移（默认 12 单位/秒），用来验证 chunk 的加载与卸载 |
+| `--streaming-fly [speed]` | 相机沿 +X 直线巡航（默认 12 单位/秒，`--streaming-fly-radius` 控制摆幅），用来验证 chunk 的加载与卸载 |
+| `--streaming-fly-radius <r>` | 巡航摆幅半径，默认 220；`--origin-threshold` 小于它时更容易触发 rebase |
+| `--origin-threshold <units>` | 浮动原点阈值（默认 1024）：相机局部水平距离超过它就 rebase 一次 |
+| `--no-origin-rebase` | 关闭浮动原点；相机走远后局部坐标会一直变大（用来做对照） |
 | `--render-scale F` | 动态分辨率倍率 0.25~1.0 |
 | `--resize-test` | 自检中连续缩放、切动态分辨率、最小化/恢复 |
 | `--material-stress` | 反复分配/延迟归还材质槽位 |

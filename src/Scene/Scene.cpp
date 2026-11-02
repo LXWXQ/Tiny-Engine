@@ -743,6 +743,7 @@ void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCa
     if (cameraTransform.isDirty())
         markTransformDirty(cameraEntity);
 
+    maybeRebaseWorldOrigin();
     camera.setViewYXZ(cameraTransform.getTranslation(), cameraTransform.getEuler());
     camera.setPerspectiveProjection(glm::radians(60.0f), aspectRatio, 0.1f, 5000.0f);
 
@@ -2066,6 +2067,121 @@ bool Scene::adoptStreamingTerrainManager(entt::entity entity)
     return true;
 }
 
+void Scene::rebaseWorldOrigin(const glm::vec3& delta)
+{
+if (delta.x == 0.0f && delta.y == 0.0f && delta.z == 0.0f)
+return;
+
+// 1) Everything in the registry stores local coordinates, so shifting all of
+// them at once keeps the world looking identical.
+auto transforms = registry.view<TransformComponent>();
+for (entt::entity entity : transforms)
+{
+TransformComponent& transform = transforms.get<TransformComponent>(entity);
+transform.setTranslation(transform.getTranslation() - delta);
+markTransformDirty(entity);
+}
+
+// 2) The camera controller caches absolute smoothing state.
+cameraController.offsetWorldPosition(delta);
+
+// 3) Streamed chunks are keyed by integer chunk indices; the shift is snapped
+// to whole chunks so the keys stay integral.
+float chunkSizeX = 32.0f;
+float chunkSizeZ = 32.0f;
+if (terrainStreamingEntity != entt::null)
+{
+if (auto* streaming = registry.try_get<TerrainStreamingComponent>(terrainStreamingEntity))
+{
+if (streaming->chunkConfig.sizeX > 0.0f)
+chunkSizeX = streaming->chunkConfig.sizeX;
+if (streaming->chunkConfig.sizeZ > 0.0f)
+chunkSizeZ = streaming->chunkConfig.sizeZ;
+}
+}
+const int32_t chunkDeltaX = static_cast<int32_t>(std::llround(
+static_cast<double>(delta.x) / static_cast<double>(chunkSizeX)));
+const int32_t chunkDeltaZ = static_cast<int32_t>(std::llround(
+static_cast<double>(delta.z) / static_cast<double>(chunkSizeZ)));
+if (chunkDeltaX != 0 || chunkDeltaZ != 0)
+{
+std::unordered_map<int64_t, entt::entity> rekeyedChunks;
+rekeyedChunks.reserve(streamingTerrainChunks.size());
+for (const auto& [key, entity] : streamingTerrainChunks)
+{
+if (!registry.valid(entity))
+continue;
+int32_t chunkX = static_cast<int32_t>(static_cast<int64_t>(key >> 32)) - chunkDeltaX;
+int32_t chunkZ = static_cast<int32_t>(static_cast<int64_t>(
+static_cast<uint32_t>(key & 0xFFFFFFFFu))) - chunkDeltaZ;
+if (TerrainChunkComponent* chunk = registry.try_get<TerrainChunkComponent>(entity))
+{
+chunk->chunkX -= chunkDeltaX;
+chunk->chunkZ -= chunkDeltaZ;
+chunkX = chunk->chunkX;
+chunkZ = chunk->chunkZ;
+}
+rekeyedChunks[terrainChunkKey(chunkX, chunkZ)] = entity;
+}
+streamingTerrainChunks.swap(rekeyedChunks);
+
+std::unordered_set<int64_t> rekeyedPending;
+rekeyedPending.reserve(pendingStreamingTerrainChunks.size());
+for (int64_t key : pendingStreamingTerrainChunks)
+{
+const int32_t chunkX = static_cast<int32_t>(static_cast<int64_t>(key >> 32)) - chunkDeltaX;
+const int32_t chunkZ = static_cast<int32_t>(static_cast<int64_t>(
+static_cast<uint32_t>(key & 0xFFFFFFFFu))) - chunkDeltaZ;
+rekeyedPending.insert(terrainChunkKey(chunkX, chunkZ));
+}
+pendingStreamingTerrainChunks.swap(rekeyedPending);
+}
+
+// 4) The absolute origin accumulates in double; float only carries the local
+// coordinates near the origin.
+worldOrigin += glm::dvec3(delta);
+++originRebaseCount;
+
+std::cout << "[Origin] rebased | delta=(" << delta.x << ", " << delta.y << ", " << delta.z
+<< ") origin=(" << worldOrigin.x << ", " << worldOrigin.y << ", " << worldOrigin.z
+<< ") rebases=" << originRebaseCount << std::endl;
+}
+
+bool Scene::maybeRebaseWorldOrigin()
+{
+const glm::vec3 local = getCameraTransform().getTranslation();
+const float horizontal = std::sqrt(local.x * local.x + local.z * local.z);
+maxLocalCameraDistance = std::max(maxLocalCameraDistance, horizontal);
+
+if (!engineSettings.originRebaseEnabled)
+return false;
+
+const float threshold = std::max(64.0f, engineSettings.originRebaseThreshold);
+if (horizontal < threshold)
+return false;
+
+float stepX = 32.0f;
+float stepZ = 32.0f;
+if (terrainStreamingEntity != entt::null)
+{
+if (auto* streaming = registry.try_get<TerrainStreamingComponent>(terrainStreamingEntity))
+{
+if (streaming->chunkConfig.sizeX > 0.0f)
+stepX = streaming->chunkConfig.sizeX;
+if (streaming->chunkConfig.sizeZ > 0.0f)
+stepZ = streaming->chunkConfig.sizeZ;
+}
+}
+
+const float deltaX = std::floor(local.x / stepX) * stepX;
+const float deltaZ = std::floor(local.z / stepZ) * stepZ;
+if (deltaX == 0.0f && deltaZ == 0.0f)
+return false;
+
+rebaseWorldOrigin(glm::vec3(deltaX, 0.0f, deltaZ));
+return true;
+}
+
 void Scene::refreshStreamingTerrain()
 {
     const auto start = std::chrono::steady_clock::now();
@@ -2209,8 +2325,11 @@ void Scene::updateTerrainStreaming()
         config.localColorRange = false;
         const float centerWorldX = (static_cast<float>(candidate.x) + 0.5f) * chunkSizeX;
         const float centerWorldZ = (static_cast<float>(candidate.z) + 0.5f) * chunkSizeZ;
-        config.sampleOriginX = centerWorldX;
-        config.sampleOriginZ = centerWorldZ;
+        // F2-c: sampleOrigin is the absolute noise anchor, not a local
+        // coordinate. Keeping it absolute means chunks generated after a
+        // rebase still match their neighbours generated before it.
+        config.sampleOriginX = static_cast<float>(worldOrigin.x + static_cast<double>(centerWorldX));
+        config.sampleOriginZ = static_cast<float>(worldOrigin.z + static_cast<double>(centerWorldZ));
 
         std::string configError;
         if (!config.validate(configError))

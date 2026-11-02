@@ -29,6 +29,10 @@ void setMode(Mode m);
 Mode getMode() const { return mode; }
 void setFocusPoint(const glm::vec3& point) { focusPoint = point; }
 
+// F2-c: the origin rebase moves the whole scene, so the smoothing state
+// (which caches absolute positions) has to move with it.
+void offsetWorldPosition(const glm::vec3& delta);
+
 // 编辑器用它来屏蔽相机输入。
 //
 // 为什么需要：这个控制器直接用 glfwGetKey / glfwGetMouseButton 读输入，

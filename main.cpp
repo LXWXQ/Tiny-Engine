@@ -80,6 +80,10 @@ int main(int argc, char** argv)
     int32_t streamingRadius = 3;
     bool streamingFly = false;
     float streamingFlySpeed = 12.0f;
+    // F2-c: origin rebase. Threshold is in world units.
+    bool originRebase = true;
+    float originThreshold = 0.0f;
+    float streamingFlyRadius = 0.0f;
     bool jobTest = false;
     bool crossQueueTest = false;
     bool resizeTest = false;
@@ -162,6 +166,28 @@ int main(int argc, char** argv)
             }
             diagOptions.streamingFly = true;
             diagOptions.streamingFlySpeed = streamingFlySpeed;
+        }
+        else if (arg == "--no-origin-rebase")
+        {
+            originRebase = false;
+        }
+        else if (arg == "--origin-threshold")
+        {
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                try { originThreshold = std::stof(argv[i + 1]); }
+                catch (...) { }
+                ++i;
+            }
+        }
+        else if (arg == "--streaming-fly-radius")
+        {
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                try { streamingFlyRadius = std::stof(argv[i + 1]); }
+                catch (...) { }
+                ++i;
+            }
         }
         else if (arg == "--jobtest")  jobTest = true;
         else if (arg == "--cross-queue-test") crossQueueTest = true;
@@ -290,6 +316,9 @@ int main(int argc, char** argv)
         if (gpuSceneExternal > 0u) app.setGpuSceneExternalDebugCount(gpuSceneExternal);
         if (streamingWorld) app.setStreamingWorldEnabled(true, streamingRadius);
         if (streamingFly) app.setStreamingFly(true, streamingFlySpeed);
+        if (!originRebase) app.setOriginRebaseEnabled(false);
+        if (originThreshold > 0.0f) app.setOriginRebaseThreshold(originThreshold);
+        if (streamingFlyRadius > 0.0f) app.setStreamingFlyRadius(streamingFlyRadius);
         if (crossQueueTest) app.setCrossQueueTestEnabled(true);
         if (resizeTest) app.setResizeTestEnabled(true);
         if (materialStress) app.setMaterialStressEnabled(true);

@@ -58,6 +58,10 @@ public:
 	void setGpuSceneExternalDebugCount(uint32_t count);
 	void setStreamingWorldEnabled(bool enabled, int32_t radius);
 	void setStreamingFly(bool enabled, float speed);
+
+	void setStreamingFlyRadius(float radius);
+	void setOriginRebaseEnabled(bool enabled);
+	void setOriginRebaseThreshold(float threshold);
 	void setCrossQueueTestEnabled(bool enabled);
 	void setResizeTestEnabled(bool enabled);
 	void setMaterialStressEnabled(bool enabled);
@@ -183,6 +187,8 @@ private:
 	bool streamingFlyEnabled = false;
 	float streamingFlySpeed = 12.0f;
 	float streamingFlyAngle = 0.0f;
+	float streamingFlyRadius = 220.0f;
+	double streamingFlyTravel = 0.0;
 	entt::entity streamingWorldEntity = entt::null;
 	bool resizeTestEnabled = false;
 	bool materialStressEnabled = false;

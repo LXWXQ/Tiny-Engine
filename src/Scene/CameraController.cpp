@@ -181,6 +181,13 @@ lastAppliedYaw = cameraTransform.getEuler().y;
 lastAppliedPitch = cameraTransform.getEuler().x;
 }
 
+void CameraController::offsetWorldPosition(const glm::vec3& delta)
+{
+smoothPosition -= delta;
+focusPoint -= delta;
+lastAppliedPosition -= delta;
+}
+
 void CameraController::onScroll(double, double yoffset)
 {
 if (mode == Mode::Orbit)

@@ -20,6 +20,7 @@ updated: 2026-10-30
 | [synchronization](synchronization.md) | 2 帧在飞怎么工作？双队列怎么调度？resize 怎么不崩？ | 碰帧循环、队列、交换链 |
 | [gpu-driven-submission](gpu-driven-submission.md) | 几何提交怎么从 CPU 逐实体变成 GPU 剔除 + 间接绘制？实例缓冲里有什么？set 3 干什么？ | 改几何提交路径、接大批量实例、调间接绘制 |
 | [descriptors](descriptors.md) | Set0/Set1/Set2 各是什么？bindless 槽位和地形纹理怎么管理？ | 改材质或描述符布局 |
+| [world-origin](world-origin.md) | 场景坐标怎么不抖？rebase 时哪些东西必须跟着挪？地形噪声锚点为什么保持绝对？ | 接大世界、排查远距离抖动或地形接缝 |
 | [decisions](decisions.md) | 21 条关键取舍，各自放弃了什么 | **质疑现有设计之前必读** |
 | [weak-points](weak-points.md) | 现在哪里脆？按影响排序 | 评估改动风险、决定下一步 |
 

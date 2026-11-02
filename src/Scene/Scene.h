@@ -172,9 +172,17 @@ public:
     uint64_t getStreamingChunksUnloadedTotal() const { return streamingChunksUnloadedTotal; }
     uint32_t getStreamingLoadsLastFrame() const { return streamingLoadsLastFrame; }
     uint32_t getStreamingUnloadsLastFrame() const { return streamingUnloadsLastFrame; }
+    // F2-c：浮动原点。worldOrigin 是当前局部原点在绝对世界里的位置（double 累计）；
+    // 实体 Transform 一律存相对这个原点的坐标，所以渲染与剔除看到的数值始终很小。
+    glm::dvec3 getWorldOrigin() const { return worldOrigin; }
+    uint64_t getOriginRebaseCount() const { return originRebaseCount; }
+    float getMaxLocalCameraDistance() const { return maxLocalCameraDistance; }
     // Test/tool entry point; Scene::update() calls this automatically after the
     // camera transform is advanced.
     void refreshStreamingTerrain();
+    // F2-c：把整棵场景平移 -delta（delta 必须是 chunk 尺寸的整数倍），并累计 worldOrigin。
+    void rebaseWorldOrigin(const glm::vec3& delta);
+    bool maybeRebaseWorldOrigin();
 
     // Rebuild the entity's MeshComponent from its current config. On failure the
     // previous mesh and generatedConfig are preserved and lastError is set.
@@ -339,6 +347,10 @@ private:
     uint32_t streamingLoadsLastFrame = 0;
     uint32_t streamingUnloadsLastFrame = 0;
     double maxStreamingUpdateMs = 0.0;
+    // F2-c：浮动原点状态。delta 一律吸到整块 chunk，实体与流送 key 才能整体平移。
+    glm::dvec3 worldOrigin{ 0.0, 0.0, 0.0 };
+    uint64_t originRebaseCount = 0;
+    float maxLocalCameraDistance = 0.0f;
     double maxTerrainPollMs = 0.0;
     uint64_t terrainPollCount = 0;
 };

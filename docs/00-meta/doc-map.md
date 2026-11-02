@@ -36,6 +36,7 @@ updated: 2026-11-01
 | `RenderPipeline.h` / `IRenderPass.h` | Pass 注册容器 / Pass 抽象（`read`/`writeColor`/`setEnabled`） | [rendergraph](../10-architecture/rendergraph.md) | rendergraph |
 | `RenderResources.h` | 帧内资源登记表（句柄集合） | [rendergraph](../10-architecture/rendergraph.md) | rendergraph |
 | `GeometryPass.*` / `GeometrySystem.*` / `GeometrySystemGpu.cpp` / `terrain_lod.comp` | GPU terrain selection、indirect count、写 G-Buffer、Set0/1/2 绑定、地形 push 参数 | [pass-order](../20-pipeline/pass-order.md)、[descriptors](../10-architecture/descriptors.md) | pass-order、descriptors |
+| `Scene.cpp`（浮动原点）/ `CameraController.*` | F2-c：局部坐标 + double 绝对原点、rebase 时平移 Transform 与相机平滑状态、chunk 索引重排、地形噪声锚点保持绝对 | [world-origin](../10-architecture/world-origin.md)、[terrain](../30-systems/terrain.md) | world-origin、terrain |
 | `SceneGpuBatch.*` / `scene_cull.comp` / `hiz_build.comp` / `hiz_downsample.comp` | F1：实例缓冲摊平、按 (模型, 子网格) 分组实例化、材质排序、compute 视锥 + Hi-Z 遮挡剔除、合并顶点/索引缓冲、set 3 实例 SSBO、GPU 批统计回读 | [gpu-driven-submission](../10-architecture/gpu-driven-submission.md)、[pass-order](../20-pipeline/pass-order.md) | gpu-driven-submission、pass-order |
 | `TerrainMaterial.*` | 优先加载外部 16 张 PNG，否则生成程序化源纹理；打包 height/roughness 后更新 12-sampler Set 2 | [terrain-materials](../30-systems/terrain-materials.md)、[descriptors](../10-architecture/descriptors.md) | terrain-materials、descriptors |
 | `SubMeshCulling.*` | 纯 CPU frustum-AABB、世界 bounds 与地形 LOD 距离选择 | [terrain](../30-systems/terrain.md)、[descriptors](../10-architecture/descriptors.md) | terrain、descriptors |

@@ -167,6 +167,10 @@ struct EngineSettings
 	// F2-b：地形 chunk 合并进共享网格缓冲 + 一条 indirect draw。关掉回到逐
 	// chunk 绑定 + 逐 chunk drawIndirectCount 的旧路径。
 	bool terrainBatchEnabled = true;
+	// F2-c：浮动原点。相机相对原点的水平距离超过阈值时，把整棵场景平移回原点附近，
+	// 原点的绝对位移记在 worldOrigin 里（double），用来抵消 float 精度损失。
+	bool originRebaseEnabled = true;
+	float originRebaseThreshold = 1024.0f;
 	// 实例数低于该阈值时不走 GPU 批：几十个间接绘制比直接绘制还慢。
 	uint32_t gpuSceneMinInstances = 256;
 	// 调试/验证用：忽略阈值，强制走 GPU 路径（缩略场景也能覆盖这条路径）。

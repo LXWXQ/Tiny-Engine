@@ -10,7 +10,7 @@ updated: 2026-11-02
 
 # 当前技术债
 
-## 1. 已关闭（TD-01 ~ TD-18）
+## 1. 已关闭（TD-01 ~ TD-19）
 
 | ID | 问题 | 修法要点 |
 |---|---|---|
@@ -33,6 +33,7 @@ updated: 2026-11-02
 | TD-17 | GPU 批只有逐模型提交路径、没有屏幕空间误差剔除、粒子/体素无入口 | 删掉非合并模式逐模型 bind，合并缓冲成为唯一 GPU 提交路径（`useGpuPath()` 要求 `mergedActive`）；`FrameData` 加 `vec4 screen` 做 SSE 剔除；新增 `ExternalInstance` 与 `setExternalInstances()`，外部实例与 ECS 实例共用分组/合并缓冲/同一条 indirect 命令 |
 | TD-18 | 地形每个 chunk 一份独立 Model，渲染时逐 chunk `bind` + 逐 chunk `drawIndexedIndirectCount` | 合并贛图与十几次提交，半径 3 就是 49 次绑定 | `TerrainMeshArena`（96 槽，每槽 4096 顶点 / 20480 索引）+ set 3 的 chunk 实例表（64 行 x 224B，复用 `InstanceRecord` 布局），间接命令写 `firstIndex = 子网格基址 + arena 索引基址`、`vertexOffset = arena 顶点基址`、`firstInstance = 实体槽号`；清空 2048 条命令区后只发一条 `vkCmdDrawIndexedIndirect`。实测 `--streaming-world 2` 的 `draw calls 13` 降到 2，两路截图逐像素一致（`max diff = 0`）；任一 chunk adopt 失败则整帧回退到逐 chunk 路径 |
 
+| TD-19 | 世界坐标全程是 `float`，相机走远后矩阵/深度抖动；流送世界没有原点概念 | 万米量级地形与阴影都会糊 | 局部坐标 + `Scene::worldOrigin`（double）的浮动原点：超阈值时吸到整块 chunk、平移所有 Transform 与相机平滑状态、重排 chunk 索引与 key 表；地形噪声锚点保持绝对。实测 600 帧 13 次 rebase、chunk 数稳定 35 |
 ## 2. 未关闭（按"何时必须处理"排序）
 
 | # | 内容 | 影响 | 触发条件 |
@@ -54,6 +55,8 @@ updated: 2026-11-02
 | 15 | GPU 端只有 SSE 剔除，没有 LOD 选级（模型本身没有 LOD 链） | 顶点量上来后只能整组剔除，不能按距离换级 | F4 资产管线产出 LOD 之后 |
 | 16 | 粒子/体素只有 `ExternalInstance` 数据入口，还没有生产方 | 引擎侧已能画，但没有系统往里喂数据 | F3 体素 / F6 特效系统落地时 |
 | 17 | arena 每个 chunk 一份整块拷贝，槽位固定 4096 顶点 / 20480 索引 | 超出槽位大小或临时峰值时整帧回退到逐 chunk 路径；chunk 重建会重拷一次 | chunk 尺寸或 LOD 数量变大时（可改成按实际需求分配的 bump allocator） |
+| 18 | 浮动原点只在运行时生效，序列化仍以原点 0 为基准 | 存档重开会回到原点附近，绝对位置丢失 | 做世界存档 / 无缝大世界时 |
+| 19 | 地形噪声锚点是 `float` 绝对值，1e6 量级量化步长约 0.06 | 极远处地形细节变粗（相邻 chunk 同网格，不会裂缝） | 噪声改 double 或分块重锚定时 |
 
 ## 3. 明确"不打算做"的
 
