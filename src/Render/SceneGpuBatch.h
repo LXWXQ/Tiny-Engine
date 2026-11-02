@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -56,7 +57,18 @@ public:
         glm::mat4 viewProjection;
         glm::mat4 view;          // Hi-Z 用：世界坐标 -> 线性视深度
         glm::vec4 planes[6];
-        glm::uvec4 params;     // x=groupCount
+        glm::vec4 screen;        // x=最小屏幕像素阈值 y=视口高度 z=投影 [1][1] w=保留
+        glm::uvec4 params;     // x=groupCount y=保留 z=1 表示 Hi-Z 可用
+    };
+
+    // 外部实例入口：粒子/体素这类没有 ECS 实体的几何可以每帧填进来，走同一套分组、
+    // 合并缓冲与 GPU 剔除。变换每帧不同，结构签名会随之变化（预期行为）。
+    struct ExternalInstance
+    {
+        const Model* model = nullptr;
+        uint32_t subMeshIndex = 0;
+        glm::mat4 transform{ 1.0f };
+        uint32_t materialSlot = 0;
     };
 
     struct Stats
@@ -71,6 +83,9 @@ public:
         uint32_t drawCalls = 0;
         uint32_t occlusionTests = 0;    // 做过 Hi-Z 测试的组数（滞后两帧）
         uint32_t occlusionCulled = 0;   // 其中被 Hi-Z 判定遮挡的组数
+        uint32_t screenTests = 0;       // 做过屏幕空间误差测试的组数
+        uint32_t screenCulled = 0;      // 其中因为投影太小被剔除的组数
+        uint32_t externalInstances = 0; // 本帧来自外部（粒子/体素）的实例数
     };
 
     explicit SceneGpuBatch(Device& device);
@@ -97,6 +112,17 @@ public:
 
     // 绑定实例集合并提交 indirect 绘制。调用方需已绑定管线与 push constant。
     void recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
+
+    // 每帧由引擎侧（粒子/体素系统）调用；传空表示本帧没有外部实例。
+    void setExternalInstances(std::vector<ExternalInstance> instances)
+    {
+        externalInstances = std::move(instances);
+    }
+
+    uint32_t getExternalInstanceCount() const
+    {
+        return static_cast<uint32_t>(externalInstances.size());
+    }
 
     // 模型被销毁后释放缓存的子网格 AABB，避免指针复用带来的错配。
     void forgetModel(const Model* model);
@@ -209,6 +235,7 @@ private:
     uint64_t computeStructureSignature(const FrameInfo& frameInfo) const;
     const std::vector<SubMeshBounds>& subMeshBoundsFor(const Model& model, uint64_t frameNumber);
     void readStats(uint32_t frameInFlightIndex);
+    void refreshDebugExternalInstances(FrameInfo& frameInfo);
 
     Device& vulkanDevice;
     bool available = false;
@@ -262,6 +289,9 @@ private:
     bool warnedNoMergedData = false;
 
     Stats stats;
+
+    std::vector<ExternalInstance> externalInstances;
+    uint32_t debugExternalCount = 0;
 
     bool reportedFirstBatch = false;
 };

@@ -44,7 +44,7 @@ static_assert(offsetof(SceneGpuBatch::GroupRecord, draw) == 32,
 static_assert(offsetof(SceneGpuBatch::GroupRecord, counts) == 48,
               "GroupRecord.counts offset mismatch");
 
-static_assert(sizeof(SceneGpuBatch::FrameData) == 240,
+static_assert(sizeof(SceneGpuBatch::FrameData) == 256,
               "FrameData must match scene_cull.comp");
 
 // 组的世界 AABB 由实例的局部 AABB 变换后求并集；少于这个数的组不值得单独剔除。
@@ -92,6 +92,9 @@ SceneGpuBatch::~SceneGpuBatch()
 bool SceneGpuBatch::useGpuPath(const FrameInfo& frameInfo) const
 {
     if (!available || !frameInfo.settings.gpuSceneEnabled)
+        return false;
+    // 跨模型 single draw 的前提是合并缓冲：没有它只能逐模型 bind，退回 CPU 路径更简单。
+    if (!mergedActive)
         return false;
     if (frameInfo.settings.gpuSceneForce)
         return true;
@@ -345,7 +348,7 @@ void SceneGpuBatch::createFrameBuffers()
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
         createBuffer(res.frameData, sizeof(FrameData),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        createBuffer(res.stats, 8u * sizeof(uint32_t),
+        createBuffer(res.stats, 12u * sizeof(uint32_t),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
         std::memset(res.stats.mapped, 0, static_cast<size_t>(res.stats.size));
         vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation, 0, VK_WHOLE_SIZE);
@@ -691,9 +694,81 @@ uint64_t SceneGpuBatch::computeStructureSignature(const FrameInfo& frameInfo) co
         }
     }
 
+    // 外部实例每帧都可能变（粒子在动），变换本身进签名。
+    mix(static_cast<uint64_t>(externalInstances.size()));
+    for (const ExternalInstance& external : externalInstances)
+    {
+        if (external.model == nullptr)
+        {
+            mix(0xFFFFull);
+            continue;
+        }
+        mix(external.model->getGeometryId());
+        mix(static_cast<uint64_t>(external.subMeshIndex));
+        mix(static_cast<uint64_t>(external.materialSlot));
+        uint32_t bits[16] = {};
+        std::memcpy(bits, &external.transform, sizeof(bits));
+        for (uint32_t value : bits)
+            mix(static_cast<uint64_t>(value));
+    }
+
     // 合并/非合并会改变分组与命令写法，也属于结构。
     mix(frameInfo.settings.gpuMergedBuffers ? 1ull : 0ull);
     return signature;
+}
+
+void SceneGpuBatch::refreshDebugExternalInstances(FrameInfo& frameInfo)
+{
+    if (frameInfo.settings.gpuSceneExternalDebugCount == debugExternalCount)
+        return;
+    debugExternalCount = frameInfo.settings.gpuSceneExternalDebugCount;
+    externalInstances.clear();
+    if (debugExternalCount == 0u)
+        return;
+
+    // 用第一个可批子网格当模板：只验证「外部实例 -> 分组 -> 合并缓冲 -> 剔除 -> 绘制」这条链。
+    const Model* templateModel = nullptr;
+    uint32_t templateSubMesh = 0;
+    glm::mat4 templateTransform(1.0f);
+    auto view = frameInfo.registry.view<MeshComponent, WorldTransformComponent>();
+    for (entt::entity entity : view)
+    {
+        const MeshComponent& mesh = view.get<MeshComponent>(entity);
+        const WorldTransformComponent& worldTransform = view.get<WorldTransformComponent>(entity);
+        if (!mesh.model || !worldTransform.valid || mesh.model->getIndexCount() == 0)
+            continue;
+        const RenderTagComponent* tag = frameInfo.registry.try_get<RenderTagComponent>(entity);
+        if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
+            continue;
+        const std::vector<SubMesh>& subMeshes = mesh.model->getSubMeshes();
+        for (uint32_t i = 0; i < static_cast<uint32_t>(subMeshes.size()); ++i)
+        {
+            if (subMeshes[i].isTerrainChunk || subMeshes[i].indexCount == 0)
+                continue;
+            templateModel = mesh.model.get();
+            templateSubMesh = i;
+            templateTransform = worldTransform.matrix;
+            break;
+        }
+        if (templateModel != nullptr)
+            break;
+    }
+    if (templateModel == nullptr)
+        return;
+
+    for (uint32_t i = 0; i < debugExternalCount; ++i)
+    {
+        ExternalInstance instance{};
+        instance.model = templateModel;
+        instance.subMeshIndex = templateSubMesh;
+        instance.materialSlot = 0u;
+        glm::mat4 offset(1.0f);
+        offset[3][0] = 2.5f * static_cast<float>(i + 1u);
+        instance.transform = templateTransform * offset;
+        externalInstances.push_back(instance);
+    }
+    std::cout << "[SceneGpu] external instances | count=" << externalInstances.size()
+              << " source=debug-injection" << std::endl;
 }
 
 void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
@@ -722,6 +797,19 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
             entities.push_back(entity);
             if (seenModels.insert(mesh.model.get()).second)
                 batchModels.push_back(mesh.model.get());
+        }
+    }
+    // 外部实例（粒子/体素）也参与同一套分组：把它们用的模型一并纳入合并缓冲。
+    {
+        std::unordered_set<const Model*> seenModels(batchModels.begin(), batchModels.end());
+        for (const ExternalInstance& external : externalInstances)
+        {
+            if (external.model == nullptr || external.model->getIndexCount() == 0)
+                continue;
+            if (external.subMeshIndex >= external.model->getSubMeshes().size())
+                continue;
+            if (seenModels.insert(external.model).second)
+                batchModels.push_back(external.model);
         }
     }
     mergedActive = frameInfo.settings.gpuMergedBuffers && ensureMergedMesh(batchModels);
@@ -863,6 +951,90 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
 
     // 3) 排序后拼接实例：命令顺序即组顺序。合并模式只绑一次 VBO/IBO，顺序任意；
     //    非合并模式要先按模型排，保证同一模型的组连续，才能一条命令画完一组。
+    // 2b) 外部实例：没有 ECS 实体，变换由调用方直接给（粒子/体素）。
+    for (const ExternalInstance& external : externalInstances)
+    {
+        const Model* model = external.model;
+        if (model == nullptr || model->getIndexCount() == 0)
+            continue;
+        const std::vector<SubMesh>& subMeshes = model->getSubMeshes();
+        if (external.subMeshIndex >= subMeshes.size())
+            continue;
+        const SubMesh& subMesh = subMeshes[external.subMeshIndex];
+        if (subMesh.isTerrainChunk || subMesh.indexCount == 0)
+            continue;
+
+        const std::pair<const Model*, uint32_t> key{ model, external.subMeshIndex };
+        uint32_t groupIndexValue = 0;
+        auto groupIt = groupIndex.find(key);
+        if (groupIt == groupIndex.end())
+        {
+            groupIndexValue = static_cast<uint32_t>(modelGroups.size());
+            groupIndex.emplace(key, groupIndexValue);
+            ModelGroup newGroup{};
+            newGroup.model = model;
+            newGroup.subMeshIndex = external.subMeshIndex;
+            newGroup.materialSlot = external.materialSlot;
+            if (mergedActive)
+            {
+                const auto placement = mergedPlacements.find(model->getGeometryId());
+                if (placement != mergedPlacements.end())
+                {
+                    newGroup.merged = true;
+                    newGroup.mergedFirstIndex = placement->second.firstIndex + subMesh.firstIndex;
+                    newGroup.mergedBaseVertex = static_cast<int32_t>(placement->second.baseVertex);
+                }
+            }
+            modelGroups.push_back(newGroup);
+            buckets.emplace_back();
+        }
+        else
+        {
+            groupIndexValue = groupIt->second;
+        }
+
+        glm::vec3 localMin = model->getBoundsMin();
+        glm::vec3 localMax = model->getBoundsMax();
+        const std::vector<SubMeshBounds>& boundsList = subMeshBoundsFor(*model, frameInfo.frameNumber);
+        if (external.subMeshIndex < boundsList.size() && boundsList[external.subMeshIndex].valid)
+        {
+            localMin = boundsList[external.subMeshIndex].min;
+            localMax = boundsList[external.subMeshIndex].max;
+        }
+
+        InstanceRecord record{};
+        record.model = external.transform;
+        record.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(external.transform))));
+        record.flags = glm::uvec4(external.materialSlot, 1u, subMesh.alphaMasked ? 1u : 0u,
+                                  subMesh.albedoFallback ? 1u : 0u);
+        record.misc = glm::vec4(subMesh.alphaCutoff, 1.0f, 0.0f, 0.0f);
+        record.uvTransform = glm::vec4(0.0f);
+        record.boundsMin = glm::vec4(localMin, 1.0f);
+        record.boundsMax = glm::vec4(localMax, 0.0f);
+        record.draw = glm::uvec4(0u);
+        buckets[groupIndexValue].push_back(record);
+
+        ModelGroup& group = modelGroups[groupIndexValue];
+        for (int corner = 0; corner < 8; ++corner)
+        {
+            const glm::vec3 localPoint((corner & 1) ? localMax.x : localMin.x,
+                                       (corner & 2) ? localMax.y : localMin.y,
+                                       (corner & 4) ? localMax.z : localMin.z);
+            const glm::vec3 worldPoint = glm::vec3(external.transform * glm::vec4(localPoint, 1.0f));
+            if (!group.hasBounds)
+            {
+                group.boundsMin = worldPoint;
+                group.boundsMax = worldPoint;
+                group.hasBounds = true;
+            }
+            else
+            {
+                group.boundsMin = glm::min(group.boundsMin, worldPoint);
+                group.boundsMax = glm::max(group.boundsMax, worldPoint);
+            }
+        }
+    }
+
     std::vector<uint32_t> order(modelGroups.size());
     for (uint32_t i = 0; i < static_cast<uint32_t>(order.size()); ++i)
         order[i] = i;
@@ -909,6 +1081,8 @@ void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
     stats.visibleVertices = words[5];
     stats.occlusionTests = words[6];
     stats.occlusionCulled = words[7];
+    stats.screenTests = words[8];
+    stats.screenCulled = words[9];
 }
 
 void SceneGpuBatch::ensureHiZ(VkExtent2D extent)
@@ -1220,7 +1394,11 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                   << " hizLevels=" << hiz[(frameInfo.frameInFlightIndex + 1u) % kFramesInFlight].mipLevels
                   << " hizEnabled=" << (frameInfo.settings.hizEnabled ? 1 : 0)
                   << " hizTests=" << stats.occlusionTests
-                  << " hizCulled=" << stats.occlusionCulled << " stable=" << stableFrames << "/60"
+                  << " hizCulled=" << stats.occlusionCulled
+                  << " screenTests=" << stats.screenTests
+                  << " screenCulled=" << stats.screenCulled
+                  << " external=" << stats.externalInstances
+                  << " stable=" << stableFrames << "/60"
                   << " rebuilds=" << structureRebuilds
                   << " flattenUs=" << (structureMicros / 60u)
                   << std::endl;
@@ -1235,6 +1413,10 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     // --no-gpu-scene：整条路径连剔除 dispatch 都不做。
     if (!frameInfo.settings.gpuSceneEnabled)
         return;
+
+    // 调试注入：把第一个可批模型复制 N 份当外部实例（验证粒子/体素那条链路）。
+    refreshDebugExternalInstances(frameInfo);
+    stats.externalInstances = getExternalInstanceCount();
 
     const uint32_t frame = frameInfo.frameInFlightIndex;
     // 同一槽位的统计是两帧前那次 dispatch 的结果（kFramesInFlight=2），GPU 早已完成；
@@ -1318,6 +1500,9 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     const HiZFrame& readHiZ = hiz[(frame + 1u) % kFramesInFlight];
     const bool hizUsable = frameInfo.settings.hizEnabled && hizReady &&
                            readHiZ.fullView != VK_NULL_HANDLE;
+    frameData.screen = glm::vec4(frameInfo.settings.gpuSceneMinScreenPixels,
+                                 static_cast<float>(hizExtent.height),
+                                 frameInfo.projectionMatrix[1][1], 0.0f);
     frameData.params = glm::uvec4(static_cast<uint32_t>(modelGroups.size()), 0u,
                                   hizUsable ? 1u : 0u, 0u);
     std::memcpy(res.frameData.mapped, &frameData, sizeof(FrameData));
@@ -1368,10 +1553,11 @@ void SceneGpuBatch::recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameIn
 
     if (!available || instanceScratch.empty())
         return;
+    if (!mergedActive || !mergedMesh.valid)
+        return;
 
     const FrameResources& res = frames[frameInfo.frameInFlightIndex];
     const uint32_t groupCount = static_cast<uint32_t>(modelGroups.size());
-    if (mergedActive && mergedMesh.valid)
     {
         const VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mergedMesh.vertices.buffer, &offset);
@@ -1385,27 +1571,5 @@ void SceneGpuBatch::recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameIn
             frameInfo.telemetry.drawCalls += 1;
         frameInfo.telemetry.triangles += stats.visibleTriangles;
         frameInfo.telemetry.vertices += stats.visibleVertices;
-        return;
     }
-
-    // 非合并模式：每个模型一条命令范围（同模型的组已经排在一起）。
-    uint32_t runStart = 0;
-    while (runStart < groupCount)
-    {
-        const Model* model = modelGroups[runStart].model;
-        uint32_t runEnd = runStart + 1;
-        while (runEnd < groupCount && modelGroups[runEnd].model == model)
-            ++runEnd;
-        model->bind(commandBuffer);
-        vkCmdDrawIndexedIndirect(commandBuffer, res.commands.buffer,
-                                 static_cast<VkDeviceSize>(runStart) * kCommandWords * sizeof(uint32_t),
-                                 runEnd - runStart, kCommandWords * sizeof(uint32_t));
-        stats.drawCalls += 1;
-        runStart = runEnd;
-    }
-
-    // 遥测：真实绘制量只能从 GPU 回读（滞后两帧）。
-    frameInfo.telemetry.drawCalls += stats.drawCalls;
-    frameInfo.telemetry.triangles += stats.visibleTriangles;
-    frameInfo.telemetry.vertices += stats.visibleVertices;
 }

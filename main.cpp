@@ -70,6 +70,8 @@ int main(int argc, char** argv)
     bool noSSAO = false;
     bool noGpuScene = false;
     bool forceGpuScene = false;
+    float gpuSceneMinPixels = 0.0f;
+    uint32_t gpuSceneExternal = 0u;
     bool noMergedBuffers = false;
     bool noHiZ = false;
     bool jobTest = false;
@@ -117,6 +119,18 @@ int main(int argc, char** argv)
         else if (arg == "--gpu-scene") forceGpuScene = true;
         else if (arg == "--no-merged-buffers") noMergedBuffers = true;
         else if (arg == "--no-hiz") noHiZ = true;
+        else if (arg == "--gpu-scene-min-px" && i + 1 < argc)
+        {
+            try { gpuSceneMinPixels = std::stof(argv[i + 1]); }
+            catch (...) { /* 参数不是数字就忽略 */ }
+            ++i;
+        }
+        else if (arg == "--gpu-scene-external" && i + 1 < argc)
+        {
+            try { gpuSceneExternal = static_cast<uint32_t>(std::stoul(argv[i + 1])); }
+            catch (...) { /* 参数不是数字就忽略 */ }
+            ++i;
+        }
         else if (arg == "--jobtest")  jobTest = true;
         else if (arg == "--cross-queue-test") crossQueueTest = true;
         else if (arg == "--resize-test") resizeTest = true;
@@ -239,6 +253,8 @@ int main(int argc, char** argv)
         if (forceGpuScene) app.setGpuSceneForced(true);
         if (noMergedBuffers) app.setGpuMergedBuffers(false);
         if (noHiZ) app.setHiZEnabled(false);
+        if (gpuSceneMinPixels > 0.0f) app.setGpuSceneMinScreenPixels(gpuSceneMinPixels);
+        if (gpuSceneExternal > 0u) app.setGpuSceneExternalDebugCount(gpuSceneExternal);
         if (crossQueueTest) app.setCrossQueueTestEnabled(true);
         if (resizeTest) app.setResizeTestEnabled(true);
         if (materialStress) app.setMaterialStressEnabled(true);

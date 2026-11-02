@@ -53,6 +53,8 @@ public:
 	void setGpuSceneForced(bool forced);
 	void setGpuMergedBuffers(bool enabled);
 	void setHiZEnabled(bool enabled);
+	void setGpuSceneMinScreenPixels(float pixels);
+	void setGpuSceneExternalDebugCount(uint32_t count);
 	void setCrossQueueTestEnabled(bool enabled);
 	void setResizeTestEnabled(bool enabled);
 	void setMaterialStressEnabled(bool enabled);

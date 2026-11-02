@@ -168,6 +168,10 @@ struct EngineSettings
 	bool gpuMergedBuffers = true;
 	// F1-c：Hi-Z 遮挡剔除。关掉只保留 6 平面视锥剔除（用来对比与排查）。
 	bool hizEnabled = true;
+	// F1-d：屏幕空间误差剔除。投影后包围球半径小于这个像素数的组直接剔除，0 = 关闭。
+	float gpuSceneMinScreenPixels = 0.0f;
+	// 调试/验证用：没有外部实例时，用第一个可批模型复制 N 份注入实例缓冲（粒子/体素的替身）。
+	uint32_t gpuSceneExternalDebugCount = 0;
 
 	bool ssaoEnabled = true;
 	float ssaoRadius = 0.5f;

@@ -1380,6 +1380,16 @@ void FirstApp::setHiZEnabled(bool enabled)
 	scene->getSettings().hizEnabled = enabled;
 }
 
+void FirstApp::setGpuSceneMinScreenPixels(float pixels)
+{
+	scene->getSettings().gpuSceneMinScreenPixels = pixels;
+}
+
+void FirstApp::setGpuSceneExternalDebugCount(uint32_t count)
+{
+	scene->getSettings().gpuSceneExternalDebugCount = count;
+}
+
 void FirstApp::setCrossQueueTestEnabled(bool enabled)
 {
 	crossQueueProbePassPtr->setEnabled(enabled);

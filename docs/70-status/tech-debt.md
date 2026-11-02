@@ -10,7 +10,7 @@ updated: 2026-11-02
 
 # 当前技术债
 
-## 1. 已关闭（TD-01 ~ TD-16）
+## 1. 已关闭（TD-01 ~ TD-17）
 
 | ID | 问题 | 修法要点 |
 |---|---|---|
@@ -30,6 +30,7 @@ updated: 2026-11-02
 | TD-14 | `Pass::writeDepth` 静默把 `depth==0 && stencil==0` 改写成 `{1.0, 0}` | 清屏值由调用方显式给出；删掉隐式改写，GeometryPass 本来就显式传 1.0 |
 | TD-15 | GPU 批每子网格一条间接命令、无全局合并缓冲（原未关闭第 14 条） | 合并顶点/索引缓冲 + 单 range/单 counter + 一次 `vkCmdDrawIndexedIndirectCount`；索引不重写，用 `vertexOffset` 施加 `baseVertex` |
 | TD-16 | GPU 批每组一条命令（instanceCount 恒为 1）+ 无材质排序 + 无遮挡剔除 + 包围盒缓存以裸指针为键 | 分组键改为 `(模型, 子网格)` 实现实例化；组按 materialSlot 排序；缓存改用 `Model::getGeometryId()` 并按 600 帧/64 条淘汰；Hi-Z 金字塔（`R32_SFLOAT`，GENERAL，错帧一帧）做组级保守遮挡剔除，`--no-hiz` 可关 |
+| TD-17 | GPU 批只有逐模型提交路径、没有屏幕空间误差剔除、粒子/体素无入口 | 删掉非合并模式逐模型 bind，合并缓冲成为唯一 GPU 提交路径（`useGpuPath()` 要求 `mergedActive`）；`FrameData` 加 `vec4 screen` 做 SSE 剔除；新增 `ExternalInstance` 与 `setExternalInstances()`，外部实例与 ECS 实例共用分组/合并缓冲/同一条 indirect 命令 |
 
 ## 2. 未关闭（按"何时必须处理"排序）
 
@@ -48,6 +49,7 @@ updated: 2026-11-02
 | 11 | 地形雕刻只改运行期 HeightField/Model，不写场景 JSON；CharacterControllerComponent 已序列化但 Play 快照不保存雕刻 | 保存重载/Play 停止会丢失雕刻成果；编辑器无法持久化地形修改 | 后续/地形编辑持久化需求 |
 | 12 | 地形材质最多 4 个 Set2 set，但渲染按实体顺序遇到变化即重绑，未按材质集排序/合批 | 交替材质会增加 descriptor switch，材质集切换次数不设上限 | 多材质 chunk profiling 时 |
 | 13 | 合并缓冲的源数据要 CPU 侧完整顶点/索引副本（`Model::cpuVertices/cpuIndices`），Sponza 约 11MB；地形模型不留 | CPU 内存随可批模型总量线性增长 | 资产规模上去、或改走 GPU 回读重建时 |
+| 14 | 外部实例与 ECS 实体共用 `(模型, 子网格)` 分组，同一子网格上不同材质的外部实例会归到同一组、只用第一条记录的材质槽 | 粒子/体素若同一网格多材质会串色 | 粒子系统接入前 |
 
 ## 3. 明确"不打算做"的
 

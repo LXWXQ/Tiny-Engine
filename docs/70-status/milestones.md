@@ -41,7 +41,7 @@ updated: 2026-11-02
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 27 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 29 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -575,12 +575,7 @@ updated: 2026-11-02
 ## F1-b：合并顶点/索引缓冲（一次 multidraw）
 **问题**：F1-a 按模型分组、每个子网格一条间接命令，103 个子网格仍是 103 条命令；multidraw 的收益要等命令能跨模型才拿得到，而间接命令本身不带顶点缓冲绑定。
 
-**实现**：
-- `Model` 为可批模型保留一份完整 CPU 顶点/索引（`getCpuVertices()/getCpuIndices()`）；地形模型（含 `isTerrainChunk` 子网格）不留，它们本来不走 GPU 批；
-- `SceneGpuBatch::ensureMergedMesh()`：按模型集合算 FNV 签名（指针 + 顶点数 + 索引数），变了才重建；顶点/索引分别拼进一份 device-local 缓冲，索引保持原样，每个模型记 `baseVertex`；
-- 绘制时把 `baseVertex` 填进间接命令的 `vertexOffset`（等价 `vkCmdDrawIndexed` 语义），所有实例共用 `ranges[0]`/`counts[0]`，一条 `vkCmdDrawIndexedIndirectCount` 画完；
-- 重建走自建 `uploadPool` + staging + `cmdBeginSingleTime/cmdEndSingleTime`，屏障 TRANSFER_WRITE -> VERTEX_ATTRIBUTE_READ|INDEX_READ；
-- 回退：任一可批模型没有 CPU 几何 -> `ensureMergedMesh` 返回 false，退回 F1-a 每模型路径；`--no-merged-buffers` 可强制回退。
+**实现**：`Model` 为可批模型保留完整 CPU 顶点/索引（地形不留）；`ensureMergedMesh()` 按模型集合算 FNV 签名（指针 + 顶点数 + 索引数），顶点/索引分别拼进一份 device-local 缓冲、索引保持原样、每模型记 `baseVertex` 并填进间接命令的 `vertexOffset`（等价 `vkCmdDrawIndexed` 语义），所有实例共用 `ranges[0]`/`counts[0]`，一条 `vkCmdDrawIndexedIndirectCount` 画完；重建走自建 `uploadPool` + staging + 单次命令（屏障 TRANSFER_WRITE -> VERTEX_ATTRIBUTE_READ|INDEX_READ）。F1-d 起回退直接落到 CPU 路径（`--no-merged-buffers` 强制）。
 
 **可观测**：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时遥测 `draw calls 2 / triangles 270459 / vertices 811377`（合并前 104）。
 
@@ -595,6 +590,11 @@ updated: 2026-11-02
 **Hi-Z 有效性**：当前 `hizCulled = 0` 是正确结果 —— Sponza 的 103 个子网格各自覆盖整栋建筑一大块，组级保守剔除几乎不命中；把 `kOcclusionBias` 临时改成 -100000 可验证全链路（`hizTests=103 hizCulled=103`、`visible=0`）。收益等大量小实例（粒子/植被/体素 chunk）。
 ## F1-d：稳定帧快速路径 + 同步校验 0 错误
 **问题**：从 F1-a 起每帧都重新摊平实例（世界矩阵 + 每组并集 AABB），静态场景实测 439µs/帧；`--validation-features sync` 跑出 180 条同步危害，全部来自 Hi-Z 的跨帧读写与屏障。
-**实现**：结构签名（FNV-1a：entity、`sourceRevision`、材质槽、材质指针、`getGeometryId()`、子网格数、局部 AABB 六个 float、`gpuMergedBuffers`）；签名命中就跳过 `buildInstances()` 与 `instances/groups` 上传，只写 240 字节 `frameData` 再 dispatch；每槽位记 `(signature, capacityGeneration)`，容量重建后两槽都重传。Hi-Z 起始屏障改成 `GENERAL→GENERAL` + `srcAccess = SHADER_READ`（等上一帧剔除的采样），逐级屏障给下一级 `SHADER_READ`。
+**实现**：结构签名（FNV-1a：entity、`sourceRevision`、材质槽、材质指针、`getGeometryId()`、子网格数、局部 AABB 六个 float、`gpuMergedBuffers`）；签名命中就跳过 `buildInstances()` 与 `instances/groups` 上传，只写 240 字节 `frameData` 再 dispatch（F1-e 起 256 字节）；每槽位记 `(signature, capacityGeneration)`，容量重建后两槽都重传。Hi-Z 起始屏障改成 `GENERAL→GENERAL` + `srcAccess = SHADER_READ`（等上一帧剔除的采样），逐级屏障给下一级 `SHADER_READ`。
 **可观测**：`[SceneGpu] cull stats | ... stable=60/60 rebuilds=0 flattenUs=9`（重建帧 439）；`--validation-features sync` → `[Validation] errors=0 warnings=0`。
 **回归**：新增 `f1d-stable-path`（要求 `stable=`/`rebuilds=`/`flattenUs=`）与 `f1d-sync-validation`（sync 0 错误），全套 **27 项 ALL PASS**、stderr 0 字节。
+## F1-e：屏幕空间误差剔除 + 外部实例 + 跨模型单条提交
+**实现**：① 删掉非合并模式的逐模型 bind 中间路径，合并缓冲成为唯一 GPU 提交路径（`useGpuPath()` 要求 `mergedActive`，否则整帧回 CPU）；② `FrameData` 加 `vec4 screen`（阈值像素、视口高、投影 `[1][1]`），`scene_cull.comp` 用 `radius * 0.5 * H * P11 / distance < 阈值` 做实心 SSE 剔除，`stats[2]` 记 `screenTests/screenCulled`；③ 新增 `ExternalInstance { model, subMeshIndex, transform, materialSlot }` 与 `setExternalInstances()`，外部实例与 ECS 实例共用分组 `(模型, 子网格)`、合并缓冲与同一条 indirect 命令，结构签名混入它们。
+**可观测**：`[SceneGpu] external instances | count=<n> source=debug-injection`、`cull stats` 尾部 `screenTests=.. screenCulled=.. external=..`；`--gpu-scene-min-px 400` 时 `screenTests=103 screenCulled=103`（整屏剔空），`--gpu-scene-external 4` 时 `instances=107`。
+**回归**：新增 `f1e-screen-space` 与 `f1e-external-instances`，全套 **29 项 ALL PASS**（`build/validation/20261102-160351`）；`--no-merged-buffers` 仍走 CPU 路径 `104 / 270459 / 811377`。
+**边界**：SSE 只做剔除、不是 LOD 选级（模型没有 LOD 链）；外部实例与 ECS 共用分组，同子网格不同材质会归到一组；粒子每帧变化会击穿结构签名 —— 数据确实变了，这是预期行为。

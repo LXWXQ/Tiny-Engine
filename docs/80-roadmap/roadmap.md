@@ -61,10 +61,11 @@ Graphics: vkCmdDrawIndexedIndirect
 - F1-a：实例缓冲摊平（224B/条）、compute 视锥剔除、`vkCmdDrawIndexedIndirectCount` 按模型提交、set 3 实例 SSBO、GPU 批遥测回读；详见 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md)。
 - F1-b：可批模型合并进全局顶点/索引缓冲，单 range/单 counter，一条 `vkCmdDrawIndexedIndirectCount` 画完；Sponza 的 draw call 104 -> 2，三路像素比对 `max diff = 0`。
 - F1-c：分组键改成 `(模型, 子网格)` 实现真正的实例化（`instanceCount = N`）、组按材质排序、包围盒缓存改用 `Model::getGeometryId()`、Hi-Z 遮挡剔除（`R32_SFLOAT` 金字塔 + 错帧一帧 + 组级保守测试）；`--no-hiz` 可关。
-- F1-d：稳定帧快速路径（结构签名命中即跳过摊平与 `instances/groups` 上传，实测 439µs → 9µs；只写 240B `frameData` 再 dispatch）+ 修掉 Hi-Z 的跨帧屏障，`--validation-features sync` 0 错误。
-- 阈值 256 实例：小场景仍走 CPU 路径，`--gpu-scene` 强制、`--no-gpu-scene` 关闭、`--no-merged-buffers` 退回每模型 indirect。
+- F1-d：稳定帧快速路径（结构签名命中即跳过摊平与 `instances/groups` 上传，实测 439µs → 9µs；只写 256B `frameData` 再 dispatch）+ 修掉 Hi-Z 的跨帧屏障，`--validation-features sync` 0 错误。
+- F1-e：非合并模式的逐模型 bind 中间路径删除（合并缓冲是唯一 GPU 提交路径，否则整帧回 CPU）；`FrameData` 加 `vec4 screen` 做屏幕空间误差剔除（`stats[2]` 记 `screenTests/screenCulled`）；新增 `ExternalInstance` 入口，粒子/体素与 ECS 实例共用分组、合并缓冲与同一条 indirect 命令。
+- 阈值 256 实例：小场景仍走 CPU 路径，`--gpu-scene` 强制、`--no-gpu-scene` 关闭、`--no-merged-buffers` 整条退回 CPU、`--gpu-scene-min-px` 开屏幕空间误差剔除、`--gpu-scene-external` 注入外部实例。
 - 验收状态：draw call 104 -> 2、CPU 不再逐实体决定绘制（只摊平一次，之后靠签名跳过）、验证层 0 字节、`--validation-features sync` 0 errors —— 均已达成。
-- 未完成：非合并模式下的跨模型 single draw（需要全局缓冲统一重写 firstIndex）、GPU 端 LOD 与屏幕空间误差、粒子/体素接入（往实例缓冲塞记录即可，不需要新管线）。
+- 未完成：GPU 端 LOD 选级（需要模型 LOD 链，SSE 现在只用来剔除）、粒子/体素真实接入引擎侧（入口 `setExternalInstances()` 已就位，等 Effect 系统来喂数据）。
 - Hi-Z 在当前 Sponza 场景 `hizCulled = 0`：103 个子网格各自覆盖整栋建筑一大块，组级保守剔除几乎不命中；收益等大量小实例（见 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md) §9）。
 
 ---

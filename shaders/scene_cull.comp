@@ -36,12 +36,16 @@ layout(set = 0, binding = 2) readonly buffer FrameBuffer
     mat4 viewProjection;
     mat4 view;
     vec4 planes[6];
+    vec4 screen;       // x = 最小屏幕像素阈值, y = 视口高度, z = 投影 [1][1]
     uvec4 params;      // x = groupCount, z = 1 表示 Hi-Z 可用
 } frame;
 
 layout(set = 0, binding = 3) buffer StatsBuffer
 {
-    uvec4 stats[2];
+    // [0] = (总组数, 可见组数, 被剔除组数, 可见实例数)
+    // [1] = (可见三角形, 可见顶点, 遮挡测试组数, 遮挡剔除组数)
+    // [2] = (屏幕误差测试组数, 屏幕误差剔除组数, 保留, 保留)
+    uvec4 stats[3];
 } statsBuffer;
 
 layout(set = 0, binding = 4) uniform sampler2D hizPyramid;
@@ -65,6 +69,21 @@ bool frustumVisible(vec3 minimum, vec3 maximum)
             return false;
     }
     return true;
+}
+
+// 屏幕空间误差剔除：投影后包围球半径小于阈值像素的组直接丢弃。
+// 这是 LOD 选择的前置件 —— 有了 LOD 链以后，这里会改成按误差选级而不是剔除。
+bool tooSmallOnScreen(vec3 minimum, vec3 maximum)
+{
+    if (frame.screen.x <= 0.0 || frame.screen.y <= 0.0)
+        return false;
+
+    const vec3 center = (minimum + maximum) * 0.5;
+    const float radius = length((maximum - minimum) * 0.5);
+    const vec3 eye = (inverse(frame.view))[3].xyz;
+    const float distance = max(length(center - eye), 1.0e-3);
+    const float pixels = radius * (0.5 * frame.screen.y * frame.screen.z) / distance;
+    return pixels < frame.screen.x;
 }
 
 bool occludedByHiZ(vec3 minimum, vec3 maximum)
@@ -121,6 +140,15 @@ void main()
     if (group.boundsMin.w > 0.5)
     {
         visible = frustumVisible(group.boundsMin.xyz, group.boundsMax.xyz);
+        if (visible && frame.screen.x > 0.0)
+        {
+            atomicAdd(statsBuffer.stats[2].x, 1u);   // 做过屏幕空间误差测试的组数
+            if (tooSmallOnScreen(group.boundsMin.xyz, group.boundsMax.xyz))
+            {
+                atomicAdd(statsBuffer.stats[2].y, 1u);   // 其中投影太小的组数
+                visible = false;
+            }
+        }
         if (visible && frame.params.z != 0u)
         {
             atomicAdd(statsBuffer.stats[1].z, 1u);   // 做过遮挡测试的组数

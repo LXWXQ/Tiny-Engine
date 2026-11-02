@@ -52,7 +52,7 @@ Graphics: merged  -> 绑合并 VBO/IBO + 一条 vkCmdDrawIndexedIndirect(groupCo
 | instances | STORAGE，`instanceCapacity * 224` | host visible，每帧覆盖写 |
 | groups | STORAGE，`groupCapacity * 64` | host visible，每帧覆盖写 |
 | commands | STORAGE + INDIRECT，`groupCapacity * 5 * 4` | device local，compute 每帧重写 |
-| frameData | STORAGE，240 字节 | viewProjection + view + 6 平面 + params，host visible |
+| frameData | STORAGE，256 字节 | viewProjection + view + 6 平面 + `vec4 screen` + params，host visible |
 | stats | STORAGE + TRANSFER_DST，`2 * uvec4` | host visible，回读用 |
 
 - **没有 counters 缓冲**：每个组只服务自己那 5 个 uint，compute 直接把 `instanceCount` 写成 0 或 N，不需要原子计数与 reset。
@@ -99,7 +99,7 @@ push constant 是 `uvec4 params = (groupCount, hizWidth, hizHeight, mipLevels)`�
 
 `baseVertex` 通过 indirect 命令的 `vertexOffset` 施加，语义与 `vkCmdDrawIndexed` 的 vertexOffset 一致，所以索引缓冲不需要重写（Sponza 78.7 万索引，省掉一次全量加法）。
 
-源数据来自 `Model` 新增的 CPU 副本（`getCpuVertices()/getCpuIndices()`）。地形模型保留 `isTerrainChunk` 子网格且 LOD + 裙边体积大，**不保留 CPU 副本**，也不参与合并；任一可批模型缺 CPU 几何时 `ensureMergedMesh` 返回 false，整帧退回每模型路径（`--no-merged-buffers` 可强制回退）。
+源数据来自 `Model` 新增的 CPU 副本（`getCpuVertices()/getCpuIndices()`）。地形模型保留 `isTerrainChunk` 子网格且 LOD + 裙边体积大，**不保留 CPU 副本**，也不参与合并；任一可批模型缺 CPU 几何时 `ensureMergedMesh` 返回 false，`useGpuPath()` 随之返回 false，整帧退回 **CPU 逐子网格路径**（`--no-merged-buffers` 可强制回退）。F1-d 起不再保留「逐模型 bind + 每组一条 indirect」的中间路径：跨模型 single draw 需要一份共享顶点/索引缓冲，两条 GPU 提交路径保留其一即可。
 
 实测：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时 `draw calls 2 / triangles 270459 / vertices 811377`，与 CPU 路径逐像素一致（`max diff = 0`）。
 
@@ -118,11 +118,41 @@ push constant 是 `uvec4 params = (groupCount, hizWidth, hizHeight, mipLevels)`�
 | `BoundsComponent::getLocal()` 的 6 个 float | `checkerScale` 由它算出来 |
 | `EngineSettings::gpuMergedBuffers` | 合并/非合并会改分组与命令写法 |
 
-签名命中时跳过摊平与 `instances/groups` 上传，只写 240 字节的 `frameData`（viewProjection / view / 6 平面 / params），然后照常 dispatch。每个帧槽位额外记 `(signature, capacityGeneration)`：容量增长会重建缓冲，等于两个槽位都要重传一次。命令缓冲不需要清 —— compute 每帧对每组整块重写（可见写命令，不可见写 0）。
+签名命中时跳过摊平与 `instances/groups` 上传，只写 256 字节的 `frameData`（viewProjection / view / 6 平面 / `vec4 screen` / params），然后照常 dispatch。每个帧槽位额外记 `(signature, capacityGeneration)`：容量增长会重建缓冲，等于两个槽位都要重传一次。命令缓冲不需要清 —— compute 每帧对每组整块重写（可见写命令，不可见写 0）。
 
 实测（Sponza，103 组）：重建帧 `flattenUs=439`，稳定帧 `flattenUs=9`，日志 `stable=60/60 rebuilds=0`。
 
 **改代码时注意**：新增任何会进入 `InstanceRecord` 的每实体字段（自定义颜色、LOD 偏置、可见性开关……），必须同步加进签名，否则会出现「场景变了但缓冲还是旧的」。
+## 4.3 屏幕空间误差剔除（F1-e）
+
+投影后包围球半径小于阈值的组直接丢弃，判据就是屏幕空间误差（SSE）的分子：`radius * (0.5 * 视口高 * P[1][1]) / 距离 < 阈值像素`。
+这是 LOD 选择的前置件 —— 等模型有 LOD 链之后，同一个投影尺寸会用来「选级」而不是「剔除」。
+
+`FrameData` 因此多了一个 `vec4 screen`：`x` = 阈值像素（0 = 关闭）、`y` = 视口高度（取 Hi-Z 的 extent 高）、`z` = 投影矩阵 `[1][1]`。
+统计写在 `stats[2]`：`screenTests`（做过 SSE 测试的组数）、`screenCulled`（其中投影太小的组数）。
+
+实测（相机 `position [0,6,45] / rotation [0,pi,0]`）：`--gpu-scene-min-px 400` 时 `screenTests=103 screenCulled=103`（整屏被剔空），阈值降到 2 时不再剔除；默认 0 = 关闭，行为与 F1-d 完全一致。
+
+## 4.4 外部实例（F1-e）
+
+粒子/体素这类没有 ECS 实体的几何，每帧通过 `SceneGpuBatch::setExternalInstances(std::vector<ExternalInstance>)` 提交：
+
+```cpp
+struct ExternalInstance
+{
+    const Model* model = nullptr;
+    uint32_t subMeshIndex = 0;
+    glm::mat4 transform{ 1.0f };
+    uint32_t materialSlot = 0;
+};
+```
+
+它们与 ECS 实例共用同一个分组键 `(模型, 子网格)`、同一份合并缓冲、同一套剔除与同一条 indirect 命令 —— 引擎侧不需要为粒子单独开绘制路径。三处配套改动：
+
+- `batchModels` 收集时把外部实例的模型也算进去，合并缓冲必须覆盖它们；
+- 结构签名混入外部实例的数量、几何 id、子网格、材质槽与 16 个矩阵 float（粒子在动，签名每帧都会变，这是预期行为，快速路径对它们不生效）；
+- 调试注入：`--gpu-scene-external <n>` 把第一个可批子网格复制 n 份当外部实例，日志 `[SceneGpu] external instances | count=<n> source=debug-injection`，`cull stats` 里有 `external=<n>`。实测 `--gpu-scene-external 4` 时 `instances=107`（103 + 4）。
+
 ## 5. 管线接线
 
 1. `GeometryPass::init()` 先建 `SceneGpuBatch`，再把 `getInstanceSetLayout()` 与裸指针交给 `GeometrySystem`（成员声明顺序保证 `SceneGpuBatch` 比 `GeometrySystem` 活得久）。随后对两个帧槽调用 `setHiZSource(frame, gBuffer.getPosition().view, extent)`。
@@ -145,24 +175,26 @@ resize 有两个坑，都已修：
 | `gpuSceneEnabled` | true | 关掉后 `prepare()` 直接返回，完全走 CPU 路径 |
 | `gpuSceneMinInstances` | 256 | 实例数低于阈值仍走 CPU 路径：几十条间接绘制比直接绘制慢 |
 | `gpuSceneForce` | false | 忽略阈值，强制走 GPU 批（验证用） |
-| `gpuMergedBuffers` | true | 合并顶点/索引缓冲，一次绑定提交所有组 |
+| `gpuMergedBuffers` | true | 合并顶点/索引缓冲；关掉等于整条 GPU 批退回 CPU 路径（跨模型 single draw 依赖它） |
 | `hizEnabled` | true | Hi-Z 遮挡剔除；关掉只留视锥剔除 |
+| `gpuSceneMinScreenPixels` | 0 | 屏幕空间误差剔除阈值（像素）；0 = 关闭 |
+| `gpuSceneExternalDebugCount` | 0 | 调试注入：复制第一个可批子网格 n 份当外部实例 |
 
-`SceneGpuBatch::useGpuPath(frameInfo)` 是唯一判定点：`available && gpuSceneEnabled && (gpuSceneForce || stats.submitted >= gpuSceneMinInstances)`。`stats.submitted` 在 `buildInstances()` 之后由 CPU 写入本帧真实条数（GPU 回读的 `submitted` 滞后两帧，不参与判定）。
+`SceneGpuBatch::useGpuPath(frameInfo)` 是唯一判定点：`available && gpuSceneEnabled && mergedActive && (gpuSceneForce || stats.submitted >= gpuSceneMinInstances)`。`mergedActive` 在 `prepare()` 里算好，合并缓冲建不起来就整帧回 CPU 路径，不会出现「命令缓冲空但实体被跳过」的情况。`stats.submitted` 在 `buildInstances()` 之后由 CPU 写入本帧真实条数（GPU 回读的 `submitted` 滞后两帧，不参与判定）。
 
-命令行：`--gpu-scene` 强制、`--no-gpu-scene` 关闭、`--no-merged-buffers` 退回每模型提交、`--no-hiz` 关遮挡剔除。
+命令行：`--gpu-scene` 强制、`--no-gpu-scene` 关闭、`--no-merged-buffers` 整条 GPU 批退回 CPU 路径、`--no-hiz` 关遮挡剔除、`--gpu-scene-min-px <像素>` 开屏幕空间误差剔除、`--gpu-scene-external <n>` 调试注入外部实例。
 
 ## 7. 遥测
 
 - `readStats()` 读 host 可见统计缓冲前必须 `vmaInvalidateAllocation(...)`，否则永远读到 0（与 `GeometrySystemGpu.cpp:93` 同一坑）。
 - 可见数/剔除数/图元数是 GPU 回读，**滞后两帧**；日志与面板要按「上一帧或更早」理解。
-- 每 60 帧一行：`[SceneGpu] cull stats | groups=<n> visible=<n> culled=<n> instances=<n> hiz=<0/1> hizLevels=<n> hizEnabled=<0/1> hizTests=<n> hizCulled=<n> stable=<n>/60 rebuilds=<n> flattenUs=<n>`。`culled` 含视锥与遮挡，`hizTests/hizCulled` 单列遮挡剔除；`stable/rebuilds/flattenUs` 是结构签名的命中率与 CPU 摊平时长（每 60 帧平均）。
+- 每 60 帧一行：`[SceneGpu] cull stats | groups=<n> visible=<n> culled=<n> instances=<n> hiz=<0/1> hizLevels=<n> hizEnabled=<0/1> hizTests=<n> hizCulled=<n> stable=<n>/60 rebuilds=<n> flattenUs=<n>`。`culled` 含视锥与遮挡，`hizTests/hizCulled` 单列遮挡剔除，`screenTests/screenCulled` 单列屏幕空间误差剔除，`external` 是本帧外部实例数；`stable/rebuilds/flattenUs` 是结构签名的命中率与 CPU 摊平时长（每 60 帧平均）。
 - 一次性日志（ASCII，供 PowerShell 匹配）：`[SceneGpu] GPU batch ready | instancesPerFrame=.. groupsPerFrame=.. multiDrawIndirect=1`、`[SceneGpu] merged buffers built | ...`、`[SceneGpu] indirect batch | groups=.. instances=..`。
 
 ## 8. 验证
 
 - 像素级等价：临时把相机放到 `position [0,6,45] / rotation [0,pi,0]`，分别出 `--gpu-scene` 与 `--no-gpu-scene` 截图，忽略 ImGui 面板区域后 `max diff = 0`。改动提交路径后应重做这一步。
-- 回归：`f1-gpu-scene`、`f1b-merged-buffers`、`f1b-merged-off`（要求 `[SceneGpu] indirect batch | groups=`）、`f1c-hiz-off`（要求 `hizEnabled=0`）、`f1d-stable-path`（要求 `stable=`/`rebuilds=`/`flattenUs=`）、`f1d-sync-validation`（`--validation-features sync` 下 `[Validation] errors=0 warnings=0`）。
+- 回归：`f1-gpu-scene`、`f1b-merged-buffers`、`f1b-merged-off`（`--no-merged-buffers` 现在验证「退回 CPU 路径」）、`f1c-hiz-off`（要求 `hizEnabled=0`）、`f1d-stable-path`（要求 `stable=`/`rebuilds=`/`flattenUs=`）、`f1d-sync-validation`（`--validation-features sync` 下 `[Validation] errors=0 warnings=0`）、`f1e-screen-space`（要求 `screenTests=`）、`f1e-external-instances`（要求 `[SceneGpu] external instances | count=4` 与 `external=4`）。
 - 同步校验（syncval）曾报 180 条 `SYNC-HAZARD-WRITE-AFTER-READ`：Hi-Z 图像被上一帧剔除 dispatch 采样过，本帧写之前必须等读完成 —— 起始屏障要用 `GENERAL→GENERAL` + `srcAccess = SHADER_READ`（原来的 `UNDEFINED` 起始屏障既丢弃内容又不与读同步）。逐级屏障要给下一级 `SHADER_READ`，否则降采样采样上一级时会报 `READ-AFTER-WRITE`。
 - Hi-Z 管线自检：把 `kOcclusionBias` 临时改成 −100000，`hizTests=103 hizCulled=103`、`visible=0`，证明投影、选级、采样、比较全链路是通的；改回 0.05 后当前场景 `hizCulled=0`（原因见 §9）。
 - 计时：本机 120 帧短跑波动可达 40 FPS，比较路径必须用 300 帧以上并多轮取中位；当前 103 实例下两条路径差异在噪声内。
@@ -173,6 +205,9 @@ resize 有两个坑，都已修：
 - 包围盒缓存以 `Model::getGeometryId()` 为键，超过 64 个或 600 帧不活跃会被淘汰；`forgetModel()` 保留但没有生产调用方。
 - 合并缓冲按模型集合整体重建：模型增删或规模变化会触发一次全量重传（低频；大资产场景要观察重建耗时）。
 - 合并缓冲要求可批模型带完整 CPU 顶点/索引副本（Sponza 约 11MB 常驻），地形模型不保留。
-- 仍是一组一条间接命令：跨模型合成一条需要全局顶点/索引缓冲统一重写 `firstIndex`，留给后续。
+- 合并模式已经是一条 `vkCmdDrawIndexedIndirect` 画完所有组（跨模型 single draw 成立）；`--no-merged-buffers` 会整帧退回 CPU 路径。`
+- 屏幕空间误差目前只用来「剔除」，还不是 LOD 选择：模型没有 LOD 链，等 F2/F6 有了 LOD 才会改成按误差选级。
+- 外部实例与 ECS 实体共用 `(模型, 子网格)` 分组，所以同一子网格上不同材质的实例会归到同一组、用第一条记录的材质槽。
+- 外部实例每帧变化会击穿结构签名，快速路径对粒子不生效（这正是应该的：数据确实变了）。
 - 遥测滞后两帧，`drawCalls` 也是。
 
