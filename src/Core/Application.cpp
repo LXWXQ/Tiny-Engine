@@ -436,34 +436,90 @@ streamingConfig.skirtsEnabled = false;
 			chunkSnapshots.push_back({ entity, terrain.revision, mesh.model.get() });
 		}
 
-		// Pick the far row of the 3x3 streamed set. The demo 257x257 terrain
-		// overlaps the near rows, and this keeps the brush test isolated.
+		// B-07: pick a stream point where the brush is provably alone. The demo
+		// 257x257 terrain sits in front of the camera and the camera pose saved in
+		// config/engine.json shifts the 3x3 stream centre, so isolation is measured
+		// instead of assumed from the chunk row: the ground query must resolve to
+		// the chunk itself and no other terrain bounds may come within brush reach.
+		const float kBrushRadius = 2.5f;
+		const float kSampleFractions[] = { 0.0f, 0.45f, -0.45f, 0.25f, -0.25f };
+		const auto brushAvoidsOtherTerrain = [&](entt::entity target, float worldX,
+			float worldZ)
+		{
+			for (auto [entity, terrain, bounds] :
+				scene->getRegistry().view<TerrainComponent, WorldBoundsComponent>().each())
+			{
+				(void)terrain;
+				if (entity == target || !bounds.world.valid)
+					continue;
+				const auto& box = bounds.world;
+				if (worldX + kBrushRadius >= box.min.x &&
+					worldX - kBrushRadius <= box.max.x &&
+					worldZ + kBrushRadius >= box.min.z &&
+					worldZ - kBrushRadius <= box.max.z)
+					return false;
+			}
+			return true;
+		};
 		entt::entity sculptChunk = entt::null;
 		float sculptX = 0.0f;
 		float sculptZ = 0.0f;
-		for (const ChunkSnapshot& snapshot : chunkSnapshots)
+		float sculptGround = 0.0f;
+		for (int32_t pass = 0; pass < 2 && sculptChunk == entt::null; ++pass)
 		{
-			const auto* chunk = scene->getRegistry().try_get<TerrainChunkComponent>(snapshot.entity);
-			const auto* transform = scene->getRegistry().try_get<TransformComponent>(snapshot.entity);
-			if (chunk && transform && chunk->chunkZ == centerChunkZ - 1)
+			for (const ChunkSnapshot& snapshot : chunkSnapshots)
 			{
-				sculptChunk = snapshot.entity;
-				sculptX = transform->getTranslation().x;
-				sculptZ = transform->getTranslation().z;
-				break;
+				const auto* chunk =
+					scene->getRegistry().try_get<TerrainChunkComponent>(snapshot.entity);
+				const auto* terrain =
+					scene->getRegistry().try_get<TerrainComponent>(snapshot.entity);
+				const auto* transform =
+					scene->getRegistry().try_get<TransformComponent>(snapshot.entity);
+				if (!chunk || !terrain || !transform || !terrain->cpuHeightField)
+					continue;
+				if (pass == 0 && chunk->chunkZ != centerChunkZ - 1)
+					continue;
+				const terrain::HeightField& field = *terrain->cpuHeightField;
+				const glm::vec3 center = transform->getTranslation();
+				for (float fractionZ : kSampleFractions)
+				{
+					for (float fractionX : kSampleFractions)
+					{
+						const float sampleX = center.x + field.sizeX * 0.5f * fractionX;
+						const float sampleZ = center.z + field.sizeZ * 0.5f * fractionZ;
+						float ground = 0.0f;
+						entt::entity groundOwner = entt::null;
+						if (!scene->sampleTerrainGroundHeightWorld(
+							sampleX, sampleZ, ground, &groundOwner) ||
+							groundOwner != snapshot.entity)
+							continue;
+						if (!brushAvoidsOtherTerrain(snapshot.entity, sampleX, sampleZ))
+							continue;
+						sculptChunk = snapshot.entity;
+						sculptX = sampleX;
+						sculptZ = sampleZ;
+						sculptGround = ground;
+						break;
+					}
+					if (sculptChunk != entt::null)
+						break;
+				}
+				if (sculptChunk != entt::null)
+					break;
 			}
 		}
 		if (sculptChunk == entt::null)
 			throw std::runtime_error("--terrain-test B-07 could not find an isolated streamed chunk");
-		float sculptGround = 0.0f;
 		entt::entity groundEntity = entt::null;
-		if (!scene->sampleTerrainGroundHeightWorld(sculptX, sculptZ, sculptGround, &groundEntity) ||
-			groundEntity != sculptChunk)
+		float queriedGround = 0.0f;
+		if (!scene->sampleTerrainGroundHeightWorld(sculptX, sculptZ, queriedGround,
+			&groundEntity) || groundEntity != sculptChunk)
 			throw std::runtime_error("--terrain-test B-07 sculpt ground query failed");
+		sculptGround = queriedGround;
 
 		terrain::TerrainBrushSettings brush;
 		brush.center = glm::vec3(sculptX, sculptGround, sculptZ);
-		brush.radius = 2.5f;
+		brush.radius = kBrushRadius;
 		brush.strength = 0.45f;
 		brush.mode = terrain::TerrainBrushMode::Raise;
 		Scene::TerrainSculptResult sculptResult;
