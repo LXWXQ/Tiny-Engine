@@ -213,7 +213,8 @@ public:
                          VkAttachmentStoreOp storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                          const SubresourceRange& range = {});
 
-        // 作为深度附件写入
+        // 作为深度附件写入。clear 原样生效（默认 {} 就是深度 0.0），
+        // 不做"depth==0 视为未设置"的改写 —— 想清 1.0 请显式传入。
         Pass& writeDepth(TextureHandle t,
                          VkAttachmentLoadOp loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                          VkClearValue clear = {},

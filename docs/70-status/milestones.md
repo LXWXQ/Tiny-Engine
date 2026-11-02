@@ -544,3 +544,14 @@ updated: 2026-11-02
   （`build/validation/20261102-132535`）；DocCheck PASS。
 - **文档**：rendergraph.md 新增 §2.2（跨帧语义 + 禁用会跳过屏障声明的代价与原错误串）；
   tech-debt 增 TD-13 并从"未关闭"表移除；weak-points 删除该条；test-matrix 第 3 项补标记。
+
+## D-47：还清 TD-14（writeDepth 隐式改写）并修正过期技术债
+
+- **TD-14**：`RenderGraph::Pass::writeDepth` 删掉"`depth==0 && stencil==0` 视为未设置、
+  静默改成 `{1.0, 0}`"的两行。清屏值一律由调用方显式给出：`GeometryPass` 本来就传
+  `clearDepth.depthStencil = {1.0f, 0}`，`EditorOverlayPass` 走 `LOAD`，所以这次改动零行为
+  变化；引入阴影贴图时不会再被"想清 0 却被改写成 1.0"坑到。头文件注释同步说明。
+- **过期债清理**：`releaseMaterialSet()` 从 B-06 起就有生产调用方
+  （`Scene::clearEntities()` 先归还槽位再销毁实体），tech-debt 原第 3 条已不成立，删除。
+- **回归**：`--selftest 120` 236 FPS、验证层 0/0、pass bookkeeping `executed=14 skipped=0`；
+  21 项 `Validate.ps1` ALL PASS；DocCheck PASS。

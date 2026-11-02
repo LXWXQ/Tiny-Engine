@@ -254,6 +254,7 @@ if (gpuTimer) { /* vkCmdWriteTimestamp2 */ }
 - [ ] 每个读操作都有对应的写？（否则 `validateWriteCoverage` 会抛）
 - [ ] 跨队列资源标了 `crossQueue`？
 - [ ] `LOAD` 语义的附件，读访问位是否声明了？
+- [ ] 深度/颜色附件的 clear 值由调用方显式给出（`writeDepth` 不再把 `depth==0` 改写成 `1.0`）
 - [ ] 跑 `--selftest 120 --no-bloom --no-ssao` 四种组合，stderr 0 字节
 - [ ] 跑 `--validation-features sync`，0 errors / 0 warnings
 - [ ] 如果新 Pass 可被关闭，加了 CLI 开关并纳入 `tools/Validate.ps1`

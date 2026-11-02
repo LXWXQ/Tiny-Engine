@@ -23,9 +23,8 @@ updated: 2026-11-01
 | 6 | `Application` 构造函数约 120 行、`Application.h` 包含过多 | 不可单独测试，改动易踩顺序依赖 | 重构窗口期 |
 | 7 | `FrameInfo` 成员混用引用与裸指针，无成文规则 | 隐式耦合，易误用 | 同上 |
 | 8 | `Swapchain::imageCount` 与 ImGui `MinImageCount=2` 不一致 | 目前不触发（ImGui 只在小于时报错） | 改交换链创建参数时 |
-| 9 | `Pass::writeDepth` 在 `depth==0 && stencil==0` 时静默改成 `{1.0, 0}` | 真想清成 0 的调用方会被坑 | 引入阴影贴图时 |
-| 10 | JobSystem 只有全局队列，无 work stealing / 依赖图 / 核心取消令牌 | 大量短任务时负载不均；地形目前是 Scene 级协作取消 | 地形/体素接入后按 profile 升级 |
-| 11 | bindless `normalMaps` 绑了但没采样 | 每材质白占 1/4 描述符 | 启用切线空间法线贴图时 |
+| 9 | JobSystem 只有全局队列，无 work stealing / 依赖图 / 核心取消令牌 | 大量短任务时负载不均；地形目前是 Scene 级协作取消 | 地形/体素接入后按 profile 升级 |
+| 10 | bindless `normalMaps` 绑了但没采样 | 每材质白占 1/4 描述符 | 启用切线空间法线贴图时 |
 
 ## 未被验证覆盖的路径
 

@@ -1302,8 +1302,9 @@ RenderGraph::Pass& RenderGraph::Pass::writeDepth(TextureHandle t, VkAttachmentLo
 {
     if (!t.valid()) return *this;
 
-    if (clear.depthStencil.depth == 0.0f && clear.depthStencil.stencil == 0)
-        clear.depthStencil = { 1.0f, 0 };   // 深度默认清 1.0
+    // 深度清屏值由调用方显式给出，这里不再静默改写：
+    // 旧版会把 depth==0 && stencil==0 悄悄改成 {1.0, 0}，想清 0 的调用方被坑，
+    // 而 VkClearValue{} 的 0.0f 本身是合法取值。需要清 1.0 就自己传。
 
     DepthAttachment da;
     da.texture = t;
