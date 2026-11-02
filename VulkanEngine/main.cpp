@@ -29,6 +29,9 @@
 //   --screenshot-viewport         截图拍编辑器离屏视口（纯 3D，不含 UI）；需配合 --editor
 //   --empty-scene                 不加载 Sponza / 天空盒，只留相机（编辑器调试单物体时用）
 //   --terrain-test                启动时创建持久地形，用于地形 G-Buffer/截图回归
+//   --hidden                      不显示窗口（自检/截图/回归这类无人值守运行默认开启）
+//   --minimized                   启动后最小化窗口（最小化会跳过渲染，只适合看日志）
+//   --visible                     强制显示窗口，覆盖 --hidden 的默认行为
 //
 // 本文件被编译两次，产出两个可执行文件（见 CMakeLists.txt）：
 //   VulkanEngine.exe   运行时模式
@@ -75,6 +78,9 @@ int main(int argc, char** argv)
     bool configTest = false;
     bool deviceFaultTest = false;
     bool diagTest = false;
+    bool windowHiddenFlag = false;
+    bool windowMinimizedFlag = false;
+    bool windowVisibleFlag = false;
     // SentinelEditor.exe 用 SENTINEL_DEFAULT_EDITOR=1 编译，于是"打开就是编辑器"；
     // VulkanEngine.exe 不带这个宏，行为与引入编辑器之前完全一致。
     // 两个 exe 共用同一份 main.cpp，差异只在这一个宏上。
@@ -126,6 +132,9 @@ int main(int argc, char** argv)
         else if (arg == "--screenshot-viewport") diagOptions.screenshotViewport = true;
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
         else if (arg == "--terrain-test") diagOptions.terrainTest = true;
+        else if (arg == "--hidden") windowHiddenFlag = true;
+        else if (arg == "--minimized") windowMinimizedFlag = true;
+        else if (arg == "--visible") windowVisibleFlag = true;
         else if (arg == "--build-info") diagOptions.printBuildInfo = true;
         else if (arg == "--gpu-timing") diagOptions.gpuTiming = true;
         else if (arg == "--gpu-timing-csv" && i + 1 < argc)
@@ -168,6 +177,21 @@ int main(int argc, char** argv)
             }
         }
     }
+
+    // 无人值守运行默认不显示窗口：每次跑测试都把窗口弹到最前会打断用户。
+    // 交互式启动（无参数 / --editor）仍然正常显示；--minimized 需要窗口存在
+    // 才能最小化，所以它优先于隐藏；--visible 可以强制显示。
+    const bool unattendedRun = selfTest || crossQueueTest || resizeTest || materialStress ||
+        subresourceTest || subresourceErrorTest || computeTest || deviceFaultTest ||
+        diagOptions.screenshot || diagOptions.terrainTest;
+    // --minimized 只对交互式启动有意义：最小化会命中跳过渲染的分支，而无人值守
+    // 自检/截图必须持续出帧，因此该组合退化为隐藏窗口（不弹窗、不阻塞）。
+    const bool minimizedIgnored = windowMinimizedFlag && unattendedRun;
+    diagOptions.windowHidden = !windowVisibleFlag &&
+        (windowHiddenFlag || minimizedIgnored || (unattendedRun && !editorMode));
+    diagOptions.windowMinimized = windowMinimizedFlag && !unattendedRun;
+    if (minimizedIgnored && !windowVisibleFlag)
+        std::cout << "[Window] --minimized ignored for unattended run; staying hidden" << std::endl;
 
     try
     {

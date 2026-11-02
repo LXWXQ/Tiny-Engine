@@ -62,8 +62,14 @@ updated: 2026-11-01
 
 - `TerrainTextureGenerator` 生成 16 张 256² CPU 源纹素；`TerrainMaterial`
   把每层 height/roughness 打包成一张 RGBA，GPU 只上传 12 张纹理；
-- `DescriptorManager::createTerrainLayout()` 固定 12 个 fragment sampler；
-- `updateTerrainTextures()` 在 Scene 初始化时一次性写入；
+- `DescriptorManager::createTerrainLayout()` 声明 16 个 binding（0~11 被 `mrt.frag`
+  使用，12~15 预留），12 个 fragment sampler 全部带
+  `UPDATE_AFTER_BIND | PARTIALLY_BOUND`，布局带 `UPDATE_AFTER_BIND_POOL`（描述符池
+  同样开了该标志）——缺一项，运行期重写就会违反
+  `VUID-vkUpdateDescriptorSets-None-03047`；
+- `updateTerrainTextures()` 在 set 0 初始化时写一次，之后每次
+  `TerrainMaterial::uploadMaterialSet()` 切换材质集都会重写同一组 binding，这正是
+  必须开 UPDATE_AFTER_BIND 的原因；
 - `GeometrySystem` 的 pipeline layout 现在包含 `{Set0, Set1, Set2}`，
   每帧一次 `vkCmdBindDescriptorSets(..., 3, sets, ...)`，`desc binds` 仍是 1；
 - 地形实体仍然没有 `MaterialComponent`，不消耗 bindless 槽位；

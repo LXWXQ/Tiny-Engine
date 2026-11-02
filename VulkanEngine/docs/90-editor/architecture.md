@@ -4,7 +4,7 @@ title: 编辑器架构与接缝
 type: architecture
 scope: EditorContext / EditorState / EngineServices / EditorLayer 的职责划分
 read-when: 加新面板、给编辑器接新能力、或怀疑编辑器越界碰了引擎内部
-size: medium
+size: ~80 行
 updated: 2026-10-30
 ---
 

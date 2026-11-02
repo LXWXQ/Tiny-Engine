@@ -197,6 +197,12 @@ void DescriptorManager::createTerrainLayout()
 	// needs four different albedo+normal pairs in one draw call; packing them
 	// into one material slot would require a texture array that Texture does not
 	// expose. Fixed bindings keep the normal material path untouched.
+	//
+	// TD-04 / 运行时切换材质集：TerrainMaterial::uploadMaterialSet() 会在帧进行
+	// 中调用 updateTerrainTextures() 重写这些 binding，所以布局必须以
+	// UPDATE_AFTER_BIND 方式创建（binding flag + layout flag + pool flag 三者
+	// 缺一不可），否则 vkUpdateDescriptorSets 违反
+	// VUID-vkUpdateDescriptorSets-None-03047。
 	std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
 	for (uint32_t i = 0; i < bindings.size(); ++i)
 	{
@@ -206,10 +212,26 @@ void DescriptorManager::createTerrainLayout()
 		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	}
 
+	// 12 个 binding 实际被 mrt.frag 使用，12-15 目前空闲；PARTIALLY_BOUND 让
+	// 这些槽位不必先写占位图就能直接使用描述符集。
+	std::array<VkDescriptorBindingFlags, 16> bindingFlags{};
+	for (auto& flag : bindingFlags)
+	{
+		flag = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+		       VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+	}
+
+	VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
+	flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+	flagsInfo.bindingCount = static_cast<uint32_t>(bindingFlags.size());
+	flagsInfo.pBindingFlags = bindingFlags.data();
+
 	VkDescriptorSetLayoutCreateInfo layoutInfo{};
 	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 	layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
 	layoutInfo.pBindings = bindings.data();
+	layoutInfo.pNext = &flagsInfo;
+	layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
 	if (vkCreateDescriptorSetLayout(device->getDevice(), &layoutInfo, nullptr, &terrainSetLayout) != VK_SUCCESS)
 		throw std::runtime_error("DescriptorManager: terrain layer layout failed!");
 }

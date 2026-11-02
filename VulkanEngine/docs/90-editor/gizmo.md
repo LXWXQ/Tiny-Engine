@@ -4,7 +4,7 @@ title: 视口交互：点选与三轴手柄
 type: system
 scope: 射线拾取、Gizmo 的坐标系约定、拖拽如何换算成变换
 read-when: 改视口交互 / 点不中物体 / 拖拽方向不对 / 加新的手柄
-size: medium
+size: ~340 行
 updated: 2026-10-30
 ---
 

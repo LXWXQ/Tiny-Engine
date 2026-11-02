@@ -65,6 +65,12 @@ bool terrainTest = false;
 // 是否以编辑器模式启动。编辑器默认不加载 Sponza（见 Scene::init 的说明），
 // 但 VulkanEngine.exe 的常规运行仍然加载，视觉回归基线不受影响。
 bool editorMode = false;
+
+// --hidden / --minimized：无人值守运行（自检、截图、回归）不要抢焦点。
+// 隐藏窗口仍有真实 HWND 与客户区尺寸，swapchain / 渲染 / 截图都不受影响；
+// 最小化会命中 handleWindowMaintenance() 的跳过分支，只适合"看日志"的运行。
+bool windowHidden = false;
+bool windowMinimized = false;
         int  captureFrame = -1;      // RenderDoc in-app 抓帧的帧号（P1-2）
     };
 

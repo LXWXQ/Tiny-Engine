@@ -192,7 +192,7 @@ $tests = @(
        MustContain = @("[Diag] screenshot written:") },
     # ---- F2 / D-18: terrain CPU + G-Buffer path ----
     @{ Name = "terrain-render"; Args = @("--selftest", "20", "--empty-scene", "--terrain-test");
-       MustContain = @("[Terrain] selfTest PASS", "[Terrain] LOD stitching PASS", "[Terrain] GPU mesh assembly selfTest PASS", "[Terrain] GPU selection selfTest PASS", "[Terrain] GPU selection transition PASS", "[Terrain] demo entity created", "chunks=4", "lods=3", "submeshes=12", "[Terrain] async generation PASS", "streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9", "[Terrain] spatial region query PASS | chunks=9 regions=5x5", "[Terrain] sculpt PASS | chunks=9 rebuilt=1", "[Terrain] character controller PASS | grounded=1", "[Terrain] character serialization PASS | captured=1", "[Terrain] material sets PASS | resident=4 max=4") },
+       MustContain = @("[Terrain] selfTest PASS", "[Terrain] LOD stitching PASS", "[Terrain] GPU mesh assembly selfTest PASS", "[Terrain] GPU selection selfTest PASS", "[Terrain] GPU selection transition PASS", "[Terrain] demo entity created", "chunks=4", "lods=3", "submeshes=12", "[Terrain] async generation PASS", "[Terrain] build task retirement PASS", "[Window] presentation=hidden", "streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9", "[Terrain] spatial region query PASS | chunks=9 regions=5x5", "[Terrain] sculpt PASS | chunks=9 rebuilt=1", "[Terrain] character controller PASS | grounded=1", "[Terrain] character serialization PASS | captured=1", "[Terrain] material sets PASS | resident=4 max=4") },
     # ---- P2 ----
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
@@ -208,8 +208,11 @@ $failed = @()
 foreach ($test in $tests) {
     Write-Host "[validate] Test: $($test.Name)"
     $result = Invoke-Native -FilePath $exe -Arguments $test.Args -LogStem (Join-Path "tests" $test.Name)
-    $stdout = [string]$result.Stdout
-    $errorText = [string]$result.Stderr
+    # Windows PowerShell 5.1: casting $null to [string] still yields $null, and the
+    # later $stdout.IndexOf(...) throws InvokeMethodOnNull - which aborts the whole
+    # suite instead of reporting a FAIL (e.g. when the exe writes an empty log).
+    $stdout = if ($null -eq $result.Stdout) { "" } else { [string]$result.Stdout }
+    $errorText = if ($null -eq $result.Stderr) { "" } else { [string]$result.Stderr }
 
     $reasons = @()
     if ($result.ExitCode -ne 0) {

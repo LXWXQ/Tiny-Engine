@@ -4,7 +4,7 @@ title: 离屏视口
 type: system
 scope: 3D 画面如何从"铺满整窗"变成"ImGui 里的一张图"
 read-when: 改视口尺寸/格式、加多视口、或编辑器里画面拉伸/发暗
-size: medium
+size: ~140 行
 updated: 2026-10-30
 ---
 

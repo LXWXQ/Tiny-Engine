@@ -185,7 +185,18 @@ public:
     bool requestRegenerateTerrain(entt::entity entity,
                                   TerrainGenerationCallback onComplete = {});
     void waitForTerrainGeneration();
-    bool hasPendingTerrainGeneration() const { return !pendingTerrainBuilds.empty(); }
+    bool hasPendingTerrainGeneration() const
+    {
+        return !pendingTerrainBuilds.empty() || !retiringTerrainBuilds.empty();
+    }
+
+    // 自检用：任务计数（pending + 退役）暴露出来，才能断言"摘除后没有被立刻释放"。
+    std::size_t getPendingTerrainBuildCount() const { return pendingTerrainBuilds.size(); }
+    std::size_t getRetiringTerrainBuildCount() const { return retiringTerrainBuilds.size(); }
+
+    // 自检用：临时禁用 GPU 高度场提交，强制走"提交即进 CPU worker"的路径。
+    // 这条路径上 worker 用裸指针写任务字段，是退役队列要保护的对象。
+    void setTerrainGpuHeightEnabled(bool enabled) { terrainGpuHeightEnabled = enabled; }
 
     // B-05: main-thread cost of terrain generation polling only. GPU heightfield
     // and mesh assembly happen asynchronously; Model adoption still occurs on
@@ -257,6 +268,11 @@ private:
     struct PendingTerrainBuild;
 
     void processTerrainGeneration();
+    // 从 pendingTerrainBuilds 摘除的任务不能立刻释放：JobSystem 的 worker
+    // 可能还在写它的 mesh / heightField / error（提交时用裸指针捕获）。
+    // 句柄未完成时先移入 retiringTerrainBuilds，等 isComplete 后再回收。
+    void retireTerrainBuild(std::shared_ptr<PendingTerrainBuild> task);
+    void drainRetiringTerrainBuilds();
     bool queryGroundAtWorld(float worldX, float worldZ, float& outHeight,
                             entt::entity& outEntity, float* outSlopeDegrees = nullptr) const;
     void recordTerrainPollMs(double ms);
@@ -301,7 +317,10 @@ private:
     std::unique_ptr<TerrainGpuMeshBuilder> terrainGpuMeshBuilder;
 
     JobSystem* jobSystem = nullptr;
+    bool terrainGpuHeightEnabled = true;
     std::vector<std::shared_ptr<PendingTerrainBuild>> pendingTerrainBuilds;
+    // 已摘除但仍可能有 CPU worker 写入的任务；见 retireTerrainBuild()。
+    std::vector<std::shared_ptr<PendingTerrainBuild>> retiringTerrainBuilds;
     std::unordered_map<entt::entity, uint64_t> latestTerrainRequest;
     uint64_t nextTerrainRequestSerial = 0;
 

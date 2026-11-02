@@ -4,7 +4,7 @@ title: 撤销 / 重做
 type: architecture
 scope: CommandStack 的语义、合并窗口、以及"必须走命令"的硬规则
 read-when: 加任何会修改场景的交互；或撤销结果不对、撤销后数据损坏
-size: medium
+size: ~120 行
 updated: 2026-10-31
 ---
 

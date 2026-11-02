@@ -4,7 +4,7 @@ title: 场景编辑器
 type: system
 scope: 编辑器的整体结构、分层边界与面板清单
 read-when: 要动编辑器任何部分之前，先读这一页决定该看哪份子文档
-size: small
+size: ~75 行
 updated: 2026-11-01
 ---
 

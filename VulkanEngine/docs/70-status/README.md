@@ -13,7 +13,7 @@ updated: 2026-11-02
 | 文档 | 回答的问题 |
 |---|---|
 | [milestones](milestones.md) | 已经完成了哪些阶段？实测基线是多少？ |
-| [milestones-archive](milestones-archive.md) | D-8～D-20 的历史逐轮记录是什么？ |
+| [milestones-archive](milestones-archive.md) | D-8～D-24 的历史逐轮记录是什么？ |
 | [backlog](backlog.md) | 下一项做什么？完成判据是什么？ |
 | [tech-debt](tech-debt.md) | 现在欠着什么？什么时候必须还？ |
 | [known-limits](known-limits.md) | 哪些事现在做不到？ |

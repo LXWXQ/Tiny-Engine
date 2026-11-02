@@ -36,7 +36,7 @@ updated: 2026-11-01
 | `RenderPipeline.h` / `IRenderPass.h` | Pass 注册容器 / Pass 抽象（`read`/`writeColor`/`setEnabled`） | [rendergraph](../10-architecture/rendergraph.md) | rendergraph |
 | `RenderResources.h` | 帧内资源登记表（句柄集合） | [rendergraph](../10-architecture/rendergraph.md) | rendergraph |
 | `GeometryPass.*` / `GeometrySystem.*` / `GeometrySystemGpu.cpp` / `terrain_lod.comp` | GPU terrain selection、indirect count、写 G-Buffer、Set0/1/2 绑定、地形 push 参数 | [pass-order](../20-pipeline/pass-order.md)、[descriptors](../10-architecture/descriptors.md) | pass-order、descriptors |
-| `TerrainMaterial.*` | 优先加载外部 16 张 PNG，否则生成程序化源纹理；打包 height/roughness 后更新 12-sampler Set 2 |
+| `TerrainMaterial.*` | 优先加载外部 16 张 PNG，否则生成程序化源纹理；打包 height/roughness 后更新 12-sampler Set 2 | [terrain-materials](../30-systems/terrain-materials.md)、[descriptors](../10-architecture/descriptors.md) | terrain-materials、descriptors |
 | `SubMeshCulling.*` | 纯 CPU frustum-AABB、世界 bounds 与地形 LOD 距离选择 | [terrain](../30-systems/terrain.md)、[descriptors](../10-architecture/descriptors.md) | terrain、descriptors |
 | `SSAOPass.*` | SSAO 输出 + 模糊 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `LightingPass.*` / `LightingSystem.*` | HDR 光照输出、导入交换链 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
@@ -80,14 +80,14 @@ updated: 2026-11-01
 | `TerrainNoise.*` | 确定性 2D Perlin + fBm | [terrain](../30-systems/terrain.md) | terrain |
 | `TerrainHeightField.*` | 规则高度场、世界采样、边缘衰减 | [terrain](../30-systems/terrain.md) | terrain |
 | `TerrainMeshBuilder.*` | 顶点/索引/法线/UV/顶点色 | [terrain](../30-systems/terrain.md) | terrain |
-| `TerrainTextureGenerator.*` | 确定性可平铺 4 层 albedo/normal/height/roughness 纹素 | [terrain](../30-systems/terrain.md) | terrain |
+| `TerrainTextureGenerator.*` | 确定性可平铺 4 层 albedo/normal/height/roughness 纹素 | [terrain-materials](../30-systems/terrain-materials.md) | terrain-materials |
 | `TerrainSelfTest.*` | 高度场/网格/纹理缓冲不变量自检 | [terrain](../30-systems/terrain.md) | terrain |
 
 ## 5. Shader（`shaders/`）
 
 | 文件 | 用途 | 必读文档 |
 |---|---|---|
-| `mrt.vert/.frag`、`grid_mrt.*`、`skybox_mrt.*` | 写 G-Buffer 的几何路径；`mrt.*` 含地形四层 PBR 纹理、Surface Style、Set2 法线与 Normal.w SSAO mask | [gbuffer](../20-pipeline/gbuffer.md)、[terrain](../30-systems/terrain.md) |
+| `mrt.vert/.frag`、`grid_mrt.*`、`skybox_mrt.*` | 写 G-Buffer 的几何路径；`mrt.*` 含地形四层 PBR 纹理、Surface Style、Set2 法线与 Normal.w SSAO mask | [gbuffer](../20-pipeline/gbuffer.md)、[terrain-materials](../30-systems/terrain-materials.md) |
 | `ssao.frag`、`ssao_blur.frag` | SSAO 与模糊 | [pass-order](../20-pipeline/pass-order.md) |
 | `lighting.frag/.vert` | HDR 光照 | [pass-order](../20-pipeline/pass-order.md) |
 | `bloom_bright/down/up.frag` | Bloom 金字塔 | [intermediate](../20-pipeline/intermediate.md) |

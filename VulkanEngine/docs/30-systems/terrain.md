@@ -2,9 +2,9 @@
 id: systems/terrain
 title: 程序化地形
 type: system
-scope: src/Terrain/, src/Render/TerrainMaterial.*, src/Render/TerrainGpuMeshBuilder.*, DescriptorManager 的 terrain sets, Scene 地形生成接口, shaders/mrt.* 的 terrainMode, shaders/terrain_mesh.comp
+scope: src/Terrain/, src/Render/TerrainGpuMeshBuilder.*, Scene 地形生成接口, shaders/terrain_mesh.comp（材质与 Set2 见 terrain-materials）
 read-when: 改地形生成算法、网格规则、顶点色、创建/重建流程、地形存读或地形自检
-size: ~600 行
+size: ~560 行
 updated: 2026-11-02
 ---
 
@@ -228,6 +228,8 @@ chunk 手动地形；多 chunk 继续走 CPU `TerrainMeshBuilder`。
   `MeshComponent`；slot 满时任务保持 pending；
 - 每次请求分配全局递增 serial；新请求置位旧任务 `cancelRequested`，结果与
   回调静默丢弃；回调在主线程执行，编辑器据此构造 `RegenerateTerrainCommand`；
+- 被取代/实体已销毁的任务移入 `retiringTerrainBuilds`，等 `JobHandle` 完成才由
+  `drainRetiringTerrainBuilds()` 回收（worker 用裸指针写任务字段，不能提前释放）；
 - `waitForTerrainGeneration()` 只给自检/诊断；`clearEntities()` 丢弃待完成
   回调，`cleanup()` 先等 worker 结束再销毁 Scene/JobSystem 依赖。
 
@@ -388,45 +390,9 @@ CPU 侧仍保留：
 这些 CPU 镜像不是渲染数据源；当前为了兼容既有 picking API 暂时保留，后续可
 改为 HeightField raycast 或 GPU readback 的按需 picking。
 
-地形材质使用独立的 **set 2**，共 12 个固定 `sampler2D`：
-
-| binding | 内容 |
-|---|---|
-| 0~3 | 沙地 / 草地 / 岩石 / 雪 albedo |
-| 4~7 | 沙地 / 草地 / 岩石 / 雪 tangent-space normal |
-| 8~11 | 沙地 / 草地 / 岩石 / 雪 packed height(R) + roughness(G) |
-
-`TerrainMaterial` 管理最多 4 个材质 set（`kMaxMaterialSets=4`），每个 set 持有
-上述 12 张纹理。set 0 在启动时从 `Resources/Texture/Terrain/` 加载；若该目录
-16 张 PNG 不全，则生成 4 层 256² 程序化纹理。set 1~3 按需从
-`Resources/Texture/Terrain/setN/` 加载，同样要求 16 张齐全，缺任意一张就整套
-回退到程序化纹理，避免层间 UV/风格错配。albedo 按 sRGB 加载；
-normal/height/roughness 按线性 UNORM 加载；height 与 roughness 在 CPU 侧打包，
-因此同一层两张图尺寸必须一致。文件名约定见 `README.txt`。
-`TerrainConfig::materialSetIndex`（0..3）随地形配置写入场景 JSON；仅切换材质
-不改变 `geometryEquals()`，不会重建网格。渲染时 Set2 按相邻地形实体的
-`materialSetIndex` 变化重新绑定；每帧统计 `terrainMaterialBatches`/
-`terrainMaterialSwitches`/`terrainMaterialFallbacks`，非法索引回退 set 0。
-
-片元着色器在真实几何法线写入后进入地形分支：
-
-- 用局部 Y 范围还原高度（0..1），用 `1 - normal.y` 还原坡度；
-- 按高度/坡度得到沙地、草地、岩石、雪基础权重，再应用 `surfaceStyle`
-  的权重偏置；
-- 以世界 XZ 采样四层 height，对层权重乘 0.72~1.28 的高度调制并重新归一化；
-- albedo 用第二尺度样本和 patch mask 混合，抑制单张纹理的明显平铺；
-- 对四层 normal 解码后按权重混合，投影到由几何法线构造的 XZ 切线基；
-  屏幕空间 footprint 控制法线细节淡出；
-- 四层 roughness 按权重混合，再叠加 Style 偏置和低频噪声；
-- 用低频 fBm 做宏观亮度变化，metallic 固定为 0；
-- `outNormal.w = 0` 保持 SSAO policy mask，地形继续跳过 SSAO。
-
-Surface Style 是 shader-only 变体：Arid 提高沙地、压低雪和草；Alpine 提高
-岩石/雪并加强法线；Lush 提高草、压低岩石和沙。切换在下一帧生效，无需 Generate。
-
-`uvTiling`、`materialDetailStrength`、`surfaceStyle` 和 `lodDistanceScale` 不改变
-网格；`geometryEquals()` 排除这四个字段。`lodLevelCount` 和 `skirtsEnabled`
-改变预生成的网格内容，属于几何参数，需要 Generate。
+地形材质（Set2 的 12 个 sampler、四套材质集的加载/回退、四层 PBR 混合与
+Surface Style）单独写在 [terrain-materials](terrain-materials.md)，这里只保留
+网格、LOD 与渲染顺序相关内容。
 
 **SSAO 例外**：大面积平滑地形上的 16-tap SSAO 会产生低频干涉条纹。
 `outNormal.w` 因此定义为 SSAO policy mask：地形写 `0`，普通几何写 `1`，
@@ -527,17 +493,12 @@ Surface Style 是 shader-only 变体：Arid 提高沙地、压低雪和草；Alp
 
 - `[Terrain] LOD stitching PASS | lodPairs=9 edges=18 skirts=off boundary=full-res`：
   LOD0/1/2 的 3×3 邻接组合全部通过边界顶点位置、法线、UV、色断言；
-- `[Terrain] selfTest PASS`：同 seed 一致、不同 seed 不同、高度 finite/范围、
-  非法参数拒绝、顶点/索引数、索引范围、法线单位长度、+Y 绕序、平坦法线、
-  非正方形世界间距、height curve / island mask 分层断言、chunk/LOD 索引区间、
-  `surfaceIndexCount==indexCount`（skirts=off）、LOD 递减、局部 AABB、
-  3×3 全 LOD 邻接边界位置/法线/UV/色一致、18 条邻接边断言，以及 16 张 CPU
-  源纹理缓冲的尺寸/确定性/非恒定断言；
+- `[Terrain] selfTest PASS`：同/不同 seed、非法参数、顶点/索引与法线、+Y 绕序、
+  chunk/LOD 区间、LOD 递减、局部 AABB、18 条邻接边与 16 张源纹理断言全部通过；
 - `[Terrain] demo entity created`：`--terrain-test` 真正走完 Model 上传；
 - `[Terrain] GPU mesh assembly ready | maxLods=3 maxResolution=257 mode=singleChunk async slots=4`：
   单 chunk mesh builder 资源与 4 个异步 slot 就绪；
-- `[Terrain] GPU mesh assembly selfTest PASS | vertices=6691 indices=37824
-  lods=3 skirts=on localColor=on maxPosError=0 maxAttrError=8.27056e-07`：
+- `[Terrain] GPU mesh assembly selfTest PASS | vertices=6691 indices=37824 ...`：
   GPU 顶点/索引与 CPU `TerrainMeshBuilder` 逐项一致；
 - `[Terrain] async GPU upload PASS | resolution=257x257 chunks=1 ...
   gpuMesh=1`：257² 单 chunk 异步重建主线程 poll 时长低于同步创建 baseline；
@@ -545,22 +506,22 @@ Surface Style 是 shader-only 变体：Arid 提高沙地、压低雪和草；Alp
   流送 chunk 全部通过 GPU mesh 路径；
 - `[Terrain] spatial region query PASS | chunks=9 regions=5x5`：Scene 通过
   XZ region 索引查询当前 manager 的 chunk，不扫描 chunk map；
-- `[Terrain] GPU selection ready | entities=64 records=1024
-  commandsPerEntity=32 drawIndirectCount=1`：compute selection 资源就绪；
-- `[Terrain] GPU selection selfTest PASS | matches=3 records=4`：
-  下一帧读回的 GPU visible/LOD/commandCount 与 CPU mirror 一致；
-- `[Terrain] GPU selection transition PASS | records=4`：
-  临时切换 `lodDistanceScale` 后，GPU 产生的 from/to 过渡命令也通过 parity；
+- `[Terrain] GPU selection ready | entities=64 records=1024 commandsPerEntity=32
+  drawIndirectCount=1`：compute selection 资源就绪；
+- `[Terrain] GPU selection selfTest PASS | matches=3 records=4` 与
+  `transition PASS | records=4`：GPU visible/LOD/commandCount 与 CPU mirror 一致，
+  临时切换 `lodDistanceScale` 的 from/to 过渡命令也通过 parity；
 - `[Terrain] GPU compute heightfield selfTest PASS`：GPU/CPU 高度场参考最大误差
   < 5e-4；`--terrain-test` 的同步创建与异步重建都断言 `generatedOnGpu`；
+- `[Terrain] build task retirement PASS | cpuBuildInFlight=1 tracked=1 drained=1`：
+  CPU 网格构建仍在 worker 上时销毁实体，任务进退役队列并最终 drain 干净；
 - `[Terrain] async generation PASS`：异步 GPU 高度场请求 + JobSystem 网格提交、
   主线程轮询上传、revision 递增，默认 2×2 = 4 个逻辑 chunk、3 个 LOD；
 - `[Terrain] sculpt PASS | chunks=9 rebuilt=1` / `character controller PASS | grounded=1`：
   笔刷只重建相交 chunk；角色贴地/跳跃/往返行走稳定；`character serialization PASS` 覆盖组件往返。
 - `[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`：
   4 个 Set2 材质集、外部 16 PNG 加载、程序化回退和 `materialSetIndex` 序列化。
-- `[Scene] ECS/spatial selfTest PASS`：SpatialIndex 增量 upsert/remove、
-  SubMeshCuller 可见/不可见 AABB、LOD 滞回与抖动过渡状态机用例；
+- `[Scene] ECS/spatial selfTest PASS`：SpatialIndex 增量 upsert/remove、SubMeshCuller AABB、LOD 滞回用例；
 - 渲染路径稳定帧/过渡帧只通过 `vkCmdDrawIndexedIndirectCount` 提交，`Terrain indirect groups: 1`；
 - `[Validation] errors=0 warnings=0` + stderr 0 字节：地形 G-Buffer 渲染路径。
 
@@ -589,10 +550,9 @@ picking 与 delete/undo/redo。
   每个顶点行，不是硬中断；
 - 地形默认 set0 的 albedo/normal/height/roughness 是启动时生成的程序化纹理；set1~3 可按需加载外部 PNG，但仓库不附带美术资产；
 - 地形不参与 SSAO；大面积平滑地形使用 AO-neutral 策略，局部接触阴影留给后续；
-- 每个 Set2 材质集固定 12 张 GPU 纹理（4 albedo + 4 normal + 4 packed height/roughness），最多 4 套；外部 PNG 是每套 16 张源文件；
-- `SpatialIndex` 使用 Transform/Bounds dirty 队列；setter/markDirty 通过 owner callback 自动入队，干净帧不扫描实体 AABB；
-  B-06 起 streaming chunk 另有 XZ region bucket，region size 与 chunk size 对齐；
-  生产销毁统一走 `Scene::destroyEntity()`，地形实体总 AABB 仍用于视锥粗筛，
-  chunk 剔除发生在 GeometrySystem 子网格级；
+- Set2 的纹理数量/加载回退见 [terrain-materials](terrain-materials.md)；
+- `SpatialIndex` 用 Transform/Bounds dirty 队列（setter 自动入队，干净帧不扫描）；
+  B-06 起 streaming chunk 另有 XZ region bucket；生产销毁统一走 `Scene::destroyEntity()`，
+  地形实体总 AABB 仍用于视锥粗筛，chunk 剔除发生在 GeometrySystem 子网格级；
 - Scene 会把被替换的旧 Model 放入 4 帧延迟回收队列；撤销历史仍会
   额外持有新旧 Model，历史上限 256 条。

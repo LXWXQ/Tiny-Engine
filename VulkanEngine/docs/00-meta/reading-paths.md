@@ -64,6 +64,7 @@ updated: 2026-10-31
 ### 1.6.1 "我要改程序化地形"
 
 1. [terrain](../30-systems/terrain.md) ← 算法、ECS、渲染、编辑器与存读
+   + [terrain-materials](../30-systems/terrain-materials.md) ← Set2 与四层 PBR 混合
 2. [scene-ecs](../30-systems/scene-ecs.md) ← Mesh/Bounds/材质槽位与剔除
 3. [gbuffer](../20-pipeline/gbuffer.md) ← 顶点色从 mrt 写入同一组附件
 4. [test-matrix](../50-validation/test-matrix.md) ← `terrain-render` 回归

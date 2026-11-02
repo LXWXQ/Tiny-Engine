@@ -41,7 +41,7 @@ updated: 2026-11-02
 | 8 | `Pass::writeDepth` 静默改写 `depth==0` 清屏值 | 想清 0 的调用方被坑 | 引入阴影贴图时 |
 | 9 | `RenderGraph::setPassEnabled(name, ...)` 实际不可用 | 死接口 | 清理窗口期 |
 | 10 | `LightingPass` 兼任"导入交换链" | 职责不对称 | 清理窗口期 |
-| 11 | 地形 LOD 全部预生成并常驻显存；B-04 只把单 chunk 顶点/索引组装迁到 GPU，多 chunk 仍走 CPU builder | 大世界显存仍随层级线性增长；GPU mesh 尚未覆盖多 chunk/流送合批 | 大世界/多 chunk GPU 合批时 |
+| 11 | 地形 LOD 全部预生成并常驻显存；B-04 只把单 chunk 顶点/索引组装迁到 GPU（流送 chunk 均为 1×1，仍走 GPU mesh；仅单实体 chunkGrid>1 回退 CPU builder） | 大世界显存仍随层级线性增长；GPU mesh 尚未覆盖多 chunk/流送合批 | 大世界/多 chunk GPU 合批时 |
 | 12 | 流送 chunk 各持独立 Model；GPU selection 已按 entity 输出 indirect count，B-07 笔刷可局部重建单个 chunk，但选择/撤销仍以 manager 为单位 | chunk 数量增加后 model bind/上传开销上升；chunk 编辑撤销粒度不足 | 多 chunk 编辑/撤销需求时 |
 | 13 | GPU mesh 路径为兼容既有 picking API 仍保留全分辨率 CPU positions/indices mirror | 单 chunk 额外 CPU 内存约与 HeightField 同量级；mountain/chunk 多时累计 | 做 GPU/HeightField 统一 picking 时 |
 | 14 | 地形雕刻只改运行期 HeightField/Model，不写场景 JSON；CharacterControllerComponent 已序列化但 Play 快照不保存雕刻 | 保存重载/Play 停止会丢失雕刻成果；编辑器无法持久化地形修改 | 后续/地形编辑持久化需求 |

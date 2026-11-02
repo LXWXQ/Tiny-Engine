@@ -15,7 +15,7 @@ updated: 2026-10-31
 ## 0. 为什么要有这一层
 
 本项目由 LLM 驱动开发：每次新对话的上下文是**有限预算**，而代码规模（约 100 个源文件、
-51KB 的 `RenderGraph.cpp`、24 个 shader）远超一次能全读的量。
+51KB 的 `RenderGraph.cpp`、29 个 shader）远超一次能全读的量。
 
 所以文档系统的首要目标不是"写得多"，而是：
 
@@ -41,6 +41,7 @@ updated: 2026-10-31
 | **调试** | `60-debug-profiling/` | 出问题怎么查、有哪些坑 | 中 |
 | **状态** | `70-status/` | 现在做到哪、欠了什么 | 小 |
 | **规划** | `80-roadmap/` | 下一步做什么、为什么是这个顺序 | 小 |
+| **编辑器** | `90-editor/` | 面板、撤销、序列化、视口交互怎么组织 | 中 |
 
 **分类原则**：按"读者的问题"分，不按"代码目录"分。`RenderGraph` 的实现细节在
 `10-architecture/rendergraph.md`，但它在回归里的验收标准在 `50-validation/`——因为读它们的人
@@ -75,19 +76,21 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     │   ├── gbuffer.md           5 个 G-Buffer 附件与格式选择
     │   ├── intermediate.md      中间目标 / Bloom 金字塔 / HDR
     │   ├── ibl.md               split-sum 烘焙三步
-    │   └── shaders.md           24 个 shader 清单与编译管线
+    │   └── shaders.md           29 个 shader 清单与编译管线
     ├── 30-systems/
     │   ├── README.md
     │   ├── scene-ecs.md         EnTT / Transform 层级 / 空间索引
     │   ├── jobsystem.md         worker pool / parallelFor / 限制
     │   ├── config.md            EngineConfig v2 / 迁移 / 原子写
     │   ├── imgui.md             面板 / 后端 / ASCII 约束
-    │   └── terrain.md           程序化地形：参数 / 生成 / 渲染 / 存读
+    │   ├── terrain.md           程序化地形：参数 / 生成 / 渲染 / 存读
+    │   └── terrain-materials.md 地形 Set2：四层 PBR / 材质集 / Surface Style
     ├── 40-build/
     │   ├── README.md
     │   ├── dependencies.md      8 个固定版本 / 目录布局 / setup 脚本
     │   ├── build.md             构建流程 / 三条隐形规则
-    │   └── troubleshooting.md   构建期与运行期故障排查
+    │   ├── troubleshooting.md   构建期与运行期故障排查
+    │   └── git-workflow.md      提交/推送流程与失败处理
     ├── 50-validation/
     │   ├── README.md
     │   ├── cli-reference.md     全部命令行参数
@@ -102,14 +105,23 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     ├── 70-status/
     │   ├── README.md
     │   ├── milestones.md        里程碑与实测基线
-    │   ├── milestones-archive.md 历史里程碑归档（D-8～D-20）
+    │   ├── milestones-archive.md 历史里程碑归档（D-8～D-24）
     │   ├── backlog.md          后续任务台账
     │   ├── tech-debt.md         当前技术债
     │   └── known-limits.md      已知边界
-    └── 80-roadmap/
-        ├── README.md
-        ├── roadmap.md           F1~F7 主功能路线
-        └── terrain-plan.md      程序化地形实施方案（F2 / D-18）
+    ├── 80-roadmap/
+    │   ├── README.md
+    │   ├── roadmap.md           F1~F7 主功能路线
+    │   └── terrain-plan.md      程序化地形实施方案（F2 / D-18）
+    └── 90-editor/
+        ├── README.md            编辑器总览与面板清单
+        ├── architecture.md      EditorContext / EditorState / 接缝
+        ├── commands.md          命令栈与撤销重做
+        ├── gizmo.md             射线拾取与三轴手柄
+        ├── materials.md         占位材质棋盘格
+        ├── panels.md            面板与布局
+        ├── serialization.md     *.scene.json 场景存读
+        └── viewport.md          离屏视口
 ```
 
 **层次约束**
@@ -192,6 +204,7 @@ updated: 2026-10-30
 | build | [dependencies](40-build/dependencies.md) | 换机器 / 加依赖 |
 | build | [build](40-build/build.md) | 每次构建 |
 | build | [troubleshooting](40-build/troubleshooting.md) | 编不过 / 跑不起来 |
+| build | [git-workflow](40-build/git-workflow.md) | 提交 / 推送代码 |
 | validation | [cli-reference](50-validation/cli-reference.md) | 加参数 / 写脚本 |
 | validation | [test-matrix](50-validation/test-matrix.md) | 加回归项 |
 | validation | [acceptance](50-validation/acceptance.md) | 判断"算不算改坏" |

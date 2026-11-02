@@ -68,6 +68,14 @@ FirstApp::FirstApp(const diag::Options& options)
 	currentRenderExtent = renderExtent;
 	renderer = std::make_unique<Renderer>(*vulkanDevice, *vulkanSwapchain);
 
+	// 最小化必须放在交换链/渲染器创建之后：GLFW 在 iconify 后客户区变成 0x0，
+	// 先最小化会让 G-Buffer 附件按 0x0 创建而失败。
+	if (window != nullptr && diagnosticsOptions.windowMinimized)
+	{
+		glfwShowWindow(window);
+		glfwIconifyWindow(window);
+	}
+
 	// P1-4：无头截图（编译期或运行期任一关闭时 init 直接返回，不创建任何资源）。
 	screenshotCapture.init(vulkanDevice->getDevice(), vulkanDevice->getVmaAllocator(),
 		vulkanSwapchain->getSwapChainImageFormat(), vulkanSwapchain->getSwapChainExtent(),
@@ -217,6 +225,46 @@ scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager,
 			<< asyncTerrain->revision << " | " << asyncTerrain->vertexCount
 			<< " vertices, " << asyncTerrain->indexCount << " indices, "
 			<< asyncChunks << " chunks, " << asyncSubMeshes << " LOD submeshes\n";
+
+		// P0 回归：CPU 网格构建还在 worker 上跑时销毁实体，任务必须先退役再释放。
+		// 关掉 GPU 高度场，让 requestRegenerateTerrain() 同步提交 CPU job —— 这样
+		// 紧接着的 destroyEntity() 一定落在 worker 仍在写任务字段的窗口里（旧实现
+		// 在这里直接 erase shared_ptr，属于 use-after-free）。
+		{
+			terrain::TerrainConfig retireConfig;
+			retireConfig.seed = 6060u;
+			retireConfig.resolutionX = 129u;
+			retireConfig.resolutionZ = 129u;
+			retireConfig.sizeX = 64.0f;
+			retireConfig.sizeZ = 64.0f;
+			retireConfig.chunkGridX = 2u;   // >1 -> CPU mesh builder
+			retireConfig.chunkGridZ = 2u;
+			retireConfig.lodLevelCount = 1u;
+			retireConfig.skirtsEnabled = false;
+
+			const entt::entity retireEntity = scene->createTerrainEntity(
+				retireConfig, "TerrainRetireProbe",
+				spawnPosition + glm::vec3(0.0f, 0.0f, -terrainConfig.sizeZ * 4.0f));
+			if (retireEntity == entt::null)
+				throw std::runtime_error("--terrain-test retirement probe: create failed");
+
+			scene->setTerrainGpuHeightEnabled(false);
+			const bool retireSubmitted = scene->requestRegenerateTerrain(
+				retireEntity, [](bool, const std::string&) {});
+			scene->setTerrainGpuHeightEnabled(true);
+			if (!retireSubmitted)
+				throw std::runtime_error("--terrain-test retirement probe: submit failed");
+
+			scene->destroyEntity(retireEntity);
+			const std::size_t retireTracked = scene->getPendingTerrainBuildCount() +
+				scene->getRetiringTerrainBuildCount();
+			scene->waitForTerrainGeneration();
+			if (retireTracked == 0u || scene->hasPendingTerrainGeneration())
+				throw std::runtime_error("--terrain-test retirement probe: task not retired cleanly");
+
+			std::cout << "[Terrain] build task retirement PASS | cpuBuildInFlight=1 tracked="
+				<< retireTracked << " drained=1\n";
+		}
 
 		// B-05: a 257x257 single-chunk rebuild should spend only submit/poll
 		// time on the update thread; GPU mesh assembly stays asynchronous.
@@ -842,7 +890,17 @@ void FirstApp::initWindow(const std::string& title)
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+	// 回归/截图这类无人值守运行默认不显示窗口：否则每次跑测试都会弹到最前，
+	// 盖住用户正在做的事。隐藏窗口仍保留真实客户区尺寸，交换链与离屏渲染不变。
+	// 最小化模式同样先隐藏创建，等渲染器就绪后再 show+iconify，避免启动瞬间
+	// 有一次可见窗口抢焦点。
+	if (diagnosticsOptions.windowHidden || diagnosticsOptions.windowMinimized)
+		glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 	window = glfwCreateWindow(WIDTH, HEIGHT, title.c_str(), nullptr, nullptr);
+	const char* presentation = diagnosticsOptions.windowMinimized ? "minimized"
+		: (diagnosticsOptions.windowHidden ? "hidden" : "visible");
+	std::cout << "[Window] presentation=" << presentation << " | " << WIDTH << "x" << HEIGHT
+		<< " (--hidden/--minimized/--visible)" << std::endl;
 }
 
 void FirstApp::setResizeTestEnabled(bool enabled)

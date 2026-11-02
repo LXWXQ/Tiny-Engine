@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~430 行
+size: ~520 行
 updated: 2026-11-02
 ---
 
@@ -68,112 +68,8 @@ updated: 2026-11-02
 2. **成对更新**本文件 §2 与根 [`README.md`](../../README.md) §6；
 3. 记录测法（帧数、是否剔除预热、构建配置），否则数字无法复现。
 
-> D-8～D-20 的逐轮细节已归档到 [milestones-archive](milestones-archive.md)；
+> D-8～D-24 的逐轮细节已归档到 [milestones-archive](milestones-archive.md)；
 > 本页保留 D-21 起的近期里程碑与当前实测基线。
-## D-21：地形阶段 6 收尾（height/roughness + Surface Style）
-
-- **PBR 纹理层**：`TerrainTextureGenerator` 在每层 albedo/normal 之外再生成
-  height 与 roughness；`TerrainMaterial` 上传 16 张 256² 纹理。
-  Terrain Set 2 扩展为 16 个固定 sampler：
-  `0~3 albedo / 4~7 normal / 8~11 height / 12~15 roughness`。
-- **Shader**：height 对四层基础权重做 0.72~1.28 调制并重新归一化；
-  roughness 按层采样后混合，再叠加低频噪声。albedo 的双尺度抗平铺、
-  normal 切线基和地形 SSAO opt-out 保持不变。
-- **材质变体**：`TerrainConfig::surfaceStyle` 支持
-  Natural / Arid / Alpine / Lush；只调整层权重、色调、法线强度和粗糙度，
-  不重建纹理或网格。Inspector 增加 `Surface Style` 下拉框。
-- **布局/序列化**：push constant 的 `terrainMaterialStyle` 填入原 padding，
-  总大小仍为 208 字节。地形 JSON version 升到 3，新增 `surfaceStyle`；
-  旧 v1/v2 由默认值 Natural 补齐。
-- **测试**：
-  - `TerrainSelfTest` 覆盖非法 Style、16 张纹理的尺寸/确定性/非恒定，
-    以及三个 shader-only 字段不触发 geometry equality；
-  - 编辑器 roundTrip 覆盖 `surfaceStyle=Alpine`、`uvTiling=1.7`；
-  - `terrain-render` 覆盖 16-sampler Set 2 与 257² 输出。
-- **验证（2026-11-01）**：
-  - `[TerrainMaterial] 4 procedural layers ready | albedo+normal+height+roughness 256x256`
-  - `[Terrain] selfTest PASS`
-  - `[Editor] scene selfTest PASS | create/undo/redo + terrain create/generate`
-  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，
-    stderr 全 0 字节，`[Validation] errors=0 warnings=0`。
-  - p3 baseline（60 帧、warmup 30）通过；首轮 Present 计时抖动在同代码
-    复跑时消失（Present -0.45%）。
-- **阶段状态**：阶段 6 当前范围已完成。后续为外部美术纹理替换接口，
-  以及阶段 7 的 JobSystem 异步 / chunk / LOD / 增量 SpatialIndex。
-## D-22：地形外部纹理覆盖接口
-
-- **加载规则**：`TerrainMaterial` 检查 `Resources/Texture/Terrain/` 下是否
-  同时存在 16 张 PNG：
-  `albedo/normal/height/roughness` × `sand/grass/rock/snow`。
-  全部存在时优先加载外部资产；缺任意一张则整套回退到内置程序化纹理，
-  避免部分覆盖造成层间风格/UV 不一致。
-- **格式**：albedo 按 sRGB 加载；normal/height/roughness 按线性 UNORM 加载。
-  命名与要求写在 `Resources/Texture/Terrain/README.txt`。
-- **范围**：这是全局地形材质覆盖，不进入场景 JSON，也不支持每个地形独立
-  贴图路径；Level 级风格仍由 `surfaceStyle` 控制。
-- **验证（2026-11-01）**：
-  - 临时生成 16 张 8×8 RGBA PNG 后启动：
-    `[TerrainMaterial] 4 external PBR layers ready | .../Resources/Texture/Terrain/`
-    `[Validation] errors=0 warnings=0`，stderr 0 字节；
-  - 删除测试 PNG 后启动：回到
-    `[TerrainMaterial] 4 procedural layers ready | albedo+normal+height+roughness 256x256`；
-  - `terrain-render` 与编辑器 roundTrip 继续通过；
-  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，
-    stderr 全 0 字节，`[Validation] errors=0 warnings=0`。
-- **未附带**：仓库不附带外部美术纹理，默认仍使用确定性程序化纹理。
-## D-23：地形阶段 7 第一轮（JobSystem 异步生成）
-
-- **CPU 异步**：新增 `Scene::requestRegenerateTerrain()`。主线程复制不可变
-  `TerrainConfig`，把 `HeightField` + `TerrainMeshBuilder` 提交给 JobSystem；
-  worker 不触碰 Vulkan 对象。
-- **主线程上传**：`Scene::update()` 每帧检查 `JobHandle::isComplete()`，
-  完成后才构造 `Model`（staging 上传）、替换 `MeshComponent`、刷新 Bounds 与
-  SpatialIndex。生成期间旧网格继续渲染。
-- **版本令牌**：每次请求分配全局递增 request serial；同一实体可以被新请求
-  supersede，旧任务结果与回调静默丢弃，避免慢任务覆盖新参数。
-- **命令栈**：Inspector Generate 不再同步等待；成功回调在主线程构造
-  `RegenerateTerrainCommand`，保留 old/new Mesh 的 undo/redo 语义。生成中按钮
-  禁用并显示 `Generating on JobSystem...`。
-- **生命周期**：`TerrainComponent::generating` 供 UI 状态；`clearEntities()` 丢弃
-  待完成回调；`Scene::cleanup()` 等待所有 worker 完成后再销毁 Scene 依赖。
-  `waitForTerrainGeneration()` 仅供自检/诊断使用。
-- **保留同步 API**：`createTerrainEntity()`、`regenerateTerrain()`、
-  场景加载和 `--terrain-test` 初始化仍可同步执行；异步目前只覆盖显式重建。
-- **验证（2026-11-01）**：
-  - `[Editor] async terrain generation PASS | stale discarded, revision=3`：
-    连续两个请求只安装最新结果；
-  - `[Terrain] async generation PASS | revision=2 | 66049 vertices, 393216 indices`：
-    `--terrain-test` 覆盖 JobSystem + 主线程 Model 上传；
-  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，
-    stderr 全 0 字节，`[Validation] errors=0 warnings=0`。
-- **下一轮**：chunk/LOD/邻接缝合、增量 SpatialIndex、GPU compute 生成；
-  当前无任务取消，supersede 的 CPU job 会跑完，GPU 上传仍有短帧尖峰。
-## D-24：阶段 7 第二轮（协作取消 + 增量空间索引）
-
-- **地形协作取消**：`PendingTerrainBuild::cancelRequested` 使用 `atomic<bool>`；
-  新请求 supersede 旧任务时置位，`HeightField::build()` 与
-  `TerrainMeshBuilder::build()` 每个顶点行检查并尽早退出。即使旧任务已接近
-  完成，request serial 仍保证其结果与回调被丢弃。
-- **编辑器**：Generate 在生成期间仍可再次点击；新请求使用当前参数 supersede
-  旧任务，状态显示 `Generating on JobSystem... press Generate to replace.`。
-  旧网格一直保留到最新任务完成。
-- **SpatialIndex 增量更新**：`SpatialIndex` 为每个 entity 记录占用 cell，
-  新增 `remove()`，`insert()` 变成 upsert（先移除旧 bucket）。`Scene` 维护
-  `indexedBounds`，只在世界 AABB 变化时更新 grid，并删除 destroyed/skybox
-  的旧候选。
-- **仍未全量 dirty**：世界变换与逐实体 AABB 计算仍每帧扫描全部 Mesh；
-  后续 D-27/D-28 已加入 Transform/Bounds dirty 与显式 dirty 队列。
-- **验证（2026-11-01）**：
-  - `[Terrain] selfTest PASS` 新增取消标志早退断言；
-  - `[Scene] ECS/spatial selfTest PASS` 新增 SpatialIndex upsert 无残留 bucket、
-    remove 幂等与 entryCount 断言；
-  - `[Editor] async terrain generation PASS | stale discarded` 继续覆盖
-    supersede；
-  - `tools/Validate.ps1 -Incremental -SkipSetup`：**21/21 PASS**，stderr 全 0，
-    `[Validation] errors=0 warnings=0`。
-- **下一轮**：chunk/LOD/邻接缝合、Transform dirty flag / 区域 SpatialIndex、
-  GPU compute 生成。
-
 ## D-25：阶段 7 第三轮（chunked submeshes + 逐块剔除）
 
 - **配置**：`TerrainConfig` 新增 `chunkGridX/chunkGridZ`，默认 2×2，
@@ -594,3 +490,38 @@ updated: 2026-11-02
 - `DescriptorManager` 分配 4 个 terrain descriptor set；`TerrainConfig::materialSetIndex` 序列化，`geometryEquals()` 忽略材质切换。
 - 渲染按相邻地形实体材质集变化重绑 Set2，统计 `terrainMaterialBatches`/`Switches`/`Fallbacks`；Inspector 增加材质集下拉。
 - 实测 `[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`；`21/21 PASS`，stderr 0，`errors=0 warnings=0`，日志 `build/validation/20261102-001837`。
+
+## D-45：代码/文档审查修复（异步任务生命周期 + Set2 描述符 + 工具链）
+
+- **P0 use-after-free**：`Scene::processTerrainGeneration()` 在任务被取代或实体销毁时
+  直接 `erase` 掉 `shared_ptr`，而 JobSystem worker 仍用裸指针写 `mesh`/`heightField`/
+  `error`（多 chunk 走 CPU builder 时可达）。新增 `retiringTerrainBuilds`：句柄未完成的
+  任务先摘入 retiring 列表，`drainRetiringTerrainBuilds()` 在句柄完成后回收；
+  `waitForTerrainGeneration()` / `cancelPendingTerrainGenerations()` 同步等待 retiring 任务。
+- **P1 描述符**：`createTerrainLayout()` 的 16 个 binding 补上 `UPDATE_AFTER_BIND |
+  PARTIALLY_BOUND` 与 `UPDATE_AFTER_BIND_POOL`；此前运行期切换材质集调用
+  `updateTerrainTextures()` 会触发 `VUID-vkUpdateDescriptorSets-None-03047`。
+- **P2**：`TerrainComputeGenerator::findRequest()` 不再跳过 abandoned 槽位，`poll()` 能
+  真正返回 "GPU terrain request was abandoned"，且只在 fence 完成后回收槽位；
+  `collectFinished()` 化简为 `status != VK_NOT_READY`。
+- **工具链**：`tools/Validate.ps1` 对 `$null` stdout 做显式归一化，避免 PowerShell 5.1
+  把 `[string]$null` 留成 `$null` 后 `IndexOf` 抛 `InvokeMethodOnNull`、整个套件中断且
+  不报 FAIL。
+- **文档**：docs/README 补 29 个 shader、`90-editor/` 类型与目录树；8 篇编辑器文档
+  `size` 改为 `~N 行`；根 README 已知边界去掉"编辑器"；doc-map 补 TerrainMaterial 行；
+  TD-11 澄清流送 chunk 仍走 GPU mesh。
+- **回归**：`--terrain-test` 新增 `[Terrain] build task retirement PASS`：临时禁用 GPU
+  高度场让 `requestRegenerateTerrain()` 同步提交 CPU job，紧接着 `destroyEntity()`，
+  断言任务仍被跟踪（`tracked=1`）且 `waitForTerrainGeneration()` 后 drain 干净。
+  Scene 为此暴露 `getPendingTerrainBuildCount()` / `getRetiringTerrainBuildCount()` /
+  `setTerrainGpuHeightEnabled()` 三个自检钩子。
+- **窗口**：无人值守运行默认不显示窗口（`--hidden`），另有 `--minimized` / `--visible`；
+  启动打印 `[Window] presentation=hidden|minimized|visible`，`terrain-render` 断言 hidden。
+  `--minimized` 先隐藏创建、渲染器就绪后再 show+iconify（早 iconify 会让客户区变 0x0、
+  G-Buffer 附件创建失败），且与自检/截图组合时退化为 hidden 以免不出帧。
+- **文档拆分**：地形材质/Set2 独立为 `docs/30-systems/terrain-materials.md`，
+  `terrain.md` 600→555 行，给后续内容留出余量。
+- **实测**：`--selftest 20 --empty-scene --terrain-test` PASS（`errors=0 warnings=0`，
+  `async GPU upload PASS ... gpuMesh=1`、`material sets PASS ... resident=4`、
+  `streaming chunk test PASS ... gpuMesh=9`）；`tools/Validate.ps1 -Incremental -SkipSetup`
+  21/21 PASS，日志 `build/validation/20261102-101809`。

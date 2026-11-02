@@ -73,7 +73,7 @@ cmake --build build --config Debug
 | **程序化地形** | 257² 默认精度；单实体/独立 chunk 流送；chunk 区域索引查询；4 层 albedo/normal、height/roughness 打包纹理、最多 4 个 Set2 材质集（按需外部 16 PNG/程序化回退、materialSetIndex 序列化、按批次重绑）、Surface Style、height/slope 混合、Set2 材质；chunk/LOD 子网格、逐块剔除、滞回选层、抖动 cross-fade、可选裙边回退、稳定帧 indirect 合批、GPU compute 高度场、拓扑级 LOD 缝合、GPU selection/indirect count；单 chunk GPU 顶点/索引组装 + device-local Model 接管 + 4 槽异步 GPU mesh submit/poll + worker picking mirror，多 chunk CPU fallback；CPU 高度采样/射线查询、kinematic 角色控制器（贴地/重力/跳跃/step/slope）、区域限定运行期雕刻（Ctrl+LMB；不写 JSON）+ GPU/JobSystem 异步 Generate + 可撤销重建 + 场景存读 | [terrain](docs/30-systems/terrain.md) |
 | 调试剖析基础设施 | `--build-info` / `--gpu-timing` / `--screenshot` / 验证层增强 / RenderDoc / Tracy | [debug](docs/60-debug-profiling/README.md) |
 
-**已知边界**：无阴影 / SSR / 自动曝光 / 动画 / 音频 / 编辑器；跨队列资源走 `CONCURRENT` sharing；
+**已知边界**：无阴影 / SSR / 自动曝光 / 动画 / 音频；跨队列资源走 `CONCURRENT` sharing；
 glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`docs/70-status/known-limits.md`](docs/70-status/known-limits.md)。
 
 ---

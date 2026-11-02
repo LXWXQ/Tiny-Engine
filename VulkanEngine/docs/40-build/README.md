@@ -15,6 +15,7 @@ updated: 2026-10-31
 | [dependencies](dependencies.md) | 有哪些第三方依赖？固定哪个版本？目录什么结构？ |
 | [build](build.md) | 怎么构建？有哪几条隐形规则？ |
 | [troubleshooting](troubleshooting.md) | 编不过 / 跑不起来怎么查？ |
+| [git-workflow](git-workflow.md) | 怎么提交并推送到远程？推失败怎么办？ |
 
 ## 一句话构建
 

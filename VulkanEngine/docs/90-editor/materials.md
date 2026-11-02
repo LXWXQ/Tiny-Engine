@@ -4,7 +4,7 @@ title: 占位材质的棋盘格着色
 type: system
 scope: 没有有效材质槽位 / 没有 albedo 贴图时的程序化棋盘格
 read-when: 新建物体显示纯白、棋盘格发白、改 G-Buffer 着色或加材质相关逻辑
-size: small
+size: ~160 行
 updated: 2026-11-01
 ---
 

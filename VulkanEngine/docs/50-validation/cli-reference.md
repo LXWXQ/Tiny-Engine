@@ -4,8 +4,8 @@ title: 命令行参数全表
 type: validation
 scope: main.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~170 行
-updated: 2026-10-31
+size: ~180 行
+updated: 2026-11-02
 ---
 
 # 命令行参数全表
@@ -22,6 +22,9 @@ updated: 2026-10-31
 | `--diagnostics-test [path]` | 诊断管线自检（合成消息 -> 计数 + JSONL），不建窗口 |
 | `--subresource-error-test` | 期望 RenderGraph **拒绝**写 mip0 后读 mip1 |
 | `--device-fault-test` | `VK_EXT_device_fault` 能力自检 |
+| `--hidden` | 不创建可见窗口；自检/截图/回归这类无人值守运行**默认开启**。窗口仍有真实客户区尺寸，交换链、渲染与截图不受影响 |
+| `--minimized` | 启动后最小化窗口（先隐藏创建，渲染器就绪后再 `glfwShowWindow` + `glfwIconifyWindow`，避免启动瞬间抢焦点）；最小化会命中 `handleWindowMaintenance()` 的跳过分支、不出帧，只适合看日志。与自检/截图等无人值守运行组合时自动退化为 `--hidden` |
+| `--visible` | 强制显示窗口，覆盖 `--hidden` 的默认行为（交互调试 / RenderDoc 抓帧时用） |
 
 ## 2. Pass 开关与场景
 

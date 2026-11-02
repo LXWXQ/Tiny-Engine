@@ -4,7 +4,7 @@ title: 场景序列化
 type: system
 scope: 场景描述模型、文件格式、以及"什么该存什么不该存"
 read-when: 改 *.scene.json 格式、加组件要存盘、或加载后场景不对
-size: medium
+size: ~150 行
 updated: 2026-11-01
 ---
 

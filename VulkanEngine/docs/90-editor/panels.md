@@ -4,7 +4,7 @@ title: 面板与布局
 type: system
 scope: 现有面板、布局实现方式、以及没有 docking 时的注意事项
 read-when: 写新面板、改布局、或面板位置错乱
-size: small
+size: ~125 行
 updated: 2026-11-01
 ---
 

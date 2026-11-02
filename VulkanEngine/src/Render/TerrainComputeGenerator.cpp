@@ -315,19 +315,22 @@ TerrainComputeGenerator::PollStatus TerrainComputeGenerator::poll(
     }
 
     const VkResult status = vkGetFenceStatus(device.getDevice(), slot->fence);
+    if (slot->abandoned)
+    {
+        // release() 之后仍可能有人来 poll：明确报 abandoned。
+        // 只有 fence 真的完成才回收槽位，否则复用会覆盖 GPU 仍在写的 readback。
+        if (status != VK_NOT_READY)
+            resetSlot(*slot);
+        errorMessage = "GPU terrain request was abandoned";
+        return PollStatus::Failed;
+    }
+
     if (status == VK_NOT_READY)
         return PollStatus::Pending;
     if (status != VK_SUCCESS)
     {
         errorMessage = "GPU terrain fence failed";
         resetSlot(*slot);
-        return PollStatus::Failed;
-    }
-
-    if (slot->abandoned)
-    {
-        resetSlot(*slot);
-        errorMessage = "GPU terrain request was abandoned";
         return PollStatus::Failed;
     }
 
@@ -371,7 +374,8 @@ void TerrainComputeGenerator::collectFinished()
         if (!slot.inFlight || !slot.abandoned)
             continue;
         const VkResult status = vkGetFenceStatus(device.getDevice(), slot.fence);
-        if (status == VK_SUCCESS || (status != VK_NOT_READY && status != VK_SUCCESS))
+        // 只需要“fence 已不再 pending”；成功/设备丢失都可以安全回收槽位。
+        if (status != VK_NOT_READY)
             resetSlot(slot);
     }
 }
@@ -407,7 +411,7 @@ TerrainComputeGenerator::Slot* TerrainComputeGenerator::findRequest(uint64_t req
 {
     for (Slot& slot : slots)
     {
-        if (slot.inFlight && !slot.abandoned && slot.requestId == requestId)
+        if (slot.inFlight && slot.requestId == requestId)
             return &slot;
     }
     return nullptr;

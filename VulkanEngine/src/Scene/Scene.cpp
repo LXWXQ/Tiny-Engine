@@ -2878,7 +2878,7 @@ bool Scene::requestRegenerateTerrain(entt::entity entity,
 
     bool gpuHeightSubmitted = false;
     std::string gpuSubmitError;
-    if (terrainComputeGenerator && terrainComputeGenerator->isAvailable())
+    if (terrainGpuHeightEnabled && terrainComputeGenerator && terrainComputeGenerator->isAvailable())
     {
         task->heightStartTime = std::chrono::steady_clock::now();
         task->gpuHeightRequest = terrainComputeGenerator->submit(
@@ -2953,12 +2953,51 @@ TerrainGpuMeshBuilder::Stats Scene::getTerrainGpuMeshStats() const
                                  : TerrainGpuMeshBuilder::Stats{};
 }
 
+void Scene::retireTerrainBuild(std::shared_ptr<PendingTerrainBuild> task)
+{
+    if (!task)
+        return;
+    if (task->handle.valid())
+    {
+        // worker 仍可能在写 task 的成员，推迟到句柄完成后释放。
+        retiringTerrainBuilds.push_back(std::move(task));
+        return;
+    }
+    // 没有 CPU 作业持有该任务，可以直接释放。
+}
+
+void Scene::drainRetiringTerrainBuilds()
+{
+    for (auto it = retiringTerrainBuilds.begin(); it != retiringTerrainBuilds.end();)
+    {
+        const bool jobDone = !(*it)->handle.valid() || (*it)->handle.isComplete();
+        if (!jobDone)
+        {
+            ++it;
+            continue;
+        }
+        if ((*it)->handle.valid())
+        {
+            try
+            {
+                (*it)->handle.wait();
+            }
+            catch (...)
+            {
+                // 作业异常已写进 task->error；这里只负责回收内存。
+            }
+        }
+        it = retiringTerrainBuilds.erase(it);
+    }
+}
+
 void Scene::processTerrainGeneration()
 {
     if (terrainComputeGenerator)
         terrainComputeGenerator->collectFinished();
     if (terrainGpuMeshBuilder)
         terrainGpuMeshBuilder->collectFinished();
+    drainRetiringTerrainBuilds();
     if (pendingTerrainBuilds.empty())
         return;
 
@@ -2975,7 +3014,11 @@ void Scene::processTerrainGeneration()
                 terrainComputeGenerator->release(task->gpuHeightRequest);
             if (task->gpuMeshRequest != 0u && terrainGpuMeshBuilder)
                 terrainGpuMeshBuilder->release(task->gpuMeshRequest);
+            // 被更新请求取代：CPU 作业可能还在跑，必须延迟释放。
+            task->cancelRequested.store(true, std::memory_order_relaxed);
+            std::shared_ptr<PendingTerrainBuild> retired = std::move(*it);
             it = pendingTerrainBuilds.erase(it);
+            retireTerrainBuild(std::move(retired));
             continue;
         }
 
@@ -2989,7 +3032,11 @@ void Scene::processTerrainGeneration()
             if (task->gpuMeshRequest != 0u && terrainGpuMeshBuilder)
                 terrainGpuMeshBuilder->release(task->gpuMeshRequest);
             latestTerrainRequest.erase(task->entity);
+            // 实体已销毁：worker 可能仍在写 task，延迟释放。
+            task->cancelRequested.store(true, std::memory_order_relaxed);
+            std::shared_ptr<PendingTerrainBuild> retired = std::move(*it);
             it = pendingTerrainBuilds.erase(it);
+            retireTerrainBuild(std::move(retired));
             continue;
         }
 
@@ -3193,7 +3240,9 @@ void Scene::processTerrainGeneration()
             terrain->generating = false;
             terrain->lastError = error;
             latestTerrainRequest.erase(task->entity);
+            std::shared_ptr<PendingTerrainBuild> retired = std::move(*it);
             it = pendingTerrainBuilds.erase(it);
+            retireTerrainBuild(std::move(retired));
             if (completion)
             {
                 completion(false, error);
@@ -3268,7 +3317,9 @@ void Scene::processTerrainGeneration()
             terrain->generating = false;
             terrain->lastError = uploadError;
             latestTerrainRequest.erase(task->entity);
+            std::shared_ptr<PendingTerrainBuild> retired = std::move(*it);
             it = pendingTerrainBuilds.erase(it);
+            retireTerrainBuild(std::move(retired));
             if (completion)
             {
                 completion(false, uploadError);
@@ -3307,7 +3358,9 @@ void Scene::processTerrainGeneration()
         setModelBounds(registry, task->entity, model, &dirtySpatialEntities);
         attachDirtyTracking(task->entity);
         latestTerrainRequest.erase(task->entity);
-        it = pendingTerrainBuilds.erase(it);
+            std::shared_ptr<PendingTerrainBuild> retired = std::move(*it);
+            it = pendingTerrainBuilds.erase(it);
+            retireTerrainBuild(std::move(retired));
         refreshTransformsAndVisibility();
         if (completion)
         {
@@ -3319,9 +3372,23 @@ void Scene::processTerrainGeneration()
 
 void Scene::waitForTerrainGeneration()
 {
-    while (!pendingTerrainBuilds.empty())
+    while (!pendingTerrainBuilds.empty() || !retiringTerrainBuilds.empty())
     {
         bool waitedJob = false;
+        for (const auto& task : retiringTerrainBuilds)
+        {
+            if (!task->handle.valid())
+                continue;
+            waitedJob = true;
+            try
+            {
+                task->handle.wait();
+            }
+            catch (...)
+            {
+                // processTerrainGeneration() 只负责回收。
+            }
+        }
         for (const auto& task : pendingTerrainBuilds)
         {
             if (task->handle.valid())
@@ -3341,7 +3408,8 @@ void Scene::waitForTerrainGeneration()
         processTerrainGeneration();
         recordTerrainPollMs(std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - terrainPollStart).count());
-        if (!waitedJob && !pendingTerrainBuilds.empty())
+        if (!waitedJob &&
+            (!pendingTerrainBuilds.empty() || !retiringTerrainBuilds.empty()))
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
@@ -3364,10 +3432,19 @@ void Scene::discardPendingTerrainCallbacks()
             task->gpuMeshRequest = 0u;
         }
     }
+    for (auto& task : retiringTerrainBuilds)
+    {
+        task->cancelRequested.store(true, std::memory_order_relaxed);
+        task->completion = {};
+    }
 }
 
 void Scene::cancelPendingTerrainGenerations()
 {
+    for (const auto& task : retiringTerrainBuilds)
+    {
+        task->cancelRequested.store(true, std::memory_order_relaxed);
+    }
     for (const auto& task : pendingTerrainBuilds)
     {
         task->cancelRequested.store(true, std::memory_order_relaxed);
@@ -3401,6 +3478,21 @@ void Scene::cancelPendingTerrainGenerations()
         }
     }
     pendingTerrainBuilds.clear();
+    // retiring 任务同样必须 join 后才能释放，否则 worker 会写已释放内存。
+    for (const auto& task : retiringTerrainBuilds)
+    {
+        if (task->handle.valid())
+        {
+            try
+            {
+                task->handle.wait();
+            }
+            catch (...)
+            {
+            }
+        }
+    }
+    retiringTerrainBuilds.clear();
     latestTerrainRequest.clear();
 }
 
