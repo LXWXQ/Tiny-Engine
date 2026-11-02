@@ -1,13 +1,30 @@
-# 忽略 VS 的编译缓存和临时文件
-.vs/
-out/
+# 构建产物
+imgui.ini
 build/
-*.ipch
-*.db
-*.opendb
-*.VC.db
+out/
+.vs/
+*.user
 
-# 忽略 VS Code 自己的配置（可选）
-.vscode/
+# 第三方库与资源（体积大，不入库）
+3rdParty/
+Resources/
+
+# 编译出的 SPIR-V（构建时生成）
+*.spv
+
+# 文档笔记
+RTR4_Notes/
+
+# 调试 / 剖析工具在仓库根直接运行时可能产生的默认输出
+/gpu_timing.csv
+/screenshot.png
+/validation.jsonl
+/diagnostics_selftest.jsonl
+/*.tracy
+/*.log
+/profiles/
+/bundles/
+/baseline/
+/.tmp/
 node_modules/
 node_modules.orig/
