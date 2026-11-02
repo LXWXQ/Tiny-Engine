@@ -206,6 +206,7 @@ private:
     void writeHiZDescriptors();
 
     void buildInstances(FrameInfo& frameInfo);
+    uint64_t computeStructureSignature(const FrameInfo& frameInfo) const;
     const std::vector<SubMeshBounds>& subMeshBoundsFor(const Model& model, uint64_t frameNumber);
     void readStats(uint32_t frameInFlightIndex);
 
@@ -235,6 +236,15 @@ private:
     std::array<FrameResources, kFramesInFlight> frames{};
     uint32_t instanceCapacity = 0;
     uint32_t groupCapacity = 0;
+    // 稳定帧快速路径：结构签名一致时跳过摊平与 instances/groups 上传。
+    uint64_t structureSignature = 0;
+    bool structureBuilt = false;
+    uint32_t capacityGeneration = 0;
+    std::array<uint64_t, kFramesInFlight> slotSignatures{};
+    std::array<uint32_t, kFramesInFlight> slotGenerations{};
+    uint32_t stableFrames = 0;
+    uint32_t structureRebuilds = 0;
+    uint64_t structureMicros = 0;
 
     std::vector<InstanceRecord> instanceScratch;
     std::vector<ModelGroup> modelGroups;

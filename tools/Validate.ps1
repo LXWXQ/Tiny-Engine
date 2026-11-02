@@ -202,6 +202,10 @@ $tests = @(
        MustContain = @("[SceneGpu] GPU batch ready", "[SceneGpu] indirect batch | groups=", "[Validation] errors=0 warnings=0") },
     @{ Name = "f1c-hiz-off"; Args = @("--selftest", "$([Math]::Max($Frames, 40))", "--gpu-scene", "--no-hiz");
        MustContain = @("[SceneGpu] cull stats |", "hizEnabled=0", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f1d-stable-path"; Args = @("--selftest", "$([Math]::Max($Frames, 120))", "--gpu-scene");
+       MustContain = @("[SceneGpu] cull stats |", "stable=", "rebuilds=", "flattenUs=", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f1d-sync-validation"; Args = @("--selftest", "60", "--gpu-scene", "--validation-features", "sync");
+       MustContain = @("[Diag] validation features enabled: synchronization", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

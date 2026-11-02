@@ -103,6 +103,26 @@ push constant 是 `uvec4 params = (groupCount, hizWidth, hizHeight, mipLevels)`�
 
 实测：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时 `draw calls 2 / triangles 270459 / vertices 811377`，与 CPU 路径逐像素一致（`max diff = 0`）。
 
+## 4.2 稳定帧快速路径（F1-d）
+
+从 F1-a 起，`buildInstances()` 每帧都会重算 103 个子网格的世界矩阵与每组并集 AABB，静态场景下实测 **439µs/帧** —— 这是最后一块可以省掉的 CPU 开销。
+
+做法是每帧只算一个 64 位「结构签名」（FNV-1a），覆盖所有影响实例记录的输入：
+
+| 输入 | 为什么在签名里 |
+|---|---|
+| `entt::entity` | 增删实体要重排分组 |
+| `WorldTransformComponent.sourceRevision` | 变换变了才需要重算矩阵与 AABB |
+| `MaterialComponent.materialSetIndex` + `material` 指针 | 材质槽/棋盘格回退变了要重建记录 |
+| `Model::getGeometryId()` + 子网格数 | 换模型或模型内容变化 |
+| `BoundsComponent::getLocal()` 的 6 个 float | `checkerScale` 由它算出来 |
+| `EngineSettings::gpuMergedBuffers` | 合并/非合并会改分组与命令写法 |
+
+签名命中时跳过摊平与 `instances/groups` 上传，只写 240 字节的 `frameData`（viewProjection / view / 6 平面 / params），然后照常 dispatch。每个帧槽位额外记 `(signature, capacityGeneration)`：容量增长会重建缓冲，等于两个槽位都要重传一次。命令缓冲不需要清 —— compute 每帧对每组整块重写（可见写命令，不可见写 0）。
+
+实测（Sponza，103 组）：重建帧 `flattenUs=439`，稳定帧 `flattenUs=9`，日志 `stable=60/60 rebuilds=0`。
+
+**改代码时注意**：新增任何会进入 `InstanceRecord` 的每实体字段（自定义颜色、LOD 偏置、可见性开关……），必须同步加进签名，否则会出现「场景变了但缓冲还是旧的」。
 ## 5. 管线接线
 
 1. `GeometryPass::init()` 先建 `SceneGpuBatch`，再把 `getInstanceSetLayout()` 与裸指针交给 `GeometrySystem`（成员声明顺序保证 `SceneGpuBatch` 比 `GeometrySystem` 活得久）。随后对两个帧槽调用 `setHiZSource(frame, gBuffer.getPosition().view, extent)`。
@@ -136,13 +156,14 @@ resize 有两个坑，都已修：
 
 - `readStats()` 读 host 可见统计缓冲前必须 `vmaInvalidateAllocation(...)`，否则永远读到 0（与 `GeometrySystemGpu.cpp:93` 同一坑）。
 - 可见数/剔除数/图元数是 GPU 回读，**滞后两帧**；日志与面板要按「上一帧或更早」理解。
-- 每 60 帧一行：`[SceneGpu] cull stats | groups=<n> visible=<n> culled=<n> instances=<n> hiz=<0/1> hizLevels=<n> hizEnabled=<0/1> hizTests=<n> hizCulled=<n>`。`culled` 含视锥与遮挡，`hizTests/hizCulled` 单列遮挡剔除。
+- 每 60 帧一行：`[SceneGpu] cull stats | groups=<n> visible=<n> culled=<n> instances=<n> hiz=<0/1> hizLevels=<n> hizEnabled=<0/1> hizTests=<n> hizCulled=<n> stable=<n>/60 rebuilds=<n> flattenUs=<n>`。`culled` 含视锥与遮挡，`hizTests/hizCulled` 单列遮挡剔除；`stable/rebuilds/flattenUs` 是结构签名的命中率与 CPU 摊平时长（每 60 帧平均）。
 - 一次性日志（ASCII，供 PowerShell 匹配）：`[SceneGpu] GPU batch ready | instancesPerFrame=.. groupsPerFrame=.. multiDrawIndirect=1`、`[SceneGpu] merged buffers built | ...`、`[SceneGpu] indirect batch | groups=.. instances=..`。
 
 ## 8. 验证
 
 - 像素级等价：临时把相机放到 `position [0,6,45] / rotation [0,pi,0]`，分别出 `--gpu-scene` 与 `--no-gpu-scene` 截图，忽略 ImGui 面板区域后 `max diff = 0`。改动提交路径后应重做这一步。
-- 回归：`f1-gpu-scene`、`f1b-merged-buffers`、`f1b-merged-off`（要求 `[SceneGpu] indirect batch | groups=`）、`f1c-hiz-off`（要求 `hizEnabled=0`）。
+- 回归：`f1-gpu-scene`、`f1b-merged-buffers`、`f1b-merged-off`（要求 `[SceneGpu] indirect batch | groups=`）、`f1c-hiz-off`（要求 `hizEnabled=0`）、`f1d-stable-path`（要求 `stable=`/`rebuilds=`/`flattenUs=`）、`f1d-sync-validation`（`--validation-features sync` 下 `[Validation] errors=0 warnings=0`）。
+- 同步校验（syncval）曾报 180 条 `SYNC-HAZARD-WRITE-AFTER-READ`：Hi-Z 图像被上一帧剔除 dispatch 采样过，本帧写之前必须等读完成 —— 起始屏障要用 `GENERAL→GENERAL` + `srcAccess = SHADER_READ`（原来的 `UNDEFINED` 起始屏障既丢弃内容又不与读同步）。逐级屏障要给下一级 `SHADER_READ`，否则降采样采样上一级时会报 `READ-AFTER-WRITE`。
 - Hi-Z 管线自检：把 `kOcclusionBias` 临时改成 −100000，`hizTests=103 hizCulled=103`、`visible=0`，证明投影、选级、采样、比较全链路是通的；改回 0.05 后当前场景 `hizCulled=0`（原因见 §9）。
 - 计时：本机 120 帧短跑波动可达 40 FPS，比较路径必须用 300 帧以上并多轮取中位；当前 103 实例下两条路径差异在噪声内。
 

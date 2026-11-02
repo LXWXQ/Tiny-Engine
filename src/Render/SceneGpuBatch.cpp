@@ -9,6 +9,7 @@
 #include "Scene/Components.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -299,6 +300,8 @@ void SceneGpuBatch::ensureCapacity(uint32_t instanceNeed, uint32_t groupNeed)
     groupCapacity = newGroups;
     createFrameBuffers();
     writeDescriptors();
+    // 缓冲重建过：两个槽位都得重新装一次结构数据。
+    ++capacityGeneration;
 }
 
 void SceneGpuBatch::createFrameBuffers()
@@ -638,6 +641,59 @@ bool SceneGpuBatch::ensureMergedMesh(const std::vector<const Model*>& models)
               << " indexMB=" << (sizeof(uint32_t) * indices.size()) / (1024u * 1024u)
               << std::endl;
     return true;
+}
+
+uint64_t SceneGpuBatch::computeStructureSignature(const FrameInfo& frameInfo) const
+{
+    // FNV-1a: 只读结构相关字段（实体、变换版本、材质、局部包围盒），不碰矩阵、不算 AABB。
+    // 命中同一个签名时 buildInstances 整段跳过，稳定帧只剩 frameData 上传与剔除 dispatch。
+    uint64_t signature = 1469598103934665603ull;
+    const auto mix = [&signature](uint64_t value)
+    {
+        signature ^= value;
+        signature *= 1099511628211ull;
+    };
+
+    auto view = frameInfo.registry.view<MeshComponent, WorldTransformComponent>();
+    for (entt::entity entity : view)
+    {
+        const MeshComponent& mesh = view.get<MeshComponent>(entity);
+        const WorldTransformComponent& worldTransform = view.get<WorldTransformComponent>(entity);
+        if (!mesh.model || !worldTransform.valid || mesh.model->getIndexCount() == 0)
+            continue;
+        const RenderTagComponent* tag = frameInfo.registry.try_get<RenderTagComponent>(entity);
+        if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
+            continue;
+
+        const MaterialComponent* materialComp = frameInfo.registry.try_get<MaterialComponent>(entity);
+        const uint64_t materialSlot = materialComp
+            ? static_cast<uint64_t>(materialComp->materialSetIndex)
+            : static_cast<uint64_t>(kInvalidMaterialSlot);
+        const uint64_t materialPointer = materialComp && materialComp->material
+            ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(materialComp->material.get()))
+            : 0ull;
+        mix(static_cast<uint64_t>(entity));
+        mix(worldTransform.sourceRevision);
+        mix(materialSlot);
+        mix(materialPointer);
+        mix(mesh.model->getGeometryId());
+        mix(static_cast<uint64_t>(mesh.model->getSubMeshes().size()));
+
+        const BoundsComponent* boundsComp = frameInfo.registry.try_get<BoundsComponent>(entity);
+        if (boundsComp && boundsComp->getLocal().valid)
+        {
+            const AABB& local = boundsComp->getLocal();
+            uint32_t bits[6] = {};
+            std::memcpy(bits, &local.min, 3u * sizeof(float));
+            std::memcpy(bits + 3, &local.max, 3u * sizeof(float));
+            for (uint32_t value : bits)
+                mix(static_cast<uint64_t>(value));
+        }
+    }
+
+    // 合并/非合并会改变分组与命令写法，也属于结构。
+    mix(frameInfo.settings.gpuMergedBuffers ? 1ull : 0ull);
+    return signature;
 }
 
 void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
@@ -1078,17 +1134,23 @@ void SceneGpuBatch::buildHiZ(VkCommandBuffer commandBuffer, const FrameInfo& fra
     if (slot.image == VK_NULL_HANDLE || slot.mipLevels == 0 || hizSets[target].empty())
         return;
 
+    // 这份历史上一帧被剔除 dispatch 采样过、本帧也被 SceneGpuCull 采样过；
+    // 写之前必须把这些读等完，否则就是 WRITE_AFTER_READ（sync 校验会报）。
     VkImageMemoryBarrier initial{};
     initial.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    initial.srcAccessMask = 0;
+    initial.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     initial.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    initial.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    initial.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     initial.newLayout = VK_IMAGE_LAYOUT_GENERAL;
     initial.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     initial.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     initial.image = slot.image;
     initial.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, slot.mipLevels, 0, 1 };
-    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+    vkCmdPipelineBarrier(commandBuffer,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                         VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
                          &initial);
 
@@ -1158,7 +1220,14 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                   << " hizLevels=" << hiz[(frameInfo.frameInFlightIndex + 1u) % kFramesInFlight].mipLevels
                   << " hizEnabled=" << (frameInfo.settings.hizEnabled ? 1 : 0)
                   << " hizTests=" << stats.occlusionTests
-                  << " hizCulled=" << stats.occlusionCulled << std::endl;
+                  << " hizCulled=" << stats.occlusionCulled << " stable=" << stableFrames << "/60"
+                  << " rebuilds=" << structureRebuilds
+                  << " flattenUs=" << (structureMicros / 60u)
+                  << std::endl;
+        stableFrames = 0u;
+        structureRebuilds = 0u;
+        structureMicros = 0ull;
+        stableFrames = 0u;
     }
 
     if (!available)
@@ -1172,7 +1241,24 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     // 只用于日志与自检，不参与任何绘制决策。
     readStats(frame);
 
-    buildInstances(frameInfo);
+    // 稳定帧快速路径：结构签名没变就不重新摊平实例，也不重算每组的并集 AABB。
+    const auto structureStart = std::chrono::steady_clock::now();
+    const uint64_t signature = computeStructureSignature(frameInfo);
+    const bool structureChanged = !structureBuilt || signature != structureSignature;
+    if (structureChanged)
+    {
+        buildInstances(frameInfo);
+        structureSignature = signature;
+        structureBuilt = true;
+        slotSignatures.fill(0ull);
+        ++structureRebuilds;
+    }
+    else
+    {
+        ++stableFrames;
+    }
+    structureMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - structureStart).count());
     stats.groups = static_cast<uint32_t>(modelGroups.size());
     // 本帧真实提交量：GPU 回读的 submitted 是两帧前的，阈值判断与日志都用这个值。
     stats.submitted = static_cast<uint32_t>(instanceScratch.size());
@@ -1182,29 +1268,37 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
     ensureCapacity(static_cast<uint32_t>(instanceScratch.size()),
                    static_cast<uint32_t>(modelGroups.size()));
-
     FrameResources& res = frames[frame];
-    std::memcpy(res.instances.mapped, instanceScratch.data(),
-                instanceScratch.size() * sizeof(InstanceRecord));
-    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.instances.allocation, 0, VK_WHOLE_SIZE);
-
-    GroupRecord* groups = static_cast<GroupRecord*>(res.groups.mapped);
-    for (size_t i = 0; i < modelGroups.size(); ++i)
+    // 结构没变、容量没变、这个槽位的缓冲已经装过同一批数据：跳过 instances/groups 上传。
+    // 命令缓冲由 compute 每帧整组重写（可见写命令、不可见写 0），所以不需要清理旧命令。
+    const bool uploadStructure =
+        slotSignatures[frame] != signature || slotGenerations[frame] != capacityGeneration;
+    if (uploadStructure)
     {
-        const ModelGroup& group = modelGroups[i];
-        const SubMesh& subMesh = group.model->getSubMeshes()[group.subMeshIndex];
-        GroupRecord& record = groups[i];
-        record = {};
-        record.boundsMin = glm::vec4(group.boundsMin, group.hasBounds ? 1.0f : 0.0f);
-        record.boundsMax = glm::vec4(group.boundsMax, 0.0f);
-        record.draw = glm::uvec4(group.merged ? group.mergedFirstIndex : subMesh.firstIndex,
-                                 subMesh.indexCount,
-                                 group.merged ? static_cast<uint32_t>(group.mergedBaseVertex) : 0u,
-                                 group.firstInstance);
-        record.counts = glm::uvec4(group.instanceCount, group.materialSlot,
-                                   group.merged ? 1u : 0u, 0u);
+        std::memcpy(res.instances.mapped, instanceScratch.data(),
+                    instanceScratch.size() * sizeof(InstanceRecord));
+        vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.instances.allocation, 0, VK_WHOLE_SIZE);
+
+        GroupRecord* groups = static_cast<GroupRecord*>(res.groups.mapped);
+        for (size_t i = 0; i < modelGroups.size(); ++i)
+        {
+            const ModelGroup& group = modelGroups[i];
+            const SubMesh& subMesh = group.model->getSubMeshes()[group.subMeshIndex];
+            GroupRecord& record = groups[i];
+            record = {};
+            record.boundsMin = glm::vec4(group.boundsMin, group.hasBounds ? 1.0f : 0.0f);
+            record.boundsMax = glm::vec4(group.boundsMax, 0.0f);
+            record.draw = glm::uvec4(group.merged ? group.mergedFirstIndex : subMesh.firstIndex,
+                                     subMesh.indexCount,
+                                     group.merged ? static_cast<uint32_t>(group.mergedBaseVertex) : 0u,
+                                     group.firstInstance);
+            record.counts = glm::uvec4(group.instanceCount, group.materialSlot,
+                                       group.merged ? 1u : 0u, 0u);
+        }
+        vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.groups.allocation, 0, VK_WHOLE_SIZE);
+        slotSignatures[frame] = signature;
+        slotGenerations[frame] = capacityGeneration;
     }
-    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.groups.allocation, 0, VK_WHOLE_SIZE);
 
     FrameData frameData{};
     frameData.viewProjection = frameInfo.projectionMatrix * frameInfo.viewMatrix;
