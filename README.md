@@ -153,11 +153,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 
 | 项 | 值 |
 |---|---|
-| 回归 | `tools/Validate.ps1`：**21 项全 PASS**，stderr 全 0 字节 |
+| 回归 | `tools/Validate.ps1`：**22 项全 PASS**，stderr 全 0 字节 |
 | 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |
-| 场景 | Sponza：103 子网格 + 天空盒，`draw calls 104` |
-| 绑定 | `desc binds 1`（bindless 生效） |
-| 帧率 | Debug / RTX 2070 约 500 FPS（仅作同机相对比较） |
+| 场景 | Sponza：103 子网格 + 天空盒，`draw calls 104`（相机朝向 Sponza 时） |
+| 绑定 | `desc binds 2`（Set0/1/2 + Set3 实例 SSBO；bindless 生效） |
+| 帧率 | Debug / RTX 2070：`--selftest 300` 约 240~260 FPS（仅作同机相对比较） |
+| GPU 批 | F1-a：实例数 ≥ 256 才走 GPU 驱动提交；当前 103 实例走 CPU 路径，`--gpu-scene` 可强制 |
 
 > 这些数字随硬件与代码变化。**更新基线时请成对更新本表与
 > [`docs/70-status/milestones.md`](docs/70-status/milestones.md)。**

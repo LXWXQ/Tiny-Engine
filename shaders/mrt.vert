@@ -20,6 +20,8 @@ layout(location = 5) out vec3 fragNormalLocal;
 // firstInstance; pass it flat to the fragment dither path.
 layout(location = 6) flat out float fragTerrainLodBlend;
 layout(location = 7) flat out uint fragTerrainLodBlendMode;
+// F1：GPU 驱动提交下，实例下标要交给片元去实例缓冲里取材质参数。
+layout(location = 8) flat out uint fragInstanceIndex;
 
 layout(set = 0, binding = 0) uniform GlobalUbo
 {
@@ -52,16 +54,40 @@ layout(push_constant) uniform Push
     uint terrainMaterialStyle;
     float terrainLodBlend;
     uint terrainLodBlendMode;
+    uint gpuScene;
 } push;
+
+// F1：与 shaders/scene_cull.comp 的 InstanceRecord 严格一致。
+struct InstanceRecord
+{
+    mat4 model;
+    mat4 normal;
+    uvec4 flags;
+    vec4 misc;
+    vec4 uvTransform;
+    vec4 boundsMin;
+    vec4 boundsMax;
+    uvec4 draw;
+};
+layout(set = 3, binding = 0) readonly buffer InstanceBuffer { InstanceRecord instances[]; };
 
 void main() 
 {
-    vec4 positionWorld = push.modelMatrix * vec4(inPosition, 1.0);
+    mat4 modelMatrix = push.modelMatrix;
+    mat4 normalMatrix = push.normalMatrix;
+    if (push.gpuScene != 0u)
+    {
+        InstanceRecord inst = instances[gl_InstanceIndex];
+        modelMatrix = inst.model;
+        normalMatrix = inst.normal;
+    }
+    vec4 positionWorld = modelMatrix * vec4(inPosition, 1.0);
     gl_Position = ubo.projectionView * positionWorld;
-    fragNormalWorld = normalize(mat3(push.normalMatrix) * inNormal);
+    fragNormalWorld = normalize(mat3(normalMatrix) * inNormal);
     fragPosWorld = positionWorld.xyz;
     fragColor = inColor;
     fragUV = inUV;
     fragPosLocal = inPosition;
     fragNormalLocal = inNormal;
+    fragInstanceIndex = uint(gl_InstanceIndex);
 }

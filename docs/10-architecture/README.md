@@ -18,6 +18,7 @@ updated: 2026-10-30
 | [rendergraph](rendergraph.md) | 屏障怎么推出来的？子资源/buffer 怎么跟踪？语义校验查什么？ | 改任何 Pass 声明、资源使用 |
 | [resource-lifetime](resource-lifetime.md) | 谁创建谁销毁？帧槽位怎么隔离？销毁顺序为什么必须显式？ | 新增任何 GPU 资源 |
 | [synchronization](synchronization.md) | 2 帧在飞怎么工作？双队列怎么调度？resize 怎么不崩？ | 碰帧循环、队列、交换链 |
+| [gpu-driven-submission](gpu-driven-submission.md) | 几何提交怎么从 CPU 逐实体变成 GPU 剔除 + 间接绘制？实例缓冲里有什么？set 3 干什么？ | 改几何提交路径、接大批量实例、调间接绘制 |
 | [descriptors](descriptors.md) | Set0/Set1/Set2 各是什么？bindless 槽位和地形纹理怎么管理？ | 改材质或描述符布局 |
 | [decisions](decisions.md) | 21 条关键取舍，各自放弃了什么 | **质疑现有设计之前必读** |
 | [weak-points](weak-points.md) | 现在哪里脆？按影响排序 | 评估改动风险、决定下一步 |

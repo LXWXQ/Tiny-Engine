@@ -1360,6 +1360,16 @@ void FirstApp::setSSAOEnabled(bool enabled)
 	scene->getSettings().ssaoEnabled = enabled;
 }
 
+void FirstApp::setGpuSceneEnabled(bool enabled)
+{
+	scene->getSettings().gpuSceneEnabled = enabled;
+}
+
+void FirstApp::setGpuSceneForced(bool forced)
+{
+	scene->getSettings().gpuSceneForce = forced;
+}
+
 void FirstApp::setCrossQueueTestEnabled(bool enabled)
 {
 	crossQueueProbePassPtr->setEnabled(enabled);
@@ -1494,6 +1504,11 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	{
 		std::cout << "[SelfTest] performance: " << frames << " frames in "
 			<< benchmarkSeconds << " s (" << (frames / benchmarkSeconds) << " FPS)\n";
+		const RenderTelemetry& perfTelemetry = scene->getTelemetry();
+		std::cout << "[SelfTest] telemetry: draw calls " << perfTelemetry.drawCalls
+			<< " | desc binds " << perfTelemetry.descriptorBinds
+			<< " | triangles " << perfTelemetry.triangles
+			<< " | vertices " << perfTelemetry.vertices << std::endl;
 	}
 
 	if (materialStressEnabled && materialStressPendingSlot != kInvalidMaterialSlot)

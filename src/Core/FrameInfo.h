@@ -107,6 +107,10 @@ float checkerScale = 1.0f;
 	float terrainLodBlend = 1.0f;
 	uint32_t terrainLodBlendMode = 0;
 
+	// F1：非 0 表示这帧的几何由 SceneGpuBatch 的间接命令提交，
+	// 顶点/片元着色器据此改用实例缓冲里的矩阵与材质参数。
+	uint32_t gpuScene = 0;
+
 	// 偏移必须在编译期钉死，否则"某个字段悄悄移位"会导致材质错乱，
 	// 而且这类错乱看起来像"贴图加载错了"，极难往回追。
 	static constexpr size_t kMaterialOffset = 2 * sizeof(glm::mat4);
@@ -139,14 +143,26 @@ static_assert(offsetof(SimplePushConstantData, terrainLodBlend) == SimplePushCon
 "terrainLodBlend must follow terrainMaterialStyle");
 static_assert(offsetof(SimplePushConstantData, terrainLodBlendMode) == SimplePushConstantData::kMaterialOffset + 76,
 "terrainLodBlendMode must follow terrainLodBlend");
-static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 80,
-	"push constant size must match GLSL layout");
+static_assert(offsetof(SimplePushConstantData, gpuScene) == SimplePushConstantData::kMaterialOffset + 80,
+	"gpuScene must follow terrainLodBlendMode");
+// 结构体按 glm::mat4 的 16 字节对齐补齐：GLSL 侧块是 212 字节，C++ 侧 sizeof 是 224。
+// push range 用 sizeof 是合法的，多出的 12 字节着色器不读。
+static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 96,
+	"push constant size must match GLSL layout (with padding)");
 
 struct EngineSettings
 {
 	// W1：窗口标题进了配置。把它放在这里是刻意的 —— 调试时经常要按场景/质量档
 	// 起好几个实例同时看，标题是区分它们唯一的可见标识，而它又必须能改。
 	std::string windowTitle = "Tiny Engine";
+
+	// F1：GPU 驱动提交（实例缓冲 + compute 剔除 + indirect draw）。
+	// 关掉退回 CPU 逐实体逐子网格的旧路径，用来对比与排查。
+	bool gpuSceneEnabled = true;
+	// 实例数低于该阈值时不走 GPU 批：几十个间接绘制比直接绘制还慢。
+	uint32_t gpuSceneMinInstances = 256;
+	// 调试/验证用：忽略阈值，强制走 GPU 路径（缩略场景也能覆盖这条路径）。
+	bool gpuSceneForce = false;
 
 	bool ssaoEnabled = true;
 	float ssaoRadius = 0.5f;

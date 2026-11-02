@@ -41,13 +41,13 @@ updated: 2026-11-02
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 21 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 22 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
-| 场景 | 103 子网格 + 天空盒 = `draw calls 104` | `[Perf]` 行 |
+| 场景 | 103 子网格 + 天空盒 = `draw calls 104`（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
 | 三角形 / 顶点 | 270459 / 811377（`vertices` 实际统计的是索引数） | 同上 |
-| 描述符绑定 | `desc binds 1` | 同上 |
-| 帧率 | 约 500 FPS（Debug） | 同上 |
+| 描述符绑定 | `desc binds 2`（Set0/1/2 一次 + Set3 实例 SSBO 一次；后者由所有图形管线静态使用，GPU 批关闭时也要绑） | `[SelfTest] telemetry` / `[Perf]` 行 |
+| 帧率 | `--selftest 300` 约 240~260 FPS（Debug，随相机/场景内容变化） | 同上 |
 | 材质槽位 | `26/256` 占用 | 启动日志 |
 | GPU 时间分布 | Geometry ~1.0ms、Present ~1.1ms、SSAO ~0.58ms、其余 < 0.3ms | `--gpu-timing` |
 
@@ -555,3 +555,20 @@ updated: 2026-11-02
   （`Scene::clearEntities()` 先归还槽位再销毁实体），tech-debt 原第 3 条已不成立，删除。
 - **回归**：`--selftest 120` 236 FPS、验证层 0/0、pass bookkeeping `executed=14 skipped=0`；
   21 项 `Validate.ps1` ALL PASS；DocCheck PASS。
+
+## F1-a：GPU 驱动提交第一刀（SceneGpuBatch）
+
+**问题**：几何提交仍是 `for (entity : visibleEntities)` 逐实体逐子网格的 CPU 决策，实例数一多就成瓶颈，也是 F6（阴影/SSR）的前置。
+
+**实现**：
+- `shaders/scene_cull.comp`：64 线程/组，6 平面视锥剔除，写 5-uint indirect 命令 + 每模型计数器；
+- `src/Render/SceneGpuBatch.{h,cpp}`：224 字节 `InstanceRecord` 摊平、双缓冲槽 SSBO、容量不足时 device idle 后重建、`vkCmdDrawIndexedIndirectCount` 按模型提交；
+- `SceneGpuCull` 无附件 pass 挂在 `Geometry` 之前；`GeometrySystem` 跳过交给 GPU 批的普通网格，并在整帧开头补绑 set 3（否则旧路径绘制触发 `VUID-vkCmdDrawIndexedIndirectCount-None-08600`）；
+- `gpuScene` 标志进 `SimplePushConstantData`，`mrt.vert/frag` 从实例缓冲取矩阵与材质；
+- 阈值 `gpuSceneMinInstances = 256`：小场景仍走 CPU 路径，`--gpu-scene` 可强制、`--no-gpu-scene` 可关闭。
+
+**可观测**：`[SceneGpu] GPU batch ready | instancesPerFrame=256 models=32 drawIndirectCount=1`、`[SceneGpu] indirect batch | models=1 instances=103`；遥测 `drawCalls/triangles/vertices` 与 F1 前基线一致（104 / 270459 / 811377）。
+
+**回归**：`--selftest 120` errors=0 warnings=0；`Validate.ps1` 新增 `f1-gpu-scene`；像素级比对（相机 `[0,6,45]`）GPU 路径与 CPU 路径 `max diff = 0`。
+
+**性能**：300 帧多轮 default 248.1/248.0、cpu 237.7/257.1、forced 248.1/228.2 —— 噪声大于差异，当前 103 实例下两条路径相当，收益留给实例数上来之后。

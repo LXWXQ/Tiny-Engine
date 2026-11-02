@@ -5,6 +5,7 @@
 #include "RHI/RenderGraph.h"
 #include "Render/RenderResources.h"
 #include "GeometrySystem.h"
+#include "Render/SceneGpuBatch.h"
 #include <memory>
 #include <array>
 #include "Core/FrameInFlight.h"
@@ -35,6 +36,10 @@ private:
     VkDescriptorSetLayout globalSetLayout;
     VkDescriptorSetLayout materialSetLayout;
     VkDescriptorSetLayout terrainSetLayout;
+
+    // F1：GPU 驱动提交的实例/命令/计数缓冲。必须比 geometrySystem 活得久，
+    // 因为 GeometrySystem 只持有裸指针。
+    std::unique_ptr<SceneGpuBatch> sceneGpuBatch;
 
     std::unique_ptr<GeometrySystem> geometrySystem;
 };

@@ -4,6 +4,7 @@
 #include "RHI/GBuffer.h"
 #include "AssetPaths.h"
 #include "Render/SubMeshCulling.h"
+#include "Render/SceneGpuBatch.h"
 #include <iostream>
 #include <algorithm>
 #include <array>
@@ -14,10 +15,13 @@
 GeometrySystem::GeometrySystem(Device& device, VkFormat depthFormat,
                                VkDescriptorSetLayout globalSetLayout,
                                VkDescriptorSetLayout materialSetLayout,
-                               VkDescriptorSetLayout terrainSetLayout)
-    : vulkanDevice(device), depthFormat(depthFormat)
+                               VkDescriptorSetLayout terrainSetLayout,
+                               VkDescriptorSetLayout sceneInstanceSetLayout,
+                               SceneGpuBatch* sceneGpuBatch)
+    : vulkanDevice(device), depthFormat(depthFormat),
+      sceneGpuBatch(sceneGpuBatch), sceneInstanceSetLayout(sceneInstanceSetLayout)
 {
-    createPipelineLayout(globalSetLayout, materialSetLayout, terrainSetLayout);
+    createPipelineLayout(globalSetLayout, materialSetLayout, terrainSetLayout, sceneInstanceSetLayout);
     createPipelines();
     createTerrainIndirectBuffers();
     createTerrainGpuSelection();
@@ -294,7 +298,8 @@ void GeometrySystem::destroyTerrainIndirectBuffers()
 
 void GeometrySystem::createPipelineLayout(VkDescriptorSetLayout globalSetLayout,
                                           VkDescriptorSetLayout materialSetLayout,
-                                          VkDescriptorSetLayout terrainSetLayout)
+                                          VkDescriptorSetLayout terrainSetLayout,
+                                          VkDescriptorSetLayout sceneInstanceSetLayout)
 {
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -302,6 +307,11 @@ void GeometrySystem::createPipelineLayout(VkDescriptorSetLayout globalSetLayout,
     pushConstantRange.size = sizeof(SimplePushConstantData);
 
     std::vector<VkDescriptorSetLayout> descriptorSetLayouts{ globalSetLayout, materialSetLayout, terrainSetLayout };
+    // F1：set 3 = 实例缓冲。没有 GPU 批时也照常建布局（复用 set 0 的布局占位），
+    // 免得管线布局随运行期状态变化而需要重建。
+    descriptorSetLayouts.push_back(sceneInstanceSetLayout != VK_NULL_HANDLE
+                                       ? sceneInstanceSetLayout
+                                       : globalSetLayout);
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -360,6 +370,16 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
         pipelineLayout, 0, 3, sets, 0, nullptr);
     frameInfo.telemetry.descriptorBinds += 1;
+
+    // F1：set 3（实例缓冲）在所有图形管线里静态使用，所以整帧也要绑一次，
+    // 否则地形/天空盒这些仍走旧路径的绘制会因为 set 3 未绑而通不过验证层。
+    if (sceneGpuBatch != nullptr && sceneGpuBatch->isAvailable())
+    {
+        VkDescriptorSet instanceSet = sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipelineLayout, 3, 1, &instanceSet, 0, nullptr);
+        frameInfo.telemetry.descriptorBinds += 1;
+    }
 
     // B-08: terrain material sets are a bounded array. Most frames need one
     // bind; a batch switch occurs only when adjacent terrain entities select a
@@ -437,6 +457,15 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         // safer and explicit (capacity is 64 entities / 1024 chunk records).
         if (isTerrain && gpuRun.enabled && !terrainGpuEntity)
             continue;
+
+        // F1：普通网格交给 SceneGpuBatch 的 GPU 驱动提交（实例缓冲 + compute 剔除 +
+        // indirect draw）。天空盒、网格辅助线、地形仍然留在下面的 CPU 路径。
+        if (sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
+            !isSkybox && !isGrid && !isTerrain &&
+            mesh->model->getIndexCount() > 0)
+        {
+            continue;
+        }
 
         if (isTerrain)
         {
@@ -811,4 +840,18 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                            static_cast<VkDeviceSize>(indirectCursor) *
                                sizeof(VkDrawIndexedIndirectCommand));
     }
+
+    // F1：GPU 驱动提交。间接命令与计数由 SceneGpuCull pass 写好，这里只按模型
+    // 绑一次顶点/索引缓冲再提交；实例缓冲走 set 3。
+    if (sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo))
+    {
+        SimplePushConstantData batchPush{};
+        batchPush.gpuScene = 1u;
+        vkCmdPushConstants(commandBuffer, pipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(SimplePushConstantData), &batchPush);
+        geometryPipeline->bind(commandBuffer);
+        sceneGpuBatch->recordDraw(commandBuffer, frameInfo);
+    }
+
 }

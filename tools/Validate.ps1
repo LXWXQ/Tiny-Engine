@@ -194,6 +194,8 @@ $tests = @(
     @{ Name = "terrain-render"; Args = @("--selftest", "20", "--empty-scene", "--terrain-test");
        MustContain = @("[Terrain] selfTest PASS", "[Terrain] LOD stitching PASS", "[Terrain] GPU mesh assembly selfTest PASS", "[Terrain] GPU selection selfTest PASS", "[Terrain] GPU selection transition PASS", "[Terrain] demo entity created", "chunks=4", "lods=3", "submeshes=12", "[Terrain] async generation PASS", "[Terrain] build task retirement PASS", "[Window] presentation=hidden", "streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9", "[Terrain] spatial region query PASS | chunks=9 regions=5x5", "[Terrain] sculpt PASS | chunks=9 rebuilt=1", "[Terrain] character controller PASS | grounded=1", "[Terrain] character serialization PASS | captured=1", "[Terrain] material sets PASS | resident=4 max=4") },
     # ---- P2 ----
+    @{ Name = "f1-gpu-scene"; Args = @("--selftest", "$([Math]::Max($Frames, 40))", "--gpu-scene");
+       MustContain = @("[SceneGpu] GPU batch ready", "[SceneGpu] indirect batch | models=", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

@@ -9,6 +9,8 @@
 #include <unordered_set>
 #include <vector>
 
+class SceneGpuBatch;
+
 // 几何渲染逻辑：持有 3 条管线（标准物体 / 天空盒 / 网格）。
 // D-1(b) 起管线按「附件格式」创建（动态渲染），不再需要 VkRenderPass。
 class GeometrySystem
@@ -17,7 +19,9 @@ public:
     GeometrySystem(Device& device, VkFormat depthFormat,
                    VkDescriptorSetLayout globalSetLayout,
                    VkDescriptorSetLayout materialSetLayout,
-                   VkDescriptorSetLayout terrainSetLayout);
+                   VkDescriptorSetLayout terrainSetLayout,
+                   VkDescriptorSetLayout sceneInstanceSetLayout,
+                   SceneGpuBatch* sceneGpuBatch);
     ~GeometrySystem();
 
     GeometrySystem(const GeometrySystem&) = delete;
@@ -30,7 +34,8 @@ public:
 private:
     void createPipelineLayout(VkDescriptorSetLayout globalSetLayout,
                               VkDescriptorSetLayout materialSetLayout,
-                              VkDescriptorSetLayout terrainSetLayout);
+                              VkDescriptorSetLayout terrainSetLayout,
+                              VkDescriptorSetLayout sceneInstanceSetLayout);
     void createPipelines();
     void createTerrainIndirectBuffers();
     void destroyTerrainIndirectBuffers();
@@ -42,6 +47,9 @@ private:
     void destroyTerrainGpuBuffer(TerrainGpuBuffer& buffer);
 
     Device& vulkanDevice;
+    // F1：普通网格的 GPU 驱动提交。裸指针不持有所有权，生命周期由 GeometryPass 管。
+    SceneGpuBatch* sceneGpuBatch = nullptr;
+    VkDescriptorSetLayout sceneInstanceSetLayout = VK_NULL_HANDLE;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     std::unique_ptr<Pipeline> geometryPipeline;

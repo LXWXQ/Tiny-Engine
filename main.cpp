@@ -68,6 +68,8 @@ int main(int argc, char** argv)
     bool selfTest = false;
     bool noBloom = false;
     bool noSSAO = false;
+    bool noGpuScene = false;
+    bool forceGpuScene = false;
     bool jobTest = false;
     bool crossQueueTest = false;
     bool resizeTest = false;
@@ -109,6 +111,8 @@ int main(int argc, char** argv)
         }
         else if (arg == "--no-bloom") noBloom = true;
         else if (arg == "--no-ssao")  noSSAO = true;
+        else if (arg == "--no-gpu-scene") noGpuScene = true;
+        else if (arg == "--gpu-scene") forceGpuScene = true;
         else if (arg == "--jobtest")  jobTest = true;
         else if (arg == "--cross-queue-test") crossQueueTest = true;
         else if (arg == "--resize-test") resizeTest = true;
@@ -227,6 +231,8 @@ int main(int argc, char** argv)
         if (editorMode) app.setEditorEnabled(true);
         if (noBloom) app.setBloomEnabled(false);
         if (noSSAO) app.setSSAOEnabled(false);
+        if (noGpuScene) app.setGpuSceneEnabled(false);
+        if (forceGpuScene) app.setGpuSceneForced(true);
         if (crossQueueTest) app.setCrossQueueTestEnabled(true);
         if (resizeTest) app.setResizeTestEnabled(true);
         if (materialStress) app.setMaterialStressEnabled(true);

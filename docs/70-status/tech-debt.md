@@ -45,6 +45,8 @@ updated: 2026-11-02
 | 10 | GPU mesh 路径为兼容既有 picking API 仍保留全分辨率 CPU positions/indices mirror | 单 chunk 额外 CPU 内存约与 HeightField 同量级；mountain/chunk 多时累计 | 做 GPU/HeightField 统一 picking 时 |
 | 11 | 地形雕刻只改运行期 HeightField/Model，不写场景 JSON；CharacterControllerComponent 已序列化但 Play 快照不保存雕刻 | 保存重载/Play 停止会丢失雕刻成果；编辑器无法持久化地形修改 | 后续/地形编辑持久化需求 |
 | 12 | 地形材质最多 4 个 Set2 set，但渲染按实体顺序遇到变化即重绑，未按材质集排序/合批 | 交替材质会增加 descriptor switch，材质集切换次数不设上限 | 多材质 chunk profiling 时 |
+| 13 | GPU 批的包围盒缓存以 `const Model*` 为键（超过 64 个整表丢弃），`forgetModel()` 已实现但没有调用方 | 模型销毁后地址被复用可能命中过期 AABB，导致错误剔除 | 模型频繁加载/卸载（资产管线、F4）时 |
+| 14 | GPU 批每子网格一条间接命令，没有全局合并顶点/索引缓冲 | 命令数随可见子网格线性增长，multidraw 收益拿不到 | 实例数上千、或接粒子/体素大批量时 |
 
 ## 3. 明确"不打算做"的
 

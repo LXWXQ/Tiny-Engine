@@ -1,0 +1,92 @@
+#version 450
+
+// F1：逐实例视锥剔除。
+//
+// CPU 只把每个子网格写进实例记录（不做任何可见性判断），可见性在这里决定：
+// 每个实例的局部 AABB 变换到世界空间后与 6 个视锥平面比较，通过的实例用
+// 每个模型自己的计数器原子追加一条 indirect 命令。
+//
+// 「每个模型自己的计数器」是刻意的：几何管线按模型分批提交（每个模型绑一次
+// 顶点/索引缓冲），所以命令必须按模型分段紧凑排列，不能全局共享一个游标。
+layout(local_size_x = 64) in;
+
+struct InstanceRecord
+{
+    mat4 model;
+    mat4 normal;
+    uvec4 flags;        // x=materialId y=materialValid z=alphaMasked w=albedoFallback
+    vec4 misc;          // x=alphaCutoff y=checkerScale z=terrainMode w=保留
+    vec4 uvTransform;
+    vec4 boundsMin;     // xyz=局部 AABB 最小角 w=是否有效（1=参与剔除）
+    vec4 boundsMax;
+    uvec4 draw;         // x=firstIndex y=indexCount z=vertexOffset w=modelSlot
+};
+
+layout(set = 0, binding = 0) readonly buffer InstanceBuffer { InstanceRecord instances[]; };
+// 直接按 VkDrawIndexedIndirectCommand 的 5 个 uint 写入，避免 std430 结构体对齐歧义。
+layout(set = 0, binding = 1) writeonly buffer CommandBuffer { uint commands[]; };
+layout(set = 0, binding = 2) buffer CounterBuffer { uint counts[]; };
+layout(set = 0, binding = 3) readonly buffer RangeBuffer { uvec4 ranges[]; };
+layout(set = 0, binding = 4) readonly buffer FrustumBuffer { mat4 viewProjection; vec4 planes[6]; };
+// [0] = x submitted / y visible / z culled / w model groups
+// [1] = x visible triangles / y visible vertices
+layout(set = 0, binding = 5) buffer StatsBuffer { uvec4 stats[2]; };
+
+layout(push_constant) uniform Push
+{
+    uvec4 params;   // x=instanceCount y=modelCount
+} push;
+
+void main()
+{
+    const uint index = gl_GlobalInvocationID.x;
+    if (index >= push.params.x)
+        return;
+
+    InstanceRecord inst = instances[index];
+    const uvec4 range = ranges[inst.draw.w];
+
+    bool visible = true;
+    if (inst.boundsMin.w > 0.5)
+    {
+        const vec3 localCenter = (inst.boundsMin.xyz + inst.boundsMax.xyz) * 0.5;
+        const vec3 localExtent = (inst.boundsMax.xyz - inst.boundsMin.xyz) * 0.5;
+        const vec3 worldCenter = (inst.model * vec4(localCenter, 1.0)).xyz;
+        // 缩放取三个基向量里最长的那个：均匀/非均匀缩放都不会漏剔除。
+        const float scale = max(length(inst.model[0].xyz),
+                            max(length(inst.model[1].xyz), length(inst.model[2].xyz)));
+        const float radius = length(localExtent) * scale;
+
+        for (int i = 0; i < 6; ++i)
+        {
+            if (dot(planes[i].xyz, worldCenter) + planes[i].w < -radius)
+            {
+                visible = false;
+                break;
+            }
+        }
+    }
+
+    atomicAdd(stats[0].x, 1u);
+    if (!visible)
+    {
+        atomicAdd(stats[0].z, 1u);
+        return;
+    }
+    atomicAdd(stats[0].y, 1u);
+    // 可见实例的三角形/顶点数：GPU 剔除之后才知道真实绘制量，
+    // 下一帧回读给遥测，替代旧 CPU 路径逐子网格的累加。
+    atomicAdd(stats[1].x, inst.draw.y / 3u);
+    atomicAdd(stats[1].y, inst.draw.y);
+
+    const uint slot = atomicAdd(counts[range.z], 1u);
+    if (slot >= range.y)
+        return;   // 该模型本帧实例数超过预留容量：多出来的实例这一帧不画。
+
+    const uint base = (range.x + slot) * 5u;
+    commands[base + 0u] = inst.draw.y;   // indexCount
+    commands[base + 1u] = 1u;            // instanceCount
+    commands[base + 2u] = inst.draw.x;   // firstIndex
+    commands[base + 3u] = inst.draw.z;   // vertexOffset
+    commands[base + 4u] = index;         // firstInstance -> gl_InstanceIndex
+}

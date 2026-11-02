@@ -32,6 +32,8 @@ updated: 2026-11-02
 |---|---|
 | `--no-bloom` | 关闭 Bloom（自检与普通运行均可） |
 | `--no-ssao` | 关闭 SSAO |
+| `--gpu-scene` | 忽略实例阈值，强制走 GPU 驱动提交（配合 `gpuSceneMinInstances` 默认 256） |
+| `--no-gpu-scene` | 关闭 GPU 驱动提交，完全回退 CPU 逐子网格路径 |
 | `--render-scale F` | 动态分辨率倍率 0.25~1.0 |
 | `--resize-test` | 自检中连续缩放、切动态分辨率、最小化/恢复 |
 | `--material-stress` | 反复分配/延迟归还材质槽位 |

@@ -9,6 +9,8 @@ layout(location = 4) in vec3 fragPosLocal;
 layout(location = 5) in vec3 fragNormalLocal;
 layout(location = 6) flat in float fragTerrainLodBlend;
 layout(location = 7) flat in uint fragTerrainLodBlendMode;
+// F1：GPU 驱动提交下，材质参数来自实例缓冲而不是 push constant。
+layout(location = 8) flat in uint fragInstanceIndex;
 
 // 向 4 个 G-Buffer 颜色附件输出。
 // 编号是「输出槽位」而不是附件序号 —— 动态渲染下附件集合由 GeometryPass
@@ -74,7 +76,36 @@ layout(push_constant) uniform Push {
     uint terrainMaterialStyle;
     float terrainLodBlend;
     uint terrainLodBlendMode;
+    uint gpuScene;
 } push;
+
+// F1：与 shaders/scene_cull.comp / mrt.vert 的 InstanceRecord 严格一致。
+struct InstanceRecord
+{
+    mat4 model;
+    mat4 normal;
+    uvec4 flags;
+    vec4 misc;
+    vec4 uvTransform;
+    vec4 boundsMin;
+    vec4 boundsMax;
+    uvec4 draw;
+};
+layout(set = 3, binding = 0) readonly buffer InstanceBuffer { InstanceRecord instances[]; };
+
+// GPU 驱动提交时材质参数在实例缓冲里；统一复制到这份可写副本，
+// 主流程与棋盘格函数都读它，避免在几十处分支里分别判断来源。
+// 注意：push_constant 块不能再声明额外实例，所以这里用只含材质字段的副本结构。
+struct MaterialParams
+{
+    uvec2 material;
+    float alphaCutoff;
+    uint alphaMasked;
+    uint albedoFallback;
+    float checkerScale;
+    vec4 checkerUvTransform;
+};
+MaterialParams gMaterial;
 
 // 程序化棋盘格。
 //
@@ -116,7 +147,7 @@ float checkerFiltered(vec2 p, vec2 dpdx, vec2 dpdy)
 float checkerUv(vec2 uv)
 {
     const float kTiles = 8.0;             // 参考你给的黑白格：约 8 格
-    vec2 normalized = (uv - push.checkerUvTransform.zw) * push.checkerUvTransform.xy;
+    vec2 normalized = (uv - gMaterial.checkerUvTransform.zw) * gMaterial.checkerUvTransform.xy;
     vec2 p = normalized * kTiles;
     vec2 dpdx = dFdx(p);
     vec2 dpdy = dFdy(p);
@@ -146,10 +177,10 @@ float checker3D(vec3 p)
 // 3D 棋盘在球面上不会出现三平面的灰带或 UV 图集的接缝。
 vec3 checkerboardFallback(vec3 localPos)
 {
-    if (push.checkerUvTransform.x > 0.0f)
+    if (gMaterial.checkerUvTransform.x > 0.0f)
         return mix(vec3(0.03), vec3(0.85), checkerUv(fragUV));
 
-    const vec3 p = localPos * push.checkerScale;
+    const vec3 p = localPos * gMaterial.checkerScale;
     return mix(vec3(0.03), vec3(0.85), checker3D(p));
 }
 
@@ -231,6 +262,23 @@ float terrainBayer4(ivec2 pixel)
 }
 
 void main() {
+    gMaterial.material = push.material;
+    gMaterial.alphaCutoff = push.alphaCutoff;
+    gMaterial.alphaMasked = push.alphaMasked;
+    gMaterial.albedoFallback = push.albedoFallback;
+    gMaterial.checkerScale = push.checkerScale;
+    gMaterial.checkerUvTransform = push.checkerUvTransform;
+    if (push.gpuScene != 0u)
+    {
+        InstanceRecord inst = instances[fragInstanceIndex];
+        gMaterial.material = inst.flags.xy;
+        gMaterial.alphaMasked = inst.flags.z;
+        gMaterial.albedoFallback = inst.flags.w;
+        gMaterial.alphaCutoff = inst.misc.x;
+        gMaterial.checkerScale = inst.misc.y;
+        gMaterial.checkerUvTransform = inst.uvTransform;
+    }
+
     if (fragTerrainLodBlendMode != 0u)
     {
         const float dither = terrainBayer4(ivec2(gl_FragCoord.xy));
@@ -383,8 +431,8 @@ void main() {
     // 编辑器里还没分配材质的网格），直接画棋盘格占位 —— 因为此时数组里那个
     // 下标可能压根没绑定内容（descriptorBindingPartiallyBound 允许数组尾部未绑定，
     // 采它就是未定义行为）。
-    const uint matId = push.material.x;
-    if (push.material.y == 0u) {
+    const uint matId = gMaterial.material.x;
+    if (gMaterial.material.y == 0u) {
         // 不乘顶点色：占位着色的目的就是让任何模型（含顶点色非白的）
         // 都能看到清晰的黑白格。
         outAlbedo = vec4(checkerboardFallback(fragPosLocal), 1.0);
@@ -400,16 +448,16 @@ void main() {
     // 之所以换成浮点：天空盒借道这个通道写 >1.0 的线性 HDR，8bit 会在写入时截断。
     // 材质没有 albedo 贴图时，采样到的是"默认白纹理" —— 渲染出来是一团白。
     // 改画棋盘格，让占位材质一眼可辨。
-    vec4 albedoColor = (push.albedoFallback != 0u)
+    vec4 albedoColor = (gMaterial.albedoFallback != 0u)
         ? vec4(checkerboardFallback(fragPosLocal), 1.0)
         : texture(albedoMaps[nonuniformEXT(matId)], fragUV);
-    if (push.alphaMasked != 0u && albedoColor.a < push.alphaCutoff)
+    if (gMaterial.alphaMasked != 0u && albedoColor.a < gMaterial.alphaCutoff)
         discard;
 
     // 占位棋盘格不乘顶点色（理由同上：要保证任何模型都能看出黑白格）；
     // 真正有 albedo 贴图的走原来的 tint 行为。
     vec3 albedo = albedoColor.rgb;
-    if (push.albedoFallback == 0u)
+    if (gMaterial.albedoFallback == 0u)
         albedo *= fragColor;
     outAlbedo = vec4(albedo, albedoColor.a);
 
@@ -418,7 +466,7 @@ void main() {
     // 让棋盘格变成金属反射，黑白对比会被环境光吃掉。退化为"粗糙电介质"。
     float metallic = 0.0;
     float roughness = 1.0;
-    if (push.albedoFallback == 0u)
+    if (gMaterial.albedoFallback == 0u)
     {
         metallic = texture(metallicMaps[nonuniformEXT(matId)], fragUV).b;
         roughness = texture(roughnessMaps[nonuniformEXT(matId)], fragUV).g;

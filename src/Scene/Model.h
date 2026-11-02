@@ -175,6 +175,11 @@ public:
 
     const std::vector<SubMesh>& getSubMeshes() const { return subMeshes; }
 
+    // F1：GPU 驱动提交要用 CPU 侧顶点位置算每个子网格的局部 AABB，
+    // 才能在 compute 里做子网格级剔除；这里只读，不做任何修改。
+    const std::vector<glm::vec3>& getPickingPositions() const { return pickingPositions; }
+    const std::vector<uint32_t>& getPickingIndices() const { return pickingIndices; }
+
     // 顶点包围盒（AABB）：用来给场景自动摆放相机、做粗略剔除等
     glm::vec3 getBoundsMin() const { return boundsMin; }
     glm::vec3 getBoundsMax() const { return boundsMax; }

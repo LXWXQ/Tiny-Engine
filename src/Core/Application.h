@@ -49,6 +49,8 @@ public:
 	// 这样这些分支也能进"零验证层输出"的回归检查。
 	void setBloomEnabled(bool enabled);
 	void setSSAOEnabled(bool enabled);
+	void setGpuSceneEnabled(bool enabled);
+	void setGpuSceneForced(bool forced);
 	void setCrossQueueTestEnabled(bool enabled);
 	void setResizeTestEnabled(bool enabled);
 	void setMaterialStressEnabled(bool enabled);

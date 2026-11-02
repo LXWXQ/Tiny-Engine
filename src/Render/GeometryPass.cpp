@@ -42,9 +42,15 @@ void GeometryPass::init()
         resources.gbDepth[frame]    = import("GBuffer.Depth",    gBuffer.getDepth(),    depthUsage);
     }
 
+    // F1：GPU 驱动提交。先建实例缓冲，再把它的布局与裸指针交给几何系统
+    // （set 3 必须是管线布局的一部分，插不了管道，只能建的时候一起给出）。
+    sceneGpuBatch = std::make_unique<SceneGpuBatch>(vulkanDevice);
+
     // 所有 G-Buffer 的格式相同，几何管线只建一份。
     geometrySystem = std::make_unique<GeometrySystem>(vulkanDevice, gBuffers[0]->getDepth().format,
-                                                      globalSetLayout, materialSetLayout, terrainSetLayout);
+                                                      globalSetLayout, materialSetLayout, terrainSetLayout,
+                                                      sceneGpuBatch->getInstanceSetLayout(),
+                                                      sceneGpuBatch.get());
 }
 
 void GeometryPass::resize(VkExtent2D extent)
@@ -87,6 +93,14 @@ void GeometryPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     selectionPass.execute([this, &frameInfo](VkCommandBuffer cmd)
     {
         geometrySystem->prepareTerrainGpuSelection(cmd, frameInfo);
+    });
+
+    // F1：普通网格的 GPU 剔除。没有附件，所以在渲染通道之外执行（纯 compute），
+    // 必须在 Geometry 之前把间接命令与计数写好。
+    auto& cullPass = graph.addGraphicsPass("SceneGpuCull");
+    cullPass.execute([this, &frameInfo](VkCommandBuffer cmd)
+    {
+        sceneGpuBatch->prepare(cmd, frameInfo);
     });
 
     auto& pass = graph.addGraphicsPass("Geometry");
