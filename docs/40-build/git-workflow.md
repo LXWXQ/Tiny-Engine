@@ -56,3 +56,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 ```
 
 只改文档时跑这一条就够；改了代码再跑 `tools/Validate.ps1 -Incremental -SkipSetup`。
+
+## 6. `3rdParty/` 不入库
+
+依赖由 `tools/SetupDependencies.ps1` 按钉死的版本下载到 `3rdParty/`（见 `.gitignore`）。新 clone 第一次构建前先跑一次：
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/SetupDependencies.ps1
+```
