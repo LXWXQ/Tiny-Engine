@@ -166,6 +166,8 @@ struct EngineSettings
 	// F1-b：把可批模型合并进一份全局顶点/索引缓冲，一次 multidraw 提交。
 	// 关掉退回 F1-a 的「每模型一次 bind + 一组建 indirect 命令」。
 	bool gpuMergedBuffers = true;
+	// F1-c：Hi-Z 遮挡剔除。关掉只保留 6 平面视锥剔除（用来对比与排查）。
+	bool hizEnabled = true;
 
 	bool ssaoEnabled = true;
 	float ssaoRadius = 0.5f;

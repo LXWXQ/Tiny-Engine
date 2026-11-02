@@ -60,8 +60,10 @@ Graphics: vkCmdDrawIndexedIndirect
 **进度（2026-11-02）**
 - F1-a：实例缓冲摊平（224B/条）、compute 视锥剔除、`vkCmdDrawIndexedIndirectCount` 按模型提交、set 3 实例 SSBO、GPU 批遥测回读；详见 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md)。
 - F1-b：可批模型合并进全局顶点/索引缓冲，单 range/单 counter，一条 `vkCmdDrawIndexedIndirectCount` 画完；Sponza 的 draw call 104 -> 2，三路像素比对 `max diff = 0`。
+- F1-c：分组键改成 `(模型, 子网格)` 实现真正的实例化（`instanceCount = N`）、组按材质排序、包围盒缓存改用 `Model::getGeometryId()`、Hi-Z 遮挡剔除（`R32_SFLOAT` 金字塔 + 错帧一帧 + 组级保守测试）；`--no-hiz` 可关。
 - 阈值 256 实例：小场景仍走 CPU 路径，`--gpu-scene` 强制、`--no-gpu-scene` 关闭、`--no-merged-buffers` 退回每模型 indirect。
-- 未完成：Hi-Z 遮挡剔除、按材质排序合批、实例化（把顶点属性也搬进缓冲，彻底摆脱每模型绑定）、`forgetModel()` 调用方（见 [tech-debt](../70-status/tech-debt.md) 13）。
+- 未完成：跨模型合成一条命令（需要全局缓冲统一重写 firstIndex）、GPU 端 LOD 与屏幕空间误差、粒子/体素接入（往实例缓冲塞记录即可，不需要新管线）。
+- Hi-Z 在当前 Sponza 场景 `hizCulled = 0`：103 个子网格各自覆盖整栋建筑一大块，组级保守剔除几乎不命中；收益等大量小实例（见 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md) §9）。
 
 ---
 

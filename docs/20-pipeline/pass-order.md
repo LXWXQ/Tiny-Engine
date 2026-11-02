@@ -13,11 +13,13 @@ updated: 2026-10-30
 ## 1. 顺序
 
 ```
-SceneGpuCull        F1：无附件 pass；摊平实例 + compute 视锥剔除，写 indirect command/count
-   |
 TerrainGpuSelection  B-03：无附件 pass；compute 选层/剔除，写 indirect command/count
    |
-GeometryPass      写 G-Buffer 5 张附件（4 颜色 + 深度，全部 CLEAR），消费 GPU count
+SceneGpuCull        F1：无附件 pass；摊平实例 + 视锥/Hi-Z 剔除，写组级 indirect command
+   |
+GeometryPass      写 G-Buffer 5 张附件（4 颜色 + 深度，全部 CLEAR），消费 GPU 命令
+   |
+HiZBuild          F1-c：无附件 pass；读 G-Buffer.Position 建下一帧用的 Hi-Z 金字塔（错帧一帧）
    |
 SSAOPass          读 G-Buffer.Position/Normal -> 写 R8_UNORM 遮蔽图
    |
@@ -34,9 +36,10 @@ PresentPass       HDR + Bloom*intensity -> 曝光 -> ACES -> gamma(1/2.2) -> 交
 PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 ```
 
-`TerrainGpuSelection` 由 `GeometryPass::addToGraph()` 在 `Geometry` 之前注册。 `SceneGpuCull` 同理，且必须排在 `TerrainGpuSelection` 与 `Geometry` 之前：它写的命令/计数会被 `Geometry` 的 `vkCmdDrawIndexedIndirectCount` 直接消费。
+`TerrainGpuSelection` 与 `SceneGpuCull` 都由 `GeometryPass::addToGraph()` 在 `Geometry` 之前注册（顺序固定为 Terrain -> SceneGpuCull -> Geometry）：两者写的 indirect command 会被 `Geometry` 的 `vkCmdDrawIndexedIndirect` 直接消费。
+`HiZBuild` 必须排在 `Geometry` **之后**：金字塔要包含本帧刚画出的几何；它写的是 `(frameInFlight + 1) % kFramesInFlight` 槽，供下一帧 `SceneGpuCull` 读（错帧一帧，第一帧 `params.z = 0` 关闭遮挡）。
 渲染图里注册的 pass 名依次是：
-`TerrainGpuSelection`, `Geometry`, `SSAO`, `SSAOBlur`, `Lighting`,
+`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`,
 `Bloom.Bright`, `Bloom.Down0/1/2`, `Bloom.Up2/1/0`, `Present`,
 `PresentTransition`。
 

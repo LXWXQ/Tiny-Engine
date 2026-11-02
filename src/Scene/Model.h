@@ -183,6 +183,10 @@ public:
     // F1-b：合并顶点/索引缓冲要用完整顶点（法线/UV/颜色），拾取数据只有位置。
     // 地形模型不保留（LOD+裙边会成倍占内存），它们本来也不参与 GPU 批。
     const std::vector<Vertex>& getCpuVertices() const { return cpuVertices; }
+
+    // F1：稳定的几何 id。GPU 批用 id 而不是 Model* 做缓存键——
+    // 模型销毁后地址可能被新模型复用，指针键会命中过期包围盒。
+    uint64_t getGeometryId() const { return geometryId; }
     const std::vector<uint32_t>& getCpuIndices() const { return cpuIndices; }
 
     // 顶点包围盒（AABB）：用来给场景自动摆放相机、做粗略剔除等
@@ -236,6 +240,7 @@ private:
     std::vector<uint32_t> cpuIndices;
 
     // 拾取用的 CPU 侧几何
+    uint64_t geometryId = 0;
     std::vector<glm::vec3> pickingPositions;
     std::vector<uint32_t> pickingIndices;
 

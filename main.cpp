@@ -71,6 +71,7 @@ int main(int argc, char** argv)
     bool noGpuScene = false;
     bool forceGpuScene = false;
     bool noMergedBuffers = false;
+    bool noHiZ = false;
     bool jobTest = false;
     bool crossQueueTest = false;
     bool resizeTest = false;
@@ -115,6 +116,7 @@ int main(int argc, char** argv)
         else if (arg == "--no-gpu-scene") noGpuScene = true;
         else if (arg == "--gpu-scene") forceGpuScene = true;
         else if (arg == "--no-merged-buffers") noMergedBuffers = true;
+        else if (arg == "--no-hiz") noHiZ = true;
         else if (arg == "--jobtest")  jobTest = true;
         else if (arg == "--cross-queue-test") crossQueueTest = true;
         else if (arg == "--resize-test") resizeTest = true;
@@ -236,6 +238,7 @@ int main(int argc, char** argv)
         if (noGpuScene) app.setGpuSceneEnabled(false);
         if (forceGpuScene) app.setGpuSceneForced(true);
         if (noMergedBuffers) app.setGpuMergedBuffers(false);
+        if (noHiZ) app.setHiZEnabled(false);
         if (crossQueueTest) app.setCrossQueueTestEnabled(true);
         if (resizeTest) app.setResizeTestEnabled(true);
         if (materialStress) app.setMaterialStressEnabled(true);

@@ -10,7 +10,7 @@ updated: 2026-11-02
 
 # 当前技术债
 
-## 1. 已关闭（TD-01 ~ TD-12）
+## 1. 已关闭（TD-01 ~ TD-16）
 
 | ID | 问题 | 修法要点 |
 |---|---|---|
@@ -26,10 +26,11 @@ updated: 2026-11-02
 | TD-10 | RenderGraph 同步语义缺口 | `LOAD` 补读访问位 + `imageAvailable` 等 `ALL_COMMANDS` |
 | TD-11 | 地形 GPU mesh 同步 submit + fence wait | 4 槽异步 submit/poll + worker picking mirror；257² 主线程 poll 约 1ms |
 | TD-12 | 组件 public 字段可直写 + 生产销毁入口不一致 + 无区域索引 | 字段私有/getter/setPose；XZ region bucket；clearEntities/相机复用走 Scene::destroyEntity |
-
 | TD-13 | `RenderGraph::setPassEnabled` 帧间失效（`passes` 每帧重建） | `PassSwitchboard` 记住规则 + 注册时重放 + 前缀匹配 + 未命中诊断 + 纯逻辑自检 |
 | TD-14 | `Pass::writeDepth` 静默把 `depth==0 && stencil==0` 改写成 `{1.0, 0}` | 清屏值由调用方显式给出；删掉隐式改写，GeometryPass 本来就显式传 1.0 |
 | TD-15 | GPU 批每子网格一条间接命令、无全局合并缓冲（原未关闭第 14 条） | 合并顶点/索引缓冲 + 单 range/单 counter + 一次 `vkCmdDrawIndexedIndirectCount`；索引不重写，用 `vertexOffset` 施加 `baseVertex` |
+| TD-16 | GPU 批每组一条命令（instanceCount 恒为 1）+ 无材质排序 + 无遮挡剔除 + 包围盒缓存以裸指针为键 | 分组键改为 `(模型, 子网格)` 实现实例化；组按 materialSlot 排序；缓存改用 `Model::getGeometryId()` 并按 600 帧/64 条淘汰；Hi-Z 金字塔（`R32_SFLOAT`，GENERAL，错帧一帧）做组级保守遮挡剔除，`--no-hiz` 可关 |
+
 ## 2. 未关闭（按"何时必须处理"排序）
 
 | # | 内容 | 影响 | 触发条件 |
@@ -46,8 +47,7 @@ updated: 2026-11-02
 | 10 | GPU mesh 路径为兼容既有 picking API 仍保留全分辨率 CPU positions/indices mirror | 单 chunk 额外 CPU 内存约与 HeightField 同量级；mountain/chunk 多时累计 | 做 GPU/HeightField 统一 picking 时 |
 | 11 | 地形雕刻只改运行期 HeightField/Model，不写场景 JSON；CharacterControllerComponent 已序列化但 Play 快照不保存雕刻 | 保存重载/Play 停止会丢失雕刻成果；编辑器无法持久化地形修改 | 后续/地形编辑持久化需求 |
 | 12 | 地形材质最多 4 个 Set2 set，但渲染按实体顺序遇到变化即重绑，未按材质集排序/合批 | 交替材质会增加 descriptor switch，材质集切换次数不设上限 | 多材质 chunk profiling 时 |
-| 13 | GPU 批的包围盒缓存以 `const Model*` 为键（超过 64 个整表丢弃），`forgetModel()` 已实现但没有调用方 | 模型销毁后地址被复用可能命中过期 AABB，导致错误剔除 | 模型频繁加载/卸载（资产管线、F4）时 |
-| 14 | 合并缓冲的源数据要 CPU 侧完整顶点/索引副本（`Model::cpuVertices/cpuIndices`），Sponza 约 11MB；地形模型不留 | CPU 内存随可批模型总量线性增长 | 资产规模上去、或改走 GPU 回读重建时 |
+| 13 | 合并缓冲的源数据要 CPU 侧完整顶点/索引副本（`Model::cpuVertices/cpuIndices`），Sponza 约 11MB；地形模型不留 | CPU 内存随可批模型总量线性增长 | 资产规模上去、或改走 GPU 回读重建时 |
 
 ## 3. 明确"不打算做"的
 

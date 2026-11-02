@@ -1,65 +1,76 @@
 #pragma once
 
-#include "RHI/Device.h"
-#include "RHI/Pipeline.h"
-#include "Core/FrameInfo.h"
-#include "Core/FrameInFlight.h"
-
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include <glm/glm.hpp>
 
-class Model;
+#include "Core/FrameInFlight.h"
+#include "RHI/Device.h"
+#include "RHI/Pipeline.h"
 
-// F1：普通网格的 GPU 驱动提交。
+class Model;
+struct FrameInfo;
+
+// F1：GPU 驱动提交。
 //
-// 以前 GeometrySystem::render 每帧遍历 visibleEntities、逐个子网格做视锥剔除，
-// 再逐个 vkCmdDrawIndexed —— 场景一上千级子网格时 CPU 就成了瓶颈。
+// CPU 只做两件事：把本帧的网格摊平成实例记录、把 (模型, 子网格) 归成组；
+// 可见性判断与间接命令都由 compute 完成，图形侧一条 indirect 提交收尾。
 //
-// 现在 CPU 只做一件不需要判断的事：把每个子网格摊平成一条实例记录
-// （世界矩阵 + 材质参数 + 局部 AABB + 绘制区间），可见性交给 compute，
-// 命令写进 indirect buffer，几何管线按模型分批提交。
-//
-// 为什么按模型分批而不是一次性 multidraw：一个模型一份顶点/索引缓冲，
-// 间接绘制命令不带顶点缓冲绑定，跨模型的命令没法用同一次绘制提交。
-// 合并成全局缓冲是 F1 的下一刀（收益是 draw call 从「模型数」降到 1）。
+// 分组键从「模型」细化到「(模型, 子网格)」：同一个子网格被多个实体复用时，
+// 它们的实例在缓冲里连续排列，一条命令带 instanceCount = N 就能一次画完（实例化），
+// 而不是每实例一条命令。剔除按组的并集 AABB 做，属于保守剔除（组内任一实例可见 -> 整组可见）。
 class SceneGpuBatch
 {
 public:
-    // 与 shaders/scene_cull.comp 的 InstanceRecord 严格一致。
+    // 与 shaders/scene_cull.comp、shaders/mrt.vert 的 InstanceRecord 逐字节一致。
     struct InstanceRecord
     {
-        glm::mat4 model{ 1.0f };
-        glm::mat4 normal{ 1.0f };
-        glm::uvec4 flags{ 0u };      // x=materialId y=materialValid z=alphaMasked w=albedoFallback
-        glm::vec4 misc{ 0.0f };      // x=alphaCutoff y=checkerScale z=terrainMode
-        glm::vec4 uvTransform{ 1.0f, 1.0f, 0.0f, 0.0f };
-        glm::vec4 boundsMin{ 0.0f }; // xyz=局部 AABB 最小角 w=1 表示参与剔除
-        glm::vec4 boundsMax{ 0.0f };
-        glm::uvec4 draw{ 0u };       // x=firstIndex y=indexCount z=vertexOffset w=模型槽位
+        glm::mat4 model;
+        glm::mat4 normal;
+        glm::uvec4 flags;      // x=materialId y=materialValid z=alphaMasked w=albedoFallback
+        glm::vec4 misc;        // x=alphaCutoff y=checkerScale z=terrainMode w=保留
+        glm::vec4 uvTransform; // xy=缩放 zw=偏移
+        glm::vec4 boundsMin;   // xyz=局部 AABB 下界 w=1 表示有效
+        glm::vec4 boundsMax;
+        glm::uvec4 draw;       // 保留：图形侧不再读，命令由 compute 写
     };
 
-    // 与着色器 FrustumBuffer 一致。
+    // 与 shaders/scene_cull.comp 的 GroupRecord 逐字节一致。
+    struct GroupRecord
+    {
+        glm::vec4 boundsMin;   // xyz=世界 AABB 下界 w=1 表示有效
+        glm::vec4 boundsMax;
+        glm::uvec4 draw;       // x=firstIndex y=indexCount z=vertexOffset w=firstInstance
+        glm::uvec4 counts;     // x=instanceCount y=materialSlot z=merged w=保留
+    };
+
+    // 与 shaders/scene_cull.comp 的 FrameData 一致。
     struct FrameData
     {
-        glm::mat4 viewProjection{ 1.0f };
-        glm::vec4 planes[6]{};
+        glm::mat4 viewProjection;
+        glm::mat4 view;          // Hi-Z 用：世界坐标 -> 线性视深度
+        glm::vec4 planes[6];
+        glm::uvec4 params;     // x=groupCount
     };
 
     struct Stats
     {
         uint32_t submitted = 0;
-        uint32_t visible = 0;
-        uint32_t culled = 0;
-        uint32_t models = 0;
+        uint32_t visibleGroups = 0;
+        uint32_t culledGroups = 0;
+        uint32_t visibleInstances = 0;
         uint32_t visibleTriangles = 0;
         uint32_t visibleVertices = 0;
+        uint32_t groups = 0;
         uint32_t drawCalls = 0;
+        uint32_t occlusionTests = 0;    // 做过 Hi-Z 测试的组数（滞后两帧）
+        uint32_t occlusionCulled = 0;   // 其中被 Hi-Z 判定遮挡的组数
     };
 
     explicit SceneGpuBatch(Device& device);
@@ -78,18 +89,28 @@ public:
     bool isAvailable() const { return available; }
 
     // 这一帧是否该走 GPU 批：可用 + 开关打开 + （强制 或 实例数达到阈值）。
-    // prepare() 已经在本帧更早的 Pass 里跑过，stats.submitted 就是本帧的实例数。
     bool useGpuPath(const FrameInfo& frameInfo) const;
     const Stats& getStats() const { return stats; }
 
     // 写实例记录 + 派发剔除。必须在几何 Pass 之前录制（无需附件）。
     void prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
 
-    // 绑定实例集合并按模型提交 indirect 绘制。调用方需已绑定管线与 push constant。
+    // 绑定实例集合并提交 indirect 绘制。调用方需已绑定管线与 push constant。
     void recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
 
     // 模型被销毁后释放缓存的子网格 AABB，避免指针复用带来的错配。
     void forgetModel(const Model* model);
+
+    // F1-c：Hi-Z 遮挡剔除。在几何 Pass 之后调用，用本帧的 G-Buffer 位置重建金字塔；
+    // 剔除用的是上一帧建好的那一份（错开一帧，相机帧间连续时几乎看不出差别）。
+    void buildHiZ(VkCommandBuffer commandBuffer, const FrameInfo& frameInfo,
+                  VkImageView positionView, VkExtent2D extent);
+
+    // 登记某个帧槽位的 G-Buffer 位置视图。须在 init()/resize() 里调用：
+    // Hi-Z 的构建描述符只在这时写，录制期间不再更新（否则会让在录的命令缓冲失效）。
+    void setHiZSource(uint32_t frameInFlightIndex, VkImageView positionView, VkExtent2D extent);
+
+    bool isHiZReady() const { return hizReady; }
 
 private:
     struct GpuBuffer
@@ -103,12 +124,13 @@ private:
     struct ModelGroup
     {
         const Model* model = nullptr;
+        uint32_t subMeshIndex = 0;
         uint32_t firstInstance = 0;
         uint32_t instanceCount = 0;
-        uint32_t commandBase = 0;
-        uint32_t modelSlot = 0;
-        bool eligible = false;
-        // F1-b：合并缓冲里的落点（该模型顶点/索引在全局缓冲中的起始位置）。
+        glm::vec3 boundsMin{ 0.0f };
+        glm::vec3 boundsMax{ 0.0f };
+        bool hasBounds = false;
+        uint32_t materialSlot = 0;
         uint32_t mergedFirstIndex = 0;
         int32_t mergedBaseVertex = 0;
         bool merged = false;
@@ -121,16 +143,10 @@ private:
         bool valid = false;
     };
 
-    struct FrameResources
+    struct CachedBounds
     {
-        GpuBuffer instances;
-        GpuBuffer commands;
-        GpuBuffer counters;
-        GpuBuffer ranges;
-        GpuBuffer frameData;
-        GpuBuffer stats;
-        VkDescriptorSet computeSet = VK_NULL_HANDLE;
-        VkDescriptorSet graphicsSet = VK_NULL_HANDLE;
+        std::vector<SubMeshBounds> bounds;
+        uint64_t lastFrame = 0;
     };
 
     struct MergedPlacement
@@ -147,13 +163,33 @@ private:
         bool valid = false;
     };
 
+    // 每帧槽位一份 Hi-Z 金字塔：mip0 由 G-Buffer 位置生成，之后逐级 2x2 取最远。
+    // 布局恒为 GENERAL，屏障全部手动管理（不进 RenderGraph 跟踪）。
+    struct HiZFrame
+    {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        VkImageView fullView = VK_NULL_HANDLE;
+        std::vector<VkImageView> mipViews;
+        VkExtent2D extent{};
+        uint32_t mipLevels = 0;
+    };
+
+    struct FrameResources
+    {
+        GpuBuffer instances;
+        GpuBuffer commands;
+        GpuBuffer groups;
+        GpuBuffer frameData;
+        GpuBuffer stats;
+        VkDescriptorSet computeSet = VK_NULL_HANDLE;
+        VkDescriptorSet graphicsSet = VK_NULL_HANDLE;
+    };
+
     void createLayoutsAndPipeline();
-    bool ensureMergedMesh(const std::vector<const Model*>& models);
-    void destroyMergedMesh();
-    void uploadDeviceLocal(GpuBuffer& destination, const void* data, VkDeviceSize size);
     void destroyResources();
 
-    void ensureCapacity(uint32_t instanceCapacity, uint32_t modelCapacity);
+    void ensureCapacity(uint32_t instanceCapacity, uint32_t groupCapacity);
     void createFrameBuffers();
     void destroyFrameBuffers();
     void writeDescriptors();
@@ -161,8 +197,16 @@ private:
     void createBuffer(GpuBuffer& buffer, VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible);
     void destroyBuffer(GpuBuffer& buffer);
 
+    bool ensureMergedMesh(const std::vector<const Model*>& models);
+    void destroyMergedMesh();
+    void uploadDeviceLocal(GpuBuffer& destination, const void* data, VkDeviceSize size);
+
+    void ensureHiZ(VkExtent2D extent);
+    void destroyHiZ();
+    void writeHiZDescriptors();
+
     void buildInstances(FrameInfo& frameInfo);
-    const std::vector<SubMeshBounds>& subMeshBoundsFor(const Model& model);
+    const std::vector<SubMeshBounds>& subMeshBoundsFor(const Model& model, uint64_t frameNumber);
     void readStats(uint32_t frameInFlightIndex);
 
     Device& vulkanDevice;
@@ -175,27 +219,39 @@ private:
     VkPipelineLayout computePipelineLayout = VK_NULL_HANDLE;
     std::unique_ptr<ComputePipeline> cullPipeline;
 
+    // Hi-Z：构建/降采样两条 compute 管线（共用一套「采样源 + 存储图像」描述符布局）。
+    VkDescriptorSetLayout hizSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout hizPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorPool hizPool = VK_NULL_HANDLE;
+    std::unique_ptr<ComputePipeline> hizBuildPipeline;
+    std::unique_ptr<ComputePipeline> hizDownsamplePipeline;
+    std::array<HiZFrame, kFramesInFlight> hiz{};
+    std::array<std::vector<VkDescriptorSet>, kFramesInFlight> hizSets{};
+    std::array<VkImageView, kFramesInFlight> hizPositionViews{};
+    VkSampler hizSampler = VK_NULL_HANDLE;
+    VkExtent2D hizExtent{};
+    bool hizReady = false;
+
     std::array<FrameResources, kFramesInFlight> frames{};
     uint32_t instanceCapacity = 0;
-    uint32_t modelCapacity = 0;
+    uint32_t groupCapacity = 0;
 
     std::vector<InstanceRecord> instanceScratch;
     std::vector<ModelGroup> modelGroups;
     std::vector<glm::vec4> planeScratch;
-    std::vector<std::vector<InstanceRecord>> buckets;   // 每模型一段，组装实例缓冲时复用容量
-    std::unordered_set<uint32_t> warnedFallback;        // 缺材质槽位的实体只提示一次
+    std::vector<std::vector<InstanceRecord>> buckets;
+    std::vector<std::vector<uint32_t>> bucketEntities;
+    std::unordered_set<uint32_t> warnedFallback;
 
-    std::unordered_map<const Model*, std::vector<SubMeshBounds>> modelBoundsCache;
+    std::unordered_map<uint64_t, CachedBounds> modelBoundsCache;
 
-    // F1-b：全局合并顶点/索引缓冲。签名 = 模型集合，变了才重建（低频）。
     MergedMesh mergedMesh;
-    std::unordered_map<const Model*, MergedPlacement> mergedPlacements;
+    std::unordered_map<uint64_t, MergedPlacement> mergedPlacements;
     VkCommandPool uploadPool = VK_NULL_HANDLE;
     bool mergedActive = false;
     bool warnedNoMergedData = false;
 
     Stats stats;
 
-    // 首次真正提交间接命令时打一行日志：既方便确认路径生效，也给回归测试一个标记。
     bool reportedFirstBatch = false;
 };

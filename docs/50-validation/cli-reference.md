@@ -35,6 +35,7 @@ updated: 2026-11-02
 | `--gpu-scene` | 忽略实例阈值，强制走 GPU 驱动提交（配合 `gpuSceneMinInstances` 默认 256） |
 | `--no-gpu-scene` | 关闭 GPU 驱动提交，完全回退 CPU 逐子网格路径 |
 | `--no-merged-buffers` | 保留 GPU 驱动提交，但不合并全局顶点/索引缓冲，退回 F1-a 的每模型 indirect |
+| `--no-hiz` | 关闭 Hi-Z 遮挡剔除，只留 6 平面视锥剔除（对照 `hizEnabled=0`） |
 | `--render-scale F` | 动态分辨率倍率 0.25~1.0 |
 | `--resize-test` | 自检中连续缩放、切动态分辨率、最小化/恢复 |
 | `--material-stress` | 反复分配/延迟归还材质槽位 |

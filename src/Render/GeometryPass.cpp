@@ -45,6 +45,9 @@ void GeometryPass::init()
     // F1：GPU 驱动提交。先建实例缓冲，再把它的布局与裸指针交给几何系统
     // （set 3 必须是管线布局的一部分，插不了管道，只能建的时候一起给出）。
     sceneGpuBatch = std::make_unique<SceneGpuBatch>(vulkanDevice);
+    for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+        sceneGpuBatch->setHiZSource(frame, gBuffers[frame]->getPosition().view,
+                                    gBuffers[frame]->getExtent());
 
     // 所有 G-Buffer 的格式相同，几何管线只建一份。
     geometrySystem = std::make_unique<GeometrySystem>(vulkanDevice, gBuffers[0]->getDepth().format,
@@ -58,6 +61,8 @@ void GeometryPass::resize(VkExtent2D extent)
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
         GBuffer& gBuffer = *gBuffers[frame];
+        // G-Buffer 重建后视图会变，Hi-Z 的采样描述符要跟着更新。
+        sceneGpuBatch->setHiZSource(frame, gBuffer.getPosition().view, gBuffer.getExtent());
         auto update = [&](const char* name, const FrameBufferAttachment& att, VkImageUsageFlags usage,
                           RenderGraph::TextureHandle handle)
         {
@@ -113,5 +118,17 @@ void GeometryPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     pass.execute([this, &frameInfo](VkCommandBuffer cmd)
     {
         geometrySystem->render(cmd, frameInfo);
+    });
+
+    // F1-c：几何画完再用这一帧的位置缓冲重建 Hi-Z 金字塔。
+    // 剔除发生在 SceneGpuCull，读的是上一帧建好的那份（错开一帧）。
+    auto& hizPass = graph.addGraphicsPass("HiZBuild");
+    hizPass.read(resources.gbPosition[frame], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_SHADER_READ_BIT);
+    hizPass.execute([this, &frameInfo](VkCommandBuffer cmd)
+    {
+        GBuffer& gBuffer = *gBuffers[frameInfo.frameInFlightIndex];
+        sceneGpuBatch->buildHiZ(cmd, frameInfo, gBuffer.getPosition().view,
+                               gBuffer.getExtent());
     });
 }

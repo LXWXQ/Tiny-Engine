@@ -41,7 +41,7 @@ updated: 2026-11-02
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 24 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 25 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -589,3 +589,11 @@ updated: 2026-11-02
 **回归**：`Validate.ps1` 新增 `f1b-merged-buffers` 与 `f1b-merged-off`，全套 24 项 ALL PASS；三路像素比对（合并 / 每模型 / CPU）相机 `[0,6,45]` 下 `max diff = 0`。
 
 **性能**：300 帧两轮 cpu 185.2/209.6、merged 209.6/227.6、per-model 218.9/219.6 —— 同模式轮间波动 24 FPS，仍以噪声为主；确定收益是 draw call 数 104 -> 2，不是本机 FPS。
+
+## F1-c：按组实例化 + 材质排序 + Hi-Z 遮挡剔除
+
+**实现**：分组键改成 `(模型, 子网格)`（实例连续，`instanceCount = N`，一条命令画完所有实例）；去掉 counters 缓冲（组自己那 5 个 uint 直接写，被剔除写 0）；组按并集世界 AABB 剔除；合并模式按 `materialSlot` 排序、非合并按 `(model, materialSlot)`；包围盒缓存改用 `Model::getGeometryId()`（600 帧/64 条淘汰）；Hi-Z 金字塔从 `GBuffer.Position` 反算线性视深度（`R32_SFLOAT`、`floor(log2(max(w,h)))+1` 级、布局恒 GENERAL、手动屏障），`HiZBuild` 挂在 `Geometry` 之后写另一槽（错帧一帧），剔除时投影成屏幕矩形、按矩形像素选级、4 角 `textureLod` 取最大值，`nearest > farthest + 0.05` 判遮挡；`--no-hiz` 可关。
+
+**可观测与回归**：`[SceneGpu] cull stats | groups=103 visible=103 culled=0 instances=103 hiz=1 hizLevels=11 hizEnabled=1 hizTests=103 hizCulled=0`（每 60 帧一行）；新增 `f1c-hiz-off`，全套 25 项 ALL PASS、stderr 0 字节；`--resize-test` / `--render-scale 0.5` 验证层 0/0（顺带修掉 G-Buffer 重建后遗留旧 `VkImageView` 导致描述符写入崩溃、录制期 `vkUpdateDescriptorSets` 让命令缓冲失效两个 bug）。
+
+**Hi-Z 有效性**：当前 `hizCulled = 0` 是正确结果 —— Sponza 的 103 个子网格各自覆盖整栋建筑一大块，组级保守剔除几乎不命中；把 `kOcclusionBias` 临时改成 -100000 可验证全链路（`hizTests=103 hizCulled=103`、`visible=0`）。收益等大量小实例（粒子/植被/体素 chunk）。

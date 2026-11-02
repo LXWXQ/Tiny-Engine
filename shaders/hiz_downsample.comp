@@ -1,0 +1,33 @@
+#version 450
+
+// Hi-Z 降采样：每级取 2x2 的最大深度（最远表面），构成保守的遮挡体金字塔。
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceLevel;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D destination;
+
+layout(push_constant) uniform Push
+{
+    uvec4 params;   // x = 源级索引 y = 目标宽度 z = 目标高度 w = 保留
+} push;
+
+void main()
+{
+    const ivec2 target = ivec2(gl_GlobalInvocationID.xy);
+    if (target.x >= int(push.params.y) || target.y >= int(push.params.z))
+        return;
+
+    const vec2 texelSize = 1.0 / vec2(textureSize(sourceLevel, int(push.params.x)));
+    const vec2 uv = (vec2(target) + 0.5) * texelSize;
+    float farthest = 0.0;
+    for (int y = 0; y < 2; ++y)
+    {
+        for (int x = 0; x < 2; ++x)
+        {
+            const vec2 offset = vec2(x == 0 ? -0.25 : 0.25, y == 0 ? -0.25 : 0.25) * texelSize;
+            farthest = max(farthest, textureLod(sourceLevel, uv + offset, float(push.params.x)).r);
+        }
+    }
+    imageStore(destination, target, vec4(farthest, 0.0, 0.0, 1.0));
+}

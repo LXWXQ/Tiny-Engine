@@ -8,13 +8,21 @@
 #include <stdexcept>
 #include <iostream>
 #include <unordered_map>
+#include <atomic>
 
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
+namespace
+{
+// 每个模型一个进程内唯一的几何 id：GPU 批的包围盒缓存用它做键。
+std::atomic<uint64_t> g_nextGeometryId{ 1 };
+} // namespace
+
 Model::Model(Device& device, VkCommandPool commandPool, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
     : device(device)
 {
+    geometryId = g_nextGeometryId.fetch_add(1, std::memory_order_relaxed);
     createVertexBuffers(vertices, commandPool);
     createIndexBuffers(indices, commandPool);
     computeBounds(vertices);
@@ -27,6 +35,7 @@ Model::Model(Device& device, VkCommandPool commandPool, const std::vector<Vertex
 Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& builder)
     : device(device)
 {
+    geometryId = g_nextGeometryId.fetch_add(1, std::memory_order_relaxed);
     createVertexBuffers(builder.vertices, commandPool);
     createIndexBuffers(builder.indices, commandPool);
     computeBounds(builder.vertices);

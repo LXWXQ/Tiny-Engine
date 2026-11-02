@@ -10,7 +10,7 @@ updated: 2026-11-02
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **22 项引擎用例 + 2 项工具自测 = 24 项**；
+`tools/Validate.ps1` 默认跑 **23 项引擎用例 + 2 项工具自测 = 25 项**；
 加 `-EnableProfiling` 时多一项（23 + 2 = 25）。
 
 ## 1. 每项的判据（统一）
@@ -43,11 +43,12 @@ updated: 2026-11-02
 | 15 | `p0-diagnostics-selftest` | `--diagnostics-test <path>` | `[Diag] diagnostics selfTest PASS` | 合成消息 -> 计数 + JSONL |
 | 16 | `p0-gpu-timing` | `--gpu-timing --gpu-timing-csv <path>` | `[Diag] gpu_timing.csv written:`、`[Diag] zero-overhead guard SKIP` | 每 pass 计时 |
 | 17 | `p1-screenshot` | `--screenshot <png> --screenshot-frame 30` | `[Diag] screenshot written:` | 无头截图 |
-| 18 | `f1-gpu-scene` | `--selftest 40 --gpu-scene` | `[SceneGpu] GPU batch ready`、`[SceneGpu] indirect batch | models=` | GPU 驱动提交主路径 |
-| 19 | `f1b-merged-buffers` | `--selftest 40 --gpu-scene` | `[SceneGpu] merged buffers built` | F1-b 全局合并顶点/索引缓冲 + 一次 multidraw |
-| 20 | `f1b-merged-off` | `--selftest 40 --gpu-scene --no-merged-buffers` | `[SceneGpu] GPU batch ready`、`[SceneGpu] indirect batch | models=` | 回退到 F1-a 每模型 indirect |
-| 21 | `p2-device-fault` | `--device-fault-test` | `[DeviceFault] selfTest PASS` | `VK_EXT_device_fault` 能力就绪 |
-| 22 | `terrain-render` | `--selftest 20 --empty-scene --terrain-test` | `[Terrain] selfTest PASS`、`[Terrain] LOD stitching PASS`、`[Terrain] GPU mesh assembly selfTest PASS`、`[Terrain] GPU selection selfTest PASS`、`[Terrain] GPU selection transition PASS`、`[Terrain] demo entity created`、`chunks=4`、`lods=3`、`submeshes=12`、`[Terrain] async generation PASS`、`[Terrain] build task retirement PASS`、`[Terrain] async GPU upload PASS`、`[Terrain] spatial region query PASS | chunks=9 regions=5x5`、`[Terrain] sculpt PASS | chunks=9 rebuilt=1`、`[Terrain] character controller PASS | grounded=1`、`[Terrain] character serialization PASS | captured=1`、`[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`、`streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9` | CPU 算法/16 张源纹理缓冲 + height/roughness packing + JobSystem 异步构建 + chunk/LOD 子网格/AABB/裙边 + 稳定帧 indirect 合批 + GPU 高度场 + GPU compute 单 chunk 顶点/索引组装 + device-local VBO/IBO Model 接管 + 独立 chunk 流送 smoke + 8 槽异步高度场 + 4 槽异步 GPU mesh submit/poll + 257² 单 chunk 非阻塞重建基线 + CPU 构建中销毁实体的任务退役（retiring 队列） + XZ region 查询/组件私有字段/统一销毁 + 区域限定运行期雕刻 + kinematic 角色控制器/贴地/跳跃/序列化 + 4 个 Set2 材质集/按需外部 16 PNG/程序化回退/`materialSetIndex` 序列化/按材质批次重绑 + chunk→manager picking/删除撤销 + 全 LOD 邻接缝合（skirts=off） + GPU selection parity/过渡（4-int state slot） + CPU 高度/射线碰撞 + 地形 G-Buffer / 12-sampler Set2 四层 PBR 材质 / Surface Style / SSAO 策略 |
+| 18 | `f1-gpu-scene` | `--selftest 40 --gpu-scene` | `[SceneGpu] GPU batch ready`、`[SceneGpu] indirect batch | groups=` | GPU 驱动提交主路径（按组实例化） |
+| 19 | `f1b-merged-buffers` | `--selftest 40 --gpu-scene` | `[SceneGpu] merged buffers built` | F1-b 全局合并顶点/索引缓冲 + 一条 indirect |
+| 20 | `f1b-merged-off` | `--selftest 40 --gpu-scene --no-merged-buffers` | `[SceneGpu] GPU batch ready`、`[SceneGpu] indirect batch | groups=` | 回退到每模型 indirect |
+| 21 | `f1c-hiz-off` | `--selftest 80 --gpu-scene --no-hiz` | `[SceneGpu] cull stats |`、`hizEnabled=0` | Hi-Z 关闭后的对照路径（视锥剔除仍在） |
+| 22 | `p2-device-fault` | `--device-fault-test` | `[DeviceFault] selfTest PASS` | `VK_EXT_device_fault` 能力就绪 |
+| 23 | `terrain-render` | `--selftest 20 --empty-scene --terrain-test` | `[Terrain] selfTest PASS`、`[Terrain] LOD stitching PASS`、`[Terrain] GPU mesh assembly selfTest PASS`、`[Terrain] GPU selection selfTest PASS`、`[Terrain] GPU selection transition PASS`、`[Terrain] demo entity created`、`chunks=4`、`lods=3`、`submeshes=12`、`[Terrain] async generation PASS`、`[Terrain] build task retirement PASS`、`[Terrain] async GPU upload PASS`、`[Terrain] spatial region query PASS | chunks=9 regions=5x5`、`[Terrain] sculpt PASS | chunks=9 rebuilt=1`、`[Terrain] character controller PASS | grounded=1`、`[Terrain] character serialization PASS | captured=1`、`[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`、`streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9` | CPU 算法/16 张源纹理缓冲 + height/roughness packing + JobSystem 异步构建 + chunk/LOD 子网格/AABB/裙边 + 稳定帧 indirect 合批 + GPU 高度场 + GPU compute 单 chunk 顶点/索引组装 + device-local VBO/IBO Model 接管 + 独立 chunk 流送 smoke + 8 槽异步高度场 + 4 槽异步 GPU mesh submit/poll + 257² 单 chunk 非阻塞重建基线 + CPU 构建中销毁实体的任务退役（retiring 队列） + XZ region 查询/组件私有字段/统一销毁 + 区域限定运行期雕刻 + kinematic 角色控制器/贴地/跳跃/序列化 + 4 个 Set2 材质集/按需外部 16 PNG/程序化回退/`materialSetIndex` 序列化/按材质批次重绑 + chunk→manager picking/删除撤销 + 全 LOD 邻接缝合（skirts=off） + GPU selection parity/过渡（4-int state slot） + CPU 高度/射线碰撞 + 地形 G-Buffer / 12-sampler Set2 四层 PBR 材质 / Surface Style / SSAO 策略 |
 
 ## 3. 工具自测
 

@@ -1,0 +1,41 @@
+#version 450
+
+// Hi-Z 第 0 级：把 G-Buffer 的世界坐标转成线性视深度（-viewZ），写入 R32_SFLOAT 金字塔底层。
+// 越大越远：背景写一个很大的值，保证它永远不会遮挡任何东西。
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourcePosition;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D destination;
+
+layout(push_constant) uniform Push
+{
+    mat4 view;
+    uvec4 params;   // x = 源宽度 y = 源高度 z = 目标宽度 w = 目标高度
+} push;
+
+const float kFarDepth = 1.0e9;
+
+void main()
+{
+    const ivec2 target = ivec2(gl_GlobalInvocationID.xy);
+    if (target.x >= int(push.params.z) || target.y >= int(push.params.w))
+        return;
+
+    // 第 0 级与源同尺寸：把每个像素的多个源采样合并取最远（保守：宁可少剔除也不误剔）。
+    const ivec2 sourceSize = ivec2(push.params.x, push.params.y);
+    const ivec2 base = ivec2(ivec2(target) * sourceSize / ivec2(push.params.z, push.params.w));
+    const ivec2 stepSize = max(ivec2(1), sourceSize / ivec2(push.params.z, push.params.w));
+    float farthest = 0.0;
+    for (int y = 0; y < stepSize.y; ++y)
+    {
+        for (int x = 0; x < stepSize.x; ++x)
+        {
+            const ivec2 texel = min(base + ivec2(x, y), sourceSize - ivec2(1));
+            const vec4 world = texelFetch(sourcePosition, texel, 0);
+            const float depth = world.w > 0.5 ? -(push.view * vec4(world.xyz, 1.0)).z : kFarDepth;
+            farthest = max(farthest, depth);
+        }
+    }
+    imageStore(destination, target, vec4(farthest, 0.0, 0.0, 1.0));
+}

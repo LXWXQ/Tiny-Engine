@@ -1,92 +1,157 @@
 #version 450
 
-// F1：逐实例视锥剔除。
+// F1：按组做视锥剔除 + Hi-Z 遮挡剔除，并把可见组的绘制参数写进 indirect 命令。
 //
-// CPU 只把每个子网格写进实例记录（不做任何可见性判断），可见性在这里决定：
-// 每个实例的局部 AABB 变换到世界空间后与 6 个视锥平面比较，通过的实例用
-// 每个模型自己的计数器原子追加一条 indirect 命令。
+// 一个组 = 一个（模型, 子网格）。同一个子网格被多个实体复用时，这些实例在实例缓冲里连续排列，
+// 一条命令用 instanceCount = N 就能一次画完（实例化）。剔除按组的并集世界 AABB 做，
+// 属于保守剔除：组内任一实例可见，整组可见。
 //
-// 「每个模型自己的计数器」是刻意的：几何管线按模型分批提交（每个模型绑一次
-// 顶点/索引缓冲），所以命令必须按模型分段紧凑排列，不能全局共享一个游标。
+// Hi-Z 用的是「上一帧最后」的深度金字塔（本帧几何画完才重建），相机帧间连续时漏判代价极小；
+// 金字塔存线性视深度（-viewZ），越大越远，每级取 2x2 最大值，所以「物体最近点比矩形内最远面还远」
+// 才判定被遮挡 —— 宁可少剔除，不误剔。
+
 layout(local_size_x = 64) in;
 
-struct InstanceRecord
+struct GroupRecord
 {
-    mat4 model;
-    mat4 normal;
-    uvec4 flags;        // x=materialId y=materialValid z=alphaMasked w=albedoFallback
-    vec4 misc;          // x=alphaCutoff y=checkerScale z=terrainMode w=保留
-    vec4 uvTransform;
-    vec4 boundsMin;     // xyz=局部 AABB 最小角 w=是否有效（1=参与剔除）
+    vec4 boundsMin;   // xyz = 世界 AABB 下界，w = 1 表示包围盒有效
     vec4 boundsMax;
-    uvec4 draw;         // x=firstIndex y=indexCount z=vertexOffset w=modelSlot
+    uvec4 draw;       // x = firstIndex, y = indexCount, z = vertexOffset, w = firstInstance
+    uvec4 counts;     // x = instanceCount, y = materialSlot, z = merged, w = 保留
 };
 
-layout(set = 0, binding = 0) readonly buffer InstanceBuffer { InstanceRecord instances[]; };
-// 直接按 VkDrawIndexedIndirectCommand 的 5 个 uint 写入，避免 std430 结构体对齐歧义。
-layout(set = 0, binding = 1) writeonly buffer CommandBuffer { uint commands[]; };
-layout(set = 0, binding = 2) buffer CounterBuffer { uint counts[]; };
-layout(set = 0, binding = 3) readonly buffer RangeBuffer { uvec4 ranges[]; };
-layout(set = 0, binding = 4) readonly buffer FrustumBuffer { mat4 viewProjection; vec4 planes[6]; };
-// [0] = x submitted / y visible / z culled / w model groups
-// [1] = x visible triangles / y visible vertices
-layout(set = 0, binding = 5) buffer StatsBuffer { uvec4 stats[2]; };
+layout(set = 0, binding = 0) readonly buffer GroupBuffer
+{
+    GroupRecord groups[];
+} groupBuffer;
+
+layout(set = 0, binding = 1) writeonly buffer CommandBuffer
+{
+    // 用 5 个 uint 手写而不是结构体数组：避免 std430 对结构体成员对齐的解释差异。
+    uint commands[];
+} commandBuffer;
+
+layout(set = 0, binding = 2) readonly buffer FrameBuffer
+{
+    mat4 viewProjection;
+    mat4 view;
+    vec4 planes[6];
+    uvec4 params;      // x = groupCount, z = 1 表示 Hi-Z 可用
+} frame;
+
+layout(set = 0, binding = 3) buffer StatsBuffer
+{
+    uvec4 stats[2];
+} statsBuffer;
+
+layout(set = 0, binding = 4) uniform sampler2D hizPyramid;
 
 layout(push_constant) uniform Push
 {
-    uvec4 params;   // x=instanceCount y=modelCount
+    uvec4 params;   // x = groupCount, y = Hi-Z 宽, z = Hi-Z 高, w = Hi-Z 层数
 } push;
+
+const uint kCommandWords = 5u;
+const float kOcclusionBias = 0.05;
+
+bool frustumVisible(vec3 minimum, vec3 maximum)
+{
+    const vec3 center = (minimum + maximum) * 0.5;
+    const vec3 extent = (maximum - minimum) * 0.5;
+    const float radius = length(extent);
+    for (int plane = 0; plane < 6; ++plane)
+    {
+        if (dot(frame.planes[plane].xyz, center) + frame.planes[plane].w < -radius)
+            return false;
+    }
+    return true;
+}
+
+bool occludedByHiZ(vec3 minimum, vec3 maximum)
+{
+    if (frame.params.z == 0u || push.params.w == 0u)
+        return false;
+
+    vec2 uvMin = vec2(1.0e9);
+    vec2 uvMax = vec2(-1.0e9);
+    float nearest = 1.0e9;
+    for (int corner = 0; corner < 8; ++corner)
+    {
+        const vec3 point = vec3((corner & 1) != 0 ? maximum.x : minimum.x,
+                                (corner & 2) != 0 ? maximum.y : minimum.y,
+                                (corner & 4) != 0 ? maximum.z : minimum.z);
+        const vec4 clip = frame.viewProjection * vec4(point, 1.0);
+        if (clip.w <= 1.0e-5)
+            return false;   // 有顶点在相机背后：不做遮挡判断
+        const vec3 ndc = clip.xyz / clip.w;
+        const vec2 uv = ndc.xy * 0.5 + 0.5;
+        uvMin = min(uvMin, uv);
+        uvMax = max(uvMax, uv);
+        nearest = min(nearest, -(frame.view * vec4(point, 1.0)).z);
+    }
+
+    // 选择让投影矩形大约占 1~2 个 texel 的那一级：矩形越大，用的级别越粗。
+    const vec2 rectPixels = max((uvMax - uvMin) * vec2(push.params.y, push.params.z), vec2(1.0));
+    const float largest = max(rectPixels.x, rectPixels.y);
+    const int level = clamp(int(ceil(log2(largest))), 0, int(push.params.w) - 1);
+
+    const vec2 clampedMin = clamp(uvMin, vec2(0.0), vec2(1.0));
+    const vec2 clampedMax = clamp(uvMax, vec2(0.0), vec2(1.0));
+    float farthest = 0.0;
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        const vec2 uv = vec2((corner & 1) != 0 ? clampedMax.x : clampedMin.x,
+                             (corner & 2) != 0 ? clampedMax.y : clampedMin.y);
+        farthest = max(farthest, textureLod(hizPyramid, uv, float(level)).r);
+    }
+    return nearest > farthest + kOcclusionBias;
+}
 
 void main()
 {
-    const uint index = gl_GlobalInvocationID.x;
-    if (index >= push.params.x)
+    const uint groupIndex = gl_GlobalInvocationID.x;
+    if (groupIndex >= push.params.x)
         return;
 
-    InstanceRecord inst = instances[index];
-    const uvec4 range = ranges[inst.draw.w];
+    const uint base = groupIndex * kCommandWords;
+    const GroupRecord group = groupBuffer.groups[groupIndex];
+    atomicAdd(statsBuffer.stats[0].x, 1u);
 
     bool visible = true;
-    if (inst.boundsMin.w > 0.5)
+    if (group.boundsMin.w > 0.5)
     {
-        const vec3 localCenter = (inst.boundsMin.xyz + inst.boundsMax.xyz) * 0.5;
-        const vec3 localExtent = (inst.boundsMax.xyz - inst.boundsMin.xyz) * 0.5;
-        const vec3 worldCenter = (inst.model * vec4(localCenter, 1.0)).xyz;
-        // 缩放取三个基向量里最长的那个：均匀/非均匀缩放都不会漏剔除。
-        const float scale = max(length(inst.model[0].xyz),
-                            max(length(inst.model[1].xyz), length(inst.model[2].xyz)));
-        const float radius = length(localExtent) * scale;
-
-        for (int i = 0; i < 6; ++i)
+        visible = frustumVisible(group.boundsMin.xyz, group.boundsMax.xyz);
+        if (visible && frame.params.z != 0u)
         {
-            if (dot(planes[i].xyz, worldCenter) + planes[i].w < -radius)
+            atomicAdd(statsBuffer.stats[1].z, 1u);   // 做过遮挡测试的组数
+            if (occludedByHiZ(group.boundsMin.xyz, group.boundsMax.xyz))
             {
+                atomicAdd(statsBuffer.stats[1].w, 1u);   // 其中判定被遮挡的组数
                 visible = false;
-                break;
             }
         }
     }
 
-    atomicAdd(stats[0].x, 1u);
     if (!visible)
     {
-        atomicAdd(stats[0].z, 1u);
+        atomicAdd(statsBuffer.stats[0].z, 1u);
+        commandBuffer.commands[base + 0u] = 0u;
+        commandBuffer.commands[base + 1u] = 0u;
+        commandBuffer.commands[base + 2u] = 0u;
+        commandBuffer.commands[base + 3u] = 0u;
+        commandBuffer.commands[base + 4u] = 0u;
         return;
     }
-    atomicAdd(stats[0].y, 1u);
-    // 可见实例的三角形/顶点数：GPU 剔除之后才知道真实绘制量，
-    // 下一帧回读给遥测，替代旧 CPU 路径逐子网格的累加。
-    atomicAdd(stats[1].x, inst.draw.y / 3u);
-    atomicAdd(stats[1].y, inst.draw.y);
 
-    const uint slot = atomicAdd(counts[range.z], 1u);
-    if (slot >= range.y)
-        return;   // 该模型本帧实例数超过预留容量：多出来的实例这一帧不画。
+    const uint instanceCount = group.counts.x;
+    atomicAdd(statsBuffer.stats[0].y, 1u);
+    atomicAdd(statsBuffer.stats[0].w, instanceCount);
+    atomicAdd(statsBuffer.stats[1].x, instanceCount * (group.draw.y / 3u));
+    atomicAdd(statsBuffer.stats[1].y, instanceCount * group.draw.y);
 
-    const uint base = (range.x + slot) * 5u;
-    commands[base + 0u] = inst.draw.y;   // indexCount
-    commands[base + 1u] = 1u;            // instanceCount
-    commands[base + 2u] = inst.draw.x;   // firstIndex
-    commands[base + 3u] = inst.draw.z;   // vertexOffset
-    commands[base + 4u] = index;         // firstInstance -> gl_InstanceIndex
+    commandBuffer.commands[base + 0u] = group.draw.y;   // indexCount
+    commandBuffer.commands[base + 1u] = instanceCount;  // instanceCount
+    commandBuffer.commands[base + 2u] = group.draw.x;   // firstIndex
+    commandBuffer.commands[base + 3u] = group.draw.z;   // vertexOffset
+    commandBuffer.commands[base + 4u] = group.draw.w;   // firstInstance
 }

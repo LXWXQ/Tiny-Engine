@@ -1375,6 +1375,11 @@ void FirstApp::setGpuMergedBuffers(bool enabled)
 	scene->getSettings().gpuMergedBuffers = enabled;
 }
 
+void FirstApp::setHiZEnabled(bool enabled)
+{
+	scene->getSettings().hizEnabled = enabled;
+}
+
 void FirstApp::setCrossQueueTestEnabled(bool enabled)
 {
 	crossQueueProbePassPtr->setEnabled(enabled);
