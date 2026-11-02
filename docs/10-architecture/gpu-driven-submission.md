@@ -40,7 +40,7 @@ CPU: registry.view<MeshComponent, WorldTransformComponent>()
 GPU: scene_cull.comp（每组一个 invocation）
        -> 视锥剔除 -> Hi-Z 遮挡剔除 -> 写 5 个 uint 的间接命令
 Graphics: merged  -> 绑合并 VBO/IBO + 一条 vkCmdDrawIndexedIndirect(groupCount)
-          非 merged -> 按模型连续区间逐段 bind + vkCmdDrawIndexedIndirect
+          非 merged -> 整帧回退到 CPU 逐子网格路径（F1-e 起不再保留逐模型 bind 中间路径）
 ```
 
 关键取舍：**`firstInstance` 当全局实例下标**。间接绘制里 `firstInstance` 会成为 `gl_InstanceIndex` 的基值，顶点着色器可以直接用它索引实例缓冲，不需要额外 push constant 或额外描述符集；而 `instanceCount` 现在是组内真实实例数，一条命令画完同子网格的所有实体。
@@ -163,6 +163,8 @@ struct ExternalInstance
 6. 提交块：push 一份 `gpuScene = 1` 的 `SimplePushConstantData`（矩阵留单位、材质无效），绑 `geometryPipeline`，`recordDraw()` 提交。
 
 Hi-Z 资源归 `SceneGpuBatch` 自己管：`VK_FORMAT_R32_SFLOAT`、`SAMPLED | STORAGE`、`TILING_OPTIMAL`、**布局恒为 GENERAL**（`vkCmdPipelineBarrier` 手动切，不进 RenderGraph 跟踪），mip 数 `floor(log2(max(w,h))) + 1`，创建后立刻用 `cmdBeginSingleTime/cmdEndSingleTime` 做一次 UNDEFINED -> GENERAL 全链屏障。
+
+地形合批（F2-b）复用同一个 set 3：`GeometrySystem` 把 `sceneInstanceSetLayout` 同时用于 `SceneGpuBatch` 的网格实例表与自己的 chunk 实例表（`kTerrainGpuMaxEntities x 224B`），两者共用 `InstanceRecord` 224 字节布局（model / normal 两个 mat4 有效）。`terrainBatched` 与 `gpuScene` 互斥：普通网格走 `gpuScene = 1`，地形合批走 `terrainBatched = 1`，`mrt.vert` 两者都从实例表取矩阵；`mrt.frag` 的地形分支用 `terrainBatched` 从实例行取 `misc.z`（terrainMode）与 `uvTransform`（minY / heightRange / detail / uvTiling），以及 `misc.w`（材质风格）。注意：`misc` 是浮点 vec4，C++ 侧写整数位模式会变成次正常数，必须写 `1.0f` 并在着色器里 `uint(x + 0.5)`。
 
 resize 有两个坑，都已修：
 - **不能遗留旧视图**：G-Buffer 重建会销毁旧 `VkImageView`，`destroyHiZ()` 必须 `hizPositionViews.fill(VK_NULL_HANDLE)`，否则重建描述符时把已失效的句柄写进描述符集，驱动直接崩（`--resize-test` 里表现为 access violation）。

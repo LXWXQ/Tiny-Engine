@@ -1415,6 +1415,11 @@ void FirstApp::setGpuSceneExternalDebugCount(uint32_t count)
 	scene->getSettings().gpuSceneExternalDebugCount = count;
 }
 
+void FirstApp::setTerrainBatchEnabled(bool enabled)
+{
+	scene->getSettings().terrainBatchEnabled = enabled;
+}
+
 void FirstApp::setStreamingWorldEnabled(bool enabled, int32_t radius)
 {
 	streamingWorldEnabled = enabled;

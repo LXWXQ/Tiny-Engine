@@ -171,6 +171,11 @@ public:
     const std::string& getSourcePath() const { return sourcePath; }
 
     uint32_t getVertexCount() const { return vertexCount; }
+
+    // F2-b：地形 chunk 网格 arena 需要把整块顶点/索引缓冲拷进共享缓冲。
+    VkBuffer getVertexBufferHandle() const { return vertexBuffer; }
+    VkBuffer getIndexBufferHandle() const { return indexBuffer; }
+    bool hasIndexBufferData() const { return hasIndexBuffer; }
     uint32_t getIndexCount()  const { return indexCount; }
 
     const std::vector<SubMesh>& getSubMeshes() const { return subMeshes; }

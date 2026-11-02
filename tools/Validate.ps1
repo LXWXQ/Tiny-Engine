@@ -214,6 +214,10 @@ $tests = @(
        MustContain = @("[Streaming] world ready | radius=2", "[Streaming] chunks=25", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2-streaming-fly"; Args = @("--selftest", "$([Math]::Max($Frames, 150))", "--streaming-world", "2", "--streaming-fly", "60");
        MustContain = @("[Streaming] chunks=", "unloaded=", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f2b-terrain-batch"; Args = @("--selftest", "$([Math]::Max($Frames, 130))", "--streaming-world", "2");
+       MustContain = @("[Terrain] mesh arena ready", "[Terrain] batched draw |", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f2b-terrain-batch-off"; Args = @("--selftest", "$([Math]::Max($Frames, 60))", "--streaming-world", "2", "--no-terrain-batch");
+       MustContain = @("[Terrain] terrain batching disabled |", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

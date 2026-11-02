@@ -10,7 +10,7 @@ updated: 2026-11-02
 
 # 当前技术债
 
-## 1. 已关闭（TD-01 ~ TD-17）
+## 1. 已关闭（TD-01 ~ TD-18）
 
 | ID | 问题 | 修法要点 |
 |---|---|---|
@@ -31,6 +31,7 @@ updated: 2026-11-02
 | TD-15 | GPU 批每子网格一条间接命令、无全局合并缓冲（原未关闭第 14 条） | 合并顶点/索引缓冲 + 单 range/单 counter + 一次 `vkCmdDrawIndexedIndirectCount`；索引不重写，用 `vertexOffset` 施加 `baseVertex` |
 | TD-16 | GPU 批每组一条命令（instanceCount 恒为 1）+ 无材质排序 + 无遮挡剔除 + 包围盒缓存以裸指针为键 | 分组键改为 `(模型, 子网格)` 实现实例化；组按 materialSlot 排序；缓存改用 `Model::getGeometryId()` 并按 600 帧/64 条淘汰；Hi-Z 金字塔（`R32_SFLOAT`，GENERAL，错帧一帧）做组级保守遮挡剔除，`--no-hiz` 可关 |
 | TD-17 | GPU 批只有逐模型提交路径、没有屏幕空间误差剔除、粒子/体素无入口 | 删掉非合并模式逐模型 bind，合并缓冲成为唯一 GPU 提交路径（`useGpuPath()` 要求 `mergedActive`）；`FrameData` 加 `vec4 screen` 做 SSE 剔除；新增 `ExternalInstance` 与 `setExternalInstances()`，外部实例与 ECS 实例共用分组/合并缓冲/同一条 indirect 命令 |
+| TD-18 | 地形每个 chunk 一份独立 Model，渲染时逐 chunk `bind` + 逐 chunk `drawIndexedIndirectCount` | 合并贛图与十几次提交，半径 3 就是 49 次绑定 | `TerrainMeshArena`（96 槽，每槽 4096 顶点 / 20480 索引）+ set 3 的 chunk 实例表（64 行 x 224B，复用 `InstanceRecord` 布局），间接命令写 `firstIndex = 子网格基址 + arena 索引基址`、`vertexOffset = arena 顶点基址`、`firstInstance = 实体槽号`；清空 2048 条命令区后只发一条 `vkCmdDrawIndexedIndirect`。实测 `--streaming-world 2` 的 `draw calls 13` 降到 2，两路截图逐像素一致（`max diff = 0`）；任一 chunk adopt 失败则整帧回退到逐 chunk 路径 |
 
 ## 2. 未关闭（按"何时必须处理"排序）
 
@@ -52,6 +53,7 @@ updated: 2026-11-02
 | 14 | 外部实例与 ECS 实体共用 `(模型, 子网格)` 分组，同一子网格上不同材质的外部实例会归到同一组、只用第一条记录的材质槽 | 粒子/体素若同一网格多材质会串色 | 粒子系统接入前 |
 | 15 | GPU 端只有 SSE 剔除，没有 LOD 选级（模型本身没有 LOD 链） | 顶点量上来后只能整组剔除，不能按距离换级 | F4 资产管线产出 LOD 之后 |
 | 16 | 粒子/体素只有 `ExternalInstance` 数据入口，还没有生产方 | 引擎侧已能画，但没有系统往里喂数据 | F3 体素 / F6 特效系统落地时 |
+| 17 | arena 每个 chunk 一份整块拷贝，槽位固定 4096 顶点 / 20480 索引 | 超出槽位大小或临时峰值时整帧回退到逐 chunk 路径；chunk 重建会重拷一次 | chunk 尺寸或 LOD 数量变大时（可改成按实际需求分配的 bump allocator） |
 
 ## 3. 明确"不打算做"的
 

@@ -53,6 +53,7 @@ public:
 	void setGpuSceneForced(bool forced);
 	void setGpuMergedBuffers(bool enabled);
 	void setHiZEnabled(bool enabled);
+	void setTerrainBatchEnabled(bool enabled);
 	void setGpuSceneMinScreenPixels(float pixels);
 	void setGpuSceneExternalDebugCount(uint32_t count);
 	void setStreamingWorldEnabled(bool enabled, int32_t radius);

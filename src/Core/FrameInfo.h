@@ -110,6 +110,9 @@ float checkerScale = 1.0f;
 	// F1：非 0 表示这帧的几何由 SceneGpuBatch 的间接命令提交，
 	// 顶点/片元着色器据此改用实例缓冲里的矩阵与材质参数。
 	uint32_t gpuScene = 0;
+	// F2-b：地形 chunk 走 arena 批量提交时非 0，顶点着色器从 set 3 的
+	// chunk 实例表里按 gl_InstanceIndex 取模型矩阵。
+	uint32_t terrainBatched = 0;
 
 	// 偏移必须在编译期钉死，否则"某个字段悄悄移位"会导致材质错乱，
 	// 而且这类错乱看起来像"贴图加载错了"，极难往回追。
@@ -143,6 +146,8 @@ static_assert(offsetof(SimplePushConstantData, terrainLodBlend) == SimplePushCon
 "terrainLodBlend must follow terrainMaterialStyle");
 static_assert(offsetof(SimplePushConstantData, terrainLodBlendMode) == SimplePushConstantData::kMaterialOffset + 76,
 "terrainLodBlendMode must follow terrainLodBlend");
+static_assert(offsetof(SimplePushConstantData, terrainBatched) == SimplePushConstantData::kMaterialOffset + 84,
+	"terrainBatched must follow gpuScene");
 static_assert(offsetof(SimplePushConstantData, gpuScene) == SimplePushConstantData::kMaterialOffset + 80,
 	"gpuScene must follow terrainLodBlendMode");
 // 结构体按 glm::mat4 的 16 字节对齐补齐：GLSL 侧块是 212 字节，C++ 侧 sizeof 是 224。
@@ -159,6 +164,9 @@ struct EngineSettings
 	// F1：GPU 驱动提交（实例缓冲 + compute 剔除 + indirect draw）。
 	// 关掉退回 CPU 逐实体逐子网格的旧路径，用来对比与排查。
 	bool gpuSceneEnabled = true;
+	// F2-b：地形 chunk 合并进共享网格缓冲 + 一条 indirect draw。关掉回到逐
+	// chunk 绑定 + 逐 chunk drawIndirectCount 的旧路径。
+	bool terrainBatchEnabled = true;
 	// 实例数低于该阈值时不走 GPU 批：几十个间接绘制比直接绘制还慢。
 	uint32_t gpuSceneMinInstances = 256;
 	// 调试/验证用：忽略阈值，强制走 GPU 路径（缩略场景也能覆盖这条路径）。

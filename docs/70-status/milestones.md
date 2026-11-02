@@ -9,7 +9,6 @@ updated: 2026-11-02
 ---
 
 # 里程碑与实测基线
-
 ## 1. 已完成阶段
 
 | 阶段 | 内容 | 关键成果 |
@@ -33,7 +32,6 @@ updated: 2026-11-02
 | D-7 | EnTT ECS + Transform 层级 + 空间索引 | 视锥剔除接入渲染 |
 | TD-01~10 | 技术债清理 | 见 [tech-debt](tech-debt.md) |
 | P0~P3 | 调试/剖析基础设施 | 验证层结构化、GPU 计时、截图、深度校验、基线 diff、证据包 |
-
 ## 2. 当前实测基线
 
 环境：Windows / RTX 2070 / Vulkan 1.4 驱动 / Debug 构建 / Sponza 场景。
@@ -41,7 +39,7 @@ updated: 2026-11-02
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 29 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 33 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -50,7 +48,6 @@ updated: 2026-11-02
 | 帧率 | `--selftest 300` 约 240~260 FPS（Debug，随相机/场景内容变化） | 同上 |
 | 材质槽位 | `26/256` 占用 | 启动日志 |
 | GPU 时间分布 | Geometry ~1.0ms、Present ~1.1ms、SSAO ~0.58ms、其余 < 0.3ms | `--gpu-timing` |
-
 ## 3. 关键性能对照（同机 Debug）
 
 | 对照 | 数字 | 结论 |
@@ -59,7 +56,6 @@ updated: 2026-11-02
 | compute probe 默认关 vs 开 | 486 FPS vs 455 FPS（-6.5%） | 探针是固定成本，必须默认关 |
 | bindless 前 vs 后 | 452 FPS vs 498 FPS（+10%），绑定 104 -> 1 | D-3 有效 |
 | IBL 老实现 vs split-sum | 过曝像素 95.9% -> 7.1% | C 阶段质变 |
-
 ## 4. 更新基线的规矩
 
 改完影响性能/画面的代码后：
@@ -96,7 +92,6 @@ updated: 2026-11-02
     `[Validation] errors=0 warnings=0`。
 - **下一轮**：LOD 选择、邻接缝合/T 形裂缝处理、独立 chunk 实体与流送；
   当前仍是单个地形实体和一个总 SpatialIndex AABB。
-
 ## D-26：阶段 7 第四轮（chunk LOD + 裙边接缝）
 
 - **配置**：`TerrainConfig` 新增 `lodLevelCount`（1~3，默认 3）和
@@ -128,7 +123,6 @@ updated: 2026-11-02
     `[Validation] errors=0 warnings=0`。
 - **下一轮**：拓扑级 stitching / LOD cross-fade、流送、独立 chunk 实体、
   GPU LOD/indirect 与 GPU compute 生成。当前 LOD 全部预生成，显存随层级增长。
-
 ## D-27：阶段 7 第五轮（Transform dirty + 增量 SpatialIndex）
 
 - Transform/Bounds 增加 revision+dirty；setter 对未变化值早退。
@@ -138,7 +132,6 @@ updated: 2026-11-02
 - 测试覆盖 dirty 子树计数、sourceRevision、移动对象 1/1 更新、干净帧 0/0。
 - `tools/Validate.ps1 -Incremental -SkipSetup`：21/21 PASS，stderr 全 0。
 - **当时仍保留** O(N) dirty 标志扫描、stale sweep；D-28 已改成显式 dirty 集合（历史记录保留）。
-
 ## D-28：阶段 7 第六轮（显式 dirty 队列 + destroy 同步索引）
 
 - Scene 新增 `dirtyTransformEntities` / `dirtySpatialEntities`；
@@ -156,7 +149,6 @@ updated: 2026-11-02
   `[Validation] errors=0 warnings=0`。
 - 仍保留：dirty 通知是显式契约，直接写 public 字段或 registry.destroy 可绕过；
   只有统一网格，无 chunk/区域索引。
-
 ## D-29：阶段 7 第七轮（地形纹理打包 + 旧 Model 延迟回收）
 
 - TerrainMaterial 在 CPU 侧把每层 height.r 与 roughness.r 打包成 RGBA：
@@ -173,7 +165,6 @@ updated: 2026-11-02
   `[Validation] errors=0 warnings=0`；外部 16 PNG 临时覆盖启动测试 PASS。
 - 仍保留：地形 Set2 仍有 12 个固定 sampler；LOD/流送/GPU compute 等阶段 7
   项未完成。
-
 ## D-30：阶段 7 第八轮（LOD 滞回 + 抖动 cross-fade）
 
 - `SubMeshCulling` 新增 LOD 滞回与过渡状态机：
@@ -195,7 +186,6 @@ updated: 2026-11-02
   重跑通过；其余 20 项一次通过。
 - 仍保留（B-02/D-38 已用拓扑级 stitching 取代裙边缝隙方案）：抖动过渡在强运动模糊下可能有短暂噪声；
   流送、GPU LOD/indirect 与 GPU compute 生成仍未做。
-
 ## D-31：阶段 7 第九轮（地形 indirect 合批）
 
 - Device 按物理设备支持启用 `multiDrawIndirect`；不支持时 GeometrySystem
@@ -573,7 +563,6 @@ updated: 2026-11-02
 
 ## F1-b：合并顶点/索引缓冲（一次 multidraw）
 **问题**：F1-a 按模型分组、每个子网格一条间接命令，103 个子网格仍是 103 条命令；multidraw 的收益要等命令能跨模型才拿得到，而间接命令本身不带顶点缓冲绑定。
-
 **实现**：`Model` 为可批模型保留完整 CPU 顶点/索引（地形不留）；`ensureMergedMesh()` 按模型集合算 FNV 签名（指针 + 顶点数 + 索引数），顶点/索引分别拼进一份 device-local 缓冲、索引保持原样、每模型记 `baseVertex` 并填进间接命令的 `vertexOffset`（等价 `vkCmdDrawIndexed` 语义），所有实例共用 `ranges[0]`/`counts[0]`，一条 `vkCmdDrawIndexedIndirectCount` 画完；重建走自建 `uploadPool` + staging + 单次命令（屏障 TRANSFER_WRITE -> VERTEX_ATTRIBUTE_READ|INDEX_READ）。F1-d 起回退直接落到 CPU 路径（`--no-merged-buffers` 强制）。
 **可观测**：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时遥测 `draw calls 2 / triangles 270459 / vertices 811377`（合并前 104）。
 **回归**：`Validate.ps1` 新增 `f1b-merged-buffers` 与 `f1b-merged-off`，全套 24 项 ALL PASS；三路像素比对（合并 / 每模型 / CPU）相机 `[0,6,45]` 下 `max diff = 0`。
@@ -598,3 +587,9 @@ updated: 2026-11-02
 **问题**：流送地形此前只在 `--terrain-test` 冒烟块里创建（17x17、半径 1），正常运行与编辑器里没有流送世界 —— 「无限世界」缺一个能跑的载体。
 **实现**：`--streaming-world [radius]` 在构造期 `createStreamingTerrain(seed 9001, 33x33, chunk 32, heightScale 12, lod 3, 半径 1..8, maxLoadsPerFrame 4)`；`--streaming-fly [speed]` 让相机沿半径 220 的圆周前移（yaw = -a，与 forward=(sin y,0,cos y) 一致），把加载/卸载从「一次性」变成「持续发生」；`Scene` 新增 loaded/unloaded 累计与 lastFrame 增量计数。半径 3 = 49 个 chunk 实体，低于地形 GPU 选择的 64 slot 上限。顺带把配置自检的临时目录改成「建目录 + 写探针」并在不可写时退回工作目录 `.tiny-config-selftest/`（只读 TEMP 的受限环境里不再假失败）。
 **可观测**：`[Streaming] world ready | radius=..`、`[Streaming] chunks=<n> loaded=<n> unloaded=<n> maxUpdateMs=<ms>`；静态半径 2 → `chunks=25`；飞行 150 帧 → `chunks=35 loaded=54 unloaded=19`（带 unloadPadding 的滞回环），验证层 0/0。**回归**：新增 `f2-streaming-world`（要求 `chunks=25`）与 `f2-streaming-fly`（要求 `unloaded=`），全套 **31 项**。
+## F2-b：多 chunk GPU 合批（arena + 实例表 + 一条 indirect）
+**问题**：流送世界的每个 chunk 是一份独立 Model，渲染时逐 chunk `bind` + 逐 chunk `drawIndexedIndirectCount`，半径 3 就是 49 次绑定与 49 次提交。
+**实现**：新增 `TerrainMeshArena`（96 槽，每槽 4096 顶点 / 20480 索引），可见 chunk 的整块 VBO/IBO 惰拷贝进槽位；世界矩阵不烘进顶点，改为每帧写进 set 3 的 chunk 实例表（64 行 x 224B，复用 `InstanceRecord` 布局），间接命令带 `firstIndex = 子网格基址 + arena 索引基址`、`vertexOffset = arena 顶点基址`、`firstInstance = 实体槽号`；筛选后干涉 `terrain_lod.comp`、`mrt.vert`、`mrt.frag` 各自读取该行。绘制侧先 `vkCmdFillBuffer` 清空 2048 条命令区（64 实体 x 32 命令），只发一条 `vkCmdDrawIndexedIndirect`；CPU 间接游标在 GPU 选择启用时从 2048 起。任一可见 chunk adopt 失败则整帧回退（全有或全无），`--no-terrain-batch` 强制回退。
+**可观测**：`[Terrain] mesh arena ready | slots=96 vertexMB=16 indexMB=7`、`[Terrain] batched draw | chunks=<n> arenaSlots=<n> commandSpan=2048`、`[Terrain] terrain batching disabled | falling back to per-chunk draws`；`--streaming-world 2` 遥测从 `draw calls 13 / groups 12 / binds 2` 变为 `draw calls 2 / groups 1 / binds 3`，`triangles 22464 / vertices 67392` 不变。
+**回归**：新增 `f2b-terrain-batch` 与 `f2b-terrain-batch-off`，全套 **33 项**；批量 vs `--no-terrain-batch` 两路截图逐像素一致（忽略 ImGui 面板 `max diff = 0`）；`--streaming-fly 60` 150 帧 `chunks=35 loaded=54 unloaded=19`、0/0；`--validation-features sync` 0/0。
+**坑**：实例表的 `misc` 是 `vec4` 浮点，写 `uint` 位模式 1 会变成 1.4e-45，着色器取整后 terrainMode 变 0、整块地形走棋盘格占位——必须写 `1.0f` 并在着色器里 `uint(x + 0.5)`。

@@ -55,6 +55,7 @@ layout(push_constant) uniform Push
     float terrainLodBlend;
     uint terrainLodBlendMode;
     uint gpuScene;
+    uint terrainBatched;
 } push;
 
 // F1：与 shaders/scene_cull.comp 的 InstanceRecord 严格一致。
@@ -75,7 +76,7 @@ void main()
 {
     mat4 modelMatrix = push.modelMatrix;
     mat4 normalMatrix = push.normalMatrix;
-    if (push.gpuScene != 0u)
+    if (push.gpuScene != 0u || push.terrainBatched != 0u)
     {
         InstanceRecord inst = instances[gl_InstanceIndex];
         modelMatrix = inst.model;

@@ -153,7 +153,10 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         }
     }
 
-    frameInfo.telemetry.drawCalls += previousStats[0];
+    // F2-b: when the arena batch was active last frame, all those chunks were
+    // drawn by a single indirect call that was already counted then.
+    if (!terrainBatchWasActive)
+        frameInfo.telemetry.drawCalls += previousStats[0];
     frameInfo.telemetry.subMeshesCulled += previousStats[1];
     frameInfo.telemetry.terrainLod0Chunks += previousStats[2];
     frameInfo.telemetry.terrainLod1Chunks += previousStats[3];
@@ -175,6 +178,8 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         if (destroyed || it->second.lastFrame + 8u < frameInfo.frameNumber)
         {
             terrainGpuSlotUsed[it->second.slot] = false;
+            if (terrainMeshArena && it->second.arenaSlot != TerrainMeshArena::kInvalidSlot)
+                terrainMeshArena->release(it->second.arenaSlot);
             it = terrainGpuEntitySlots.erase(it);
         }
         else
@@ -197,6 +202,32 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
     std::vector<std::array<uint32_t, kTerrainGpuDebugWords>> parityExpected;
     parityExpected.reserve(kTerrainGpuMaxRecords);
     uint32_t recordCursor = 0u;
+
+    const bool terrainBatchRequested =
+        frameInfo.settings.terrainBatchEnabled && sceneInstanceSetLayout != VK_NULL_HANDLE;
+    if (!frameInfo.settings.terrainBatchEnabled)
+    {
+        static bool loggedDisabled = false;
+        if (!loggedDisabled)
+        {
+            loggedDisabled = true;
+            std::cout << "[Terrain] terrain batching disabled | falling back to per-chunk draws"
+                      << std::endl;
+        }
+    }
+    bool terrainBatchActive = terrainBatchRequested && ensureTerrainChunkInstances();
+    auto* chunkInstanceBytes = terrainBatchActive
+        ? static_cast<uint8_t*>(terrainChunkInstances[frameInfo.frameInFlightIndex].mapped)
+        : nullptr;
+    if (terrainBatchActive && chunkInstanceBytes != nullptr)
+    {
+        std::memset(chunkInstanceBytes, 0,
+                    static_cast<size_t>(kTerrainGpuMaxEntities) * kTerrainChunkInstanceStride);
+    }
+    else
+    {
+        terrainBatchActive = false;
+    }
 
     for (entt::entity entity : frameInfo.visibleEntities)
     {
@@ -246,6 +277,12 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
                 slotIt->second.model = mesh->model.get();
                 slotIt->second.revision = terrain->revision;
                 slotIt->second.resetPending = true;
+                if (terrainMeshArena &&
+                    slotIt->second.arenaSlot != TerrainMeshArena::kInvalidSlot)
+                {
+                    terrainMeshArena->release(slotIt->second.arenaSlot);
+                    slotIt->second.arenaSlot = TerrainMeshArena::kInvalidSlot;
+                }
             }
             slotIt->second.lastFrame = frameInfo.frameNumber;
         }
@@ -253,6 +290,64 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         TerrainGpuEntitySlot& slot = slotIt->second;
         const uint32_t slotIndex = slot.slot;
         run.entitySlots[entityId] = slotIndex;
+
+        uint32_t arenaIndexBase = 0u;
+        uint32_t arenaVertexBase = 0u;
+        if (terrainBatchActive)
+        {
+            if (slot.arenaSlot == TerrainMeshArena::kInvalidSlot)
+            {
+                if (!terrainMeshArena)
+                    terrainMeshArena = std::make_unique<TerrainMeshArena>(vulkanDevice);
+                uint32_t adopted = TerrainMeshArena::kInvalidSlot;
+                std::string arenaError;
+                if (terrainMeshArena && terrainMeshArena->adopt(commandBuffer, *mesh->model,
+                                                               adopted, arenaError))
+                {
+                    slot.arenaSlot = adopted;
+                }
+                else if (!terrainArenaWarned)
+                {
+                    terrainArenaWarned = true;
+                    std::cout << "[Terrain] mesh arena adopt failed | " << arenaError
+                              << "; falling back to per-chunk draws" << std::endl;
+                }
+            }
+            if (slot.arenaSlot != TerrainMeshArena::kInvalidSlot)
+            {
+                arenaIndexBase = terrainMeshArena->getIndexOffset(slot.arenaSlot);
+                arenaVertexBase = terrainMeshArena->getVertexOffset(slot.arenaSlot);
+            }
+            else
+            {
+                terrainBatchActive = false;
+            }
+        }
+
+        if (terrainBatchActive && chunkInstanceBytes != nullptr)
+        {
+            auto* row = reinterpret_cast<float*>(chunkInstanceBytes +
+                static_cast<size_t>(slotIndex) * kTerrainChunkInstanceStride);
+            std::memcpy(row, &worldTransform->matrix, sizeof(glm::mat4));
+            std::memcpy(row + 16, &worldTransform->normalMatrix, sizeof(glm::mat4));
+            const BoundsComponent* terrainBounds =
+                frameInfo.registry.try_get<BoundsComponent>(entity);
+            float terrainMinY = 0.0f;
+            float terrainHeightRange = 1.0f;
+            if (terrainBounds && terrainBounds->getLocal().valid)
+            {
+                const AABB& localBounds = terrainBounds->getLocal();
+                terrainMinY = localBounds.min.y;
+                terrainHeightRange = std::max(localBounds.max.y - localBounds.min.y, 1e-4f);
+            }
+            row[38] = 1.0f; // misc.z: terrainMode (float field, not a bit pattern)
+            row[39] = static_cast<float>(terrain->config.surfaceStyle);
+            row[40] = terrainMinY;
+            row[41] = terrainHeightRange;
+            row[42] = terrain->config.materialDetailStrength;
+            row[43] = terrain->config.uvTiling;
+        }
+
         const uint32_t lodCount = std::clamp(terrain->config.lodLevelCount, 1u, 3u);
         const float distanceScale = terrain->config.lodDistanceScale;
         std::array<int32_t, kTerrainGpuChunksPerEntity> chunkRecords{};
@@ -286,6 +381,8 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
                     slotIndex * kTerrainGpuChunksPerEntity + chunkKey,
                     slot.resetPending ? 1u : 0u,
                     slotIndex);
+                record.arena = glm::uvec4(arenaIndexBase, arenaVertexBase,
+                                          terrainBatchActive ? 1u : 0u, 0u);
                 parityExpected.push_back({});
                 hasRecords = true;
             }
@@ -378,6 +475,13 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         ++run.entityCount;
     }
 
+    terrainBatchActive = terrainBatchActive && recordCursor > 0u;
+    if (!terrainBatchActive && recordCursor > 0u)
+    {
+        for (uint32_t i = 0; i < recordCursor; ++i)
+            records[i].arena = glm::uvec4(0u);
+    }
+
     frameRes.recordCount = recordCursor;
     if (frameInfo.settings.terrainGpuSelectionSelfTest)
     {
@@ -392,6 +496,24 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
     {
         vmaFlushAllocation(vulkanDevice.getVmaAllocator(), frameRes.records.allocation,
                            0, VK_WHOLE_SIZE);
+    }
+    if (terrainBatchActive)
+    {
+        vmaFlushAllocation(vulkanDevice.getVmaAllocator(),
+                           terrainChunkInstances[frameInfo.frameInFlightIndex].allocation,
+                           0, VK_WHOLE_SIZE);
+        auto& indirect = terrainIndirectBuffers[frameInfo.frameInFlightIndex];
+        vkCmdFillBuffer(commandBuffer, indirect.buffer, 0,
+                        static_cast<VkDeviceSize>(kTerrainGpuMaxEntities) *
+                            kTerrainGpuCommandsPerEntity * sizeof(VkDrawIndexedIndirectCommand),
+                        0u);
+        VkMemoryBarrier clearToCompute{};
+        clearToCompute.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        clearToCompute.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        clearToCompute.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                             &clearToCompute, 0, nullptr, 0, nullptr);
     }
     vmaFlushAllocation(vulkanDevice.getVmaAllocator(), frameRes.counts.allocation,
                        0, VK_WHOLE_SIZE);
@@ -448,5 +570,14 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         frameRes.debugValid = false;
     }
 
+    if (terrainBatchActive && frameInfo.frameNumber % 120u == 0u)
+    {
+        std::cout << "[Terrain] batched draw | chunks=" << recordCursor
+                  << " arenaSlots=" << (terrainMeshArena ? terrainMeshArena->getAdoptedCount() : 0u)
+                  << " commandSpan=" << (kTerrainGpuMaxEntities * kTerrainGpuCommandsPerEntity)
+                  << std::endl;
+    }
+    terrainBatchWasActive = terrainBatchActive;
+    run.batchActive = terrainBatchActive;
     currentTerrainGpuRun = std::move(run);
 }

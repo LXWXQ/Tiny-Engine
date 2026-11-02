@@ -18,6 +18,8 @@ struct TerrainChunkRecord
     uvec4 lod0;           // x=firstIndex, y=indexCount, z=valid
     uvec4 lod1;
     uvec4 lod2;
+    // F2-b: x=arena index base y=arena vertex base z=1 when the chunk lives in the arena.
+    uvec4 arena;
 };
 
 layout(set = 0, binding = 0) readonly buffer ChunkRecords
@@ -341,9 +343,12 @@ void main()
         uint wordBase = commandIndex * 5u;
         commandWords[wordBase + 0u] = lodData.y; // indexCount
         commandWords[wordBase + 1u] = 1u;       // instanceCount
-        commandWords[wordBase + 2u] = lodData.x; // firstIndex
-        commandWords[wordBase + 3u] = 0u;       // vertexOffset
-        commandWords[wordBase + 4u] = packedLodPayload(blend, mode);
+        // F2-b: the arena path draws every chunk with one indirect call, so the
+        // command carries the chunk's slice inside the arena plus its instance row.
+        const bool batched = record.arena.z > 0u;
+        commandWords[wordBase + 2u] = batched ? (lodData.x + record.arena.x) : lodData.x;
+        commandWords[wordBase + 3u] = batched ? record.arena.y : 0u;
+        commandWords[wordBase + 4u] = batched ? record.commandParams.w : packedLodPayload(blend, mode);
 
         atomicAdd(stats[STAT_DRAW_COMMANDS], 1u);
         atomicAdd(stats[STAT_TRIANGLES], lodData.y / 3u);

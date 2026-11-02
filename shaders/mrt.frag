@@ -77,6 +77,7 @@ layout(push_constant) uniform Push {
     float terrainLodBlend;
     uint terrainLodBlendMode;
     uint gpuScene;
+    uint terrainBatched;
 } push;
 
 // F1：与 shaders/scene_cull.comp / mrt.vert 的 InstanceRecord 严格一致。
@@ -317,9 +318,27 @@ void main() {
     // Terrain stage 6: four material layers blended by height, slope and
     // layer-local height maps. Texture sampling supplies albedo, normal,
     // height and roughness detail; Surface Style biases the layer weights.
-    if (push.terrainMode != 0u) {
-        const float h = clamp((fragPosLocal.y - push.terrainMinY) /
-                              max(push.terrainHeightRange, 1e-4), 0.0, 1.0);
+    // F2-b: the batched terrain path draws many chunks with one push constant, so
+    // each chunk carries its own height range, tiling and surface style in the
+    // set 3 instance table instead.
+    uint tMode = push.terrainMode;
+    float tMinY = push.terrainMinY;
+    float tHeightRange = push.terrainHeightRange;
+    float tDetailStrength = push.terrainDetailStrength;
+    float tUvTiling = push.terrainUvTiling;
+    uint tMaterialStyle = push.terrainMaterialStyle;
+    if (push.terrainBatched != 0u) {
+        InstanceRecord terrainInst = instances[fragInstanceIndex];
+        tMode = uint(terrainInst.misc.z + 0.5);
+        tMinY = terrainInst.uvTransform.x;
+        tHeightRange = terrainInst.uvTransform.y;
+        tDetailStrength = terrainInst.uvTransform.z;
+        tUvTiling = terrainInst.uvTransform.w;
+        tMaterialStyle = uint(terrainInst.misc.w + 0.5);
+    }
+    if (tMode != 0u) {
+        const float h = clamp((fragPosLocal.y - tMinY) /
+                              max(tHeightRange, 1e-4), 0.0, 1.0);
         const float slope = clamp(1.0 - worldNormal.y, 0.0, 1.0);
 
         const float sandW = 1.0 - smoothstep(0.08, 0.22, h);
@@ -334,16 +353,16 @@ void main() {
         vec3 styleTint = vec3(1.0);
         float styleRoughness = 0.0;
         float styleNormalScale = 1.0;
-        if (push.terrainMaterialStyle == 1u) {          // Arid
+        if (tMaterialStyle == 1u) {          // Arid
             styleBias = vec4(1.35, 0.80, 1.05, 0.45);
             styleTint = vec3(1.06, 1.01, 0.90);
             styleRoughness = 0.035;
-        } else if (push.terrainMaterialStyle == 2u) {   // Alpine
+        } else if (tMaterialStyle == 2u) {   // Alpine
             styleBias = vec4(0.55, 0.75, 1.25, 1.30);
             styleTint = vec3(0.94, 0.98, 1.06);
             styleRoughness = -0.025;
             styleNormalScale = 1.15;
-        } else if (push.terrainMaterialStyle == 3u) {   // Lush
+        } else if (tMaterialStyle == 3u) {   // Lush
             styleBias = vec4(0.55, 1.40, 0.75, 0.55);
             styleTint = vec3(0.94, 1.06, 0.90);
             styleRoughness = 0.02;
@@ -352,7 +371,7 @@ void main() {
         layerWeight *= styleBias;
 
         const vec2 worldXZ = fragPosWorld.xz;
-        const float uvTiling = clamp(push.terrainUvTiling, 0.01, 100.0);
+        const float uvTiling = clamp(tUvTiling, 0.01, 100.0);
         const vec2 sandUv = worldXZ * (0.65 * uvTiling) + vec2(0.11, 0.37);
         const vec2 grassUv = worldXZ * (0.85 * uvTiling) + vec2(0.53, 0.17);
         const vec2 rockUv = worldXZ * (0.48 * uvTiling) + vec2(0.23, 0.71);
@@ -393,7 +412,7 @@ void main() {
         albedo *= styleTint;
 
         const float macro = terrainFbm(worldXZ * 0.50 + vec2(1.3, -2.1));
-        const float materialStrength = clamp(push.terrainDetailStrength, 0.0, 1.0);
+        const float materialStrength = clamp(tDetailStrength, 0.0, 1.0);
         albedo *= mix(1.0, mix(0.82, 1.18, macro), 0.35 + materialStrength * 0.35);
 
         const vec3 sandNormal = texture(terrainNormalSand, sandUv).xyz * 2.0 - 1.0;

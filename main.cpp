@@ -74,6 +74,7 @@ int main(int argc, char** argv)
     uint32_t gpuSceneExternal = 0u;
     bool noMergedBuffers = false;
     bool noHiZ = false;
+    bool noTerrainBatch = false;
     // F2-a：流送世界。radius 默认 3（7x7=49 个 chunk 实体，低于地形 GPU 选择的 64 个 slot 上限）。
     bool streamingWorld = false;
     int32_t streamingRadius = 3;
@@ -124,6 +125,7 @@ int main(int argc, char** argv)
         else if (arg == "--gpu-scene") forceGpuScene = true;
         else if (arg == "--no-merged-buffers") noMergedBuffers = true;
         else if (arg == "--no-hiz") noHiZ = true;
+        else if (arg == "--no-terrain-batch") noTerrainBatch = true;
         else if (arg == "--gpu-scene-min-px" && i + 1 < argc)
         {
             try { gpuSceneMinPixels = std::stof(argv[i + 1]); }
@@ -283,6 +285,7 @@ int main(int argc, char** argv)
         if (forceGpuScene) app.setGpuSceneForced(true);
         if (noMergedBuffers) app.setGpuMergedBuffers(false);
         if (noHiZ) app.setHiZEnabled(false);
+        if (noTerrainBatch) app.setTerrainBatchEnabled(false);
         if (gpuSceneMinPixels > 0.0f) app.setGpuSceneMinScreenPixels(gpuSceneMinPixels);
         if (gpuSceneExternal > 0u) app.setGpuSceneExternalDebugCount(gpuSceneExternal);
         if (streamingWorld) app.setStreamingWorldEnabled(true, streamingRadius);

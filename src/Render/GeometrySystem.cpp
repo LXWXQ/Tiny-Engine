@@ -29,6 +29,7 @@ GeometrySystem::GeometrySystem(Device& device, VkFormat depthFormat,
 
 GeometrySystem::~GeometrySystem()
 {
+    destroyTerrainChunkInstances();
     destroyTerrainGpuSelection();
     destroyTerrainIndirectBuffers();
     vkDestroyPipelineLayout(vulkanDevice.getDevice(), pipelineLayout, nullptr);
@@ -250,6 +251,85 @@ void GeometrySystem::destroyTerrainGpuSelection()
     terrainGpuPipelineLayout = VK_NULL_HANDLE;
 }
 
+bool GeometrySystem::ensureTerrainChunkInstances()
+{
+    if (terrainChunkInstancesReady)
+        return true;
+    if (sceneInstanceSetLayout == VK_NULL_HANDLE)
+        return false;
+
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(kTerrainGpuMaxEntities) *
+                               kTerrainChunkInstanceStride;
+    for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+    {
+        if (terrainChunkInstances[frame].buffer == VK_NULL_HANDLE)
+            createTerrainGpuBuffer(terrainChunkInstances[frame], bytes,
+                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+        if (terrainChunkInstances[frame].mapped != nullptr)
+            std::memset(terrainChunkInstances[frame].mapped, 0, static_cast<size_t>(bytes));
+    }
+
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSize.descriptorCount = kFramesInFlight;
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = kFramesInFlight;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(vulkanDevice.getDevice(), &poolInfo, nullptr,
+                               &terrainChunkInstancePool) != VK_SUCCESS)
+    {
+        std::cout << "[Terrain] chunk instance table unavailable | descriptor pool" << std::endl;
+        return false;
+    }
+
+    std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
+    layouts.fill(sceneInstanceSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = terrainChunkInstancePool;
+    allocInfo.descriptorSetCount = kFramesInFlight;
+    allocInfo.pSetLayouts = layouts.data();
+    if (vkAllocateDescriptorSets(vulkanDevice.getDevice(), &allocInfo,
+                                terrainChunkInstanceSets.data()) != VK_SUCCESS)
+    {
+        std::cout << "[Terrain] chunk instance table unavailable | descriptor sets" << std::endl;
+        return false;
+    }
+
+    for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+    {
+        VkDescriptorBufferInfo bufferInfo{ terrainChunkInstances[frame].buffer, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = terrainChunkInstanceSets[frame];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &bufferInfo;
+        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 1, &write, 0, nullptr);
+    }
+
+    terrainChunkInstancesReady = true;
+    return true;
+}
+
+void GeometrySystem::destroyTerrainChunkInstances()
+{
+    for (TerrainGpuBuffer& buffer : terrainChunkInstances)
+    {
+        if (buffer.buffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(vulkanDevice.getVmaAllocator(), buffer.buffer, buffer.allocation);
+        buffer = {};
+    }
+    terrainChunkInstanceSets.fill(VK_NULL_HANDLE);
+    if (terrainChunkInstancePool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(vulkanDevice.getDevice(), terrainChunkInstancePool, nullptr);
+    terrainChunkInstancePool = VK_NULL_HANDLE;
+    terrainChunkInstancesReady = false;
+    terrainMeshArena.reset();
+}
 void GeometrySystem::createTerrainIndirectBuffers()
 {
     const VkDeviceSize size = static_cast<VkDeviceSize>(kTerrainIndirectCapacity) *
@@ -260,7 +340,8 @@ void GeometrySystem::createTerrainIndirectBuffers()
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = size;
         bufferInfo.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                           VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
         VmaAllocationCreateInfo allocInfo{};
@@ -422,7 +503,10 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         terrainIndirectBuffers[frameInfo.frameInFlightIndex];
     auto* indirectCommands =
         static_cast<VkDrawIndexedIndirectCommand*>(indirectBuffer.mapped);
-    uint32_t indirectCursor = 0;
+    // F2-b: the arena batch owns indirect commands [0, 2048) in this buffer;
+    // the CPU-side chunk path must not overwrite them.
+    uint32_t indirectCursor =
+        currentTerrainGpuRun.enabled ? kTerrainGpuMaxEntities * kTerrainGpuCommandsPerEntity : 0u;
 
     // GPU compute selection was recorded in a pre-graphics graph pass.
     const TerrainGpuRunContext& gpuRun = currentTerrainGpuRun;
@@ -779,7 +863,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
             frameInfo.telemetry.vertices += subMesh.indexCount;
         }
 
-        if (terrainGpuEntity && gpuRun.frame)
+        if (terrainGpuEntity && gpuRun.frame && !gpuRun.batchActive)
         {
             push.terrainLodBlend = 1.0f;
             push.terrainLodBlendMode = 0u;
@@ -833,6 +917,40 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         }
     }
 
+    if (gpuRun.batchActive && terrainMeshArena && terrainChunkInstancesReady)
+    {
+        SimplePushConstantData batchTerrainPush{};
+        batchTerrainPush.modelMatrix = glm::mat4(1.0f);
+        batchTerrainPush.normalMatrix = glm::mat4(1.0f);
+        batchTerrainPush.terrainMode = 1u;
+        batchTerrainPush.terrainBatched = 1u;
+        batchTerrainPush.terrainLodBlend = 1.0f;
+        batchTerrainPush.terrainLodBlendMode = 0u;
+        batchTerrainPush.materialValid = 0u;
+        batchTerrainPush.materialId = fallbackMatId;
+
+        geometryPipeline->bind(commandBuffer);
+        VkBuffer arenaVertices = terrainMeshArena->getVertexBuffer();
+        VkBuffer arenaIndices = terrainMeshArena->getIndexBuffer();
+        VkDeviceSize arenaVertexOffset = 0;
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &arenaVertices, &arenaVertexOffset);
+        vkCmdBindIndexBuffer(commandBuffer, arenaIndices, 0, VK_INDEX_TYPE_UINT32);
+        VkDescriptorSet chunkSets[] =
+            { terrainChunkInstanceSets[frameInfo.frameInFlightIndex] };
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipelineLayout, 3, 1, chunkSets, 0, nullptr);
+        frameInfo.telemetry.descriptorBinds += 1u;
+        vkCmdPushConstants(commandBuffer, pipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(SimplePushConstantData), &batchTerrainPush);
+        vkCmdDrawIndexedIndirect(
+            commandBuffer, indirectBuffer.buffer, 0,
+            kTerrainGpuMaxEntities * kTerrainGpuCommandsPerEntity,
+            sizeof(VkDrawIndexedIndirectCommand));
+
+        frameInfo.telemetry.drawCalls += 1u;
+        frameInfo.telemetry.terrainIndirectGroups += 1u;
+    }
     if (indirectCursor > 0u)
     {
         vmaFlushAllocation(vulkanDevice.getVmaAllocator(),

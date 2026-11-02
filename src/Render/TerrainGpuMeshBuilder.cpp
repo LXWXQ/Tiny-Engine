@@ -647,10 +647,12 @@ bool TerrainGpuMeshBuilder::prepareBuild(
     const VkDeviceSize indexBytes =
         static_cast<VkDeviceSize>(layout.indexCount) * sizeof(uint32_t);
     if (!createOutputBuffer(vertexBytes,
-                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                             outResult.vertexBuffer, outResult.vertexAllocation) ||
         !createOutputBuffer(indexBytes,
-                            VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                            VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                             outResult.indexBuffer, outResult.indexAllocation))
     {
         errorMessage = "GPU mesh output buffer creation failed";

@@ -3,6 +3,7 @@
 #include "RHI/Pipeline.h"
 #include "Core/FrameInfo.h"
 #include "Render/SubMeshCulling.h"
+#include "Render/TerrainMeshArena.h"
 #include <array>
 #include <memory>
 #include <unordered_map>
@@ -79,6 +80,7 @@ private:
     static constexpr uint32_t kTerrainIndirectCapacity = 4096;
     std::array<TerrainIndirectBuffer, kFramesInFlight> terrainIndirectBuffers{};
 
+
     // -----------------------------------------------------------------------
     // B-03: GPU-driven terrain selection.
     // -----------------------------------------------------------------------
@@ -108,6 +110,7 @@ private:
         glm::uvec4 lod0{ 0u };
         glm::uvec4 lod1{ 0u };
         glm::uvec4 lod2{ 0u };
+        glm::uvec4 arena{ 0u }; // x=index base y=vertex base z=adopted
     };
 
     struct TerrainGpuEntitySlot
@@ -117,6 +120,7 @@ private:
         uint64_t revision = ~0ull;
         uint64_t lastFrame = 0;
         bool resetPending = false;
+        uint32_t arenaSlot = TerrainMeshArena::kInvalidSlot;
     };
 
     struct TerrainGpuFrameResources
@@ -153,7 +157,20 @@ private:
         TerrainGpuFrameResources* frame = nullptr;
         std::unordered_map<uint32_t, uint32_t> entitySlots;
         uint32_t entityCount = 0;
+        bool batchActive = false; // all visible chunks adopted into the arena
     };
 
+    // F2-b: terrain chunk meshes copied into one arena so a single indirect draw
+    // covers every chunk; per-chunk transforms come from a set 3 instance table.
+    static constexpr uint32_t kTerrainChunkInstanceStride = 224u; // SceneGpuBatch::InstanceRecord
+    std::unique_ptr<TerrainMeshArena> terrainMeshArena;
+    std::array<TerrainGpuBuffer, kFramesInFlight> terrainChunkInstances{};
+    std::array<VkDescriptorSet, kFramesInFlight> terrainChunkInstanceSets{};
+    VkDescriptorPool terrainChunkInstancePool = VK_NULL_HANDLE;
+    bool terrainChunkInstancesReady = false;
+    bool terrainArenaWarned = false;
+    bool terrainBatchWasActive = false;
+    bool ensureTerrainChunkInstances();
+    void destroyTerrainChunkInstances();
     TerrainGpuRunContext currentTerrainGpuRun;
 };

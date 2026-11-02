@@ -36,6 +36,7 @@ updated: 2026-11-02
 | `--no-gpu-scene` | 关闭 GPU 驱动提交，完全回退 CPU 逐子网格路径 |
 | `--no-merged-buffers` | 整条 GPU 批退回 CPU 逐子网格路径（跨模型 single draw 依赖合并缓冲） |
 | `--no-hiz` | 关闭 Hi-Z 遮挡剔除，只留 6 平面视锥剔除（对照 `hizEnabled=0`） |
+| `--no-terrain-batch` | 关闭地形多 chunk 合批，回退到逐 chunk 绑定 + 逐 chunk `drawIndexedIndirectCount` |
 | `--gpu-scene-min-px <px>` | 屏幕空间误差剔除阈值（像素）；投影包围球半径小于它就直接剔除，0 = 关闭 |
 | `--gpu-scene-external <n>` | 调试注入：复制第一个可批子网格 n 份当外部实例（粒子/体素替身），验证共用分组与单条提交 |
 | `--streaming-world [radius]` | 构造期创建流送地形世界（半径 1~8，默认 3；chunk 32 单位、33x33 顶点、3 级 LOD），是「无限世界」的可运行载体 |

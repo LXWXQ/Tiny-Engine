@@ -53,6 +53,13 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
 - F2-a 起有可持续运行的载体：`--streaming-world [radius]` 在构造期建立 manager，
   半径 3 时 49 个 chunk 实体（低于地形 GPU 选择的 64 个 slot 上限）；
   `--streaming-fly [speed]` 让相机沿半径 220 的圆周前移，使加载/卸载持续发生。
+- F2-b 起同一帧的地形 chunk 由**一条** indirect 提交：每个 chunk 的顶点/索引放进
+  `TerrainMeshArena` 的固定槽位（4096 顶点 / 20480 索引），间接命令里带
+  `firstIndex`（arena 索引基址）、`vertexOffset`（arena 顶点基址）与
+  `firstInstance`（该 chunk 在 set 3 实例表里的行号）。chunk 的世界矩阵不再烘进顶点，
+  而是在顶点着色器里按 `gl_InstanceIndex` 从实例表取 —— 同一份网格被移动时不需要重拷。
+  命令区固定为 2048 条（64 实体 x 32 命令），绘制前用 `vkCmdFillBuffer` 清零，
+  `indexCount == 0` 的条目就是空绘制。`--no-terrain-batch` 回退到逐 chunk 绑定 + 逐 chunk draw。
 
 ## 2. 文件与职责
 
