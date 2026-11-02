@@ -83,8 +83,8 @@ void EditorOverlayPass::createPipeline(VkFormat colorFormat, VkFormat depthForma
     config.depthAttachmentFormat = depthFormat;
 
     pipeline = std::make_unique<Pipeline>(device,
-        std::string(SENTINEL_SHADER_DIR) + "editor_overlay.vert.spv",
-        std::string(SENTINEL_SHADER_DIR) + "editor_overlay.frag.spv",
+        std::string(TINY_SHADER_DIR) + "editor_overlay.vert.spv",
+        std::string(TINY_SHADER_DIR) + "editor_overlay.frag.spv",
         config);
 }
 
@@ -111,7 +111,7 @@ void EditorOverlayPass::init()
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                           VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        allocInfo.flags |= sentinel_vmaNameFlag();
+        allocInfo.flags |= tiny_vmaNameFlag();
         allocInfo.pUserData = const_cast<char*>(names[frame]);
 
         VmaAllocationInfo info{};

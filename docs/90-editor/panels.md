@@ -91,7 +91,7 @@ for (panel : panels) {
 
 ## 窗口布局持久化
 
-`io.IniFilename = SENTINEL_IMGUI_INI_PATH` → `config/imgui.ini`。
+`io.IniFilename = TINY_IMGUI_INI_PATH` → `config/imgui.ini`。
 
 为什么不放默认的 `imgui.ini`（工作目录）：仓库根目录只允许 `README.md`，
 而且工作目录随启动方式变化（双击 / IDE / 脚本），会到处生成 ini。

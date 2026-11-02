@@ -21,26 +21,26 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Debug
 
 # 运行
-.\\build\\Debug\\VulkanEngine.exe
+.\\build\\Debug\\TinyEngine.exe
 ```
 
 ## 1.5 两个构建产物
 
 | 目标 | 产物 | 用途 |
 |---|---|---|
-| `VulkanEngine` | `build/<Config>/VulkanEngine.exe` | 运行时模式 |
-| `SentinelEditor` | `build/<Config>/SentinelEditor.exe` | 编辑器模式（默认等价于 `--editor`） |
+| `TinyEngine` | `build/<Config>/TinyEngine.exe` | 运行时模式 |
+| `TinyEditor` | `build/<Config>/TinyEditor.exe` | 编辑器模式（默认等价于 `--editor`） |
 
-共享源码编进 `sentinel_core` 对象库，两个 exe 复用同一批 `.obj`，
+共享源码编进 `tiny_core` 对象库，两个 exe 复用同一批 `.obj`，
 只有 `main.cpp` 各编一次 —— 构建时间不会翻倍。
 
-Shader 由 `SentinelShaders` 自定义目标统一编译一次。它用的是 **OUTPUT 依赖**
+Shader 由 `TinyShaders` 自定义目标统一编译一次。它用的是 **OUTPUT 依赖**
 而不是原来的 `PRE_BUILD`：后者每次构建都会重编全部 shader，前者只重编改动过的那个。
 
 只构建其中一个：
 
 ```
-cmake --build build --config Debug --target SentinelEditor
+cmake --build build --config Debug --target TinyEditor
 ```
 
 
@@ -71,7 +71,7 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 ### 3.2 资源路径不依赖工作目录
 
 引擎通过生成的 `AssetPaths.h` 拿绝对路径，
-所以从任何目录启动 `VulkanEngine.exe` 都能找到 `Resources/`。
+所以从任何目录启动 `TinyEngine.exe` 都能找到 `Resources/`。
 
 这也意味着：**移动/重命名仓库目录后必须重新 configure**（绝对路径变了）。
 
@@ -85,13 +85,13 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 
 | 选项 | 默认 | 作用 |
 |---|---|---|
-| `SENTINEL_VMA_LEAK_CHECK` | OFF | VMA 销毁时逐条打印未释放的分配（排查泄漏用，会变慢） |
-| `SENTINEL_ENABLE_GPU_TIMING` | ON | 编译入 `--gpu-timing` |
-| `SENTINEL_ENABLE_VALIDATION_FEATURES` | ON | 编译入 `--validation-features` |
-| `SENTINEL_ENABLE_BUILD_INFO` | ON | 编译入 `--build-info` |
-| `SENTINEL_ENABLE_SCREENSHOT` | ON | 编译入 `--screenshot` |
-| `SENTINEL_ENABLE_TRACY` | **OFF** | 编译入 Tracy（需 `3rdParty/tracy`） |
-| `SENTINEL_ENABLE_RENDERDOC` | **OFF** | 编译入 RenderDoc 抓帧（需 `renderdoc_app.h`） |
+| `TINY_VMA_LEAK_CHECK` | OFF | VMA 销毁时逐条打印未释放的分配（排查泄漏用，会变慢） |
+| `TINY_ENABLE_GPU_TIMING` | ON | 编译入 `--gpu-timing` |
+| `TINY_ENABLE_VALIDATION_FEATURES` | ON | 编译入 `--validation-features` |
+| `TINY_ENABLE_BUILD_INFO` | ON | 编译入 `--build-info` |
+| `TINY_ENABLE_SCREENSHOT` | ON | 编译入 `--screenshot` |
+| `TINY_ENABLE_TRACY` | **OFF** | 编译入 Tracy（需 `3rdParty/tracy`） |
+| `TINY_ENABLE_RENDERDOC` | **OFF** | 编译入 RenderDoc 抓帧（需 `renderdoc_app.h`） |
 
 重量级 / 带外部依赖的能力默认 OFF，缺失时 CMake 只 warning 并自动禁用，不影响默认构建。
 
@@ -111,6 +111,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/Validate.ps1
 |---|---|
 | `-Incremental` | 不删 `build/`（默认会删掉全新构建） |
 | `-SkipSetup` | 跳过依赖检查 |
-| `-EnableProfiling` | 用 `-DSENTINEL_ENABLE_TRACY=ON -DSENTINEL_ENABLE_RENDERDOC=ON` 配置，多跑一项 |
+| `-EnableProfiling` | 用 `-DTINY_ENABLE_TRACY=ON -DTINY_ENABLE_RENDERDOC=ON` 配置，多跑一项 |
 | `-Frames N` | selftest 帧数（默认 120） |
 | `-BuildDir` / `-Config` / `-CMakePath` | 覆盖路径 |

@@ -139,7 +139,7 @@ void BloomPass::updateDescriptor(uint32_t index, VkImageView view)
 void BloomPass::createPipelines()
 {
     const VkFormat format = renderGraph.getFormat(resources.hdrScene[0]);
-    const std::string vert = SENTINEL_SHADER_DIR "fullscreen.vert.spv";
+    const std::string vert = TINY_SHADER_DIR "fullscreen.vert.spv";
 
     auto makeLayout = [&](uint32_t pushSize)
     {
@@ -181,14 +181,14 @@ void BloomPass::createPipelines()
         PipelineConfigInfo config = baseConfig();
         config.pipelineLayout = brightLayout;
         brightPipeline = std::make_unique<Pipeline>(device, vert,
-            SENTINEL_SHADER_DIR "bloom_bright.frag.spv", config);
+            TINY_SHADER_DIR "bloom_bright.frag.spv", config);
     }
 
     {
         PipelineConfigInfo config = baseConfig();
         config.pipelineLayout = downLayout;
         downPipeline = std::make_unique<Pipeline>(device, vert,
-            SENTINEL_SHADER_DIR "bloom_down.frag.spv", config);
+            TINY_SHADER_DIR "bloom_down.frag.spv", config);
     }
 
     {
@@ -206,7 +206,7 @@ void BloomPass::createPipelines()
         config.colorBlendAttachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
 
         upPipeline = std::make_unique<Pipeline>(device, vert,
-            SENTINEL_SHADER_DIR "bloom_up.frag.spv", config);
+            TINY_SHADER_DIR "bloom_up.frag.spv", config);
     }
 }
 

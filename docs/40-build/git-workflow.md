@@ -15,7 +15,7 @@ updated: 2026-11-02
 | 项 | 值 |
 |---|---|
 | 仓库根 | `C:\Users\Admin\Desktop\Vs code Demo` |
-| 远程 | `origin` = `https://github.com/LXWXQ/Vulkan-learning.git` |
+| 远程 | `origin` = `https://github.com/LXWXQ/Tiny-Engine.git` |
 | 分支 | `main`（upstream `origin/main`） |
 | 提交身份 | `LXWXQ <2920928423@qq.com>`（仓库本地配置） |
 

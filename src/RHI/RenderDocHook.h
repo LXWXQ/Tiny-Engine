@@ -5,7 +5,7 @@
 // P1-2：RenderDoc in-app 抓帧挂钩。
 //
 // 开关模型：
-//   * 编译期：SENTINEL_ENABLE_RENDERDOC 关闭时不加载任何东西（零开销）；
+//   * 编译期：TINY_ENABLE_RENDERDOC 关闭时不加载任何东西（零开销）；
 //   * 运行期：只有 --capture-frame N 时才尝试加载 RenderDoc API。
 //
 // 只有本进程被 RenderDoc 注入（例如经 renderdoccmd capture 启动）时，

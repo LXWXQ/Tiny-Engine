@@ -29,8 +29,8 @@ updated: 2026-10-30
 
 | 依赖 | 用途 | 获取方式 |
 |---|---|---|
-| Tracy | CPU/GPU 时间线 | `tools/SetupProfiling.ps1` + `-DSENTINEL_ENABLE_TRACY=ON` |
-| `renderdoc_app.h` | in-app 抓帧 | `tools/SetupProfiling.ps1` + `-DSENTINEL_ENABLE_RENDERDOC=ON` |
+| Tracy | CPU/GPU 时间线 | `tools/SetupProfiling.ps1` + `-DTINY_ENABLE_TRACY=ON` |
+| `renderdoc_app.h` | in-app 抓帧 | `tools/SetupProfiling.ps1` + `-DTINY_ENABLE_RENDERDOC=ON` |
 | spdlog | 日志库（**当前未使用**） | 已配 include，但一行未用 |
 
 ## 2. 目录布局的坑（EnTT）

@@ -2,7 +2,7 @@
 id: debug-profiling/zero-overhead
 title: 零开销开关模型
 type: debug
-scope: CMakeLists.txt 的 SENTINEL_ENABLE_*, src/Core/Profiler.h, src/Core/Diagnostics.h
+scope: CMakeLists.txt 的 TINY_ENABLE_*, src/Core/Profiler.h, src/Core/Diagnostics.h
 read-when: 新增任何调试/剖析能力之前
 size: ~150 行
 updated: 2026-10-30
@@ -14,7 +14,7 @@ updated: 2026-10-30
 
 | 层 | 由谁控制 | 关闭时成本 | 适用 |
 |---|---|---|---|
-| **编译期** | CMake option -> `SENTINEL_ENABLE_*` 宏 | **完全为 0**（代码不参与编译） | 重量级/带外部依赖：Tracy、RenderDoc、Debug Printf、GPU-AV |
+| **编译期** | CMake option -> `TINY_ENABLE_*` 宏 | **完全为 0**（代码不参与编译） | 重量级/带外部依赖：Tracy、RenderDoc、Debug Printf、GPU-AV |
 | **运行期** | CLI flag（默认关） | 每帧每 pass 一个 hoisted `if`；热点内层零判断 | 轻量自研：`--gpu-timing`、`--screenshot` |
 
 ## 2. 当前开关表
@@ -67,7 +67,7 @@ updated: 2026-10-30
 
 ## 6. 加新能力的流程
 
-1. `CMakeLists.txt` 加 `option(SENTINEL_ENABLE_X ...)` + `target_compile_definitions`；
+1. `CMakeLists.txt` 加 `option(TINY_ENABLE_X ...)` + `target_compile_definitions`；
 2. 头文件用宏包住实现，关闭时展开为空；
 3. CLI 参数进 `main.cpp` -> `diag::Options`；
 4. `--build-info` 的 `CompileTimeFeatures` / `Options` 各加一个字段；

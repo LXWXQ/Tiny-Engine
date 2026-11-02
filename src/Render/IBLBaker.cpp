@@ -173,7 +173,7 @@ void IBLBaker::createPipelines()
     if (vkCreatePipelineLayout(device.getDevice(), &li2, nullptr, &lutLayout) != VK_SUCCESS)
         throw std::runtime_error("IBLBaker: LUT 管线布局创建失败");
 
-    const std::string vert = SENTINEL_SHADER_DIR "ibl_capture.vert.spv";
+    const std::string vert = TINY_SHADER_DIR "ibl_capture.vert.spv";
 
     PipelineConfigInfo cfg{};
     Pipeline::defaultPipelineConfigInfo(cfg, kEnvCubeSize, kEnvCubeSize);
@@ -186,17 +186,17 @@ void IBLBaker::createPipelines()
     cfg.depthStencilInfo.depthWriteEnable = VK_FALSE;
 
     equirectToCubePipeline = std::make_unique<Pipeline>(device, vert,
-        SENTINEL_SHADER_DIR "ibl_equirect_to_cube.frag.spv", cfg);
+        TINY_SHADER_DIR "ibl_equirect_to_cube.frag.spv", cfg);
     irradiancePipeline = std::make_unique<Pipeline>(device, vert,
-        SENTINEL_SHADER_DIR "ibl_irradiance.frag.spv", cfg);
+        TINY_SHADER_DIR "ibl_irradiance.frag.spv", cfg);
     prefilterPipeline = std::make_unique<Pipeline>(device, vert,
-        SENTINEL_SHADER_DIR "ibl_prefilter.frag.spv", cfg);
+        TINY_SHADER_DIR "ibl_prefilter.frag.spv", cfg);
 
     PipelineConfigInfo lutCfg = cfg;
     lutCfg.colorAttachmentFormats = { kLutFormat };
     lutCfg.pipelineLayout = lutLayout;
     brdfLutPipeline = std::make_unique<Pipeline>(device, vert,
-        SENTINEL_SHADER_DIR "ibl_brdf_lut.frag.spv", lutCfg);
+        TINY_SHADER_DIR "ibl_brdf_lut.frag.spv", lutCfg);
 
     std::cout << "[IBL] 4 条烘焙管线已就绪\n";
 }

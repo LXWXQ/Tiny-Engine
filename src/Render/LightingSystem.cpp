@@ -45,7 +45,7 @@ void LightingSystem::createPipeline()
     config.attributeDescriptions.clear();
 
     lightingPipeline = std::make_unique<Pipeline>(vulkanDevice,
-        SENTINEL_SHADER_DIR "lighting.vert.spv", SENTINEL_SHADER_DIR "lighting.frag.spv", config);
+        TINY_SHADER_DIR "lighting.vert.spv", TINY_SHADER_DIR "lighting.frag.spv", config);
 }
 
 void LightingSystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)

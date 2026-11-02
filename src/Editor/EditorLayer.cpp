@@ -534,7 +534,7 @@ bool EditorLayer::saveSceneAs()
         return false;
 
     const std::string path = state.services.saveFileDialog(
-        "Sentinel Scene (*.scene.json)\0*.scene.json\0All Files (*.*)\0*.*\0",
+        "Tiny Engine Scene (*.scene.json)\0*.scene.json\0All Files (*.*)\0*.*\0",
         "Save Scene As");
     if (path.empty())
         return false;
@@ -549,7 +549,7 @@ bool EditorLayer::openSceneDialog()
         return false;
 
     const std::string path = state.services.openFileDialog(
-        "Sentinel Scene (*.scene.json)\0*.scene.json\0All Files (*.*)\0*.*\0",
+        "Tiny Engine Scene (*.scene.json)\0*.scene.json\0All Files (*.*)\0*.*\0",
         "Open Scene");
     if (path.empty())
         return false;
@@ -788,14 +788,14 @@ bool EditorLayer::selfTest()
         a.rotation = { 0.1f, 0.2f, 0.3f };
         a.scale = { 2.0f, 2.0f, 2.0f };
         a.parentIndex = -1;
-        a.meshPath = SENTINEL_RESOURCE_DIR "Models/sphere.obj";
+        a.meshPath = TINY_RESOURCE_DIR "Models/sphere.obj";
         a.isSkybox = false;
         input.entities.push_back(a);
 
         scene::EntityDescription b;
         b.name = "Child With Space";
         b.parentIndex = 0;                 // 引用数组下标
-        b.meshPath = SENTINEL_RESOURCE_DIR "Models/DamagedHelmet/DamagedHelmet.obj";
+        b.meshPath = TINY_RESOURCE_DIR "Models/DamagedHelmet/DamagedHelmet.obj";
         b.material.present = true;
         b.material.name = "glTF/Default";
         b.material.baseColorFactor = { 0.2f, 0.4f, 0.6f, 1.0f };
@@ -929,7 +929,7 @@ bool EditorLayer::selfTestWithScene()
     }
 
     entt::registry& registry = *state.services.registry;
-    const std::string cubePath = std::string(SENTINEL_RESOURCE_DIR) + "Models/debug_cube.obj";
+    const std::string cubePath = std::string(TINY_RESOURCE_DIR) + "Models/debug_cube.obj";
 
     const size_t meshesBefore = registry.view<MeshComponent>().size();
     const size_t entitiesBefore = registry.view<TransformComponent>().size();
@@ -1492,7 +1492,7 @@ bool EditorLayer::selfTestWithScene()
 
         // File-level save/load smoke, not only in-memory roundTrip.
         const std::filesystem::path scenePath =
-            std::filesystem::temp_directory_path() / "sentinel_streaming_selftest.scene.json";
+            std::filesystem::temp_directory_path() / "tiny_streaming_selftest.scene.json";
         std::string fileError;
         if (!SceneSerializer::saveToFile(serialized, scenePath.string(), fileError))
         {
@@ -1636,7 +1636,7 @@ bool EditorLayer::selfTestWithScene()
         Scene& scene = *state.services.scene;
 
         // 注意：不能用 sphere.obj —— 那是半径 1000 的天空盒球。
-        const std::string spherePath = std::string(SENTINEL_RESOURCE_DIR) + "Models/debug_cube.obj";
+        const std::string spherePath = std::string(TINY_RESOURCE_DIR) + "Models/debug_cube.obj";
         const entt::entity sphere = scene.createMeshEntity(spherePath, "PickTestCube");
         if (sphere == entt::null)
         {

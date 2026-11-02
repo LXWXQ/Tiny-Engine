@@ -102,7 +102,7 @@ updated: 2026-11-01
 
 | 文件 | 内容 | 必读文档 | 回写 |
 |---|---|---|---|
-| `CMakeLists.txt` | 依赖检查、shader 编译 + `spirv-val`、`SENTINEL_ENABLE_*` 开关 | [build](../40-build/build.md)、[dependencies](../40-build/dependencies.md) | build、dependencies |
+| `CMakeLists.txt` | 依赖检查、shader 编译 + `spirv-val`、`TINY_ENABLE_*` 开关 | [build](../40-build/build.md)、[dependencies](../40-build/dependencies.md) | build、dependencies |
 | `cmake/AssetPaths.h.in` | 资源绝对路径注入 | [build](../40-build/build.md) | build |
 | `main.cpp` | 全部 CLI 参数解析 | [cli-reference](../50-validation/cli-reference.md) | cli-reference |
 | `tools/Validate.ps1` | 主回归（21 项 + 文档检查） | [test-matrix](../50-validation/test-matrix.md) | test-matrix |
@@ -110,8 +110,8 @@ updated: 2026-11-01
 | `tools/DocCheck.ps1` | 本文档系统的自动校验 | [doc-rules](doc-rules.md) | doc-rules |
 | `tools/Baseline.ps1` / `DebugBundle.ps1` / `DeepValidation.ps1` / `Screenshot.ps1` / `Capture.ps1` / `Profile.ps1` | 剖析与证据收集 | [tools](../60-debug-profiling/tools.md) | tools |
 | `config/engine.json` | 运行时配置（version 2） | [config](../30-systems/config.md) | config |
-| `CMakeLists.txt` | 两个可执行目标（`VulkanEngine` / `SentinelEditor`）+ `sentinel_core` 对象库 + `SentinelShaders` | [build](../40-build/build.md) | build |
-| `main.cpp` | 唯一被编译两次的文件；`SENTINEL_DEFAULT_EDITOR` 决定默认模式 | [build](../40-build/build.md)、[editor](../90-editor/README.md) | build、editor |
+| `CMakeLists.txt` | 两个可执行目标（`TinyEngine` / `TinyEditor`）+ `tiny_core` 对象库 + `TinyShaders` | [build](../40-build/build.md) | build |
+| `main.cpp` | 唯一被编译两次的文件；`TINY_DEFAULT_EDITOR` 决定默认模式 | [build](../40-build/build.md)、[editor](../90-editor/README.md) | build、editor |
 
 ## 6.5 编辑器层（`src/Editor/`）
 

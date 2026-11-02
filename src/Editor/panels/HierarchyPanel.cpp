@@ -127,13 +127,13 @@ void HierarchyPanel::drawEntityNode(EditorState& state, entt::entity entity)
     // ---- 拖拽重挂 ----
     if (ImGui::BeginDragDropSource())
     {
-        ImGui::SetDragDropPayload("SENTINEL_ENTITY", &entity, sizeof(entt::entity));
+        ImGui::SetDragDropPayload("TINY_ENTITY", &entity, sizeof(entt::entity));
         ImGui::TextUnformatted(label.c_str());
         ImGui::EndDragDropSource();
     }
     if (ImGui::BeginDragDropTarget())
     {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SENTINEL_ENTITY"))
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("TINY_ENTITY"))
         {
             const entt::entity dragged = *static_cast<const entt::entity*>(payload->Data);
             // 拒绝成环：不能把父节点拖到自己的后代下面

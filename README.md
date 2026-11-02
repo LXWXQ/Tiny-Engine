@@ -1,4 +1,4 @@
-# Sentinel Vulkan Engine
+# Tiny Engine
 
 一个面向**学习与工程验证**的 Vulkan 1.3 渲染器（Windows x64 / C++17 / MSVC）。
 重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
@@ -29,7 +29,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/SetupDependencies.ps1
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Debug
 
-.\build\Debug\VulkanEngine.exe
+.\build\Debug\TinyEngine.exe
 ```
 
 **环境要求**
@@ -96,7 +96,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | `--editor` | 以场景编辑器模式启动（默认关闭，运行时行为完全不变） |
 | `--terrain-test` | 启动时创建持久地形 + 流送/雕刻/角色 smoke，校验 GPU 高度场、GPU mesh parity、GPU selection 过渡、区域限定重建与截图路径（常配合 `--empty-scene --selftest`） |
 
-构建同时产出 `build/<Config>/SentinelEditor.exe`，双击即进编辑器，无需敲参数。
+构建同时产出 `build/<Config>/TinyEditor.exe`，双击即进编辑器，无需敲参数。
 | `--build-info` | 打印编译进 & 本次开启的调试能力后退出 |
 | `--gpu-timing [--gpu-timing-csv P]` | 每 pass GPU 计时 |
 | `--validation-features bp,sync,printf,gpuav` | 验证层增强 |

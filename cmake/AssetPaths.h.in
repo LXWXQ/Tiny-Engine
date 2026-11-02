@@ -15,15 +15,15 @@
 // 注意：移动工程目录或换机器后，需要重新运行一次 CMake 配置。
 // ===========================================================================
 
-#define SENTINEL_SHADER_DIR   "@CMAKE_CURRENT_BINARY_DIR@/shaders/"
-#define SENTINEL_RESOURCE_DIR "@CMAKE_CURRENT_SOURCE_DIR@/Resources/"
+#define TINY_SHADER_DIR   "@CMAKE_CURRENT_BINARY_DIR@/shaders/"
+#define TINY_RESOURCE_DIR "@CMAKE_CURRENT_SOURCE_DIR@/Resources/"
 
 // 运行时配置文件（W1）。放在工程根的 config/ 下：
 //   * 不依赖工作目录（和上面两个路径同样的理由）
 //   * Debug / Release 共享同一份用户设置
 //   * 进版本库，充当"默认预设"
-#define SENTINEL_CONFIG_PATH  "@SENTINEL_CONFIG_DIR@/engine.json"
+#define TINY_CONFIG_PATH  "@TINY_CONFIG_DIR@/engine.json"
 
 // ImGui 的窗口布局持久化文件。和 engine.json 放在同一个目录，
 // 保证仓库根目录始终只有 README.md。
-#define SENTINEL_IMGUI_INI_PATH "@SENTINEL_CONFIG_DIR@/imgui.ini"
+#define TINY_IMGUI_INI_PATH "@TINY_CONFIG_DIR@/imgui.ini"

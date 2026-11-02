@@ -212,9 +212,9 @@ updated: 2026-11-02
   加载时重新生成，旧 v1 场景不回归。
 - **验证**：
   - `[Terrain] selfTest PASS | grid=65x65 vertices=221 indices=1152`
-  - `SentinelEditor.exe --selftest 5 --empty-scene`：
+  - `TinyEditor.exe --selftest 5 --empty-scene`：
     `[Editor] scene selfTest PASS | create/undo/redo + terrain create/generate`
-  - `VulkanEngine.exe --selftest 25 --empty-scene --terrain-test --screenshot ...`：
+  - `TinyEngine.exe --selftest 25 --empty-scene --terrain-test --screenshot ...`：
     129² 地形可见，`[Validation] errors=0 warnings=0`，stderr 0 字节
   - `tools/Validate.ps1` 新增 `terrain-render` 用例，默认 21 项。
 ## D-19：地形阶段 6（形态与程序化材质）
@@ -236,7 +236,7 @@ updated: 2026-11-02
   缺省字段由 `TerrainConfig` 默认值补齐。
 - **验证**：
   - `[Terrain] selfTest PASS` 新增 height curve / island mask 有界性断言；
-  - `SentinelEditor.exe --selftest 5 --empty-scene`：编辑器地形命令/生成 PASS，
+  - `TinyEditor.exe --selftest 5 --empty-scene`：编辑器地形命令/生成 PASS，
     `[Validation] errors=0 warnings=0`，stderr 0 字节；
   - `--empty-scene --terrain-test --no-bloom` 截图确认 SSAO 条纹消失；
   - `tools/Validate.ps1` 的 `terrain-render` 继续覆盖 G-Buffer 路径。

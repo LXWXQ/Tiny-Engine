@@ -116,7 +116,7 @@ acquire/present 返回 `VK_ERROR_OUT_OF_DATE_KHR` 或 `VK_SUBOPTIMAL_KHR` 时置
 
 ```powershell
 # 同步校验（最强工具）
-.\\build\\Debug\\VulkanEngine.exe --selftest 30 --validation-features sync
+.\\build\\Debug\\TinyEngine.exe --selftest 30 --validation-features sync
 
 # 期望：0 errors / 0 warnings
 ```

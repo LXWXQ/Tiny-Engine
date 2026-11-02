@@ -11,7 +11,7 @@ param(
 # Optional P1 profiling dependencies (Tracy + RenderDoc in-app header).
 #
 # These are NOT required to build/run the engine. They only enable the
-# opt-in profiling capabilities (SENTINEL_ENABLE_TRACY / SENTINEL_ENABLE_RENDERDOC),
+# opt-in profiling capabilities (TINY_ENABLE_TRACY / TINY_ENABLE_RENDERDOC),
 # which stay compile-time OFF by default.
 #
 #   * Tracy source  -> 3rdParty/tracy/public   (tracy/Tracy.hpp, TracyClient.cpp)
@@ -46,7 +46,7 @@ if (-not $SkipTracy) {
     } else {
         $zip = Join-Path $cacheDir "tracy-$TracyVersion-src.zip"
         Download "https://github.com/wolfpld/tracy/archive/refs/tags/$TracyVersion.zip" $zip
-        $tmp = Join-Path ([IO.Path]::GetTempPath()) ("sentinel-tracy-" + [Guid]::NewGuid().ToString("N"))
+        $tmp = Join-Path ([IO.Path]::GetTempPath()) ("tiny-tracy-" + [Guid]::NewGuid().ToString("N"))
         Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
         $hit = Get-ChildItem -LiteralPath $tmp -Recurse -File -Filter "Tracy.hpp" |
                Where-Object { $_.FullName -match "\\public\\tracy\\Tracy\.hpp$" } | Select-Object -First 1
@@ -67,7 +67,7 @@ if (-not $SkipTracy) {
     } else {
         $zip = Join-Path $cacheDir "tracy-$TracyVersion-win.zip"
         Download "https://github.com/wolfpld/tracy/releases/download/$TracyVersion/windows-$tracyVer.zip" $zip
-        $tmp = Join-Path ([IO.Path]::GetTempPath()) ("sentinel-tracybin-" + [Guid]::NewGuid().ToString("N"))
+        $tmp = Join-Path ([IO.Path]::GetTempPath()) ("tiny-tracybin-" + [Guid]::NewGuid().ToString("N"))
         Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
         $hit = Get-ChildItem -LiteralPath $tmp -Recurse -File -Filter "tracy-capture.exe" | Select-Object -First 1
         if ($null -eq $hit) { throw "Tracy binary archive layout unexpected" }
@@ -92,4 +92,4 @@ if (-not $SkipRenderDoc) {
 }
 
 Write-Host "[profiling] done. Enable with:"
-Write-Host "    cmake -S . -B build -DSENTINEL_ENABLE_TRACY=ON -DSENTINEL_ENABLE_RENDERDOC=ON"
+Write-Host "    cmake -S . -B build -DTINY_ENABLE_TRACY=ON -DTINY_ENABLE_RENDERDOC=ON"

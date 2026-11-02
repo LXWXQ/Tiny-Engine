@@ -1,7 +1,7 @@
 #include "RenderDocHook.h"
 #include <iostream>
 
-#ifdef SENTINEL_ENABLE_RENDERDOC
+#ifdef TINY_ENABLE_RENDERDOC
 #  include "renderdoc_app.h"
 #  include <windows.h>
 
@@ -15,7 +15,7 @@ void RenderDocHook::init(bool enabled, int frame)
 {
     captureFrame = frame;
 
-#ifndef SENTINEL_ENABLE_RENDERDOC
+#ifndef TINY_ENABLE_RENDERDOC
     enabled = false;
     (void)frame;
 #endif
@@ -23,7 +23,7 @@ void RenderDocHook::init(bool enabled, int frame)
     if (!enabled)
         return;
 
-#ifdef SENTINEL_ENABLE_RENDERDOC
+#ifdef TINY_ENABLE_RENDERDOC
     HMODULE module = GetModuleHandleA("renderdoc.dll");
     if (module == nullptr)
         module = LoadLibraryA("renderdoc.dll");
@@ -51,7 +51,7 @@ void RenderDocHook::init(bool enabled, int frame)
 
 void RenderDocHook::destroy()
 {
-#ifdef SENTINEL_ENABLE_RENDERDOC
+#ifdef TINY_ENABLE_RENDERDOC
     g_renderDocApi = nullptr;
 #endif
     active = false;
@@ -59,7 +59,7 @@ void RenderDocHook::destroy()
 
 void RenderDocHook::triggerCapture()
 {
-#ifdef SENTINEL_ENABLE_RENDERDOC
+#ifdef TINY_ENABLE_RENDERDOC
     if (active && g_renderDocApi != nullptr)
         g_renderDocApi->TriggerCapture();
 #endif

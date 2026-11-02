@@ -70,7 +70,7 @@ jobs.parallelFor(0, 100000, grain, [](size_t i){ ... });  // 按 chunk 并行
 ## 5. 自检
 
 ```powershell
-.\\build\\Debug\\VulkanEngine.exe --jobtest
+.\\build\\Debug\\TinyEngine.exe --jobtest
 ```
 
 输出：`[JobSystem] selfTest PASS | workers=15 | 512 submit + parallelFor(100000) + nested + exception propagation + parallelFor exception`

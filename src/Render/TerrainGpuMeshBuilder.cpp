@@ -184,7 +184,7 @@ void TerrainGpuMeshBuilder::createResources()
         throw std::runtime_error("terrain mesh pipeline layout creation failed");
 
     pipeline = std::make_unique<ComputePipeline>(
-        device, SENTINEL_SHADER_DIR "terrain_mesh.comp.spv", pipelineLayout);
+        device, TINY_SHADER_DIR "terrain_mesh.comp.spv", pipelineLayout);
 
     const VkDeviceSize heightBytes =
         static_cast<VkDeviceSize>(kMaxResolution) * kMaxResolution * sizeof(float);

@@ -14,16 +14,16 @@
 //   有了名字，一眼就能看出漏的是哪个缓冲。
 //
 // 用法（三行）：
-//   allocInfo.flags |= sentinel_vmaNameFlag();
+//   allocInfo.flags |= tiny_vmaNameFlag();
 //   allocInfo.pUserData = const_cast<char*>("名字");
 //   vmaCreateBuffer(..., &allocInfo, ...);
 //
-// 非泄漏检查构建下 sentinel_vmaNameFlag() 恒返回 0，调用点可以无条件写。
+// 非泄漏检查构建下 tiny_vmaNameFlag() 恒返回 0，调用点可以无条件写。
 // ===========================================================================
 
-inline VkFlags sentinel_vmaNameFlag()
+inline VkFlags tiny_vmaNameFlag()
 {
-#ifdef SENTINEL_VMA_LEAK_CHECK
+#ifdef TINY_VMA_LEAK_CHECK
     // 这一位会让 VMA 把 pUserData 指向的字符串拷进分配里，
     // 于是泄漏报告里的 Name: 就不再是 vma_empty
     return VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;

@@ -40,22 +40,22 @@ namespace diag
 CompileTimeFeatures compileTimeFeatures()
 {
     CompileTimeFeatures f;
-#ifdef SENTINEL_ENABLE_GPU_TIMING
+#ifdef TINY_ENABLE_GPU_TIMING
     f.gpuTiming = true;
 #endif
-#ifdef SENTINEL_ENABLE_VALIDATION_FEATURES
+#ifdef TINY_ENABLE_VALIDATION_FEATURES
     f.validationFeatures = true;
 #endif
-#ifdef SENTINEL_ENABLE_BUILD_INFO
+#ifdef TINY_ENABLE_BUILD_INFO
     f.buildInfo = true;
 #endif
-#ifdef SENTINEL_ENABLE_SCREENSHOT
+#ifdef TINY_ENABLE_SCREENSHOT
     f.screenshot = true;
 #endif
-#ifdef SENTINEL_ENABLE_TRACY
+#ifdef TINY_ENABLE_TRACY
     f.tracy = true;
 #endif
-#ifdef SENTINEL_ENABLE_RENDERDOC
+#ifdef TINY_ENABLE_RENDERDOC
     f.renderdoc = true;
 #endif
     return f;
@@ -138,8 +138,8 @@ bool selfTest(const std::string& jsonlPath)
     resetValidationCounts();
     configureValidationLog(jsonlPath);
 
-    recordValidationMessage(1, "SENTINEL-TEST-ERROR", "synthetic error for diagnostics self-test");
-    recordValidationMessage(2, "SENTINEL-TEST-WARNING", "synthetic warning for diagnostics self-test");
+    recordValidationMessage(1, "TINY-TEST-ERROR", "synthetic error for diagnostics self-test");
+    recordValidationMessage(2, "TINY-TEST-WARNING", "synthetic warning for diagnostics self-test");
 
     const bool countsOk = (validationErrorCount() == 1 && validationWarningCount() == 1);
 

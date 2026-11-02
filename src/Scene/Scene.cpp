@@ -522,7 +522,7 @@ void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorMana
     VkCommandPool commandPool = commandPoolArg;
     DescriptorManager& descriptorManager = descriptorManagerArg;
 
-    const std::string basePath = SENTINEL_RESOURCE_DIR;
+    const std::string basePath = TINY_RESOURCE_DIR;
 
     materialSystem.initDefaultTextures(device, commandPool);
     terrainMaterial = std::make_unique<TerrainMaterial>(
@@ -567,13 +567,13 @@ void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorMana
     std::shared_ptr<Model> heroModel;
     if (loadDefaultContent && kLoadSponza)
     {
-        sentinel::GLTFLoadContext ctx;
+        tiny::GLTFLoadContext ctx;
         ctx.device = &device;
         ctx.commandPool = commandPool;
         ctx.materialSystem = &materialSystem;
         ctx.descriptorManager = &descriptorManager;
 
-        heroModel = sentinel::loadGLTFModel(ctx, basePath + "Models/Sponza/glTF/Sponza.gltf");
+        heroModel = tiny::loadGLTFModel(ctx, basePath + "Models/Sponza/glTF/Sponza.gltf");
         if (!heroModel)
             std::cerr << "[Scene] Sponza load failed, falling back to DamagedHelmet\n";
     }

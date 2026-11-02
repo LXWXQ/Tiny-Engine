@@ -4,7 +4,7 @@
 GBuffer::GBuffer(Device& device, VkExtent2D extent)
     : device(device), currentExtent(extent) 
 {
-    std::cout << "[Sentinel 通报] 开始在显存中开辟 G-Buffer 防区...\n";
+    std::cout << "[Tiny 通报] 开始在显存中开辟 G-Buffer 防区...\n";
 
     createAttachment(GBufferFormat::Position, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &position);
     createAttachment(GBufferFormat::Normal,   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &normal);
@@ -27,7 +27,7 @@ GBuffer::GBuffer(Device& device, VkExtent2D extent)
     {
         throw std::runtime_error("[致命错误] G-Buffer 采样器创建失败！");
     }
-    std::cout << "[Sentinel 通报] G-Buffer 锻造完成！5 张底片已就绪。\n";
+    std::cout << "[Tiny 通报] G-Buffer 锻造完成！5 张底片已就绪。\n";
 }
 
 GBuffer::~GBuffer() 

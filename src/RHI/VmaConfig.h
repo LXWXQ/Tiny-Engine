@@ -11,10 +11,10 @@
 // 给分配起名字的辅助在包含 vk_mem_alloc.h **之后**，见 VmaNaming.h。
 //
 // 排查内存泄漏时打开（默认关，它会明显变慢）：
-//     cmake -S . -B build -DSENTINEL_VMA_LEAK_CHECK=ON
+//     cmake -S . -B build -DTINY_VMA_LEAK_CHECK=ON
 // ===========================================================================
 
-#ifdef SENTINEL_VMA_LEAK_CHECK
+#ifdef TINY_VMA_LEAK_CHECK
 #  include <cstdio>
 
 // vmaDestroyAllocator 发现"有分配没释放"时默认只丢一句断言，不说是谁。

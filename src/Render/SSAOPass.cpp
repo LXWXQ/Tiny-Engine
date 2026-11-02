@@ -5,7 +5,7 @@
 #include <random>
 #include <stdexcept>
 #include <cstring>
-#include <cstdlib>     // std::getenv（反面用例：SENTINEL_SIMULATE_SSAO_SKIP）
+#include <cstdlib>     // std::getenv（反面用例：TINY_SIMULATE_SSAO_SKIP）
 #include <array>
 
 SSAOPass::SSAOPass(Device& device, RenderGraph& graph, RenderResources& resources,
@@ -223,7 +223,7 @@ void SSAOPass::createUniformBuffer()
         VmaAllocationCreateInfo allocInfo{};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        allocInfo.flags |= sentinel_vmaNameFlag();
+        allocInfo.flags |= tiny_vmaNameFlag();
         allocInfo.pUserData = const_cast<char*>(names[frame]);
 
         if (vmaCreateBuffer(device.getVmaAllocator(), &bufferInfo, &allocInfo,
@@ -326,8 +326,8 @@ void SSAOPass::createBlurPipeline()
     config.depthStencilInfo.depthWriteEnable = VK_FALSE;
 
     blurPipeline = std::make_unique<Pipeline>(device,
-        SENTINEL_SHADER_DIR "fullscreen.vert.spv",
-        SENTINEL_SHADER_DIR "ssao_blur.frag.spv", config);
+        TINY_SHADER_DIR "fullscreen.vert.spv",
+        TINY_SHADER_DIR "ssao_blur.frag.spv", config);
 }
 
 void SSAOPass::createPipeline()
@@ -349,7 +349,7 @@ void SSAOPass::createPipeline()
     config.depthStencilInfo.depthWriteEnable = VK_FALSE;
 
     ssaoPipeline = std::make_unique<Pipeline>(device,
-        SENTINEL_SHADER_DIR "fullscreen.vert.spv", SENTINEL_SHADER_DIR "ssao.frag.spv", config);
+        TINY_SHADER_DIR "fullscreen.vert.spv", TINY_SHADER_DIR "ssao.frag.spv", config);
 }
 
 void SSAOPass::resize(VkExtent2D extent)
@@ -395,7 +395,7 @@ void SSAOPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     // 开销是一次几乎没有纹理采样的全屏写入，换来的是"开关状态"永远有定义。
 
     // -----------------------------------------------------------------------
-    // 反面用例（SENTINEL_SIMULATE_SSAO_SKIP=1）：
+    // 反面用例（TINY_SIMULATE_SSAO_SKIP=1）：
     // 故意把上面那个错误写法做出来 —— 跳过整个 Pass。
     // 用途是验证渲染图的语义校验真的能拦住它，而不是只写在注释里当传说。
     //   RenderGraph::validateWriteCoverage() 应该抛出
@@ -403,7 +403,7 @@ void SSAOPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     // 实测（5 帧自检）确实在启动第一帧就报出来了，而且是可读的中文错误。
     // 环境变量只读一次 —— 没必要每帧走一次 getenv。
     // -----------------------------------------------------------------------
-    static const bool simulateSkip = (std::getenv("SENTINEL_SIMULATE_SSAO_SKIP") != nullptr);
+    static const bool simulateSkip = (std::getenv("TINY_SIMULATE_SSAO_SKIP") != nullptr);
     if (simulateSkip)
         pass.setEnabled(false);
 

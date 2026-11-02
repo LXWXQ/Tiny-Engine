@@ -482,10 +482,10 @@ Surface Style）单独写在 [terrain-materials](terrain-materials.md)，这里�
 
 ```powershell
 # CPU + 网格 + 渲染路径
-.\\build\\Debug\\VulkanEngine.exe --selftest 20 --empty-scene --terrain-test
+.\\build\\Debug\\TinyEngine.exe --selftest 20 --empty-scene --terrain-test
 
 # 只看地形截图
-.\\build\\Debug\\VulkanEngine.exe --selftest 30 --empty-scene --terrain-test `
+.\\build\\Debug\\TinyEngine.exe --selftest 30 --empty-scene --terrain-test `
   --screenshot terrain.png --screenshot-frame 20
 ```
 

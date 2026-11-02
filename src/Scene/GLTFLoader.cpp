@@ -22,7 +22,7 @@
 #include <stb_image.h>
 #include <cstring>
 
-namespace sentinel
+namespace tiny
 {
 
 bool loadImageData(tinygltf::Image* image, int image_idx,
@@ -63,7 +63,7 @@ void setupGLTFLoader(tinygltf::TinyGLTF& loader)
     loader.SetImageLoader(&loadImageData, nullptr);
 }
 
-} // namespace sentinel
+} // namespace tiny
 // ============================================================================
 // glTF 2.0 加载实现
 //
@@ -87,7 +87,7 @@ void setupGLTFLoader(tinygltf::TinyGLTF& loader)
 #include <functional>
 #include <iostream>
 
-namespace sentinel
+namespace tiny
 {
 namespace
 {
@@ -463,4 +463,4 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
     return std::make_shared<Model>(*ctx.device, ctx.commandPool, builder);
 }
 
-} // namespace sentinel
+} // namespace tiny

@@ -35,7 +35,7 @@ void ScreenshotCapture::init(VkDevice dev, VmaAllocator alloc, VkFormat fmt,
     allocator = alloc;
     format = fmt;
 
-#ifndef SENTINEL_ENABLE_SCREENSHOT
+#ifndef TINY_ENABLE_SCREENSHOT
     en = false;
     (void)extent;
 #endif
@@ -78,7 +78,7 @@ void ScreenshotCapture::createStaging(VkExtent2D extent)
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
     allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    allocInfo.flags |= sentinel_vmaNameFlag();
+    allocInfo.flags |= tiny_vmaNameFlag();
     allocInfo.pUserData = const_cast<char*>("ScreenshotStaging");
 
     VmaAllocationInfo info{};

@@ -52,7 +52,7 @@ function Quote-NativeArg([string]$Value) {
 if (-not [string]::IsNullOrWhiteSpace($VulkanSdk)) { $env:VULKAN_SDK = $VulkanSdk }
 
 $buildRoot = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repoRoot $BuildDir }
-$exe = Join-Path $buildRoot (Join-Path $Config "VulkanEngine.exe")
+$exe = Join-Path $buildRoot (Join-Path $Config "TinyEngine.exe")
 if (-not (Test-Path -LiteralPath $exe)) { throw "Executable not found: $exe (build first)" }
 
 # Keep the screenshot frame inside the selftest range and after warm-up.
@@ -122,7 +122,7 @@ if (-not $SkipScreenshot) {
 }
 $engineArgs += @("--gpu-timing", "--gpu-timing-csv", $csv, "--validation-jsonl", $valJsonl)
 
-Write-Host "[bundle] running: VulkanEngine.exe $($engineArgs -join ' ')"
+Write-Host "[bundle] running: TinyEngine.exe $($engineArgs -join ' ')"
 $argLine = ($engineArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
 $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $repoRoot `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -NoNewWindow

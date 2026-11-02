@@ -11,7 +11,7 @@ class Device;
 class MaterialSystem;
 class DescriptorManager;
 
-namespace sentinel
+namespace tiny
 {
 
 // 自定义 glTF 图片解码器（注册给 tinygltf）。
@@ -52,4 +52,4 @@ struct GLTFLoadContext
 // 失败时返回 nullptr 并打印原因。
 std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::string& filepath);
 
-} // namespace sentinel
+} // namespace tiny

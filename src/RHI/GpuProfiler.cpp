@@ -11,7 +11,7 @@ void GpuProfiler::init(VkPhysicalDevice physicalDevice, VkDevice dev, VkQueue qu
 {
     device = dev;
 
-#ifndef SENTINEL_ENABLE_TRACY
+#ifndef TINY_ENABLE_TRACY
     enabled = false;
     (void)physicalDevice;
     (void)queue;
@@ -21,7 +21,7 @@ void GpuProfiler::init(VkPhysicalDevice physicalDevice, VkDevice dev, VkQueue qu
     if (!enabled)
         return;
 
-#ifdef SENTINEL_ENABLE_TRACY
+#ifdef TINY_ENABLE_TRACY
     // Tracy 的 VkCtx 构造会自己 begin/end/submit/wait 这个命令缓冲，
     // 所以必须给它一个"初始状态"（未开始录制）的命令缓冲，之后再释放。
     VkCommandBufferAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
@@ -48,7 +48,7 @@ void GpuProfiler::init(VkPhysicalDevice physicalDevice, VkDevice dev, VkQueue qu
 
 void GpuProfiler::destroy()
 {
-#ifdef SENTINEL_ENABLE_TRACY
+#ifdef TINY_ENABLE_TRACY
     if (context != nullptr)
         TracyVkDestroy(reinterpret_cast<TracyVkCtx>(context));
 #endif
@@ -57,7 +57,7 @@ void GpuProfiler::destroy()
 
 void GpuProfiler::collect(VkCommandBuffer cmd) const
 {
-#ifdef SENTINEL_ENABLE_TRACY
+#ifdef TINY_ENABLE_TRACY
     if (context != nullptr && cmd != VK_NULL_HANDLE)
         TracyVkCollect(reinterpret_cast<TracyVkCtx>(context), cmd);
 #else

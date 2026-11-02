@@ -1,5 +1,5 @@
 #include "ImGuiSystem.h"
-#include "AssetPaths.h"   // SENTINEL_IMGUI_INI_PATH
+#include "AssetPaths.h"   // TINY_IMGUI_INI_PATH
 #include "Scene/CameraController.h"
 #include "Core/EngineConfig.h"
 #include <stdexcept>
@@ -36,7 +36,7 @@ ImGuiSystem::ImGuiSystem(GLFWwindow* window, Device& device, VkFormat swapchainF
 //   1. 仓库根目录只允许出现 README.md；
 //   2. 工作目录随启动方式变化（双击 / IDE / 脚本），会到处生成 ini。
 // 放到 config/ 下还能和 engine.json 一样进版本库、跨机器共享。
-ImGui::GetIO().IniFilename = SENTINEL_IMGUI_INI_PATH;
+ImGui::GetIO().IniFilename = TINY_IMGUI_INI_PATH;
 
 ImGui::StyleColorsDark();
 
@@ -80,7 +80,7 @@ void ImGuiSystem::prepareDrawData(FrameInfo& frameInfo)
 {
 
 // 编辑器模式：UI 由 EditorLayer 全权构建（它有自己的菜单栏与面板布局），
-// 内置的 "Sentinel Engine Core" 面板不再绘制。
+// 内置的 "Tiny Engine Core" 面板不再绘制。
 // 两者不并存，避免两套面板同时修改同一批 EngineSettings 造成控制权歧义。
 if (frameInfo.isEditorMode && frameInfo.isEditorMode())
 {
@@ -95,7 +95,7 @@ return;
 	// 高度同理 —— 面板变矮时下面不留空块。
 	ImGui::SetNextWindowSize(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
 
-	ImGui::Begin("Sentinel Engine Core");
+	ImGui::Begin("Tiny Engine Core");
 
 	renderPerformancePanel(frameInfo.frameTime, frameInfo.displayTelemetry, frameInfo.settings);
 	renderSSAOPanel(frameInfo.settings);

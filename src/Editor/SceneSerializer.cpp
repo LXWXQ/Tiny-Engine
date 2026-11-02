@@ -18,7 +18,7 @@ std::string toRelative(const std::string& absolutePath)
 {
     if (absolutePath.empty())
         return {};
-    const std::string root = SENTINEL_RESOURCE_DIR;
+    const std::string root = TINY_RESOURCE_DIR;
     if (absolutePath.rfind(root, 0) == 0)
         return absolutePath.substr(root.size());
     return absolutePath;
@@ -30,7 +30,7 @@ std::string toAbsolute(const std::string& stored)
         return {};
     if (stored.size() > 1 && (stored[1] == ':' || stored[0] == '/' || stored[0] == '\\'))
         return stored;
-    return std::string(SENTINEL_RESOURCE_DIR) + stored;
+    return std::string(TINY_RESOURCE_DIR) + stored;
 }
 
 json toJson(const glm::vec3& v) { return json::array({ v.x, v.y, v.z }); }

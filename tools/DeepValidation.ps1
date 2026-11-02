@@ -43,7 +43,7 @@ function Quote-NativeArg([string]$Value) {
 }
 if (-not [string]::IsNullOrWhiteSpace($VulkanSdk)) { $env:VULKAN_SDK = $VulkanSdk }
 
-$exe = Join-Path $repoRoot (Join-Path $BuildDir (Join-Path $Config "VulkanEngine.exe"))
+$exe = Join-Path $repoRoot (Join-Path $BuildDir (Join-Path $Config "TinyEngine.exe"))
 if (-not (Test-Path -LiteralPath $exe)) { throw "Executable not found: $exe (build first)" }
 
 if ([string]::IsNullOrWhiteSpace($OutDir)) {

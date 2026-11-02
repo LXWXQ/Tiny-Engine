@@ -51,7 +51,7 @@ if (-not [string]::IsNullOrWhiteSpace($VulkanSdk)) { $env:VULKAN_SDK = $VulkanSd
 
 # Accept an absolute -BuildDir as well as a repo-relative one.
 $buildRoot = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repoRoot $BuildDir }
-$exe = Join-Path $buildRoot (Join-Path $Config "VulkanEngine.exe")
+$exe = Join-Path $buildRoot (Join-Path $Config "TinyEngine.exe")
 if (-not (Test-Path -LiteralPath $exe)) { throw "Executable not found: $exe (build first)" }
 
 # The screenshot frame must fall inside the selftest range and after warm-up.
@@ -86,7 +86,7 @@ function Invoke-Collect([string]$dir) {
 
     $engineArgs = @("--selftest", "$Frames", "--gpu-timing", "--gpu-timing-csv", $csv,
                     "--screenshot", $png, "--screenshot-frame", "$Frame")
-    Write-Host "[baseline] running: VulkanEngine.exe --selftest $Frames --gpu-timing --screenshot(frame $Frame)"
+    Write-Host "[baseline] running: TinyEngine.exe --selftest $Frames --gpu-timing --screenshot(frame $Frame)"
     $argLine = ($engineArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
     $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $repoRoot `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -NoNewWindow

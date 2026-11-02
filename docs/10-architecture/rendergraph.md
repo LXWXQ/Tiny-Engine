@@ -117,8 +117,8 @@ struct BufferEntry { BufferRange 已写区间; VkPipelineStageFlags2 stage; VkAc
 探针：
 
 ```powershell
-.\build\Debug\VulkanEngine.exe --selftest 20 --subresource-test      # 正例
-.\build\Debug\VulkanEngine.exe --subresource-error-test              # 反例：写 mip0 后读 mip1，必须被拒
+.\build\Debug\TinyEngine.exe --selftest 20 --subresource-test      # 正例
+.\build\Debug\TinyEngine.exe --subresource-error-test              # 反例：写 mip0 后读 mip1，必须被拒
 ```
 
 ---
@@ -173,7 +173,7 @@ struct BufferEntry { BufferRange 已写区间; VkPipelineStageFlags2 stage; VkAc
 ### 6.3 验收
 
 ```powershell
-.uild\Debug\VulkanEngine.exe --selftest 20 --cross-queue-test
+.uild\Debug\TinyEngine.exe --selftest 20 --cross-queue-test
 # 期望输出：
 #   [TD02] compute->graphics verified
 #   [TD02] graphics->compute verified
@@ -204,7 +204,7 @@ mip 3 超出 mipLevels 1"才是可行动的。
 `RenderGraph` 在每个 Pass 前后调 `GpuTimer`，但**只在 `--gpu-timing` 开启时**插 timestamp：
 
 ```cpp
-#ifdef SENTINEL_ENABLE_GPU_TIMING
+#ifdef TINY_ENABLE_GPU_TIMING
 if (gpuTimer) { /* vkCmdWriteTimestamp2 */ }
 #endif
 ```

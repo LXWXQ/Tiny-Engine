@@ -1,4 +1,4 @@
-# Sentinel 依赖与验证工具
+# Tiny Engine 依赖与验证工具
 
 ## 一条命令
 
@@ -64,7 +64,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/Profile.ps1 -Frames 30
 | `--validation-jsonl <path>` | 验证层消息写 JSONL（默认不落盘）|
 | `--diagnostics-test [path]` | 诊断管线自检（合成消息）|
 
-编译期开关见根 `CMakeLists.txt` 的 `SENTINEL_ENABLE_*`；设计原则见 `DEBUG_PROFILE_PLAN.md` §1.5。
+编译期开关见根 `CMakeLists.txt` 的 `TINY_ENABLE_*`；设计原则见 `DEBUG_PROFILE_PLAN.md` §1.5。
 
 ## P1 调试 / 剖析基础设施
 
@@ -93,9 +93,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/SetupProfiling.ps1
 ### Tracy 时间线
 
 ```powershell
-cmake -S . -B build -DSENTINEL_ENABLE_TRACY=ON
+cmake -S . -B build -DTINY_ENABLE_TRACY=ON
 cmake --build build --config Debug
-.\build\Debug\VulkanEngine.exe --build-info    # 应显示 tracy=1
+.\build\Debug\TinyEngine.exe --build-info    # 应显示 tracy=1
 ```
 
 无人值守抓取：后台跑引擎，另一个终端 `3rdParty/tracy/bin/tracy-capture.exe -o s.tracy -s 6`；
@@ -107,9 +107,9 @@ GPU zone；配合 `TRACY_ON_DEMAND`，未连接 server 时不记录。
 ### RenderDoc 抓帧
 
 ```powershell
-cmake -S . -B build -DSENTINEL_ENABLE_RENDERDOC=ON
+cmake -S . -B build -DTINY_ENABLE_RENDERDOC=ON
 cmake --build build --config Debug
-.\build\Debug\VulkanEngine.exe --build-info    # 应显示 renderdoc=1
+.\build\Debug\TinyEngine.exe --build-info    # 应显示 renderdoc=1
 ```
 
 抓帧：`tools/Capture.ps1 -Frame 120`（内部 `renderdoccmd capture ... --capture-frame 120`）。
@@ -186,7 +186,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/Baseline.ps1 -Action D
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/Validate.ps1 -EnableProfiling
 ```
 
-`-EnableProfiling` 把 `-DSENTINEL_ENABLE_TRACY=ON -DSENTINEL_ENABLE_RENDERDOC=ON` 传给 configure，
+`-EnableProfiling` 把 `-DTINY_ENABLE_TRACY=ON -DTINY_ENABLE_RENDERDOC=ON` 传给 configure，
 并额外跑一项 `p1-profiling-enabled`（共 18 项）。不加该开关即默认构建，17 项。
 
 Bloom 关闭的 selftest 还会检查 `[TD06] Bloom disabled: skipping Bright + Down + Up passes`；

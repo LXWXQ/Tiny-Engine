@@ -90,7 +90,7 @@ function Install-Dependency([hashtable]$Dependency) {
         Write-Host "[deps] Reusing cached $fileName"
     }
 
-    $extractRoot = Join-Path ([IO.Path]::GetTempPath()) ("sentinel-deps-" + [Guid]::NewGuid().ToString("N"))
+    $extractRoot = Join-Path ([IO.Path]::GetTempPath()) ("tiny-deps-" + [Guid]::NewGuid().ToString("N"))
     $staging = Join-Path $DependenciesRoot (".install-" + $Dependency.Name + "-" + [Guid]::NewGuid().ToString("N"))
     try {
         Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force

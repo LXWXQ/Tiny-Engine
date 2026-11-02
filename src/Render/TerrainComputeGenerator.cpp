@@ -178,7 +178,7 @@ void TerrainComputeGenerator::createPipeline()
         throw std::runtime_error("pipeline layout creation failed");
 
     pipeline = std::make_unique<ComputePipeline>(
-        device, SENTINEL_SHADER_DIR "terrain_height.comp.spv", pipelineLayout);
+        device, TINY_SHADER_DIR "terrain_height.comp.spv", pipelineLayout);
 }
 
 bool TerrainComputeGenerator::recordAndSubmit(Slot& slot,

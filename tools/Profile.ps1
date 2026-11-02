@@ -43,7 +43,7 @@ function Quote-NativeArg([string]$Value) {
 
 if (-not [string]::IsNullOrWhiteSpace($VulkanSdk)) { $env:VULKAN_SDK = $VulkanSdk }
 
-$exe = Join-Path $repoRoot (Join-Path $BuildDir (Join-Path $Config "VulkanEngine.exe"))
+$exe = Join-Path $repoRoot (Join-Path $BuildDir (Join-Path $Config "TinyEngine.exe"))
 if (-not (Test-Path -LiteralPath $exe)) {
     throw "Executable not found: $exe (run tools/Validate.ps1 first to build)"
 }
@@ -83,7 +83,7 @@ if ($ValidationSync) { $engineArgs += @("--validation-features", "sync") }
 
 $stdout = Join-Path $outDir "run.stdout.log"
 $stderr = Join-Path $outDir "run.stderr.log"
-Write-Host "[profile] running: VulkanEngine.exe $($engineArgs -join ' ')"
+Write-Host "[profile] running: TinyEngine.exe $($engineArgs -join ' ')"
 $argLine = ($engineArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
 $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $repoRoot `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -NoNewWindow

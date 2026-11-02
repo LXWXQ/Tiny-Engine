@@ -68,26 +68,26 @@ updated: 2026-11-02
 
 ```powershell
 # 正常窗口
-.\\build\\Debug\\VulkanEngine.exe
+.\\build\\Debug\\TinyEngine.exe
 
 # 基础自检
-.\\build\\Debug\\VulkanEngine.exe --selftest 120
+.\\build\\Debug\\TinyEngine.exe --selftest 120
 
 # 关 Bloom + 动态分辨率 0.5
-.\\build\\Debug\\VulkanEngine.exe --selftest 120 --no-bloom --render-scale 0.5
+.\\build\\Debug\\TinyEngine.exe --selftest 120 --no-bloom --render-scale 0.5
 
 # 同步校验（必须 0 errors / 0 warnings）
-.\\build\\Debug\\VulkanEngine.exe --selftest 30 --validation-features sync
+.\\build\\Debug\\TinyEngine.exe --selftest 30 --validation-features sync
 
 # GPU 计时 + 截图 + 验证层落盘
-.\\build\\Debug\\VulkanEngine.exe --selftest 90 --gpu-timing --screenshot shot.png --validation-jsonl val.jsonl
+.\\build\\Debug\\TinyEngine.exe --selftest 90 --gpu-timing --screenshot shot.png --validation-jsonl val.jsonl
 
 # 地形 G-Buffer 端到端 + 截图
-.\\build\\Debug\\VulkanEngine.exe --selftest 30 --empty-scene --terrain-test `
+.\\build\\Debug\\TinyEngine.exe --selftest 30 --empty-scene --terrain-test `
   --screenshot terrain.png --screenshot-frame 20
 
 # 独立 compute 回归
-.\\build\\Debug\\VulkanEngine.exe --selftest 20 --compute-test
+.\\build\\Debug\\TinyEngine.exe --selftest 20 --compute-test
 ```
 
 ## 5. 加新参数的约定

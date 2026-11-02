@@ -95,7 +95,7 @@ size_t Device::reportVmaStats(const char* stage)
     // 这个函数只在排查内存泄漏时手工插入调用（工作区里不留调用点）——
     // vmaDestroyAllocator 看到"有分配没释放"会直接断言崩掉，而断言不说是谁，
     // 所以在析构链各处插一次、对比 allocationCount 的变化，就能把范围缩到
-    // "两次调用之间被销毁的那些对象"。配合 SENTINEL_VMA_LEAK_CHECK=ON
+    // "两次调用之间被销毁的那些对象"。配合 TINY_VMA_LEAK_CHECK=ON
     // 打开分配命名，通常一轮就能定位。
     VmaBudget budget[VK_MAX_MEMORY_HEAPS]{};
     vmaGetHeapBudgets(vmaAllocator, budget);
@@ -175,7 +175,7 @@ void Device::createInstance()
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "Vulkan Engine";
+    appInfo.pApplicationName = "Tiny Engine";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "No Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -203,7 +203,7 @@ void Device::createInstance()
 
     // P0-2：验证层增强能力（best practices / 同步校验）走 VkValidationFeaturesEXT。
     // 默认不启用；只有 --validation-features 显式请求时才把结构体挂上 pNext。
-#ifdef SENTINEL_ENABLE_VALIDATION_FEATURES
+#ifdef TINY_ENABLE_VALIDATION_FEATURES
     VkValidationFeaturesEXT validationFeatures{ VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT };
     std::vector<VkValidationFeatureEnableEXT> enabledValidationFeatures;
     if (enableValidationLayers && validationBestPractices)
@@ -564,7 +564,7 @@ std::vector<const char*> Device::getRequiredExtensions()
     if (enableValidationLayers)
     {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-#ifdef SENTINEL_ENABLE_VALIDATION_FEATURES
+#ifdef TINY_ENABLE_VALIDATION_FEATURES
         if (validationBestPractices || validationSync)
             extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
 #endif

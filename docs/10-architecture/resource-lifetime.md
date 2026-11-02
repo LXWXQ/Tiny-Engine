@@ -113,7 +113,7 @@ releaseMaterialSet(slot);   // 不立即归还，记录"归还时的最后一个
 - 排查泄漏：
 
 ```powershell
-cmake -S . -B build -DSENTINEL_VMA_LEAK_CHECK=ON
+cmake -S . -B build -DTINY_VMA_LEAK_CHECK=ON
 ```
 
 打开后 VMA 销毁分配器时逐条打印未释放的分配及其名字（默认只有一句断言）。

@@ -70,7 +70,7 @@ updated: 2026-10-30
 ## 7. 自检
 
 ```powershell
-.\\build\\Debug\\VulkanEngine.exe --config-test
+.\\build\\Debug\\TinyEngine.exe --config-test
 ```
 
 输出：`[Config] selfTest PASS: v0 -> v2 migration, backup, corrupt/future config left untouched`

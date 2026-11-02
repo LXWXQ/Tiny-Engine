@@ -153,11 +153,11 @@ void CrossQueueProbePass::init()
     config.depthStencilInfo.depthWriteEnable = VK_FALSE;
 
     graphicsPipeline = std::make_unique<Pipeline>(device,
-        SENTINEL_SHADER_DIR "fullscreen.vert.spv",
-        SENTINEL_SHADER_DIR "cross_queue_probe.frag.spv", config);
+        TINY_SHADER_DIR "fullscreen.vert.spv",
+        TINY_SHADER_DIR "cross_queue_probe.frag.spv", config);
 
     computePipeline = std::make_unique<ComputePipeline>(device,
-        SENTINEL_SHADER_DIR "cross_queue_probe.comp.spv", computePipelineLayout);
+        TINY_SHADER_DIR "cross_queue_probe.comp.spv", computePipelineLayout);
 }
 void CrossQueueProbePass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
 {

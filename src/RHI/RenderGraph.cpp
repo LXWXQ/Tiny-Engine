@@ -110,7 +110,7 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     currentFrameSlot = frameSlot;
 
     // P0-4：GPU 计时。关闭时 gpuTimer 为 nullptr，一个分支都不进。
-#ifdef SENTINEL_ENABLE_GPU_TIMING
+#ifdef TINY_ENABLE_GPU_TIMING
     if (gpuTimer && cmd != VK_NULL_HANDLE)
         gpuTimer->onFrameBegin(cmd, frameSlot, frameNumber);
 #else
@@ -277,7 +277,7 @@ void RenderGraph::endFrame()
         // P1-1：Tracy GPU zone 覆盖本 pass 的屏障 + 渲染 + 回调。
         // active=false（compute pass 或未启用）时是空操作。
         {
-            SENTINEL_GPU_ZONE_SCOPE(gpuProfiler, passCmd, pass.name.c_str(), !pass.isCompute);
+            TINY_GPU_ZONE_SCOPE(gpuProfiler, passCmd, pass.name.c_str(), !pass.isCompute);
 
         // ---- 1) 资源屏障：由声明自动推导 ----
         for (const Access& acc : accesses)

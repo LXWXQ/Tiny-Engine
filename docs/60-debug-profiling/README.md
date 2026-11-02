@@ -20,7 +20,7 @@ updated: 2026-10-30
 ## 铁律
 
 所有调试 / 剖析能力都**随用随开**：默认关闭，关闭时不分配、不插 GPU 命令、不落盘。
-是否"编译进来"由 CMake 的 `SENTINEL_ENABLE_*` 决定；是否"本次开启"由命令行 flag 决定。
+是否"编译进来"由 CMake 的 `TINY_ENABLE_*` 决定；是否"本次开启"由命令行 flag 决定。
 判断标准不是"绝对零指令"，而是**"不能有可测量的渲染性能回退"**。
 
 每次运行结束会打印 `[Diag] zero-overhead guard PASS|SKIP|FAIL | queryPool=N | screenshotBuffer=N`。

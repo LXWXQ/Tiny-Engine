@@ -61,7 +61,7 @@ void AssetBrowserPanel::refresh()
     models.clear();
     scanned = true;
 
-    const std::filesystem::path root = std::filesystem::path(SENTINEL_RESOURCE_DIR) / "Models";
+    const std::filesystem::path root = std::filesystem::path(TINY_RESOURCE_DIR) / "Models";
 
     std::error_code ec;
     if (!std::filesystem::exists(root, ec))

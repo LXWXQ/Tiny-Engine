@@ -1138,7 +1138,7 @@ void FirstApp::createUniformBuffers()
 		VmaAllocationCreateInfo allocInfo{};
 		allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 		allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-		allocInfo.flags |= sentinel_vmaNameFlag();
+		allocInfo.flags |= tiny_vmaNameFlag();
 		allocInfo.pUserData = const_cast<char*>(names[frame]);
 
 		if (vmaCreateBuffer(vulkanDevice->getVmaAllocator(), &bufferInfo, &allocInfo,
@@ -1153,20 +1153,20 @@ void FirstApp::createUniformBuffers()
 
 void FirstApp::loadAllPBRTextures()
 {
-std::string basePath = SENTINEL_RESOURCE_DIR;
+std::string basePath = TINY_RESOURCE_DIR;
 
 // HDR 环境贴图：天空盒 + IBL 都要用，无条件加载
 environmentTex = std::make_unique<Texture>(*vulkanDevice,
 basePath + "Texture/environment.hdr",
 VK_FORMAT_R32G32B32A32_SFLOAT, renderer->getCommandPool(), true);
 
-std::cout << "[Sentinel] HDR environment loaded.\n";
+std::cout << "[Tiny] HDR environment loaded.\n";
 }
 
 void FirstApp::initMaterials()
 {
 auto& matSys = scene->getMaterialSystem();
-std::string basePath = SENTINEL_RESOURCE_DIR;
+std::string basePath = TINY_RESOURCE_DIR;
 
 // ---- 兜底材质 ----
 // 天空盒 / 网格虽然着色器里不读 set 1，但管线布局声明了 set 1，
@@ -1229,7 +1229,7 @@ for (entt::entity entity : registry.view<MeshComponent, RenderTagComponent>())
     materialComp.materialSetIndex = materialComp.material->descriptorSetIndex;
 }
 
-std::cout << "[Sentinel] 材质就绪，描述符槽位占用 "
+std::cout << "[Tiny] 材质就绪，描述符槽位占用 "
 << descriptorManager->getMaterialSlotUsed() << "/"
 << descriptorManager->getMaterialSlotCapacity() << "\n";
 }
@@ -1266,7 +1266,7 @@ updateMsAccum += std::chrono::duration<double, std::milli>(updateEnd - updateSta
 renderMsAccum += std::chrono::duration<double, std::milli>(renderEnd - updateEnd).count();
 ++profiledFrames;
 
-		SENTINEL_PROFILE_FRAME_MARK(); 
+		TINY_PROFILE_FRAME_MARK(); 
 // 每 5 秒打一行性能摘要。
 // 除了日常观察，这在"无头验证"（重定向 stdout 跑一遍看验证层）时特别有用 ——
 // 没有它就无法区分"渲染正常"和"卡死在第一帧"。
@@ -1424,7 +1424,7 @@ int FirstApp::runHeadlessSelfTest(int frames)
 		}
 		update(dt);
 		render(dt);
-		SENTINEL_PROFILE_FRAME_MARK();
+		TINY_PROFILE_FRAME_MARK();
 	}
 
 	const auto benchmarkEnd = std::chrono::high_resolution_clock::now();
@@ -1710,7 +1710,7 @@ void FirstApp::initEditor()
     };
 
     editorLayer = std::make_unique<editor::EditorLayer>();
-    editorLayer->initialize(services, std::string(SENTINEL_RESOURCE_DIR) + "Scenes/main.scene.json");
+    editorLayer->initialize(services, std::string(TINY_RESOURCE_DIR) + "Scenes/main.scene.json");
 
     // 先按窗口尺寸建一张，之后由编辑器的布局回调纠正成真实视口大小。
     {
@@ -1745,7 +1745,7 @@ void FirstApp::shutdownEditor()
 
 void FirstApp::update(float dt)
 {
-	SENTINEL_ZONE_SCOPED("update");
+	TINY_ZONE_SCOPED("update");
 	imguiSystem->newFrame();
 
 	// 编辑器每帧的第一步：处理快捷键与播放状态。
@@ -1807,7 +1807,7 @@ scene->update(dt, window, aspect, allowCameraInput);
 
 void FirstApp::render(float dt)
 {
-	SENTINEL_ZONE_SCOPED("render");
+	TINY_ZONE_SCOPED("render");
 	if (auto commandBuffer = renderer->beginFrame())
 	{
 		scene->beginFrameTelemetry();
@@ -1951,7 +1951,7 @@ void FirstApp::finalizeDiagnostics()
     const uint32_t gpuTimingQueries = gpuTimer.queryPoolCount();
     const uint32_t screenshotBytes = screenshotCapture.stagedBytes();
 
-#ifdef SENTINEL_ENABLE_GPU_TIMING
+#ifdef TINY_ENABLE_GPU_TIMING
     if (gpuTimer.isEnabled())
     {
         gpuTimer.finalize();

@@ -7,7 +7,7 @@
 //
 // 设计原则见 docs/60-debug-profiling/zero-overhead.md：
 //   * 所有调试 / 剖析能力「随用随开」，关闭时对运行时性能零影响；
-//   * 「是否编译进来」由 CMake option -> SENTINEL_ENABLE_* 宏决定；
+//   * 「是否编译进来」由 CMake option -> TINY_ENABLE_* 宏决定；
 //   * 「本次是否开启」由命令行 flag -> diag::Options 决定。
 //
 // 本文件不引入任何全局构造 / 分配：Options 由调用方（main）持有，
@@ -63,7 +63,7 @@ bool emptyScene = false;
 bool terrainTest = false;
 
 // 是否以编辑器模式启动。编辑器默认不加载 Sponza（见 Scene::init 的说明），
-// 但 VulkanEngine.exe 的常规运行仍然加载，视觉回归基线不受影响。
+// 但 TinyEngine.exe 的常规运行仍然加载，视觉回归基线不受影响。
 bool editorMode = false;
 
 // --hidden / --minimized：无人值守运行（自检、截图、回归）不要抢焦点。

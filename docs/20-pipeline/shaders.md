@@ -94,10 +94,10 @@ Get-ChildItem shaders -File | ForEach-Object {
 cmake --build build --config Debug
 
 # 2) 四种 Pass 组合，stderr 必须 0 字节
-.\\build\\Debug\\VulkanEngine.exe --selftest 120
-.\\build\\Debug\\VulkanEngine.exe --selftest 120 --no-bloom
-.\\build\\Debug\\VulkanEngine.exe --selftest 120 --no-ssao
-.\\build\\Debug\\VulkanEngine.exe --selftest 120 --no-bloom --no-ssao
+.\\build\\Debug\\TinyEngine.exe --selftest 120
+.\\build\\Debug\\TinyEngine.exe --selftest 120 --no-bloom
+.\\build\\Debug\\TinyEngine.exe --selftest 120 --no-ssao
+.\\build\\Debug\\TinyEngine.exe --selftest 120 --no-bloom --no-ssao
 ```
 
 改画面相关 shader 时，还要按 [acceptance](../50-validation/acceptance.md) 做截图对比。

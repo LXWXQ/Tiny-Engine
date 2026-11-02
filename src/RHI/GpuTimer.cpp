@@ -32,7 +32,7 @@ void GpuTimer::init(VkDevice dev, VkPhysicalDevice phys,
     framesInFlight = (frames == 0) ? 1u : frames;
     slots.assign(framesInFlight, SlotState{});
 
-#ifndef SENTINEL_ENABLE_GPU_TIMING
+#ifndef TINY_ENABLE_GPU_TIMING
     // 编译期关闭：即使运行期给了 --gpu-timing 也不生效。
     en = false;
     (void)phys;

@@ -239,13 +239,13 @@ public:
                     uint64_t frameNumber = 0);
     void endFrame();     // 按顺序执行所有 Pass
 
-    // P0-4：每 pass GPU 计时挂钩。SENTINEL_ENABLE_GPU_TIMING 关闭时是空实现，
+    // P0-4：每 pass GPU 计时挂钩。TINY_ENABLE_GPU_TIMING 关闭时是空实现，
     // 默认构建为此一处也不产生（零分支、零命令）。
     void setGpuTimer(GpuTimer* timer) { gpuTimer = timer; }
     void setGpuProfiler(GpuProfiler* profiler) { gpuProfiler = profiler; }
     inline void onPassTimingBegin(VkCommandBuffer cmd, uint32_t passIndex, const char* name)
     {
-#ifdef SENTINEL_ENABLE_GPU_TIMING
+#ifdef TINY_ENABLE_GPU_TIMING
         if (gpuTimer) gpuTimer->beginPass(cmd, currentFrameSlot, passIndex, name);
 #else
         (void)cmd; (void)passIndex; (void)name;
@@ -253,7 +253,7 @@ public:
     }
     inline void onPassTimingEnd(VkCommandBuffer cmd, uint32_t passIndex)
     {
-#ifdef SENTINEL_ENABLE_GPU_TIMING
+#ifdef TINY_ENABLE_GPU_TIMING
         if (gpuTimer) gpuTimer->endPass(cmd, currentFrameSlot, passIndex);
 #else
         (void)cmd; (void)passIndex;

@@ -16,7 +16,7 @@ param(
 #
 # Requirements:
 #   * RenderDoc installed (renderdoccmd on PATH, or pass -RenderDocCmd <path>).
-#   * The engine must be built with -DSENTINEL_ENABLE_RENDERDOC=ON (otherwise
+#   * The engine must be built with -DTINY_ENABLE_RENDERDOC=ON (otherwise
 #     --capture-frame is a no-op).
 #
 # ASCII-only on purpose (PowerShell 5.1 reads .ps1 without BOM as ANSI).
@@ -26,7 +26,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 
-$exe = Join-Path $repoRoot (Join-Path $BuildDir (Join-Path $Config "VulkanEngine.exe"))
+$exe = Join-Path $repoRoot (Join-Path $BuildDir (Join-Path $Config "TinyEngine.exe"))
 if (-not (Test-Path -LiteralPath $exe)) { throw "Executable not found: $exe (build first)" }
 
 if ([string]::IsNullOrWhiteSpace($RenderDocCmd)) {
@@ -43,7 +43,7 @@ if ([string]::IsNullOrWhiteSpace($RenderDocCmd)) {
 if ([string]::IsNullOrWhiteSpace($RenderDocCmd) -or -not (Test-Path -LiteralPath $RenderDocCmd)) {
     Write-Host "[capture] renderdoccmd not found."
     Write-Host "[capture] Install RenderDoc, or pass -RenderDocCmd <path to renderdoccmd.exe>."
-    Write-Host "[capture] Then rebuild with: cmake -S . -B $BuildDir -DSENTINEL_ENABLE_RENDERDOC=ON"
+    Write-Host "[capture] Then rebuild with: cmake -S . -B $BuildDir -DTINY_ENABLE_RENDERDOC=ON"
     exit 2
 }
 

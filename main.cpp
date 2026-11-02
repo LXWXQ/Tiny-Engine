@@ -34,8 +34,8 @@
 //   --visible                     强制显示窗口，覆盖 --hidden 的默认行为
 //
 // 本文件被编译两次，产出两个可执行文件（见 CMakeLists.txt）：
-//   VulkanEngine.exe   运行时模式
-//   SentinelEditor.exe 编辑器模式（SENTINEL_DEFAULT_EDITOR=1，等价于 --editor）
+//   TinyEngine.exe   运行时模式
+//   TinyEditor.exe 编辑器模式（TINY_DEFAULT_EDITOR=1，等价于 --editor）
 //
 //   ---- P0：调试 / 剖析能力（随用随开，默认关闭）----
 //   --build-info                  打印本二进制编译进的 & 本次开启的调试能力后退出
@@ -53,7 +53,7 @@
 // 这两个开关走的是和 UI 复选框完全相同的代码路径（EngineSettings）。
 //
 // 调试能力的开关模型（见 docs/60-debug-profiling/zero-overhead.md）：
-//   是否"编译进来"由 CMake option -> SENTINEL_ENABLE_* 宏决定；
+//   是否"编译进来"由 CMake option -> TINY_ENABLE_* 宏决定；
 //   是否"本次开启"由上面的 flag 决定。关闭时不分配、不插命令、不落盘。
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)
@@ -81,10 +81,10 @@ int main(int argc, char** argv)
     bool windowHiddenFlag = false;
     bool windowMinimizedFlag = false;
     bool windowVisibleFlag = false;
-    // SentinelEditor.exe 用 SENTINEL_DEFAULT_EDITOR=1 编译，于是"打开就是编辑器"；
-    // VulkanEngine.exe 不带这个宏，行为与引入编辑器之前完全一致。
+    // TinyEditor.exe 用 TINY_DEFAULT_EDITOR=1 编译，于是"打开就是编辑器"；
+    // TinyEngine.exe 不带这个宏，行为与引入编辑器之前完全一致。
     // 两个 exe 共用同一份 main.cpp，差异只在这一个宏上。
-#ifdef SENTINEL_DEFAULT_EDITOR
+#ifdef TINY_DEFAULT_EDITOR
     bool editorMode = true;
 #else
     bool editorMode = false;
@@ -216,8 +216,8 @@ int main(int argc, char** argv)
 
         diag::configureValidationLog(diagOptions.validationJsonlPath);
 
-#ifdef SENTINEL_DEFAULT_EDITOR
-        std::cout << "[Sentinel] SentinelEditor build (editor mode on by default)\n";
+#ifdef TINY_DEFAULT_EDITOR
+        std::cout << "[Tiny] TinyEditor build (editor mode on by default)\n";
 #endif
         // 让引擎知道是否编辑器模式：编辑器默认不加载 Sponza
         diagOptions.editorMode = editorMode;

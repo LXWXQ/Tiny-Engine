@@ -42,8 +42,8 @@ updated: 2026-10-30
 
 | 工具 | 用途 | 获取 |
 |---|---|---|
-| RenderDoc | 帧捕获 + 回放（主力） | 独立安装；`SENTINEL_ENABLE_RENDERDOC=ON` 后可用 `--capture-frame N` |
-| Tracy | CPU/GPU 时间线 | `tools/SetupProfiling.ps1` + `SENTINEL_ENABLE_TRACY=ON` |
+| RenderDoc | 帧捕获 + 回放（主力） | 独立安装；`TINY_ENABLE_RENDERDOC=ON` 后可用 `--capture-frame N` |
+| Tracy | CPU/GPU 时间线 | `tools/SetupProfiling.ps1` + `TINY_ENABLE_TRACY=ON` |
 | SPIRV-Tools | `spirv-val` 已接入构建 | 随 Vulkan SDK |
 | vulkaninfo | 环境快照 | 随 Vulkan SDK |
 
@@ -64,7 +64,7 @@ RGP/RGD/RGA（AMD）、GPA（Intel）。需要时自行安装，只做人工深�
 | GPU 空转 / 队列串行 | `nsys` 时间线 | Tracy |
 | pipeline / descriptor 开销 | `--validation-features bp` | `nsys` API 统计 |
 | 视觉回归 | `Baseline.ps1 -Action Diff` | RenderDoc |
-| 内存泄漏 | `-DSENTINEL_VMA_LEAK_CHECK=ON` | `VK_EXT_memory_budget` |
+| 内存泄漏 | `-DTINY_VMA_LEAK_CHECK=ON` | `VK_EXT_memory_budget` |
 
 ## 5. 注意事项
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(VulkanEngine)
+project(TinyEngine)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,7 +23,7 @@ set(SPDLOG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/spdlog")
 # 所有第三方依赖都不进版本库。配置阶段统一检查关键文件，缺失时给出
 # 一条可执行的修复命令，避免等到编译期才报 "cannot open ..."。
 # spdlog 是可选依赖，当前未启用，因此不在必需清单里。
-set(SENTINEL_REQUIRED_DEPENDENCY_FILES
+set(TINY_REQUIRED_DEPENDENCY_FILES
     "${GLFW_DIR}/CMakeLists.txt"
     "${GLFW_DIR}/include/GLFW/glfw3.h"
     "${GLM_DIR}/glm/glm.hpp"
@@ -35,7 +35,7 @@ set(SENTINEL_REQUIRED_DEPENDENCY_FILES
     "${TINYGLTF_DIR}/json.hpp"
     "${ENTT_DIR}/src/entt/entt.hpp"
 )
-foreach(DEPENDENCY_FILE IN LISTS SENTINEL_REQUIRED_DEPENDENCY_FILES)
+foreach(DEPENDENCY_FILE IN LISTS TINY_REQUIRED_DEPENDENCY_FILES)
     if(NOT EXISTS "${DEPENDENCY_FILE}")
         message(FATAL_ERROR
             "缺少第三方依赖文件：${DEPENDENCY_FILE}\n"
@@ -74,25 +74,25 @@ list(APPEND SOURCES
 # ---------------------------------------------------------------------------
 # 两个可执行文件，共享同一份引擎/编辑器源码
 #
-#   VulkanEngine   运行时模式（行为与引入编辑器之前完全一致）
-#   SentinelEditor 编辑器模式（等价于 VulkanEngine --editor）
+#   TinyEngine  运行时模式（行为与引入编辑器之前完全一致）
+#   TinyEditor  编辑器模式（等价于 TinyEngine --editor）
 #
 # 为什么用 OBJECT 库而不是把源码列两遍：后者会让每个 .cpp 被编译两次，
 # 整个工程的构建时间直接翻倍。OBJECT 库让两个 exe 复用同一批 .obj，
 # 只有 main.cpp 各编一次。
 # ---------------------------------------------------------------------------
-add_library(sentinel_core OBJECT ${SOURCES})
+add_library(tiny_core OBJECT ${SOURCES})
 
 add_executable(${PROJECT_NAME} main.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE sentinel_core)
+target_link_libraries(${PROJECT_NAME} PRIVATE tiny_core)
 
 # 编辑器版：同一个 main.cpp，只多一个编译期开关，让 --editor 变成默认值。
 # 运行时仍然可以显式传 --editor / --screenshot-viewport 等参数。
-add_executable(SentinelEditor main.cpp)
-target_link_libraries(SentinelEditor PRIVATE sentinel_core)
-target_compile_definitions(SentinelEditor PRIVATE SENTINEL_DEFAULT_EDITOR=1)
+add_executable(TinyEditor main.cpp)
+target_link_libraries(TinyEditor PRIVATE tiny_core)
+target_compile_definitions(TinyEditor PRIVATE TINY_DEFAULT_EDITOR=1)
 
-target_include_directories(sentinel_core PUBLIC 
+target_include_directories(tiny_core PUBLIC 
     ${Vulkan_INCLUDE_DIRS}
     ${GLM_INCLUDE_DIR}
     "${GLFW_DIR}/include"
@@ -111,27 +111,27 @@ target_include_directories(sentinel_core PUBLIC
 # 资源路径注入：在配置阶段把绝对路径写进生成的 AssetPaths.h，
 # 让引擎不再依赖"工作目录恰好是 build/Debug"这个隐式约定。
 # ---------------------------------------------------------------------------
-set(SENTINEL_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-file(MAKE_DIRECTORY "${SENTINEL_GENERATED_DIR}")
+set(TINY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${TINY_GENERATED_DIR}")
 
 # W1：配置文件也放在工程根下的 config/ 目录，理由和资源路径一样 ——
 # 不能依赖工作目录。放工程根（而不是 build/）是为了让 Debug / Release
 # 共享同一份用户设置，而且这份文件是要进版本库的（作为默认预设）。
-set(SENTINEL_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config")
-file(MAKE_DIRECTORY "${SENTINEL_CONFIG_DIR}")
+set(TINY_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config")
+file(MAKE_DIRECTORY "${TINY_CONFIG_DIR}")
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssetPaths.h.in"
-    "${SENTINEL_GENERATED_DIR}/AssetPaths.h"
+    "${TINY_GENERATED_DIR}/AssetPaths.h"
     @ONLY
 )
-target_include_directories(sentinel_core PUBLIC "${SENTINEL_GENERATED_DIR}")
+target_include_directories(tiny_core PUBLIC "${TINY_GENERATED_DIR}")
 
 # tinygltf 内部默认会展开一份 stb_image 实现；
 # 而 Application.cpp 里已经定义了 STB_IMAGE_IMPLEMENTATION，两者会重复定义 stbi_* 符号。
 # 因此关闭它自带的图片解码，改由我们注册自定义解码器（见 GLTFLoader.cpp）。
 # 这两个宏必须对所有包含 tiny_gltf.h 的翻译单元一致，所以放在这里统一注入。
-target_compile_definitions(sentinel_core PUBLIC
+target_compile_definitions(tiny_core PUBLIC
     TINYGLTF_NO_STB_IMAGE
     TINYGLTF_NO_STB_IMAGE_WRITE
 )
@@ -142,20 +142,20 @@ target_compile_definitions(sentinel_core PUBLIC
 # 打开之后：
 #   1) VMA 在销毁分配器时把每条未释放的分配逐条打出来
 #      （默认只有一句断言，不说是谁）；
-#   2) sentinel_vmaNameFlag() 会给分配附上名字，于是日志里直接显示
+#   2) tiny_vmaNameFlag() 会给分配附上名字，于是日志里直接显示
 #      "Name: SSAOUbo" 而不是 "Name: vma_empty"。
 #
 # 默认关：它会记录每次分配的调用点字符串，Debug 下明显变慢，而且它报告的
 # 内容本身就意味着"代码有 bug"，不该是常态。
-#   cmake -S . -B build -DSENTINEL_VMA_LEAK_CHECK=ON
+#   cmake -S . -B build -DTINY_VMA_LEAK_CHECK=ON
 # ---------------------------------------------------------------------------
-option(SENTINEL_VMA_LEAK_CHECK "打开 VMA 的详细泄漏日志（排查用，会变慢）" OFF)
-if(SENTINEL_VMA_LEAK_CHECK)
-    target_compile_definitions(sentinel_core PUBLIC SENTINEL_VMA_LEAK_CHECK)
+option(TINY_VMA_LEAK_CHECK "打开 VMA 的详细泄漏日志（排查用，会变慢）" OFF)
+if(TINY_VMA_LEAK_CHECK)
+    target_compile_definitions(tiny_core PUBLIC TINY_VMA_LEAK_CHECK)
 endif()
 
 # PUBLIC：两个可执行文件都要拿到这些链接依赖与使用要求。
-target_link_libraries(sentinel_core PUBLIC
+target_link_libraries(tiny_core PUBLIC
     Vulkan::Vulkan
     glfw
     Threads::Threads
@@ -165,50 +165,50 @@ target_link_libraries(sentinel_core PUBLIC
 # 调试 / 剖析能力开关（P0）。
 #
 # 原则（见 DEBUG_PROFILE_PLAN.md §1.5）：能力「随用随开」，关闭时零开销。
-#   * 是否「编译进来」= 下面的 CMake option（-> SENTINEL_ENABLE_* 宏）；
+#   * 是否「编译进来」= 下面的 CMake option（-> TINY_ENABLE_* 宏）；
 #   * 是否「本次开启」= 命令行 flag（如 --gpu-timing）。
-# 重量级 / 带外部依赖的能力默认 OFF（P1 的 Tracy / RenderDoc 走 SENTINEL_ENABLE_PROFILER）。
+# 重量级 / 带外部依赖的能力默认 OFF（P1 的 Tracy / RenderDoc 走 TINY_ENABLE_PROFILER）。
 # ---------------------------------------------------------------------------
-option(SENTINEL_ENABLE_GPU_TIMING "编译入 --gpu-timing（每 pass GPU 计时）" ON)
-option(SENTINEL_ENABLE_VALIDATION_FEATURES "编译入 --validation-features（best practices / sync）" ON)
-option(SENTINEL_ENABLE_BUILD_INFO "编译入 --build-info（能力清单自报）" ON)
-option(SENTINEL_ENABLE_SCREENSHOT "编译入 --screenshot（无头截图 + 视觉回归）" ON)
-option(SENTINEL_ENABLE_TRACY "编译入 Tracy 时间线剖析（需要 3rdParty/tracy）" OFF)
-option(SENTINEL_ENABLE_RENDERDOC "编译入 RenderDoc 抓帧挂钩（需要 3rdParty/renderdoc/renderdoc_app.h）" OFF)
+option(TINY_ENABLE_GPU_TIMING "编译入 --gpu-timing（每 pass GPU 计时）" ON)
+option(TINY_ENABLE_VALIDATION_FEATURES "编译入 --validation-features（best practices / sync）" ON)
+option(TINY_ENABLE_BUILD_INFO "编译入 --build-info（能力清单自报）" ON)
+option(TINY_ENABLE_SCREENSHOT "编译入 --screenshot（无头截图 + 视觉回归）" ON)
+option(TINY_ENABLE_TRACY "编译入 Tracy 时间线剖析（需要 3rdParty/tracy）" OFF)
+option(TINY_ENABLE_RENDERDOC "编译入 RenderDoc 抓帧挂钩（需要 3rdParty/renderdoc/renderdoc_app.h）" OFF)
 
-if(SENTINEL_ENABLE_GPU_TIMING)
-    target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_GPU_TIMING)
+if(TINY_ENABLE_GPU_TIMING)
+    target_compile_definitions(tiny_core PUBLIC TINY_ENABLE_GPU_TIMING)
 endif()
-if(SENTINEL_ENABLE_VALIDATION_FEATURES)
-    target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_VALIDATION_FEATURES)
+if(TINY_ENABLE_VALIDATION_FEATURES)
+    target_compile_definitions(tiny_core PUBLIC TINY_ENABLE_VALIDATION_FEATURES)
 endif()
-if(SENTINEL_ENABLE_BUILD_INFO)
-    target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_BUILD_INFO)
+if(TINY_ENABLE_BUILD_INFO)
+    target_compile_definitions(tiny_core PUBLIC TINY_ENABLE_BUILD_INFO)
 endif()
-if(SENTINEL_ENABLE_SCREENSHOT)
-    target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_SCREENSHOT)
+if(TINY_ENABLE_SCREENSHOT)
+    target_compile_definitions(tiny_core PUBLIC TINY_ENABLE_SCREENSHOT)
 endif()
 
 # P1-1：Tracy 需要 3rdParty/tracy；源不存在时强制关闭，保证默认（OFF）构建不受影响。
-if(SENTINEL_ENABLE_TRACY)
+if(TINY_ENABLE_TRACY)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public/tracy/Tracy.hpp" OR EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/tracy/Tracy.hpp")
-        target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_TRACY TRACY_ENABLE TRACY_ON_DEMAND)
-        target_include_directories(sentinel_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public")
-        target_sources(sentinel_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public/TracyClient.cpp")
+        target_compile_definitions(tiny_core PUBLIC TINY_ENABLE_TRACY TRACY_ENABLE TRACY_ON_DEMAND)
+        target_include_directories(tiny_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public")
+        target_sources(tiny_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/tracy/public/TracyClient.cpp")
         message(STATUS "Tracy profiling enabled")
     else()
-        message(WARNING "SENTINEL_ENABLE_TRACY=ON but 3rdParty/tracy not found; Tracy disabled. See tools/SetupDependencies.ps1")
+        message(WARNING "TINY_ENABLE_TRACY=ON but 3rdParty/tracy not found; Tracy disabled. See tools/SetupDependencies.ps1")
     endif()
 endif()
 
 # P1-2：RenderDoc in-app 抓帧需要 renderdoc_app.h；缺失时强制关闭。
-if(SENTINEL_ENABLE_RENDERDOC)
+if(TINY_ENABLE_RENDERDOC)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/renderdoc/renderdoc_app.h")
-        target_compile_definitions(sentinel_core PUBLIC SENTINEL_ENABLE_RENDERDOC)
-        target_include_directories(sentinel_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/renderdoc")
+        target_compile_definitions(tiny_core PUBLIC TINY_ENABLE_RENDERDOC)
+        target_include_directories(tiny_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/3rdParty/renderdoc")
         message(STATUS "RenderDoc capture hook enabled")
     else()
-        message(WARNING "SENTINEL_ENABLE_RENDERDOC=ON but 3rdParty/renderdoc/renderdoc_app.h not found; disabled.")
+        message(WARNING "TINY_ENABLE_RENDERDOC=ON but 3rdParty/renderdoc/renderdoc_app.h not found; disabled.")
     endif()
 endif()
 # shader 编译器同样由 Vulkan SDK 的 CMake 包给出，避免第二处硬编码路径。
@@ -262,6 +262,6 @@ foreach(SHADER_FILE ${SHADER_FILES})
 endforeach()
 
 # 两个可执行文件共享同一批 .spv，所以 shader 只编一次。
-add_custom_target(SentinelShaders ALL DEPENDS ${SHADER_OUTPUTS})
-add_dependencies(${PROJECT_NAME} SentinelShaders)
-add_dependencies(SentinelEditor SentinelShaders)
+add_custom_target(TinyShaders ALL DEPENDS ${SHADER_OUTPUTS})
+add_dependencies(${PROJECT_NAME} TinyShaders)
+add_dependencies(TinyEditor TinyShaders)

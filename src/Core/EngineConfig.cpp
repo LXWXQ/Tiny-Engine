@@ -1,5 +1,5 @@
 #include "Core/EngineConfig.h"
-#include "AssetPaths.h"   // SENTINEL_CONFIG_PATH（CMake 配置阶段生成）
+#include "AssetPaths.h"   // TINY_CONFIG_PATH（CMake 配置阶段生成）
 
 // nlohmann/json 来自 3rdParty/tinygltf（tinygltf 拉取时带下来的），
 // 不额外引依赖、也不需要联网。它本身是 header-only 的第三方代码，
@@ -24,7 +24,7 @@ namespace
 	using nlohmann::json;
 
 	std::string g_lastStatus = "(no config I/O yet)";
-	std::string g_configPath = SENTINEL_CONFIG_PATH;
+	std::string g_configPath = TINY_CONFIG_PATH;
 	bool g_suppressExpectedErrorLog = false;
 	constexpr int kCurrentConfigVersion = 2;
 
@@ -584,7 +584,7 @@ bool EngineConfig::selfTest()
 {
 	namespace fs = std::filesystem;
 	const std::string originalPath = g_configPath;
-	const fs::path tempRoot = fs::temp_directory_path() / "sentinel-config-selftest";
+	const fs::path tempRoot = fs::temp_directory_path() / "tiny-config-selftest";
 	std::error_code ec;
 	fs::remove_all(tempRoot, ec);
 	fs::create_directories(tempRoot, ec);

@@ -310,7 +310,7 @@ view-space +Z 当作前方，所以世界前向是 +w 而不是 -w）。
 ## 调试单个物体：`--empty-scene`
 
 ```
-build\Debug\SentinelEditor.exe --empty-scene
+build\Debug\TinyEditor.exe --empty-scene
 ```
 
 不加载 Sponza / 天空盒，只留相机，然后从 Assets 面板双击加物体。

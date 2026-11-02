@@ -59,16 +59,16 @@ updated: 2026-11-01
 
 | 可执行文件 | 模式 | 说明 |
 |---|---|---|
-| `SentinelEditor.exe` | 编辑器 | 双击即进编辑器，等价于 `VulkanEngine.exe --editor` |
-| `VulkanEngine.exe` | 运行时 | 与引入编辑器之前行为完全一致 |
+| `TinyEditor.exe` | 编辑器 | 双击即进编辑器，等价于 `TinyEngine.exe --editor` |
+| `TinyEngine.exe` | 运行时 | 与引入编辑器之前行为完全一致 |
 
 两者共享同一份源码（OBJECT 库），只有 `main.cpp` 各编译一次，
-差异只在一个编译期宏 `SENTINEL_DEFAULT_EDITOR`。
+差异只在一个编译期宏 `TINY_DEFAULT_EDITOR`。
 
 ```
-build\Debug\SentinelEditor.exe                    # 直接进编辑器
-build\Debug\SentinelEditor.exe --selftest 70      # 无头验证编辑器 UI
-build\Debug\VulkanEngine.exe                      # 运行时模式
+build\Debug\TinyEditor.exe                    # 直接进编辑器
+build\Debug\TinyEditor.exe --selftest 70      # 无头验证编辑器 UI
+build\Debug\TinyEngine.exe                      # 运行时模式
 ```
 
 编辑器版仍接受全部命令行参数（`--screenshot-viewport` 等）。

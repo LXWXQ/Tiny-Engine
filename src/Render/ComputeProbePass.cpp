@@ -92,7 +92,7 @@ void ComputeProbePass::init()
         throw std::runtime_error("ComputeProbePass: pipeline layout creation failed");
 
     pipeline = std::make_unique<ComputePipeline>(device,
-        SENTINEL_SHADER_DIR "compute_probe.comp.spv", pipelineLayout);
+        TINY_SHADER_DIR "compute_probe.comp.spv", pipelineLayout);
 }
 
 void ComputeProbePass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
@@ -133,7 +133,7 @@ void ComputeProbePass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
 
     // 反面用例：故意跳过写入者，验证 D-5 新增的 buffer 语义校验真的会拦住
     // "checksum 读未初始化 work buffer"。仅用于自动化回归，不参与正常渲染。
-    static const bool simulateSkipFill = (std::getenv("SENTINEL_SIMULATE_COMPUTE_SKIP") != nullptr);
+    static const bool simulateSkipFill = (std::getenv("TINY_SIMULATE_COMPUTE_SKIP") != nullptr);
     if (simulateSkipFill)
         fillPass.setEnabled(false);
     fillPass.execute([this, frame, frameNumber = frameInfo.frameNumber](VkCommandBuffer cmd)

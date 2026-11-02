@@ -153,7 +153,7 @@ void GeometrySystem::createTerrainGpuSelection()
         throw std::runtime_error("GeometrySystem: GPU terrain pipeline layout failed");
 
     terrainGpuPipeline = std::make_unique<ComputePipeline>(
-        vulkanDevice, SENTINEL_SHADER_DIR "terrain_lod.comp.spv",
+        vulkanDevice, TINY_SHADER_DIR "terrain_lod.comp.spv",
         terrainGpuPipelineLayout);
 
     const VkDeviceSize recordBytes =
@@ -333,16 +333,16 @@ void GeometrySystem::createPipelines()
     config.colorBlendInfo.pAttachments = config.colorBlendAttachments.data();
 
     geometryPipeline = std::make_unique<Pipeline>(vulkanDevice,
-        SENTINEL_SHADER_DIR "mrt.vert.spv", SENTINEL_SHADER_DIR "mrt.frag.spv", config);
+        TINY_SHADER_DIR "mrt.vert.spv", TINY_SHADER_DIR "mrt.frag.spv", config);
     gridPipeline = std::make_unique<Pipeline>(vulkanDevice,
-        SENTINEL_SHADER_DIR "grid_mrt.vert.spv", SENTINEL_SHADER_DIR "grid_mrt.frag.spv", config);
+        TINY_SHADER_DIR "grid_mrt.vert.spv", TINY_SHADER_DIR "grid_mrt.frag.spv", config);
 
     // 天空盒：不写深度、深度比较改成 LESS_OR_EQUAL（配合 gl_Position = pos.xyww）
     config.rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
     config.depthStencilInfo.depthWriteEnable = VK_FALSE;
     config.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     skyboxPipeline = std::make_unique<Pipeline>(vulkanDevice,
-        SENTINEL_SHADER_DIR "skybox_mrt.vert.spv", SENTINEL_SHADER_DIR "skybox_mrt.frag.spv", config);
+        TINY_SHADER_DIR "skybox_mrt.vert.spv", TINY_SHADER_DIR "skybox_mrt.frag.spv", config);
 }
 
 void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)

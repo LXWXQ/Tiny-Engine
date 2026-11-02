@@ -114,7 +114,7 @@ $configureArgs = @(
     "-S", ".", "-B", $BuildDir, "-G", "Visual Studio 17 2022", "-A", "x64"
 )
 if ($EnableProfiling) {
-    $configureArgs += @("-DSENTINEL_ENABLE_TRACY=ON", "-DSENTINEL_ENABLE_RENDERDOC=ON")
+    $configureArgs += @("-DTINY_ENABLE_TRACY=ON", "-DTINY_ENABLE_RENDERDOC=ON")
 }
 $configure = Invoke-Native -FilePath $CMakePath -LogStem "configure" -Arguments $configureArgs
 if ($configure.ExitCode -ne 0) {
@@ -138,17 +138,17 @@ if ($buildText -match '(?im)\bwarning\s+(C|LNK|MSB)\d+') {
 }
 
 $exeCandidates = @(
-    (Join-Path $BuildDir "$Config\VulkanEngine.exe"),
-    (Join-Path $BuildDir "VulkanEngine.exe")
+    (Join-Path $BuildDir "$Config\TinyEngine.exe"),
+    (Join-Path $BuildDir "TinyEngine.exe")
 )
 $exe = $exeCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
 if ($null -eq $exe) {
-    $exe = Get-ChildItem -LiteralPath $BuildDir -Recurse -Filter VulkanEngine.exe |
+    $exe = Get-ChildItem -LiteralPath $BuildDir -Recurse -Filter TinyEngine.exe |
         Where-Object { $_.FullName -match [Regex]::Escape($Config) } |
         Select-Object -First 1 -ExpandProperty FullName
 }
 if ([string]::IsNullOrWhiteSpace($exe)) {
-    throw "VulkanEngine.exe was not found under $BuildDir."
+    throw "TinyEngine.exe was not found under $BuildDir."
 }
 Write-Host "[validate] Executable: $exe"
 

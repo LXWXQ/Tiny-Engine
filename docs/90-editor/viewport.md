@@ -116,7 +116,7 @@ handle = renderGraph->createTexture(desc);
 ## UI-free 截图
 
 ```
-VulkanEngine.exe --editor --screenshot-viewport --selftest 70 \
+TinyEngine.exe --editor --screenshot-viewport --selftest 70 \
     --screenshot pure.png --screenshot-frame 66
 ```
 

@@ -60,14 +60,14 @@ Device::debugCallback
 
 ## 4. RenderDoc in-app 抓帧（P1-2）
 
-- 编译期 `SENTINEL_ENABLE_RENDERDOC`，默认 OFF。
+- 编译期 `TINY_ENABLE_RENDERDOC`，默认 OFF。
 - 开启后在指定帧调 `TriggerCapture()`。
 - **未注入 RenderDoc 时是空操作**，输出 `[Diag] RenderDoc not injected`。
 - 关闭时连 `RENDERDOC_GetAPI` 都不调用。
 
 ## 5. Tracy（P1-1）
 
-- `src/Core/Profiler.h` 提供 `SENTINEL_ZONE_SCOPED(name)` / `SENTINEL_PROFILE_FRAME_MARK()`。
+- `src/Core/Profiler.h` 提供 `TINY_ZONE_SCOPED(name)` / `TINY_PROFILE_FRAME_MARK()`。
 - 关闭时展开为 `((void)0)`。
 - `src/RHI/GpuProfiler.*` 提供每 pass 的 GPU zone，已集成进 RenderGraph。
 - 默认 OFF；ON 路径已用 `Validate.ps1 -EnableProfiling` 验证过。
@@ -87,7 +87,7 @@ Device::debugCallback
 ## 7. 诊断自检（不需要 Vulkan）
 
 ```powershell
-.\\build\\Debug\\VulkanEngine.exe --diagnostics-test out.jsonl
+.\\build\\Debug\\TinyEngine.exe --diagnostics-test out.jsonl
 # [Diag] diagnostics selfTest PASS | errors=1 warnings=1 jsonl=written
 ```
 

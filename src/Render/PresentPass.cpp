@@ -171,13 +171,13 @@ void PresentPass::createPipeline()
 
     config.pipelineLayout = pipelineLayout;
     pipeline = std::make_unique<Pipeline>(device,
-        SENTINEL_SHADER_DIR "fullscreen.vert.spv",
-        SENTINEL_SHADER_DIR "present.frag.spv", config);
+        TINY_SHADER_DIR "fullscreen.vert.spv",
+        TINY_SHADER_DIR "present.frag.spv", config);
 
     config.pipelineLayout = noBloomPipelineLayout;
     noBloomPipeline = std::make_unique<Pipeline>(device,
-        SENTINEL_SHADER_DIR "fullscreen.vert.spv",
-        SENTINEL_SHADER_DIR "present_no_bloom.frag.spv", config);
+        TINY_SHADER_DIR "fullscreen.vert.spv",
+        TINY_SHADER_DIR "present_no_bloom.frag.spv", config);
 
     pipelineSwapchainFormat = swapchain.getSwapChainImageFormat();
 }

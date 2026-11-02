@@ -10,7 +10,7 @@
 // P1-4：无头截图 + 视觉回归的采集端。
 //
 // 开关模型（docs/60-debug-profiling/zero-overhead.md）：
-//   * 编译期：SENTINEL_ENABLE_SCREENSHOT 关闭时 init() 不创建任何资源；
+//   * 编译期：TINY_ENABLE_SCREENSHOT 关闭时 init() 不创建任何资源；
 //   * 运行期：只有 --screenshot 才启用；
 //   * 关闭时：bufferBytes()==0，不分配、不录制任何命令。
 //

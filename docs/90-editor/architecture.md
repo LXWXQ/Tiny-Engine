@@ -60,7 +60,7 @@ std::function<bool()> isEditorMode;
 
 `ImGuiSystem::prepareDrawData()` 检查 `isEditorMode()`：
 
-- **false** → 画内置的 "Sentinel Engine Core" 面板（运行时模式，与改造前逐字节一致）
+- **false** → 画内置的 "Tiny Engine Core" 面板（运行时模式，与改造前逐字节一致）
 - **true**  → 调 `onBuildEditorUI()`，内置面板不再绘制
 
 两套面板不并存，是为了避免它们同时修改同一批 `EngineSettings` 造成控制权歧义。

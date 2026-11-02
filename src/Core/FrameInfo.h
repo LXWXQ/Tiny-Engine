@@ -146,7 +146,7 @@ struct EngineSettings
 {
 	// W1：窗口标题进了配置。把它放在这里是刻意的 —— 调试时经常要按场景/质量档
 	// 起好几个实例同时看，标题是区分它们唯一的可见标识，而它又必须能改。
-	std::string windowTitle = "Vulkan Engine - Sentinel";
+	std::string windowTitle = "Tiny Engine";
 
 	bool ssaoEnabled = true;
 	float ssaoRadius = 0.5f;

@@ -61,7 +61,7 @@ updated: 2026-10-30
 - **原因**：销毁顺序错，有资源在 `vmaDestroyAllocator` 之后才释放。
 - **修法**：检查 `~FirstApp` 的显式销毁顺序，见
   [resource-lifetime](../10-architecture/resource-lifetime.md) §3。
-- **定位**：`-DSENTINEL_VMA_LEAK_CHECK=ON` 重新构建，日志会打印未释放分配的名字。
+- **定位**：`-DTINY_VMA_LEAK_CHECK=ON` 重新构建，日志会打印未释放分配的名字。
 
 ### 3.3 `[Config] config selfTest FAIL: cannot create temp directory`
 
