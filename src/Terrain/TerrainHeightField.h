@@ -19,8 +19,8 @@ struct HeightField
 
     float sizeX = 0.0f;
     float sizeZ = 0.0f;
-    float sampleOriginX = 0.0f;
-    float sampleOriginZ = 0.0f;
+    double sampleOriginX = 0.0;
+    double sampleOriginZ = 0.0;
     float baseHeight = 0.0f;
     float heightScale = 0.0f;
 

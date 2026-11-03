@@ -10,7 +10,6 @@ updated: 2026-11-02
 
 # 里程碑与实测基线
 ## 1. 已完成阶段
-
 | 阶段 | 内容 | 关键成果 |
 |---|---|---|
 | baseline | 修改前的原始状态 | — |
@@ -33,7 +32,6 @@ updated: 2026-11-02
 | TD-01~10 | 技术债清理 | 见 [tech-debt](tech-debt.md) |
 | P0~P3 | 调试/剖析基础设施 | 验证层结构化、GPU 计时、截图、深度校验、基线 diff、证据包 |
 ## 2. 当前实测基线
-
 环境：Windows / RTX 2070 / Vulkan 1.4 驱动 / Debug 构建 / Sponza 场景。
 **只适合同机相对比较，不可跨机对比。**
 
@@ -49,7 +47,6 @@ updated: 2026-11-02
 | 材质槽位 | `26/256` 占用 | 启动日志 |
 | GPU 时间分布 | Geometry ~1.0ms、Present ~1.1ms、SSAO ~0.58ms、其余 < 0.3ms | `--gpu-timing` |
 ## 3. 关键性能对照（同机 Debug）
-
 | 对照 | 数字 | 结论 |
 |---|---|---|
 | Bloom 开 vs 关 | 455 FPS vs 531 FPS（+17%） | TD-06 的关闭路径真的省 GPU |
@@ -57,7 +54,6 @@ updated: 2026-11-02
 | bindless 前 vs 后 | 452 FPS vs 498 FPS（+10%），绑定 104 -> 1 | D-3 有效 |
 | IBL 老实现 vs split-sum | 过曝像素 95.9% -> 7.1% | C 阶段质变 |
 ## 4. 更新基线的规矩
-
 改完影响性能/画面的代码后：
 
 1. 跑 `tools/Baseline.ps1 -Action Diff` 确认无回归；
@@ -67,7 +63,6 @@ updated: 2026-11-02
 > D-8～D-24 的逐轮细节已归档到 [milestones-archive](milestones-archive.md)；
 > 本页保留 D-21 起的近期里程碑与当前实测基线。
 ## D-25：阶段 7 第三轮（chunked submeshes + 逐块剔除）
-
 - **配置**：`TerrainConfig` 新增 `chunkGridX/chunkGridZ`，默认 2×2，
   校验 `[1,4]`；属于几何参数，修改后需要 Generate。地形 JSON version 升到 4。
 - **网格**：`TerrainMeshBuilder` 仍使用一份共享顶点缓冲，但索引按 chunk
@@ -93,7 +88,6 @@ updated: 2026-11-02
 - **下一轮**：LOD 选择、邻接缝合/T 形裂缝处理、独立 chunk 实体与流送；
   当前仍是单个地形实体和一个总 SpatialIndex AABB。
 ## D-26：阶段 7 第四轮（chunk LOD + 裙边接缝）
-
 - **配置**：`TerrainConfig` 新增 `lodLevelCount`（1~3，默认 3）和
   `lodDistanceScale`（0.25~4，默认 1）；Chunk/LOD 层级属于几何参数，
   改后需要 Generate，距离倍率只影响运行时选层。地形 JSON version 升到 5。
@@ -124,7 +118,6 @@ updated: 2026-11-02
 - **下一轮**：拓扑级 stitching / LOD cross-fade、流送、独立 chunk 实体、
   GPU LOD/indirect 与 GPU compute 生成。当前 LOD 全部预生成，显存随层级增长。
 ## D-27：阶段 7 第五轮（Transform dirty + 增量 SpatialIndex）
-
 - Transform/Bounds 增加 revision+dirty；setter 对未变化值早退。
 - 世界变换只重建脏子树；父变化强制整棵子树，干净帧更新数为 0。
 - SpatialIndex 只对 dirty bounds 重算世界 AABB/upsert；新增 world/spatial 更新计数。
@@ -133,7 +126,6 @@ updated: 2026-11-02
 - `tools/Validate.ps1 -Incremental -SkipSetup`：21/21 PASS，stderr 全 0。
 - **当时仍保留** O(N) dirty 标志扫描、stale sweep；D-28 已改成显式 dirty 集合（历史记录保留）。
 ## D-28：阶段 7 第六轮（显式 dirty 队列 + destroy 同步索引）
-
 - Scene 新增 `dirtyTransformEntities` / `dirtySpatialEntities`；
   `markTransformDirty()` / `markSpatialDirty()` 由创建、移动、命令恢复、
   地形上传和销毁路径显式调用。
@@ -150,7 +142,6 @@ updated: 2026-11-02
 - 仍保留：dirty 通知是显式契约，直接写 public 字段或 registry.destroy 可绕过；
   只有统一网格，无 chunk/区域索引。
 ## D-29：阶段 7 第七轮（地形纹理打包 + 旧 Model 延迟回收）
-
 - TerrainMaterial 在 CPU 侧把每层 height.r 与 roughness.r 打包成 RGBA：
   R=height、G=roughness、B/A 预留。外部 16 张 PNG 约定不变，但同层
   height/roughness 必须同分辨率。
@@ -166,7 +157,6 @@ updated: 2026-11-02
 - 仍保留：地形 Set2 仍有 12 个固定 sampler；LOD/流送/GPU compute 等阶段 7
   项未完成。
 ## D-30：阶段 7 第八轮（LOD 滞回 + 抖动 cross-fade）
-
 - `SubMeshCulling` 新增 LOD 滞回与过渡状态机：
   - 粗化需超过 enter 阈值 15%，细化需低于 exit 阈值 15%；
   - 换层持续 0.24s，稳定层只在过渡完成后切换。
@@ -187,7 +177,6 @@ updated: 2026-11-02
 - 仍保留（B-02/D-38 已用拓扑级 stitching 取代裙边缝隙方案）：抖动过渡在强运动模糊下可能有短暂噪声；
   流送、GPU LOD/indirect 与 GPU compute 生成仍未做。
 ## D-31：阶段 7 第九轮（地形 indirect 合批）
-
 - Device 按物理设备支持启用 `multiDrawIndirect`；不支持时 GeometrySystem
   自动回退逐子网格直绘。
 - GeometrySystem 为每个在飞帧创建 host-visible
@@ -205,7 +194,6 @@ updated: 2026-11-02
 - 仍保留：LOD/可见性选择仍在 CPU；GPU 选层与 compute 写 indirect 参数、
   流送、拓扑级 stitching 尚未做。
 ## D-32：阶段 7 第十轮（CPU 地形碰撞查询）
-
 - `TerrainComponent` 新增运行期 `shared_ptr<terrain::HeightField> cpuHeightField`：
   - 与高度场/网格在同一 JobSystem 任务中构建；
   - GPU 上传成功后才随 `TerrainComponent` 原子替换；
@@ -227,7 +215,6 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 未做：物理引擎/角色控制器接入、运行期雕刻、地形专用空间加速结构。
 ## D-33：阶段 7 第十一轮（自动 dirty 通知）
-
 - `TransformComponent` / `BoundsComponent` 增加 owner callback：
   - `setTranslation()` / `setScale()` / `setEuler()` / `setOrientation()` /
     `markDirty()` 直接通知所属 Scene；
@@ -244,7 +231,6 @@ updated: 2026-11-02
 - 仍保留：public 字段直写与 `registry.destroy()` 可绕过回调；后续流送阶段
   应改为组件私有字段 + 区域索引 + 统一销毁 API。
 ## D-34：阶段 7 第十二轮（GPU compute 高度场）
-
 - 新增 `TerrainComputeGenerator` 与 `shaders/terrain_height.comp`：
   - GPU 执行 Perlin/fBm、octave seed、ridge/detail、island/edge mask 与 height curve；
   - storage buffer 输出 normalized heightfield，fence 同步后 readback 到 `HeightField`；
@@ -262,7 +248,6 @@ updated: 2026-11-02
 - 仍保留：GPU dispatch/fence/readback 在主线程等待；顶点/索引组装与 GPU 上传
   仍在 CPU。
 ## D-35：B-01a（独立 chunk 实体 + 流送基础）
-
 - `TerrainConfig` 新增 `sampleOriginX/Z` 与 `localColorRange`：
   - 独立 chunk 以世界中心作为噪声采样原点，边界高度连续；
   - 流送 chunk 关闭局部颜色范围拉伸，避免跨 chunk 色带。
@@ -282,7 +267,6 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 下一项 B-01b：GPU 高度场流送异步化、场景描述实际重建流送、任务预算基线。
 ## D-36：B-01b（流送异步化 + 加载硬化）
-
 - `TerrainComputeGenerator` 改为 **8 个独立 in-flight slot**：
   - 每槽独立 command buffer/fence/storage buffer/readback/descriptor set；
   - `submit()` 异步提交，`poll()` 只查 fence，`release()` 标记废弃，
@@ -303,7 +287,6 @@ updated: 2026-11-02
 - 下一项 B-01c：跨 chunk picking/删除撤销语义、JSON 文件加载 smoke、
   跨 chunk 帧时间基线。
 ## D-37：B-01c（流送交互与性能硬化）
-
 - Viewport 拾取命中 runtime `TerrainChunkComponent` 后，通过
   `Scene::resolveTerrainChunkOwner()` 解析到 streaming manager；日志保留命中
   chunk 坐标。Hierarchy 隐藏 runtime chunks，避免选择下一帧可能卸载的实体。
@@ -325,7 +308,6 @@ updated: 2026-11-02
   stderr 全 0，`[Validation] errors=0 warnings=0`。
 - 下一项 B-02：拓扑级 LOD stitching；先做可关闭裙边的 A/B 与索引/绕序断言。
 ## D-38：B-02（拓扑级 LOD stitching）
-
 - 每个 chunk/LOD 的 chunk 外边界固定为**全高度场分辨率**，内部仍按
   LOD 1/2/4 cell 步长降采样。
 - 四条过渡环带按归一化段参数把全分辨率外环与粗网格内环三角化：
@@ -348,7 +330,6 @@ updated: 2026-11-02
 - 日志：`build/validation/20261101-195549`。
 - 下一项 B-03：GPU LOD 选择 / GPU-driven culling。
 ## D-39：B-03（GPU LOD 选择 / GPU-driven culling）
-
 - `GeometryPass::addToGraph()` 在 `Geometry` 之前注册无附件
   `TerrainGpuSelection` pass：
   - 仍录制在 graphics command buffer；
@@ -385,7 +366,6 @@ updated: 2026-11-02
 - 日志：`build/validation/20261101-203943`。
 - 下一项 B-04：GPU compute 网格组装与 GPU 上传。
 ## D-40：B-04（GPU compute 网格组装与 GPU 上传）
-
 - 新增 `TerrainGpuMeshBuilder` + `shaders/terrain_mesh.comp`，把单 chunk
   terrain 的顶点/索引组装迁到 compute：
   - 顶点输出 11 个 tight float（position/color/normal/uv），与 CPU
@@ -415,7 +395,6 @@ updated: 2026-11-02
 - 日志：`build/validation/20261101-213544`。
 - B-05 已完成，见下一条 D-41。
 ## D-41：B-05（异步 GPU 上传管线）
-
 - `TerrainGpuMeshBuilder` 从 B-04 的单命令缓冲 + 同步 fence 等待改为 4 个异步
   slot。每个 slot 拥有独立 command buffer、fence、descriptor set、host-visible
   height/params buffer 和输出 VBO/IBO；`submit()` 只做 buffer 准备、参数上传、
@@ -469,7 +448,6 @@ updated: 2026-11-02
 - 渲染按相邻地形实体材质集变化重绑 Set2，统计 `terrainMaterialBatches`/`Switches`/`Fallbacks`；Inspector 增加材质集下拉。
 - 实测 `[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`；`21/21 PASS`，stderr 0，`errors=0 warnings=0`，日志 `build/validation/20261102-001837`。
 ## D-45：代码/文档审查修复（异步任务生命周期 + Set2 描述符 + 工具链）
-
 - **P0 use-after-free**：`Scene::processTerrainGeneration()` 在任务被取代或实体销毁时
   直接 `erase` 掉 `shared_ptr`，而 JobSystem worker 仍用裸指针写 `mesh`/`heightField`/
   `error`（多 chunk 走 CPU builder 时可达）。新增 `retiringTerrainBuilds`：句柄未完成的
@@ -503,7 +481,6 @@ updated: 2026-11-02
   `streaming chunk test PASS ... gpuMesh=9`）；`tools/Validate.ps1 -Incremental -SkipSetup`
   21/21 PASS，日志 `build/validation/20261102-101809`。
 ## D-46：实现 `RenderGraph::setPassEnabled`（跨帧 Pass 开关）
-
 - **问题**：`passes` 每帧重建（`beginFrame` 与 `endFrame` 末尾都会 `reset + clear`），
   旧实现遍历当前帧的 `passes`，帧间调用时列表为空 → 静默无效（tech-debt TD-13 /
   weak-points 原第 10 条）。
@@ -521,7 +498,6 @@ updated: 2026-11-02
 - **文档**：rendergraph.md 新增 §2.2（跨帧语义 + 禁用会跳过屏障声明的代价与原错误串）；
   tech-debt 增 TD-13 并从"未关闭"表移除；weak-points 删除该条；test-matrix 第 3 项补标记。
 ## D-47：还清 TD-14（writeDepth 隐式改写）并修正过期技术债
-
 - **TD-14**：`RenderGraph::Pass::writeDepth` 删掉"`depth==0 && stencil==0` 视为未设置、
   静默改成 `{1.0, 0}`"的两行。清屏值一律由调用方显式给出：`GeometryPass` 本来就传
   `clearDepth.depthStencil = {1.0f, 0}`，`EditorOverlayPass` 走 `LOAD`，所以这次改动零行为
@@ -597,3 +573,4 @@ updated: 2026-11-02
 **问题**：F2-f 的 arena 是 384 个固定槽（2048 顶点 / 12288 索引），而一个 33x33 / 3 级 LOD 的 chunk 实际只用约 1620 顶点 / 8544 索引，近三成空间放着不用，总量还被槽数卡死。
 **实现**：`TerrainMeshArena` 换成两块 device-local 大缓冲（顶点 1.1M ≈ 46 MB、索引 5.9M ≈ 22.5 MB）+ 有序空闲区间表：`acquire()` 首次适配、`release()` 前后合并，`Slice` 记录 base/count；顶点分配成功但索引失败时回滚顶点区间。`TerrainComponent` 用 `arenaVertexBase/arenaIndexBase/arenaVertexCount/arenaIndexCount` 取代 `arenaSlot`，`Scene` 落地与销毁两侧直接搬 `Slice`。
 **可观测**：`[Terrain] mesh arena ready | vertexMB=48 indexMB=22 vertexCapacity=1100000 indexCapacity=5900000`；`[Terrain] batched draw | chunks=12 arenaAllocs=25 commandSpan=6144`；半径 8 飞行 600 帧 `arenaAllocs` 在 305~323 回落，13 次 rebase，0/0。**回归**：39 项全 PASS；三组 A/B 截图 `max diff = 0`；编辑器自检 `picking=OK rebuild=OK unload=OK`；sync 与 resize 各 0/0。顺带修掉 `Model` 自有 VBO/IBO 缺 `TRANSFER_SRC` 导致的 `VUID-vkCmdCopyBuffer-srcBuffer-00118`。
+## F2-h：chunk 坐标 int64 + 采样锚点 double（流送半径上限 24） **问题**：半径 12 的 625 块是 int32 chunk key 与 float 绝对锚点能撑的上限，再放大就会出现量化与哈希碰撞。 **实现**：`Scene::TerrainChunkCoord{int64_t x, z}` + 64 位哈希替换 `int64_t` 打包 key，`TerrainChunkComponent::chunkX/Z` 与 rebase 的 key 重排全部改宽；`TerrainConfig::sampleOriginX/Z` 与 `HeightField` 成员改 `double`（噪声本身仍按 `float` 采样，保证 CPU/GPU 逐位一致），校验上限 ±1e12；arena 容量由 `Scene::createStreamingTerrain()` 按环尺寸算（`ring*1700` 顶点 / `ring*9000` 索引）并新增 `TerrainMeshArena::reconfigure()` 原地重建（渲染侧只持 `this` 指针）；GPU selection 槽位 384 → 1024、命令区 12288 → 32768。 **可观测**：`mesh arena resized | radius=24 chunks=2401 vertexCapacity=4081700 indexCapacity=21609000`、`[Streaming] chunks=2401 loaded=2401`、`draw calls 2`、`[Validation] errors=0 warnings=0`；半径 2/12/16/24 = 190/70/36/17 FPS。 **回归**：新增 `f2h-large-radius`；全套 **40 项**；三组 A/B 截图 `max diff = 0`；编辑器自检、sync、resize 各 0/0。

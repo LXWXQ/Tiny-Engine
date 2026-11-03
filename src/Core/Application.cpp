@@ -875,7 +875,7 @@ streamingConfig.skirtsEnabled = false;
 		config.lodLevelCount = 3u;
 		config.skirtsEnabled = false;
 		config.localColorRange = false;
-		streamingWorldRadius = std::clamp(options.streamingRadius, 1, 12);
+		streamingWorldRadius = std::clamp(options.streamingRadius, 1, Scene::kMaxStreamingRadius);
 		streamingWorldEntity = scene->createStreamingTerrain(
 			config, streamingWorldRadius, 4, "StreamingWorld");
 		if (streamingWorldEntity == entt::null)
@@ -1423,7 +1423,7 @@ void FirstApp::setTerrainBatchEnabled(bool enabled)
 void FirstApp::setStreamingWorldEnabled(bool enabled, int32_t radius)
 {
 	streamingWorldEnabled = enabled;
-	streamingWorldRadius = std::clamp(radius, 1, 8);
+	streamingWorldRadius = std::clamp(radius, 1, Scene::kMaxStreamingRadius);
 }
 
 void FirstApp::setStreamingFly(bool enabled, float speed)

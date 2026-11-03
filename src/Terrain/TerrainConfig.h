@@ -46,8 +46,10 @@ struct TerrainConfig
     // World-space center of the noise sampling domain. Mesh vertices remain
     // local XZ around zero; streaming chunk entities set this to their world
     // center so independently generated neighbors share one continuous field.
-    float sampleOriginX = 0.0f;
-    float sampleOriginZ = 0.0f;
+    // F2-h：绝对噪声锚点用 double。噪声本身仍是 float（CPU/GPU 必须逐位一致），
+    // 所以这里只保证「锚点累加不丢精度」，采样精度上限见 docs/30-systems/terrain.md。
+    double sampleOriginX = 0.0;
+    double sampleOriginZ = 0.0;
 
     float baseHeight = 0.0f;
     float heightScale = 25.0f;
@@ -121,8 +123,8 @@ struct TerrainConfig
         if (!std::isfinite(sizeZ) || sizeZ <= 0.0f || sizeZ > 10000.0f)
             return fail("sizeZ must be finite and in (0, 10000]");
         if (!std::isfinite(sampleOriginX) || !std::isfinite(sampleOriginZ) ||
-            std::fabs(sampleOriginX) > 1.0e7f || std::fabs(sampleOriginZ) > 1.0e7f)
-            return fail("sampleOriginX/Z must be finite and in [-1e7, 1e7]");
+            std::fabs(sampleOriginX) > 1.0e12 || std::fabs(sampleOriginZ) > 1.0e12)
+            return fail("sampleOriginX/Z must be finite and in [-1e12, 1e12]");
 
         if (!std::isfinite(baseHeight) || std::fabs(baseHeight) > 10000.0f)
             return fail("baseHeight must be finite and in [-10000, 10000]");

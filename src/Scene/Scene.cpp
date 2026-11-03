@@ -53,13 +53,12 @@ struct Scene::PendingTerrainBuild
 namespace
 {
     constexpr bool kLoadSponza = true;
-    constexpr int32_t kMaxTerrainStreamingRadius = 12;
+    constexpr int32_t kMaxTerrainStreamingRadius = Scene::kMaxStreamingRadius;
     constexpr uint32_t kMaxTerrainStreamingLoadsPerFrame = 16;
 
-    int64_t terrainChunkKey(int32_t x, int32_t z)
+    Scene::TerrainChunkCoord terrainChunkCoord(int64_t x, int64_t z)
     {
-        return (static_cast<int64_t>(static_cast<uint32_t>(x)) << 32) |
-               static_cast<uint32_t>(z);
+        return Scene::TerrainChunkCoord{ x, z };
     }
 
     void notifyTransformDirty(void* context, entt::entity entity)
@@ -506,6 +505,17 @@ namespace
     }
 }
 
+size_t Scene::TerrainChunkCoordHash::operator()(const Scene::TerrainChunkCoord& coord)
+        const noexcept
+    {
+        uint64_t h = static_cast<uint64_t>(coord.x) * 0x9e3779b97f4a7c15ull;
+        h ^= static_cast<uint64_t>(coord.z) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        h ^= h >> 33;
+        h *= 0xff51afd7ed558ccdull;
+        h ^= h >> 33;
+    return static_cast<size_t>(h);
+}
+
 Scene::~Scene() = default;
 
 void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorManager& descriptorManagerArg,
@@ -671,7 +681,7 @@ void Scene::destroyEntity(entt::entity entity)
     }
     else if (const auto* chunk = registry.try_get<TerrainChunkComponent>(entity))
     {
-        const int64_t key = terrainChunkKey(chunk->chunkX, chunk->chunkZ);
+        const TerrainChunkCoord key = terrainChunkCoord(chunk->chunkX, chunk->chunkZ);
         streamingTerrainChunks.erase(key);
         pendingStreamingTerrainChunks.erase(key);
     }
@@ -2000,6 +2010,29 @@ entt::entity Scene::createStreamingTerrain(const terrain::TerrainConfig& chunkCo
     if (terrainStreamingEntity != entt::null && registry.valid(terrainStreamingEntity))
         destroyEntity(terrainStreamingEntity);
 
+    // F2-h: size the mesh arena for the whole ring instead of the default
+    // radius-12 budget. Chunks are destroyed above, so every slice has been
+    // returned already and the old arena can be dropped safely.
+    const int32_t resolvedRadius = std::clamp<int32_t>(loadRadius, 1, kMaxTerrainStreamingRadius);
+    const uint64_t ringChunks = static_cast<uint64_t>(2 * resolvedRadius + 1) *
+                                static_cast<uint64_t>(2 * resolvedRadius + 1);
+    const uint32_t wantVertices = static_cast<uint32_t>(std::min<uint64_t>(ringChunks * 1700ull, 8000000ull));
+    const uint32_t wantIndices = static_cast<uint32_t>(std::min<uint64_t>(ringChunks * 9000ull, 42000000ull));
+    if (terrainMeshArena && device)
+    {
+        const uint32_t haveVertices = terrainMeshArena->getVertexCapacity();
+        const uint32_t haveIndices = terrainMeshArena->getIndexCapacity();
+        if (wantVertices > haveVertices || wantIndices > haveIndices)
+        {
+            // Rendering code keeps a raw pointer to the arena, so grow it in place.
+            terrainMeshArena->reconfigure(wantVertices, wantIndices);
+            std::cout << "[Terrain] mesh arena resized | radius=" << resolvedRadius
+                      << " chunks=" << ringChunks
+                      << " vertexCapacity=" << wantVertices
+                      << " indexCapacity=" << wantIndices << std::endl;
+        }
+    }
+
     const entt::entity manager = createTransformEntity(registry);
     attachDirtyTracking(manager);
     registry.emplace<NameComponent>(manager, NameComponent{ name });
@@ -2137,36 +2170,33 @@ const int32_t chunkDeltaZ = static_cast<int32_t>(std::llround(
 static_cast<double>(delta.z) / static_cast<double>(chunkSizeZ)));
 if (chunkDeltaX != 0 || chunkDeltaZ != 0)
 {
-std::unordered_map<int64_t, entt::entity> rekeyedChunks;
-rekeyedChunks.reserve(streamingTerrainChunks.size());
-for (const auto& [key, entity] : streamingTerrainChunks)
-{
-if (!registry.valid(entity))
-continue;
-int32_t chunkX = static_cast<int32_t>(static_cast<int64_t>(key >> 32)) - chunkDeltaX;
-int32_t chunkZ = static_cast<int32_t>(static_cast<int64_t>(
-static_cast<uint32_t>(key & 0xFFFFFFFFu))) - chunkDeltaZ;
-if (TerrainChunkComponent* chunk = registry.try_get<TerrainChunkComponent>(entity))
-{
-chunk->chunkX -= chunkDeltaX;
-chunk->chunkZ -= chunkDeltaZ;
-chunkX = chunk->chunkX;
-chunkZ = chunk->chunkZ;
-}
-rekeyedChunks[terrainChunkKey(chunkX, chunkZ)] = entity;
-}
-streamingTerrainChunks.swap(rekeyedChunks);
+    std::unordered_map<TerrainChunkCoord, entt::entity, TerrainChunkCoordHash> rekeyedChunks;
+    rekeyedChunks.reserve(streamingTerrainChunks.size());
+    for (const auto& [coord, entity] : streamingTerrainChunks)
+    {
+        if (!registry.valid(entity))
+            continue;
+        int64_t chunkX = coord.x - chunkDeltaX;
+        int64_t chunkZ = coord.z - chunkDeltaZ;
+        if (TerrainChunkComponent* chunk = registry.try_get<TerrainChunkComponent>(entity))
+        {
+            chunk->chunkX -= chunkDeltaX;
+            chunk->chunkZ -= chunkDeltaZ;
+            chunkX = chunk->chunkX;
+            chunkZ = chunk->chunkZ;
+        }
+        rekeyedChunks[terrainChunkCoord(chunkX, chunkZ)] = entity;
+    }
+    streamingTerrainChunks.swap(rekeyedChunks);
 
-std::unordered_set<int64_t> rekeyedPending;
-rekeyedPending.reserve(pendingStreamingTerrainChunks.size());
-for (int64_t key : pendingStreamingTerrainChunks)
-{
-const int32_t chunkX = static_cast<int32_t>(static_cast<int64_t>(key >> 32)) - chunkDeltaX;
-const int32_t chunkZ = static_cast<int32_t>(static_cast<int64_t>(
-static_cast<uint32_t>(key & 0xFFFFFFFFu))) - chunkDeltaZ;
-rekeyedPending.insert(terrainChunkKey(chunkX, chunkZ));
-}
-pendingStreamingTerrainChunks.swap(rekeyedPending);
+    std::unordered_set<TerrainChunkCoord, TerrainChunkCoordHash> rekeyedPending;
+    rekeyedPending.reserve(pendingStreamingTerrainChunks.size());
+    for (const TerrainChunkCoord& coord : pendingStreamingTerrainChunks)
+    {
+        rekeyedPending.insert(
+            terrainChunkCoord(coord.x - chunkDeltaX, coord.z - chunkDeltaZ));
+    }
+    pendingStreamingTerrainChunks.swap(rekeyedPending);
 }
 
 // 4) The absolute origin accumulates in double; float only carries the local
@@ -2255,8 +2285,8 @@ void Scene::updateTerrainStreaming()
         spatialIndex.setRegionSize(regionSize);
 
     const glm::vec3 focus = getCameraTransform().getTranslation();
-    const int32_t centerX = static_cast<int32_t>(std::floor(focus.x / chunkSizeX));
-    const int32_t centerZ = static_cast<int32_t>(std::floor(focus.z / chunkSizeZ));
+    const int64_t centerX = static_cast<int64_t>(std::floor(focus.x / chunkSizeX));
+    const int64_t centerZ = static_cast<int64_t>(std::floor(focus.z / chunkSizeZ));
     const int32_t radius = std::clamp(streaming->loadRadius, 1,
                                       kMaxTerrainStreamingRadius);
     const int32_t unloadRadius = radius + std::max(0, streaming->unloadPadding);
@@ -2267,7 +2297,7 @@ void Scene::updateTerrainStreaming()
     std::vector<entt::entity> chunksToDestroy;
     for (auto it = streamingTerrainChunks.begin(); it != streamingTerrainChunks.end();)
     {
-        const int64_t key = it->first;
+        const TerrainChunkCoord key = it->first;
         const entt::entity entity = it->second;
         if (!registry.valid(entity))
         {
@@ -2276,9 +2306,11 @@ void Scene::updateTerrainStreaming()
             continue;
         }
 
-        const int32_t x = static_cast<int32_t>(static_cast<uint32_t>(key >> 32));
-        const int32_t z = static_cast<int32_t>(static_cast<uint32_t>(key));
-        const int32_t distance = std::max(std::abs(x - centerX), std::abs(z - centerZ));
+        const int64_t x = key.x;
+        const int64_t z = key.z;
+        const int64_t dxAbs = x > centerX ? x - centerX : centerX - x;
+        const int64_t dzAbs = z > centerZ ? z - centerZ : centerZ - z;
+        const int64_t distance = std::max(dxAbs, dzAbs);
         if (distance > unloadRadius)
         {
             pendingStreamingTerrainChunks.erase(key);
@@ -2317,21 +2349,22 @@ void Scene::updateTerrainStreaming()
 
     struct Candidate
     {
-        int32_t x;
-        int32_t z;
-        int64_t key;
+        int64_t x;
+        int64_t z;
+        TerrainChunkCoord key;
         float distance2;
     };
     std::vector<Candidate> candidates;
     const float focusChunkX = focus.x / chunkSizeX - 0.5f;
     const float focusChunkZ = focus.z / chunkSizeZ - 0.5f;
-    for (int32_t dz = -radius; dz <= radius; ++dz)
+    for (int64_t dz = -static_cast<int64_t>(radius); dz <= static_cast<int64_t>(radius); ++dz)
     {
-        for (int32_t dx = -radius; dx <= radius; ++dx)
+        for (int64_t dx = -static_cast<int64_t>(radius);
+             dx <= static_cast<int64_t>(radius); ++dx)
         {
-            const int32_t x = centerX + dx;
-            const int32_t z = centerZ + dz;
-            const int64_t key = terrainChunkKey(x, z);
+            const int64_t x = centerX + dx;
+            const int64_t z = centerZ + dz;
+            const TerrainChunkCoord key = terrainChunkCoord(x, z);
             if (streamingTerrainChunks.find(key) != streamingTerrainChunks.end())
                 continue;
             const float ox = static_cast<float>(x) - focusChunkX;
@@ -2368,13 +2401,15 @@ void Scene::updateTerrainStreaming()
         config.chunkGridX = 1u;
         config.chunkGridZ = 1u;
         config.localColorRange = false;
-        const float centerWorldX = (static_cast<float>(candidate.x) + 0.5f) * chunkSizeX;
-        const float centerWorldZ = (static_cast<float>(candidate.z) + 0.5f) * chunkSizeZ;
+        const float centerWorldX = static_cast<float>(
+            (static_cast<double>(candidate.x) + 0.5) * static_cast<double>(chunkSizeX));
+        const float centerWorldZ = static_cast<float>(
+            (static_cast<double>(candidate.z) + 0.5) * static_cast<double>(chunkSizeZ));
         // F2-c: sampleOrigin is the absolute noise anchor, not a local
         // coordinate. Keeping it absolute means chunks generated after a
         // rebase still match their neighbours generated before it.
-        config.sampleOriginX = static_cast<float>(worldOrigin.x + static_cast<double>(centerWorldX));
-        config.sampleOriginZ = static_cast<float>(worldOrigin.z + static_cast<double>(centerWorldZ));
+        config.sampleOriginX = worldOrigin.x + static_cast<double>(centerWorldX);
+        config.sampleOriginZ = worldOrigin.z + static_cast<double>(centerWorldZ);
 
         std::string configError;
         if (!config.validate(configError))

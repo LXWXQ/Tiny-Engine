@@ -7,8 +7,11 @@
 #include <iostream>
 #include <stdexcept>
 
-TerrainMeshArena::TerrainMeshArena(Device& deviceArg)
-    : device(deviceArg)
+TerrainMeshArena::TerrainMeshArena(Device& deviceArg, uint32_t vertexCapacityArg,
+                                   uint32_t indexCapacityArg)
+    : device(deviceArg),
+      vertexCapacity(std::max(vertexCapacityArg, 1u)),
+      indexCapacity(std::max(indexCapacityArg, 1u))
 {
     try
     {
@@ -25,14 +28,44 @@ TerrainMeshArena::TerrainMeshArena(Device& deviceArg)
         std::cout << "[Terrain] mesh arena ready | vertexMB="
                   << (getVertexBytes() / (1024u * 1024u))
                   << " indexMB=" << (getIndexBytes() / (1024u * 1024u))
-                  << " vertexCapacity=" << kVertexCapacity
-                  << " indexCapacity=" << kIndexCapacity << "\n";
+                  << " vertexCapacity=" << vertexCapacity
+                  << " indexCapacity=" << indexCapacity << "\n";
     }
 }
 
 TerrainMeshArena::~TerrainMeshArena()
 {
     destroyResources();
+}
+
+void TerrainMeshArena::reconfigure(uint32_t vertexCapacityArg, uint32_t indexCapacityArg)
+{
+    vertexCapacityArg = std::max(vertexCapacityArg, 1u);
+    indexCapacityArg = std::max(indexCapacityArg, 1u);
+    if (vertexCapacityArg == vertexCapacity && indexCapacityArg == indexCapacity)
+        return;
+
+    destroyResources();
+    vertexCapacity = vertexCapacityArg;
+    indexCapacity = indexCapacityArg;
+    try
+    {
+        available = createResources();
+    }
+    catch (const std::exception& ex)
+    {
+        std::cout << "[Terrain] mesh arena unavailable | " << ex.what() << std::endl;
+        available = false;
+    }
+
+    if (available)
+    {
+        std::cout << "[Terrain] mesh arena ready | vertexMB="
+                  << (getVertexBytes() / (1024u * 1024u))
+                  << " indexMB=" << (getIndexBytes() / (1024u * 1024u))
+                  << " vertexCapacity=" << vertexCapacity
+                  << " indexCapacity=" << indexCapacity << std::endl;
+    }
 }
 
 bool TerrainMeshArena::createResources()
@@ -58,14 +91,14 @@ bool TerrainMeshArena::createResources()
                                &buffer, &allocation, nullptr) == VK_SUCCESS;
     };
 
-    if (!createBuffer(static_cast<VkDeviceSize>(kVertexCapacity) * kVertexStride,
+    if (!createBuffer(static_cast<VkDeviceSize>(vertexCapacity) * kVertexStride,
                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       vertexBuffer, vertexAllocation))
     {
         return false;
     }
 
-    if (!createBuffer(static_cast<VkDeviceSize>(kIndexCapacity) * sizeof(uint32_t),
+    if (!createBuffer(static_cast<VkDeviceSize>(indexCapacity) * sizeof(uint32_t),
                       VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       indexBuffer, indexAllocation))
     {
@@ -73,8 +106,8 @@ bool TerrainMeshArena::createResources()
         return false;
     }
 
-    vertexFreeSpans.assign(1, Span{ 0u, kVertexCapacity });
-    indexFreeSpans.assign(1, Span{ 0u, kIndexCapacity });
+    vertexFreeSpans.assign(1, Span{ 0u, vertexCapacity });
+    indexFreeSpans.assign(1, Span{ 0u, indexCapacity });
     usedVertexBytes = 0u;
     usedIndexBytes = 0u;
     allocationCount = 0u;

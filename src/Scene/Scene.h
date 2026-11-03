@@ -31,6 +31,22 @@ class JobSystem;
 class Scene
 {
 public:
+    // F2-h：流送 chunk 的整数坐标（int64，半径再大也不溢出）。
+    struct TerrainChunkCoord
+    {
+        int64_t x = 0;
+        int64_t z = 0;
+        bool operator==(const TerrainChunkCoord& other) const
+        {
+            return x == other.x && z == other.z;
+        }
+    };
+    struct TerrainChunkCoordHash
+    {
+        size_t operator()(const TerrainChunkCoord& coord) const noexcept;
+    };
+
+public:
     // DescriptorManager is required because glTF materials must reserve
     // bindless material slots while the scene is being loaded.
     // loadDefaultContent=false 时只创建相机实体，不加载 Sponza / 天空盒。
@@ -147,6 +163,9 @@ public:
     // B-01: camera-centred streamed terrain. The manager entity owns no mesh;
     // chunk entities are independent TerrainComponent + MeshComponent entities
     // generated asynchronously around the camera.
+    // F2-h：流送半径硬上限。容量（GPU 选择槽位 / arena）跟不上时会自动退回逐 chunk
+    // 路径，所以这里只限制「环的尺寸」，不再和槽位数绑定。
+    static constexpr int32_t kMaxStreamingRadius = 24;
     entt::entity createStreamingTerrain(const terrain::TerrainConfig& chunkConfig,
                                         int32_t loadRadius,
                                         uint32_t maxLoadsPerFrame,
@@ -347,8 +366,10 @@ private:
     uint64_t nextTerrainRequestSerial = 0;
 
     entt::entity terrainStreamingEntity = entt::null;
-    std::unordered_map<int64_t, entt::entity> streamingTerrainChunks;
-    std::unordered_set<int64_t> pendingStreamingTerrainChunks;
+    // F2-h：chunk 坐标用 int64（半径再大也不会溢出），键直接是坐标对而不是打包成 int64。
+    std::unordered_map<TerrainChunkCoord, entt::entity, TerrainChunkCoordHash>
+        streamingTerrainChunks;
+    std::unordered_set<TerrainChunkCoord, TerrainChunkCoordHash> pendingStreamingTerrainChunks;
     double lastStreamingUpdateMs = 0.0;
     uint64_t streamingChunksLoadedTotal = 0;
     uint64_t streamingChunksUnloadedTotal = 0;

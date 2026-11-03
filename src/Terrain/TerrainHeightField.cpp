@@ -43,6 +43,10 @@ bool HeightField::build(const TerrainConfig& config, std::string& errorMessage,
     heightScale = config.heightScale;
     heights.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0.0f);
 
+    // F2-h：噪声是 float 的（要和 GPU compute 生成器逐位一致），所以把 double 锚点
+    // 先截成 float 再参与采样；精度上限由这里决定。
+    const float originX = static_cast<float>(sampleOriginX);
+    const float originZ = static_cast<float>(sampleOriginZ);
     const float stepX = sizeX / static_cast<float>(width - 1u);
     const float stepZ = sizeZ / static_cast<float>(height - 1u);
 
@@ -55,11 +59,11 @@ bool HeightField::build(const TerrainConfig& config, std::string& errorMessage,
             return false;
         }
         const float localZ = -sizeZ * 0.5f + static_cast<float>(z) * stepZ;
-        const float worldZ = sampleOriginZ + localZ;
+        const float worldZ = originZ + localZ;
         for (uint32_t x = 0; x < width; ++x)
         {
             const float localX = -sizeX * 0.5f + static_cast<float>(x) * stepX;
-            const float worldX = sampleOriginX + localX;
+            const float worldX = originX + localX;
             float normalized = TerrainNoise::fbm(worldX, worldZ, config);
 
             // Optional radial island mask. The inner radius stays untouched and

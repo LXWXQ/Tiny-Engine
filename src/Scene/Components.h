@@ -266,8 +266,9 @@ struct TerrainStreamingComponent
 struct TerrainChunkComponent
 {
     entt::entity world = entt::null;
-    int32_t chunkX = 0;
-    int32_t chunkZ = 0;
+    // F2-h：int64，流送半径再大也不会溢出（键是坐标对，不再打包成 int64）。
+    int64_t chunkX = 0;
+    int64_t chunkZ = 0;
 };
 
 // B-07: lightweight kinematic character. The entity transform is the feet

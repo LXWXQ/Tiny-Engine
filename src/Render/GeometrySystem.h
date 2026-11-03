@@ -78,18 +78,18 @@ private:
         void* mapped = nullptr;
         uint32_t capacity = 0;
     };
-    static constexpr uint32_t kTerrainIndirectCapacity = 12288;
+    static constexpr uint32_t kTerrainIndirectCapacity = 32768;
     std::array<TerrainIndirectBuffer, kFramesInFlight> terrainIndirectBuffers{};
 
 
     // -----------------------------------------------------------------------
     // B-03: GPU-driven terrain selection.
     // -----------------------------------------------------------------------
-    // F2-d: the slot count is bounded by how many chunks can be visible at
-    // once, not by the streaming ring size. Radius 12 is 625 chunks, but the
-    // 60 degree frustum only ever shows a few hundred of them, so 384 slots
-    // leave headroom without paying for the whole ring.
-    static constexpr uint32_t kTerrainGpuMaxEntities = 384;
+    // F2-h: the slot count is bounded by how many chunks can be visible at once,
+    // not by the streaming ring size. Radius 24 is 2401 chunks; the 60 degree
+    // frustum plus per-chunk LOD keeps the visible set around a few hundred, so
+    // 1024 slots cover it while the buffers stay small (records/instances only).
+    static constexpr uint32_t kTerrainGpuMaxEntities = 1024;
     static constexpr uint32_t kTerrainGpuChunksPerEntity = 16;
     static constexpr uint32_t kTerrainGpuCommandsPerEntity = 16;
     static constexpr uint32_t kTerrainGpuMaxRecords =

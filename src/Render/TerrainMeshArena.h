@@ -32,8 +32,9 @@ public:
     static constexpr uint32_t kVertexFloats = 11u;
     static constexpr uint32_t kInvalidOffset = 0xFFFFFFFFu;
 
-    // 容量按「半径 12 的整环」估算：625 块 x 约 1620 顶点 x 44B 约 44.5 MB，
-    // 索引 625 x 约 8544 x 4B 约 21.4 MB；这里留约 10% 余量。
+    // F2-h：容量由调用方按流送环的尺寸算好传进来（Scene::createStreamingTerrain），
+    // 默认值对应半径 12 的整环：625 x 约 1700 顶点 x 44B 约 46 MB、
+    // 625 x 约 9000 索引 x 4B 约 22.5 MB。
     static constexpr uint32_t kVertexCapacity = 1100000u;  // 约 46 MB
     static constexpr uint32_t kIndexCapacity = 5900000u;   // 约 22.5 MB
 
@@ -49,7 +50,16 @@ public:
         bool isValid() const { return vertexOffset != kInvalidOffset; }
     };
 
-    explicit TerrainMeshArena(Device& device);
+    explicit TerrainMeshArena(Device& device,
+                              uint32_t vertexCapacity = kVertexCapacity,
+                              uint32_t indexCapacity = kIndexCapacity);
+
+    uint32_t getVertexCapacity() const { return vertexCapacity; }
+    uint32_t getIndexCapacity() const { return indexCapacity; }
+
+    // F2-h：按新容量重建两份大缓冲。渲染侧只持有 this 指针，所以扩容必须在
+    // 原地做，不能换对象。调用前必须保证没有任何切片在用（流送世界重建时成立）。
+    void reconfigure(uint32_t vertexCapacity, uint32_t indexCapacity);
     ~TerrainMeshArena();
 
     TerrainMeshArena(const TerrainMeshArena&) = delete;
@@ -72,8 +82,8 @@ public:
     VkBuffer getVertexBuffer() const { return vertexBuffer; }
     VkBuffer getIndexBuffer() const { return indexBuffer; }
     uint32_t getAllocationCount() const { return allocationCount; }
-    VkDeviceSize getVertexBytes() const { return kVertexCapacity * kVertexStride; }
-    VkDeviceSize getIndexBytes() const { return kIndexCapacity * sizeof(uint32_t); }
+    VkDeviceSize getVertexBytes() const { return static_cast<VkDeviceSize>(vertexCapacity) * kVertexStride; }
+    VkDeviceSize getIndexBytes() const { return static_cast<VkDeviceSize>(indexCapacity) * sizeof(uint32_t); }
     VkDeviceSize getUsedVertexBytes() const { return usedVertexBytes; }
     VkDeviceSize getUsedIndexBytes() const { return usedIndexBytes; }
 
@@ -96,6 +106,8 @@ private:
     VmaAllocation indexAllocation = VK_NULL_HANDLE;
     std::vector<Span> vertexFreeSpans;
     std::vector<Span> indexFreeSpans;
+    uint32_t vertexCapacity = kVertexCapacity;
+    uint32_t indexCapacity = kIndexCapacity;
     VkDeviceSize usedVertexBytes = 0u;
     VkDeviceSize usedIndexBytes = 0u;
     uint32_t allocationCount = 0u;

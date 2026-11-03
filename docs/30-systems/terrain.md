@@ -49,8 +49,8 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
   manager + 多个独立 chunk 实体，每个 chunk 拥有自己的 Model/Mesh/Bounds，
   在相机周围有限半径内加载/卸载；
 - GPU compute 已负责高度场噪声与单 chunk 顶点/索引组装；多 chunk 手动地形仍由
-  CPU builder 生成。LOD 选择/剔除走 GPU selection；流送半径上限 12（`--streaming-world`
-  最大 625 块），仍以 float 局部坐标 + 浮动原点为基础，尚不是真正无缝的无限世界。
+  CPU builder 生成。LOD 选择/剔除走 GPU selection；F2-h 起流送半径上限 24（`--streaming-world`
+  最大 2401 块），chunk 坐标是 `int64`、采样锚点是 `double`，噪声本身仍是 `float`（见 §7 精度）。
 - F2-a 起有可持续运行的载体：`--streaming-world [radius]` 在构造期建立 manager，
   半径 r 时 (2r+1)^2 个 chunk 实体；`--streaming-fly [speed]` 让相机沿 +X 直线
   巡航（F2-c 起，`--streaming-fly-radius` 控制侧向摆动幅度），使加载/卸载持续发生。
@@ -63,7 +63,7 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
   `firstIndex`（arena 索引基址）、`vertexOffset`（arena 顶点基址）与
   `firstInstance`（该 chunk 在 set 3 实例表里的行号）。chunk 的世界矩阵不再烘进顶点，
   而是在顶点着色器里按 `gl_InstanceIndex` 从实例表取 —— 同一份网格被移动时不需要重拷。
-  命令区固定为 6144 条（384 实体 x 16 命令，F2-d 起），绘制前用 `vkCmdFillBuffer` 清零，
+  命令区固定为 16384 条（1024 实体 x 16 命令，F2-h 起），绘制前用 `vkCmdFillBuffer` 清零，
   `indexCount == 0` 的条目就是空绘制。`--no-terrain-batch` 回退到逐 chunk 绑定 + 逐 chunk draw。
 - F2-f 起 arena 归 `Scene` 所有（`Scene::getTerrainMeshArena()`），地形网格生成完成、
   `Model` 接管完 VMA allocation 后立刻在一次性命令缓冲里 `acquire()` + `copyInto()` + 
@@ -74,6 +74,12 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
   `Slice{vertexOffset, vertexCount, indexOffset, indexCount}`，`copyInto()` 按切片拷贝，
   `release()` 归还并合并。单块超过剩余容量时该 chunk **保留自己的 buffer**，
   渲染时照旧 `Model::bind()`，所以不会丢几何，只是少了合批；`--no-terrain-batch` 同样只绑 arena。
+- F2-h 起 **chunk 坐标换成 `int64`**（`TerrainChunkCoord{x, z}` + 64 位哈希，`TerrainChunkComponent::chunkX/Z`
+  同步改宽），采样锚点 `TerrainConfig::sampleOriginX/Z` 与 `HeightField` 的对应成员改成 `double`，
+  校验范围放宽到 ±1e12；rebase 只平移 Transform 与 chunk 整数索引/key，锚点保持绝对。
+  arena 容量不再写死：`Scene::createStreamingTerrain()` 按环尺寸算 `ring*1700` 顶点 / `ring*9000` 索引，
+  容量不足时用 `TerrainMeshArena::reconfigure()` **原地重建**（渲染侧只持 `this` 指针，不能换对象），
+  半径 12 仍是 1.1M/5.9M，半径 24 是 4.08M/21.6M（约 171 MB + 82 MB）。
 
 ## 2. 文件与职责
 
@@ -288,7 +294,7 @@ chunk entities (runtime)
 
 当前流送使用 8 槽异步 GPU 高度场请求；单 chunk GPU mesh 组装使用 4 槽
 异步 submit/poll，主线程只做提交与轮询，完成后再安装 Model。`createTerrainEntity()`
-与场景加载仍是同步路径。流送半径上限 12（625 块，实测 1080p 下约 68 FPS，瓶颈在每 chunk 的 CPU 簿记），属于有限世界基础，不是最终无限地形。
+与场景加载仍是同步路径。F2-h 起半径上限 24（2401 块），实测 1080p 下半径 2/12/16/24 约 190/70/36/17 FPS：瓶颈是每 chunk 每帧的 CPU 簿记（Transform / 空间索引 / 地形 record / 实例表行），不是显存。
 
 编辑器语义：
 

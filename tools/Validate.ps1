@@ -235,6 +235,8 @@ $tests = @(
        MustContain = @("[Editor] streamed terrain PASS", "picking=OK", "[Editor] selfTest PASS") },
     @{ Name = "f2f-arena-slots"; Args = @("--selftest", "180", "--streaming-world", "8");
        MustContain = @("[Terrain] mesh arena ready | vertexMB=", "arenaAllocs=", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f2h-large-radius"; Args = @("--selftest", "400", "--streaming-world", "16");
+       MustContain = @("mesh arena resized | radius=16", "[Streaming] chunks=1089", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )
