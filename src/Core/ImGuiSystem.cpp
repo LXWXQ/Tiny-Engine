@@ -3,6 +3,8 @@
 #include "Scene/CameraController.h"
 #include "Core/EngineConfig.h"
 #include <stdexcept>
+#include <filesystem>
+#include <iostream>
 
 ImGuiSystem::ImGuiSystem(GLFWwindow* window, Device& device, VkFormat swapchainFormat, uint32_t imageCount, VkCommandPool commandPool)
 	: vulkanDevice(device), swapchainFormat(swapchainFormat)
@@ -39,6 +41,28 @@ ImGuiSystem::ImGuiSystem(GLFWwindow* window, Device& device, VkFormat swapchainF
 ImGui::GetIO().IniFilename = TINY_IMGUI_INI_PATH;
 
 ImGui::StyleColorsDark();
+
+	// E4-c：中文字形。ImGui 自带字体只有 ASCII，编辑器里的中文日志 / 提示 / 模态框
+	// 会全部显示成 '?'。这里从系统字体里挑一个装进去（不随仓库分发，避免字体授权问题），
+	// 找不到就保持内置字体 —— 英文界面照常可用，只是中文变问号。
+	// ImGui 1.92 起字形是按需加载的，不需要预先声明 GlyphRanges。
+	for (const char* candidate : { "C:/Windows/Fonts/msyh.ttc",
+	                               "C:/Windows/Fonts/msyhl.ttc",
+	                               "C:/Windows/Fonts/simhei.ttf",
+	                               "C:/Windows/Fonts/simsun.ttc" })
+	{
+		std::error_code existsError;
+		if (!std::filesystem::exists(candidate, existsError))
+			continue;
+		ImFontConfig fontConfig;
+		fontConfig.OversampleH = 2;
+		fontConfig.PixelSnapH = true;
+		if (ImGui::GetIO().Fonts->AddFontFromFileTTF(candidate, 16.0f, &fontConfig) != nullptr)
+		{
+			std::cout << "[ImGui] font: " << candidate << std::endl;
+			break;
+		}
+	}
 
 	ImGui_ImplGlfw_InitForVulkan(window, true);
 

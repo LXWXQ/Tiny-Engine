@@ -54,3 +54,13 @@ updated: 2026-11-03
 - 可观测：`[Editor] preferences selfTest PASS | round trip + recent dedupe/cap + broken json`、
   `[Editor] preferences file selfTest PASS | save + load + recent round trip`。
 - 验证：编辑器自检 0/0、引擎冒烟 0/0；回归 46 项（新增 `e4-preferences`）。
+
+## E4-c：快捷键速查（Help 菜单 + ? 键 + 中文字形）
+
+- 问题：快捷键只散落在菜单文字与文档里，`F` 聚焦、`Ctrl+D` 复制、`Ctrl+A` 全选几乎发现不了；
+  另外 ImGui 只有 ASCII 字形，界面上所有中文（日志、模态框按钮、提示）全是 `?`。
+- 实现：`kShortcutEntries` 一张表驱动弹窗与自检；`?`（Shift+Slash）开合、`Esc` 关闭、
+  窗口首次出现时居中；`ImGuiSystem` 按候选列表加载系统 CJK 字体（msyh/msyhl/simhei/simsun），
+  找不到就退回内置字体。
+- 可观测：`[Editor] shortcut sheet selfTest PASS | entries=16`、`[ImGui] font: C:/Windows/Fonts/msyh.ttc`。
+- 验证：编辑器自检 0/0（含截图确认中文与表格排版）；回归 47 项（新增 `e4-shortcut-sheet`）。

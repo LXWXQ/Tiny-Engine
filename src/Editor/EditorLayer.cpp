@@ -18,6 +18,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <filesystem>
 #include <unordered_map>
@@ -242,6 +243,37 @@ void focusSelection(EditorState& state)
     state.transformRefreshPending = true;
     state.pushLog(LogEntry::Level::Info, "[Editor] focused selection | radius=" + std::to_string(radius));
 }
+
+// E4-c：快捷键速查表。菜单、弹窗、自检都读这一张表 ——
+// 加一个快捷键时只改这里 + 真正处理它的地方，不会出现"文档写了但没实现"。
+struct ShortcutEntry
+{
+    const char* group;
+    const char* keys;
+    const char* action;
+};
+
+const ShortcutEntry kShortcutEntries[] =
+{
+    { "文档", "Ctrl+N", "新建场景（有未保存修改时先确认）" },
+    { "文档", "Ctrl+O", "打开场景" },
+    { "文档", "Ctrl+S", "保存" },
+    { "文档", "Ctrl+Z", "撤销" },
+    { "文档", "Ctrl+Shift+Z", "重做（同 Ctrl+Y）" },
+    { "文档", "Ctrl+Y", "重做" },
+    { "选择", "Ctrl+A", "全选（跳过地形 chunk 与相机）" },
+    { "选择", "Ctrl+D", "复制选中（含子树）" },
+    { "选择", "Delete", "删除选中" },
+    { "选择", "F", "把相机聚焦到选中" },
+    { "变换", "W / E / R", "移动 / 旋转 / 缩放（多选时整组一起变）" },
+    { "播放", "F5", "开始播放" },
+    { "播放", "F6", "暂停 / 继续" },
+    { "播放", "F7", "停止并恢复快照" },
+    { "视图", "?", "打开 / 关闭本速查表" },
+    { "视图", "Esc", "关闭速查表" },
+};
+
+constexpr size_t kShortcutEntryCount = sizeof(kShortcutEntries) / sizeof(kShortcutEntries[0]);
 } // namespace
 
 void EditorLayer::handleShortcuts()
@@ -330,6 +362,15 @@ void EditorLayer::handleShortcuts()
     {
         focusSelection(state);
     }
+    else if (ImGui::IsKeyPressed(ImGuiKey_Slash, false) && shift)
+    {
+        // ? 是 Shift+/，要求 shift 是为了不抢单独的 /。
+        showShortcutSheet = !showShortcutSheet;
+    }
+    else if (showShortcutSheet && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+    {
+        showShortcutSheet = false;
+    }
 }
 
 void EditorLayer::updatePlayState(float dt)
@@ -393,6 +434,8 @@ void EditorLayer::drawUI()
 
     drawPanels();
     layoutNeedsReset = false;
+
+    drawShortcutSheet();
 
     // 未保存确认放在所有面板之后：它要盖在最上层，且本帧的改动要先算进 dirty。
     drawUnsavedPrompt();
@@ -524,6 +567,15 @@ void EditorLayer::drawMenuBar()
         ImGui::Separator();
         if (ImGui::MenuItem("Reset Layout"))
             layoutNeedsReset = true;
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Help"))
+    {
+        ImGui::MenuItem("Keyboard Shortcuts", "?", &showShortcutSheet);
+        ImGui::Separator();
+        ImGui::TextDisabled("Tiny Editor");
+        ImGui::TextDisabled("Tiny Engine (Vulkan)");
         ImGui::EndMenu();
     }
 
@@ -972,6 +1024,51 @@ void EditorLayer::cancelPendingDocumentAction()
     unsavedPromptRequested = false;
 }
 
+// ---- E4-c：快捷键速查 ------------------------------------------------------
+void EditorLayer::drawShortcutSheet()
+{
+    if (!showShortcutSheet)
+        return;
+
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(display.x * 0.5f, display.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(420.0f, 0.0f), ImVec2(720.0f, 900.0f));
+    if (!ImGui::Begin("Keyboard Shortcuts", &showShortcutSheet, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
+
+    const char* currentGroup = nullptr;
+    if (ImGui::BeginTable("shortcuts", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
+    {
+        for (const ShortcutEntry& entry : kShortcutEntries)
+        {
+            if (currentGroup == nullptr || std::strcmp(currentGroup, entry.group) != 0)
+            {
+                currentGroup = entry.group;
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", entry.group);
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted("");
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(entry.keys);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(entry.action);
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("输入框获得焦点时快捷键会让路，不会误触。");
+
+    ImGui::End();
+}
+
 void EditorLayer::drawUnsavedPrompt()
 {
     constexpr const char* kPopupId = "未保存的修改";
@@ -1140,6 +1237,34 @@ bool EditorLayer::selfTest()
     // ---- 0b) E4-b：偏好文件往返（纯逻辑，不碰磁盘） ----
     if (!EditorPreferences::selfTest())
         return false;
+
+    // ---- 0c) E4-c：速查表本身就是数据，顺手校验它没有空项/重复键 ----
+    {
+        if (kShortcutEntryCount < 12)
+        {
+            std::cerr << "[Editor] shortcut sheet selfTest FAIL: table too small" << std::endl;
+            return false;
+        }
+        for (size_t i = 0; i < kShortcutEntryCount; ++i)
+        {
+            const ShortcutEntry& entry = kShortcutEntries[i];
+            if (entry.group == nullptr || entry.keys == nullptr || entry.action == nullptr ||
+                entry.group[0] == 0 || entry.keys[0] == 0 || entry.action[0] == 0)
+            {
+                std::cerr << "[Editor] shortcut sheet selfTest FAIL: empty entry at " << i << std::endl;
+                return false;
+            }
+            for (size_t j = i + 1; j < kShortcutEntryCount; ++j)
+            {
+                if (std::strcmp(entry.keys, kShortcutEntries[j].keys) == 0)
+                {
+                    std::cerr << "[Editor] shortcut sheet selfTest FAIL: duplicate keys " << entry.keys << std::endl;
+                    return false;
+                }
+            }
+        }
+        std::cout << "[Editor] shortcut sheet selfTest PASS | entries=" << kShortcutEntryCount << std::endl;
+    }
 
     // ---- 1) 命令栈：精确撤销 ----
     {

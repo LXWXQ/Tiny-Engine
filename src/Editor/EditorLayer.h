@@ -95,6 +95,10 @@ private:
     void updateWindowTitle();
     void cancelPendingDocumentAction();
 
+    // ---- E4-c：快捷键速查（Help 菜单 / ? 键） ----
+    void drawShortcutSheet();
+    bool showShortcutSheet = false;
+
     // ---- E4-b：偏好持久化（面板可见性 / Gizmo 模式 / 最近场景） ----
     void applyPreferences();
     void syncPreferencesFromState();

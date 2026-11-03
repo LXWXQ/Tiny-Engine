@@ -78,6 +78,28 @@ CPU 网格交给 JobSystem，旧网格继续渲染。生成期间再次点击 Ge
 - **File → Open Recent**：最近 8 条（`kMaxRecentScenes`），去重 + 置顶；打开时会先走
   `requestDocumentAction` 的未保存确认，所以它不会绕过脏文档保护。
 
+## 快捷键速查（E4-c）
+
+Help → Keyboard Shortcuts（或直接按 `?`）弹出速查表，`Esc` 关闭。菜单、弹窗、自检读的是同一张
+`kShortcutEntries` 表（`src/Editor/EditorLayer.cpp` 匿名命名空间）：加一个快捷键时只改表 + 真正处理它的
+分支，不会出现"文档写了但没实现"。自检会校验表项非空、键不重复，并打印条目数。
+
+`?` 用 `Shift+Slash` 判定，所以单独的 `/` 不会被抢；所有快捷键在 `io.WantTextInput` 为真时让路 ——
+在搜索框/命名框里打字不会误触删除或复制。
+
+### 中文字形
+
+ImGui 自带字体只有 ASCII，之前编辑器里的中文日志、模态框按钮、提示全部显示成 `?`。
+`src/Core/ImGuiSystem.cpp` 在 `CreateContext()` 之后从系统字体里挑第一个可用的装进去：
+
+1. `C:/Windows/Fonts/msyh.ttc`（微软雅黑）
+2. `C:/Windows/Fonts/msyhl.ttc`
+3. `C:/Windows/Fonts/simhei.ttf`
+4. `C:/Windows/Fonts/simsun.ttc`
+
+加载成功打印 `[ImGui] font: <path>`；都找不到就保持内置字体（英文照常，中文仍为问号），
+**不随仓库分发字体**，避免授权问题。ImGui 1.92 起字形按需加载，不需要声明 GlyphRanges。
+
 ## 布局：为什么是手写的
 
 本项目的 ImGui 是 **1.92.6 非 docking 分支**（没有 `DockSpace`）。
