@@ -76,6 +76,15 @@ stack.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(ch
 `mergeWith()` 要求**实体列表顺序完全一致**（数量相同、逐个实体相同），这样拖拽过程中的
 每帧命令会并进第一条，`absorb()` 只覆盖各项的 `new*` 值，旧值保留为拖拽起点。
 
+## 材质与渲染标记：SetMaterialCommand / SetRenderTagCommand
+
+材质滑杆、Alpha Mode、Skybox / Grid 复选框以前直接写组件 + `markDirty()`，不进命令栈。
+
+- 载荷：`MaterialSnapshot { vec4 baseColor; float metallic; float roughness; float alphaCutoff; int alphaMode; }`；
+- `SetMaterialCommand` 的 apply / revert 都走 `writeState()`：写 `Material` 字段，并调 `DescriptorManager::updateMaterialFactors()` 把 factor 推给 GPU —— 撤销也要推，否则 UI 回退了画面没回退；
+- `mergeWith` 只比较实体，连续拖滑杆在 0.35 秒窗口内合并成一条；
+- `SetRenderTagCommand` 同理，管 Skybox / Grid 两个开关。
+
 ## 删除实体的撤销（最容易写错的地方）
 
 EnTT 销毁后重建会拿到**新 ID**，所以撤销不能指望 ID 不变。构造时必须存下：

@@ -10,6 +10,7 @@
 
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
+#include "Core/Material.h"
 
 #include <imgui.h>
 #include "AssetPaths.h"
@@ -1103,6 +1104,74 @@ bool EditorLayer::selfTest()
         registry.destroy(a);
         registry.destroy(b);
         moveStack.clear();
+    }
+
+    // ---- 2d) E3：材质参数 + Render Tag 一条命令 ----
+    {
+        const entt::entity e = registry.create();
+        auto material = std::make_shared<Material>();
+        material->baseColorFactor = glm::vec4(1.0f);
+        material->metallicFactor = 1.0f;
+        material->roughnessFactor = 1.0f;
+        MaterialComponent materialComp;
+        materialComp.material = material;
+        registry.emplace<MaterialComponent>(e, materialComp);
+        registry.emplace<RenderTagComponent>(e);
+
+        MaterialSnapshot before;
+        before.baseColor = material->baseColorFactor;
+        before.metallic = material->metallicFactor;
+        before.roughness = material->roughnessFactor;
+        before.alphaCutoff = material->alphaCutoff;
+        before.alphaMode = static_cast<int>(material->alphaMode);
+
+        MaterialSnapshot after = before;
+        after.baseColor = glm::vec4(0.25f, 0.5f, 0.75f, 1.0f);
+        after.metallic = 0.2f;
+        after.roughness = 0.8f;
+
+        CommandStack materialStack;
+        materialStack.execute(std::make_unique<SetMaterialCommand>(
+            registry, e, before, after, nullptr));
+        if (material->metallicFactor != 0.2f || material->roughnessFactor != 0.8f ||
+            materialStack.undoCount() != 1)
+        {
+            std::cerr << "[Editor] selfTest FAIL: material command did not apply (E3)" << std::endl;
+            return false;
+        }
+        materialStack.undo();
+        if (material->metallicFactor != 1.0f || material->baseColorFactor.z != 1.0f)
+        {
+            std::cerr << "[Editor] selfTest FAIL: material undo did not restore factors (E3)" << std::endl;
+            return false;
+        }
+
+        auto* tag = registry.try_get<RenderTagComponent>(e);
+        materialStack.execute(std::make_unique<SetRenderTagCommand>(
+            registry, e, tag->isSkybox, tag->isGrid, true, false));
+        if (!tag->isSkybox)
+        {
+            std::cerr << "[Editor] selfTest FAIL: render tag command did not apply (E3)" << std::endl;
+            return false;
+        }
+        materialStack.undo();
+        if (tag->isSkybox)
+        {
+            std::cerr << "[Editor] selfTest FAIL: render tag undo did not restore flags (E3)" << std::endl;
+            return false;
+        }
+
+        // 同一实体的连续编辑必须能合并（拖滑杆只留一条撤销）。
+        const SetMaterialCommand first(registry, e, before, after, nullptr);
+        const SetMaterialCommand second(registry, e, after, before, nullptr);
+        if (!second.mergeWith(first))
+        {
+            std::cerr << "[Editor] selfTest FAIL: material commands did not merge (E3)" << std::endl;
+            return false;
+        }
+
+        registry.destroy(e);
+        materialStack.clear();
     }
 
     // ---- 3) 场景描述 <-> JSON 往返 ----

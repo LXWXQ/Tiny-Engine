@@ -99,6 +99,8 @@ public:
     }
 
     MaterialSystem& getMaterialSystem() { return materialSystem; }
+    // E3：材质 factor 的 GPU 侧写入（编辑器改参数后立刻生效）。
+    DescriptorManager* getDescriptorManager() const { return descriptorManager; }
 
     // ---- 场景描述（编辑器 / 序列化用）----
     // captureDescription: 把当前 registry 导出成纯数据（不含任何 GPU 句柄）。

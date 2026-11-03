@@ -181,6 +181,112 @@ void SetTransformsCommand::absorb(const Command& newer)
 }
 
 // ---------------------------------------------------------------------------
+// SetMaterialCommand（E3）
+// ---------------------------------------------------------------------------
+SetMaterialCommand::SetMaterialCommand(entt::registry& registryArg, entt::entity entityArg,
+                                       MaterialSnapshot beforeArg, MaterialSnapshot afterArg,
+                                       Scene* sceneArg)
+    : registry(&registryArg), entity(entityArg), before(beforeArg), after(afterArg),
+      scene(sceneArg)
+{
+}
+
+void SetMaterialCommand::writeState(const MaterialSnapshot& snapshot)
+{
+    if (!registry->valid(entity))
+        return;
+    auto* materialComp = registry->try_get<MaterialComponent>(entity);
+    if (materialComp == nullptr || !materialComp->material)
+        return;
+
+    Material& material = *materialComp->material;
+    material.baseColorFactor = snapshot.baseColor;
+    material.metallicFactor = snapshot.metallic;
+    material.roughnessFactor = snapshot.roughness;
+    material.alphaCutoff = snapshot.alphaCutoff;
+    material.alphaMode = static_cast<AlphaMode>(snapshot.alphaMode);
+
+    if (scene != nullptr)
+    {
+        if (DescriptorManager* descriptors = scene->getDescriptorManager())
+            descriptors->updateMaterialFactors(materialComp->materialSetIndex, snapshot.baseColor,
+                                               snapshot.metallic, snapshot.roughness);
+    }
+}
+
+void SetMaterialCommand::apply()
+{
+    writeState(after);
+}
+
+void SetMaterialCommand::revert()
+{
+    writeState(before);
+}
+
+bool SetMaterialCommand::mergeWith(const Command& previous) const
+{
+    const auto* other = dynamic_cast<const SetMaterialCommand*>(&previous);
+    return other != nullptr && other->entity == entity;
+}
+
+void SetMaterialCommand::absorb(const Command& newer)
+{
+    const auto* other = dynamic_cast<const SetMaterialCommand*>(&newer);
+    if (other == nullptr || other->entity != entity)
+        return;
+    after = other->after;
+}
+
+// ---------------------------------------------------------------------------
+// SetRenderTagCommand（E3）
+// ---------------------------------------------------------------------------
+SetRenderTagCommand::SetRenderTagCommand(entt::registry& registryArg, entt::entity entityArg,
+                                         bool oldSkyboxArg, bool oldGridArg, bool newSkyboxArg,
+                                         bool newGridArg)
+    : registry(&registryArg), entity(entityArg), oldSkybox(oldSkyboxArg), oldGrid(oldGridArg),
+      newSkybox(newSkyboxArg), newGrid(newGridArg)
+{
+}
+
+void SetRenderTagCommand::apply()
+{
+    if (!registry->valid(entity))
+        return;
+    if (auto* tag = registry->try_get<RenderTagComponent>(entity))
+    {
+        tag->isSkybox = newSkybox;
+        tag->isGrid = newGrid;
+    }
+}
+
+void SetRenderTagCommand::revert()
+{
+    if (!registry->valid(entity))
+        return;
+    if (auto* tag = registry->try_get<RenderTagComponent>(entity))
+    {
+        tag->isSkybox = oldSkybox;
+        tag->isGrid = oldGrid;
+    }
+}
+
+bool SetRenderTagCommand::mergeWith(const Command& previous) const
+{
+    const auto* other = dynamic_cast<const SetRenderTagCommand*>(&previous);
+    return other != nullptr && other->entity == entity;
+}
+
+void SetRenderTagCommand::absorb(const Command& newer)
+{
+    const auto* other = dynamic_cast<const SetRenderTagCommand*>(&newer);
+    if (other == nullptr || other->entity != entity)
+        return;
+    newSkybox = other->newSkybox;
+    newGrid = other->newGrid;
+}
+
+// ---------------------------------------------------------------------------
 // RenameEntityCommand
 // ---------------------------------------------------------------------------
 RenameEntityCommand::RenameEntityCommand(entt::registry& registry, entt::entity entity,

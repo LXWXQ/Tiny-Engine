@@ -37,6 +37,17 @@ layout(set = 1, binding = 1) uniform sampler2D normalMaps[];
 layout(set = 1, binding = 2) uniform sampler2D metallicMaps[];
 layout(set = 1, binding = 3) uniform sampler2D roughnessMaps[];
 
+// E3: glTF 材质 factor（baseColor / metallic / roughness），按材质槽位索引。
+// 放在全局 set（set 0, binding 10）：bindless 材质 set 只有 4 个纹理数组，
+// 而 factor 是"每材质一份的标量"，用 SSBO 最省事，也同时适用于
+// CPU 路径和 GPU 驱动提交（两者都绑 set 0）。
+// 每材质两个 vec4（baseColor、metalRough）在缓冲里平铺成 vec4 数组，
+// 下标 = matId * 2 与 matId * 2 + 1，对应 C++ 侧 32 字节的
+// MaterialFactorRecord。扁平数组的 stride 显式可验证（16 字节）。
+layout(set = 0, binding = 10) readonly buffer MaterialFactorBlock {
+    vec4 factors[];
+} materialFactors;
+
 // Terrain stage 6: four fixed material layers. Layer order is sand, grass,
 // rock, snow and matches TerrainTextureGenerator / TerrainMaterial.
 layout(set = 2, binding = 0) uniform sampler2D terrainAlbedoSand;
@@ -467,9 +478,11 @@ void main() {
     // 之所以换成浮点：天空盒借道这个通道写 >1.0 的线性 HDR，8bit 会在写入时截断。
     // 材质没有 albedo 贴图时，采样到的是"默认白纹理" —— 渲染出来是一团白。
     // 改画棋盘格，让占位材质一眼可辨。
+    // E3: factor 乘到采样结果上（glTF 规范：factor 与贴图相乘）。
+    const vec4 baseColorFactor = materialFactors.factors[matId * 2u];
     vec4 albedoColor = (gMaterial.albedoFallback != 0u)
         ? vec4(checkerboardFallback(fragPosLocal), 1.0)
-        : texture(albedoMaps[nonuniformEXT(matId)], fragUV);
+        : texture(albedoMaps[nonuniformEXT(matId)], fragUV) * baseColorFactor;
     if (gMaterial.alphaMasked != 0u && albedoColor.a < gMaterial.alphaCutoff)
         discard;
 
@@ -487,8 +500,10 @@ void main() {
     float roughness = 1.0;
     if (gMaterial.albedoFallback == 0u)
     {
-        metallic = texture(metallicMaps[nonuniformEXT(matId)], fragUV).b;
-        roughness = texture(roughnessMaps[nonuniformEXT(matId)], fragUV).g;
+        const vec2 metallicRoughnessFactor = materialFactors.factors[matId * 2u + 1u].xy;
+        metallic = texture(metallicMaps[nonuniformEXT(matId)], fragUV).b * metallicRoughnessFactor.x;
+        roughness = clamp(texture(roughnessMaps[nonuniformEXT(matId)], fragUV).g * metallicRoughnessFactor.y,
+                          0.04, 1.0);
     }
     outPBR = vec4(metallic, roughness, 0.0, 1.0);
 }

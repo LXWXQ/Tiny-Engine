@@ -555,17 +555,37 @@ void InspectorPanel::drawMaterial(EditorState& state, entt::entity entity)
     ImGui::Text("Name: %s", m.name.c_str());
     ImGui::Text("Slot: %u", materialComp->materialSetIndex);
 
-    // 材质参数修改不经过命令栈：它们是"外观调参"，撤销的需求弱，
-    // 而每帧写回磁盘/重建描述符的成本更高。这是一个有意的取舍。
-    ImGui::ColorEdit4("Base Color", glm::value_ptr(m.baseColorFactor));
-    ImGui::SliderFloat("Metallic", &m.metallicFactor, 0.0f, 1.0f);
-    ImGui::SliderFloat("Roughness", &m.roughnessFactor, 0.0f, 1.0f);
+    // E3：材质参数走命令栈。
+    //
+    // 先拍快照，拖动的是局部副本；只有真的变了才提交一条 SetMaterialCommand。
+    // CommandStack 的合并窗口（按实体）会把拖滑杆期间的多帧命令压成一条撤销，
+    // 所以既不会污染历史，也不会每帧写盘。
+    MaterialSnapshot before;
+    before.baseColor = m.baseColorFactor;
+    before.metallic = m.metallicFactor;
+    before.roughness = m.roughnessFactor;
+    before.alphaCutoff = m.alphaCutoff;
+    before.alphaMode = static_cast<int>(m.alphaMode);
+
+    MaterialSnapshot after = before;
+    ImGui::ColorEdit4("Base Color", glm::value_ptr(after.baseColor));
+    ImGui::SliderFloat("Metallic", &after.metallic, 0.0f, 1.0f);
+    ImGui::SliderFloat("Roughness", &after.roughness, 0.0f, 1.0f);
 
     const char* alphaModes[] = { "Opaque", "Mask", "Blend" };
-    int alphaMode = static_cast<int>(m.alphaMode);
-    if (ImGui::Combo("Alpha Mode", &alphaMode, alphaModes, 3))
+    int alphaModeIndex = after.alphaMode;
+    if (ImGui::Combo("Alpha Mode", &alphaModeIndex, alphaModes, 3))
+        after.alphaMode = alphaModeIndex;
+    if (after.alphaMode == static_cast<int>(AlphaMode::MASK_MODE))
+        ImGui::SliderFloat("Alpha Cutoff", &after.alphaCutoff, 0.0f, 1.0f);
+
+    const bool colorChanged = !glm::all(glm::equal(after.baseColor, before.baseColor));
+    if (colorChanged || after.metallic != before.metallic ||
+        after.roughness != before.roughness || after.alphaCutoff != before.alphaCutoff ||
+        after.alphaMode != before.alphaMode)
     {
-        m.alphaMode = static_cast<AlphaMode>(alphaMode);
+        state.commands.execute(std::make_unique<SetMaterialCommand>(
+            registry, entity, before, after, state.services.scene));
         state.markDirty();
     }
 
@@ -592,13 +612,19 @@ void InspectorPanel::drawRenderTag(EditorState& state, entt::entity entity)
     if (!ImGui::CollapsingHeader("Render Tag"))
         return;
 
-    bool changed = false;
-    changed |= ImGui::Checkbox("Skybox", &tag->isSkybox);
-    changed |= ImGui::Checkbox("Grid", &tag->isGrid);
+    // E3：Render Tag 也走命令栈（它直接决定这一帧怎么画，不是纯元数据）。
+    bool skybox = tag->isSkybox;
+    bool grid = tag->isGrid;
+    ImGui::Checkbox("Skybox", &skybox);
+    ImGui::Checkbox("Grid", &grid);
     if (tag->isTerrain)
         ImGui::TextDisabled("Terrain: vertex-color mode (geometry pipeline)");
-    if (changed)
+    if (skybox != tag->isSkybox || grid != tag->isGrid)
+    {
+        state.commands.execute(std::make_unique<SetRenderTagCommand>(
+            registry, entity, tag->isSkybox, tag->isGrid, skybox, grid));
         state.markDirty();
+    }
 }
 
 } // namespace editor

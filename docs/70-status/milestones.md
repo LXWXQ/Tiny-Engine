@@ -585,3 +585,10 @@ updated: 2026-11-02
 - 实现：`SetTransformsCommand` + `TransformPose`；拖拽起点快照整组（局部 pose、世界矩阵、父世界逆），每帧用 `deltaWorld = primaryWorldNew * inverse(primaryStartWorld)` 施加到其余实体，再从矩阵列拆 T/R/S；地形 chunk / 流送 / 相机不参与。
 - 可观测：`[Editor] selfTest PASS | commands + delete-undo + batch delete/duplicate + multi transform + serialization round trip`；合并窗口保证一次拖拽 = 一条撤销。
 - 验证：`TinyEditor.exe --selftest 5 --empty-scene` 0/0；回归 42 项（新增 `e2-multi-transform`）。
+
+## E3：材质参数与渲染标记进撤销栈
+
+- 问题：Inspector 的 Base Color / Metallic / Roughness / Alpha Mode 与 Render Tag 复选框直接写组件，不进命令栈；而且这些 factor 当时根本没进 GPU，滑杆是安慰剂。
+- 实现：`MaterialFactorRecord`（32 字节）+ 全局 set `binding 10` 的 SSBO，`updateMaterialFactors()` 只写 32 字节 + flush；`mrt.frag` 按 glTF 规范把 factor 乘到采样结果上；`SetMaterialCommand` / `SetRenderTagCommand` 接管面板写操作。
+- 可观测：`[Editor] selfTest PASS | ... + material/render tag + ...`；Sponza 墙面从 186 降到 161（资源自带 `baseColorFactor = 0.588`，现在才真正生效）。
+- 验证：编辑器自检 0/0、`--selftest 60` 154 FPS 0/0；回归 43 项（新增 `e3-material-undo`）。

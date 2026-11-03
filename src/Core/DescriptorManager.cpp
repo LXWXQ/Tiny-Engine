@@ -44,6 +44,35 @@ void DescriptorManager::init(Device& dev, uint32_t maxMaterials)
 	createMaterialLayout(maxMaterials);
 	createTerrainLayout();
 
+	// E3: 材质 factor 表。CPU 侧常驻映射（CPU_TO_GPU），改动时只写 32 字节 +
+	// flush，不需要重建描述符；初值把 factor 全设成 1（等于「不改变贴图采样」），
+	// 这样没写过 factor 的材质行为和以前一致。
+	{
+		VkBufferCreateInfo factorInfo{};
+		factorInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		factorInfo.size = static_cast<VkDeviceSize>(maxMaterials) * sizeof(MaterialFactorRecord);
+		factorInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+
+		VmaAllocationCreateInfo factorAlloc{};
+		factorAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+		factorAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		VmaAllocationInfo factorAllocInfo{};
+		if (vmaCreateBuffer(device->getVmaAllocator(), &factorInfo, &factorAlloc, &materialFactorBuffer,
+			&materialFactorAllocation, &factorAllocInfo) != VK_SUCCESS)
+			throw std::runtime_error("DescriptorManager: 材质 factor 缓冲创建失败");
+
+		materialFactorMapped = factorAllocInfo.pMappedData;
+		materialFactorCount = maxMaterials;
+		if (materialFactorMapped)
+		{
+			MaterialFactorRecord* records = static_cast<MaterialFactorRecord*>(materialFactorMapped);
+			for (uint32_t i = 0; i < maxMaterials; ++i)
+				records[i] = MaterialFactorRecord{};
+			vmaFlushAllocation(device->getVmaAllocator(), materialFactorAllocation, 0, factorInfo.size);
+		}
+	}
+
 	// ---- D-3：材质 set 只申请一个，长度 = 材质容量 ----
 	//
 	// 用 VARIABLE_DESCRIPTOR_COUNT 让数组长度在**分配时**决定，而不是写死在布局里。
@@ -101,6 +130,14 @@ void DescriptorManager::cleanup()
 	if (globalSetLayout) vkDestroyDescriptorSetLayout(device->getDevice(), globalSetLayout, nullptr);
 	if (materialSetLayout) vkDestroyDescriptorSetLayout(device->getDevice(), materialSetLayout, nullptr);
 	if (terrainSetLayout) vkDestroyDescriptorSetLayout(device->getDevice(), terrainSetLayout, nullptr);
+	if (materialFactorBuffer)
+	{
+		vmaDestroyBuffer(device->getVmaAllocator(), materialFactorBuffer, materialFactorAllocation);
+		materialFactorBuffer = VK_NULL_HANDLE;
+		materialFactorAllocation = nullptr;
+		materialFactorMapped = nullptr;
+		materialFactorCount = 0;
+	}
 	if (pool) vkDestroyDescriptorPool(device->getDevice(), pool, nullptr);
 }
 
@@ -113,12 +150,18 @@ void DescriptorManager::createGlobalLayout()
 	//   7 irradiance cubemap（漫反射 IBL）
 	//   8 prefiltered cubemap（镜面 IBL）
 	//   9 BRDF 积分表
-	std::vector<VkDescriptorSetLayoutBinding> bindings(10);
+	std::vector<VkDescriptorSetLayoutBinding> bindings(11);
 
 	bindings[0].binding = 0;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	bindings[0].descriptorCount = 1;
 	bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	// E3: binding 10 = 材质 factor 表（SSBO，按材质槽位索引）。
+	bindings[10].binding = 10;
+	bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	bindings[10].descriptorCount = 1;
+	bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	for (uint32_t i = 1; i <= 9; i++)
 	{
@@ -320,7 +363,7 @@ void DescriptorManager::buildGlobalSet(
 			irradianceCopy, prefilteredCopy, brdfLutCopy
 		};
 
-		std::array<VkWriteDescriptorSet, 10> writes{};
+		std::array<VkWriteDescriptorSet, 11> writes{};
 
 		writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		writes[0].dstSet = globalSets[frame];
@@ -328,6 +371,14 @@ void DescriptorManager::buildGlobalSet(
 		writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		writes[0].descriptorCount = 1;
 		writes[0].pBufferInfo = &uboInfo;
+
+		VkDescriptorBufferInfo factorBufferInfo{ materialFactorBuffer, 0, VK_WHOLE_SIZE };
+		writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[10].dstSet = globalSets[frame];
+		writes[10].dstBinding = 10;
+		writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		writes[10].descriptorCount = 1;
+		writes[10].pBufferInfo = &factorBufferInfo;
 
 		for (uint32_t i = 0; i < 9; ++i)
 		{
@@ -373,6 +424,19 @@ void DescriptorManager::reclaimReleasedMaterialSlots()
 void DescriptorManager::collectMaterialGarbage()
 {
 	reclaimReleasedMaterialSlots();
+}
+
+void DescriptorManager::updateMaterialFactors(uint32_t slot, const glm::vec4& baseColor,
+	float metallic, float roughness)
+{
+	if (materialFactorMapped == nullptr || slot >= materialFactorCount)
+		return;
+
+	MaterialFactorRecord* records = static_cast<MaterialFactorRecord*>(materialFactorMapped);
+	records[slot].baseColor = baseColor;
+	records[slot].metalRough = glm::vec4(metallic, roughness, 0.0f, 0.0f);
+	vmaFlushAllocation(device->getVmaAllocator(), materialFactorAllocation,
+		static_cast<VkDeviceSize>(slot) * sizeof(MaterialFactorRecord), sizeof(MaterialFactorRecord));
 }
 
 uint32_t DescriptorManager::allocateMaterialSet(const VkDescriptorImageInfo& albedo,
@@ -449,11 +513,16 @@ uint32_t DescriptorManager::allocateMaterialSet(const Material& material)
 	// metallicRoughness 贴图同时写进 metallic / roughness 两个数组：
 	// mrt.frag 从 metallicMaps[id].b 取金属度、从 roughnessMaps[id].g 取粗糙度，
 	// 两者本来就是同一张 glTF 打包贴图。
-	return allocateMaterialSet(
+	const uint32_t slot = allocateMaterialSet(
 		material.getAlbedoInfo(),
 		material.getNormalInfo(),
 		material.getMetallicRoughnessInfo(),
 		material.getMetallicRoughnessInfo());
+
+	// E3: 槽位刚分配（可能是回收复用的槽位），把该材质的 factor 写进去。
+	updateMaterialFactors(slot, material.baseColorFactor, material.metallicFactor,
+		material.roughnessFactor);
+	return slot;
 }
 
 VkDescriptorSet DescriptorManager::allocateSet(VkDescriptorSetLayout layout)

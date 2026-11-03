@@ -10,7 +10,21 @@
 #include "RHI/GBuffer.h"
 #include "Core/MaterialSlot.h"
 
+#include <glm/glm.hpp>
+
 class Material;
+
+// E3: glTF 的 baseColor / metallic / roughness factor。
+//
+// bindless 材质 set（set 1）只有 4 个纹理数组，factor 没地方放，而 shader 之前
+// 压根没读它们 —— 编辑器里的滑杆就是个安慰剂。这里用一个 32 字节一项的 SSBO
+// 挂到全局 set（set 0, binding 10），按材质槽位索引。
+// GLSL 侧是 std430 的两个 vec4，所以 C++ 必须也是两个 vec4（stride 32）。
+struct MaterialFactorRecord
+{
+    glm::vec4 baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+    glm::vec4 metalRough{ 1.0f, 1.0f, 0.0f, 0.0f };
+};
 
 class DescriptorManager
 {
@@ -115,6 +129,11 @@ public:
 
 	VkDescriptorPool getPool() const { return pool; }
 
+	// E3: 写某个材质槽位的 baseColor / metallic / roughness factor。
+	// 越界或缓冲未建时静默返回（自检/无设备路径也会调到这里）。
+	void updateMaterialFactors(uint32_t slot, const glm::vec4& baseColor, float metallic,
+		float roughness);
+
 private:
 	void createGlobalLayout();
 	void createMaterialLayout(uint32_t capacity);
@@ -124,6 +143,7 @@ private:
 		const VkDescriptorImageInfo& normal,
 		const VkDescriptorImageInfo& metallic,
 		const VkDescriptorImageInfo& roughness);
+
 	void reclaimReleasedMaterialSlots();
 
 	struct DeferredMaterialRelease
@@ -156,4 +176,10 @@ private:
 	std::function<uint64_t()> completedFrameQuery;
 	std::function<void(uint64_t)> frameWait;
 	std::function<uint64_t()> lastSubmittedFrameQuery;
+	// E3: 材质 factor 表（见 MaterialFactorRecord）。常驻映射，按槽位索引。
+	VkBuffer materialFactorBuffer = VK_NULL_HANDLE;
+	VmaAllocation materialFactorAllocation = nullptr;
+	void* materialFactorMapped = nullptr;
+	uint32_t materialFactorCount = 0;
+
 };

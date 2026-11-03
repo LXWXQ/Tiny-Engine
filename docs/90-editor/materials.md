@@ -4,8 +4,8 @@ title: 占位材质的棋盘格着色
 type: system
 scope: 没有有效材质槽位 / 没有 albedo 贴图时的程序化棋盘格
 read-when: 新建物体显示纯白、棋盘格发白、改 G-Buffer 着色或加材质相关逻辑
-size: ~160 行
-updated: 2026-11-01
+size: ~200 行
+updated: 2026-11-03
 ---
 
 # 占位材质的棋盘格着色
@@ -159,3 +159,20 @@ dpdy.x -= round(dpdy.x);
 `mrt.frag` 的 `push.terrainMode != 0` 分支发生在材质下标判断之前。
 地形没有 `MaterialComponent`，但会采样启动时创建的 Set2 四层 albedo/normal/heightRoughness 纹理，并计算自己的高度坡度权重与 Surface Style；
 因此它不会落入没有材质槽位时的棋盘格路径，也不会触发对应的单次警告。
+## 材质 factor 怎么进 GPU（E3）
+
+`baseColor` / `metallic` / `roughness` 三个标量以前只存在于 CPU 组件和序列化里，Inspector 的滑杆没有任何视觉效果。E3 把它们送进了 GPU：
+
+| 项 | 值 |
+|---|---|
+| 位置 | 全局 set 的 `binding 10`（SSBO） |
+| 布局 | 每材质 32 字节 = 两个 `vec4`（`MaterialFactorRecord`） |
+| 索引 | 材质槽位 `materialSetIndex`（与 bindless 材质 set 的数组下标同值） |
+| 写入 | `DescriptorManager::updateMaterialFactors()`：写 32 字节 + `vmaFlushAllocation`，不重建描述符 |
+| 着色 | `albedo *= factors[matId * 2u]`；`metallic = tex.b * factors[matId*2+1].x`；`roughness = clamp(tex.g * factors[...].y, 0.04, 1.0)` |
+
+为什么放全局 set：材质 set 的 4 个纹理数组带 `VARIABLE_DESCRIPTOR_COUNT_BIT`，而变长 binding 必须编号最大，后面不能再加 binding；全局 set 在 CPU 路径和 GPU 驱动提交两条路上都会绑定，加一个 SSBO 两边同时生效。
+
+**踩过的坑**：一开始声明成结构体运行时数组 `readonly buffer { vec4 a; vec4 b; } factors[];`，glslang 生成 SPIR-V 时**漏掉了这个运行时数组的 `ArrayStride`**（`spirv-val` 也不报），驱动按 0 步长取值 —— 表现是滑杆完全没效果、Sponza 整片变黑。改成扁平 `vec4 factors[]`（stride 16）后正常。
+
+排查手法值得留着：先用常量下标读（`factors[0]` 能读到 → 绑定没问题），再用动态下标读（读到 0 → 步长或索引有问题）；再用颜色编码的探针分支（discard / 纯色）把着色器内部的值可视化。

@@ -114,6 +114,59 @@ private:
     std::string oldName, newName;
 };
 
+// E3：材质参数快照 + 一条命令。
+//
+// 为什么需要快照：材质参数分散在 Material 的多个字段里，撤销要整体回到旧值，
+// 而"只存改动的那个字段"会让合并窗口（拖滑杆）把中间态混进来。
+struct MaterialSnapshot
+{
+    glm::vec4 baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+    float metallic = 1.0f;
+    float roughness = 1.0f;
+    float alphaCutoff = 0.5f;
+    int alphaMode = 0;
+};
+
+class SetMaterialCommand : public Command
+{
+public:
+    SetMaterialCommand(entt::registry& registry, entt::entity entity, MaterialSnapshot before,
+                       MaterialSnapshot after, Scene* scene = nullptr);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Modify Material"; }
+    bool mergeWith(const Command& previous) const override;
+    void absorb(const Command& newer) override;
+
+private:
+    void writeState(const MaterialSnapshot& snapshot);
+
+    entt::registry* registry;
+    entt::entity entity;
+    MaterialSnapshot before, after;
+    Scene* scene = nullptr;
+};
+
+// E3：Render Tag（Skybox / Grid）开关，同样要能撤销。
+class SetRenderTagCommand : public Command
+{
+public:
+    SetRenderTagCommand(entt::registry& registry, entt::entity entity, bool oldSkybox,
+                        bool oldGrid, bool newSkybox, bool newGrid);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Modify Render Tag"; }
+    bool mergeWith(const Command& previous) const override;
+    void absorb(const Command& newer) override;
+
+private:
+    entt::registry* registry;
+    entt::entity entity;
+    bool oldSkybox, oldGrid, newSkybox, newGrid;
+};
+
 // 删除实体（连同整棵子树），可撤销。
 //
 // 关键设计：撤销**不能**指望实体 ID 保持不变 —— EnTT 销毁后重建会拿到新 ID。
