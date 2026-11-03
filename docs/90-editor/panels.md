@@ -4,7 +4,7 @@ title: 面板与布局
 type: system
 scope: 现有面板、布局实现方式、以及没有 docking 时的注意事项
 read-when: 写新面板、改布局、或面板位置错乱
-size: ~125 行
+size: ~150 行
 updated: 2026-11-03
 ---
 
@@ -296,3 +296,52 @@ Console 可以被 View 菜单关掉，所以「错误只写进 Console」等于�
 `openScene()` 失败时写 `state.failedOpenPath / failedOpenError`，`drawOpenFailurePrompt()`
 每帧检查并弹「无法打开场景」模态框：重试 / 选择其它文件 / 关闭。
 不要在 `openScene()` 里直接 `ImGui::OpenPopup` —— 它可能由启动参数在 ImGui 帧之外调用。
+
+## 面板布局条件与拖动（B4 / UX-14）
+
+`drawPanels()` 对所有内置面板用同一个条件：
+
+```cpp
+const ImGuiCond cond = layoutNeedsReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+```
+
+首帧（以及点 `View -> Reset Layout` 后的那一帧）用 `Always` 把矩形铺到位，之后交给
+`config/imgui.ini` 记忆：用户可以拖动、缩放、折叠任何面板，包括视口。E5-a 之前视口用的是
+`Always`，理由是「视口是算出来的固定区域」—— 那个理由只在没有记忆时才成立，代价是用户
+永远挪不动它，面板一多就没法让出空间。
+
+`Reset Layout` 的实现没变：把 `layoutNeedsReset` 置真，下一帧所有面板重新落位，旧位置被覆盖。
+
+`config/imgui.ini` 是**本机缓存**（已在 `.gitignore` 里，不进版本库）：删掉它就等于恢复默认布局。
+典型事故：某次运行把 `[Window][Render]` 存成 `Collapsed=1`，之后每次启动渲染设置面板都是一条细线 ——
+当场删掉那一段或点 `View -> Reset Layout` 即可，不用改代码。
+
+## 快捷键表（B4 / UX-13）
+
+快捷键只有一份数据（`src/Editor/EditorLayer.cpp` 的 `kShortcutEntries`）：
+
+```cpp
+struct ShortcutEntry
+{
+    const char* group;        // 分组：文档 / 选择 / 变换 / 播放 / 视图
+    ImGuiKey key;
+    bool ctrl;
+    bool shift;
+    ShortcutAction action;    // 分发用的枚举
+    const char* actionText;   // 速查表里那句人话
+};
+```
+
+- `handleShortcuts()` 遍历这张表：修饰键**精确匹配**（所以 `Ctrl+Z` 不会顺带触发
+  `Ctrl+Shift+Z`），命中一个就 `switch (entry.action)` 分发并 `return`（一帧只做一个动作）。
+- 速查表的键位列由 `shortcutKeys(entry)` 现算（`Ctrl+` / `Shift+` + `ImGui::GetKeyName`），
+  不另存字符串 —— 以前速查表写「Ctrl+D」、代码里判断 `ImGuiKey_D`，两边漂移过。
+- `EditorLayer::selfTest()` 扫描这张表：条目数 ≥ 12、分组与描述非空、键位标签非空、
+  (key, ctrl, shift) 三元组不重复，打印 `[Editor] shortcut sheet selfTest PASS | entries=18 conflicts=0`。
+- `?` 就是 `Shift+/`：表里存的是 `ImGuiKey_Slash + shift`，所以显示成 `Shift+Slash`，
+  描述里补一句「（Shift+/ 就是 ?）」。
+
+菜单入口（UX-06）和快捷键是两套入口、同一个实现：Edit 菜单的
+`Duplicate Selected` / `Delete Selected` / `Focus Selection` / `Select All` 与快捷键
+调的是同一组函数（`duplicateSelection` / `deleteSelection` / `focusSelection` /
+`selectAllEntities`），不存在「菜单能点、快捷键不生效」的分叉。

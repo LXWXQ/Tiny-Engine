@@ -268,6 +268,8 @@ $tests = @(
        MustContain = @("render settings selfTest PASS") },
     @{ Name = "b3-notices"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] notices selfTest PASS") },
+    @{ Name = "b4-shortcuts"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("[Editor] shortcut sheet selfTest PASS", "conflicts=0") },
     @{ Name = "b2-empty-state"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] empty state selfTest PASS") },
     @{ Name = "f2i-update-profile"; Args = @("--selftest", "240", "--streaming-world", "8", "--update-profile");

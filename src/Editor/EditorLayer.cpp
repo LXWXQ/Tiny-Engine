@@ -254,36 +254,93 @@ void focusSelection(EditorState& state)
     state.pushLog(LogEntry::Level::Info, "[Editor] focused selection | radius=" + std::to_string(radius));
 }
 
-// E4-c：快捷键速查表。菜单、弹窗、自检都读这一张表 ——
-// 加一个快捷键时只改这里 + 真正处理它的地方，不会出现"文档写了但没实现"。
+// Ctrl+A：只选"有名字、不是流送 chunk"的实体，避免把地形块全部选中。
+void selectAllEntities(EditorState& state)
+{
+    entt::registry& registry = *state.services.registry;
+    const entt::entity cameraEntity = state.services.scene->getCameraEntity();
+    state.selection.clear();
+    for (auto [entity, name] : registry.view<NameComponent>().each())
+    {
+        (void)name;
+        if (entity == cameraEntity || isBatchExcluded(registry, entity))
+            continue;
+        state.selection.add(entity);
+    }
+    state.pushLog(LogEntry::Level::Info,
+                  "[Editor] selected " + std::to_string(state.selection.size()) + " entities");
+}
+
+// E4-c / UX-13：快捷键只有这一张表 —— 速查表按它排版，handleShortcuts 也按它分发，
+// 键位文本由 key + 修饰键现算（shortcutKeys），不再另写一份字符串，避免两份代码漂移。
+enum class ShortcutAction
+{
+    NewScene,
+    OpenScene,
+    SaveScene,
+    Undo,
+    Redo,
+    SelectAll,
+    Duplicate,
+    DeleteSelection,
+    FocusSelection,
+    ModeTranslate,
+    ModeRotate,
+    ModeScale,
+    Play,
+    PauseResume,
+    Stop,
+    ToggleShortcutSheet,
+    CloseShortcutSheet,
+};
+
 struct ShortcutEntry
 {
     const char* group;
-    const char* keys;
-    const char* action;
+    ImGuiKey key;
+    bool ctrl;
+    bool shift;
+    ShortcutAction action;
+    const char* actionText;
 };
 
 const ShortcutEntry kShortcutEntries[] =
 {
-    { "文档", "Ctrl+N", "新建场景（有未保存修改时先确认）" },
-    { "文档", "Ctrl+O", "打开场景" },
-    { "文档", "Ctrl+S", "保存" },
-    { "文档", "Ctrl+Z", "撤销" },
-    { "文档", "Ctrl+Shift+Z", "重做（同 Ctrl+Y）" },
-    { "文档", "Ctrl+Y", "重做" },
-    { "选择", "Ctrl+A", "全选（跳过地形 chunk 与相机）" },
-    { "选择", "Ctrl+D", "复制选中（含子树）" },
-    { "选择", "Delete", "删除选中" },
-    { "选择", "F", "把相机聚焦到选中" },
-    { "变换", "W / E / R", "移动 / 旋转 / 缩放（多选时整组一起变）" },
-    { "播放", "F5", "开始播放" },
-    { "播放", "F6", "暂停 / 继续" },
-    { "播放", "F7", "停止并恢复快照" },
-    { "视图", "?", "打开 / 关闭本速查表" },
-    { "视图", "Esc", "关闭速查表" },
+    { "文档", ImGuiKey_N, true, false, ShortcutAction::NewScene, "新建场景（有未保存修改时先确认）" },
+    { "文档", ImGuiKey_O, true, false, ShortcutAction::OpenScene, "打开场景" },
+    { "文档", ImGuiKey_S, true, false, ShortcutAction::SaveScene, "保存" },
+    { "文档", ImGuiKey_Z, true, false, ShortcutAction::Undo, "撤销" },
+    { "文档", ImGuiKey_Z, true, true, ShortcutAction::Redo, "重做（同 Ctrl+Y）" },
+    { "文档", ImGuiKey_Y, true, false, ShortcutAction::Redo, "重做" },
+    { "选择", ImGuiKey_A, true, false, ShortcutAction::SelectAll, "全选（跳过地形 chunk 与相机）" },
+    { "选择", ImGuiKey_D, true, false, ShortcutAction::Duplicate, "复制选中（含子树）" },
+    { "选择", ImGuiKey_Delete, false, false, ShortcutAction::DeleteSelection, "删除选中" },
+    { "选择", ImGuiKey_F, false, false, ShortcutAction::FocusSelection, "把相机聚焦到选中" },
+    { "变换", ImGuiKey_W, false, false, ShortcutAction::ModeTranslate, "移动手柄（多选时整组一起变）" },
+    { "变换", ImGuiKey_E, false, false, ShortcutAction::ModeRotate, "旋转手柄" },
+    { "变换", ImGuiKey_R, false, false, ShortcutAction::ModeScale, "缩放手柄" },
+    { "播放", ImGuiKey_F5, false, false, ShortcutAction::Play, "开始播放" },
+    { "播放", ImGuiKey_F6, false, false, ShortcutAction::PauseResume, "暂停 / 继续" },
+    { "播放", ImGuiKey_F7, false, false, ShortcutAction::Stop, "停止并恢复快照" },
+    { "视图", ImGuiKey_Slash, false, true, ShortcutAction::ToggleShortcutSheet, "打开 / 关闭本速查表（Shift+/ 就是 ?）" },
+    { "视图", ImGuiKey_Escape, false, false, ShortcutAction::CloseShortcutSheet, "关闭速查表" },
 };
 
 constexpr size_t kShortcutEntryCount = sizeof(kShortcutEntries) / sizeof(kShortcutEntries[0]);
+
+// 显示用键位文本：唯一来源是 key + 修饰键，速查表与自检都调它。
+std::string shortcutKeys(const ShortcutEntry& entry)
+{
+    std::string text;
+    if (entry.ctrl)
+        text += "Ctrl+";
+    if (entry.shift)
+        text += "Shift+";
+    const char* keyName = ImGui::GetKeyName(entry.key);
+    text += (keyName != nullptr) ? keyName : "?";
+    return text;
+}
+
 } // namespace
 
 void EditorLayer::handleShortcuts()
@@ -295,91 +352,84 @@ void EditorLayer::handleShortcuts()
     const bool ctrl = io.KeyCtrl;
     const bool shift = io.KeyShift;
 
-    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+    // UX-13：按表分发。修饰键必须精确匹配，所以 Ctrl+Z 不会顺带触发 Ctrl+Shift+Z。
+    for (const ShortcutEntry& entry : kShortcutEntries)
     {
-        if (shift)
+        if (entry.ctrl != ctrl || entry.shift != shift)
+            continue;
+        if (!ImGui::IsKeyPressed(entry.key, false))
+            continue;
+
+        switch (entry.action)
         {
+        case ShortcutAction::NewScene:
+            requestDocumentAction(EditorState::PendingDocumentAction::New);
+            break;
+        case ShortcutAction::OpenScene:
+            requestDocumentAction(EditorState::PendingDocumentAction::Open);
+            break;
+        case ShortcutAction::SaveScene:
+            saveScene();
+            break;
+        case ShortcutAction::Undo:
+            if (state.commands.canUndo())
+            {
+                state.commands.undo();
+                state.markDirty();
+            }
+            break;
+        case ShortcutAction::Redo:
             if (state.commands.canRedo())
             {
                 state.commands.redo();
                 state.markDirty();
             }
+            break;
+        case ShortcutAction::SelectAll:
+            selectAllEntities(state);
+            break;
+        case ShortcutAction::Duplicate:
+            duplicateSelection(state);
+            break;
+        case ShortcutAction::DeleteSelection:
+            // E1：删除整个选中集合（父节点被选中时子节点自动跳过，避免重复删除）。
+            deleteSelection(state);
+            break;
+        case ShortcutAction::FocusSelection:
+            focusSelection(state);
+            break;
+        case ShortcutAction::ModeTranslate:
+            state.gizmo.mode = GizmoMode::Translate;
+            break;
+        case ShortcutAction::ModeRotate:
+            state.gizmo.mode = GizmoMode::Rotate;
+            break;
+        case ShortcutAction::ModeScale:
+            state.gizmo.mode = GizmoMode::Scale;
+            break;
+        case ShortcutAction::Play:
+            if (state.playState == PlayState::Editing)
+                enterPlay();
+            break;
+        case ShortcutAction::PauseResume:
+            if (state.playState == PlayState::Playing)
+                pausePlay();
+            else if (state.playState == PlayState::Paused)
+                resumePlay();
+            break;
+        case ShortcutAction::Stop:
+            if (state.playState != PlayState::Editing)
+                stopPlay();
+            break;
+        case ShortcutAction::ToggleShortcutSheet:
+            showShortcutSheet = !showShortcutSheet;
+            break;
+        case ShortcutAction::CloseShortcutSheet:
+            if (showShortcutSheet)
+                showShortcutSheet = false;
+            break;
         }
-        else if (state.commands.canUndo())
-        {
-            state.commands.undo();
-            state.markDirty();
-        }
-    }
-    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y, false))
-    {
-        if (state.commands.canRedo())
-        {
-            state.commands.redo();
-            state.markDirty();
-        }
-    }
-    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
-    {
-        saveScene();
-    }
-    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false))
-    {
-        requestDocumentAction(EditorState::PendingDocumentAction::New);
-    }
-    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
-    {
-        requestDocumentAction(EditorState::PendingDocumentAction::Open);
-    }
-    else if (ImGui::IsKeyPressed(ImGuiKey_W, false))
-    {
-        state.gizmo.mode = GizmoMode::Translate;
-    }
-    else if (ImGui::IsKeyPressed(ImGuiKey_E, false))
-    {
-        state.gizmo.mode = GizmoMode::Rotate;
-    }
-    else if (ImGui::IsKeyPressed(ImGuiKey_R, false))
-    {
-        state.gizmo.mode = GizmoMode::Scale;
-    }
-    else if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
-    {
-        // E1：删除整个选中集合（父节点被选中时子节点自动跳过，避免重复删除）。
-        deleteSelection(state);
-    }
-    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false))
-    {
-        duplicateSelection(state);
-    }
-    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false))
-    {
-        // 只选"有名字、不是流送 chunk"的实体，避免 Ctrl+A 把地形块全部选中。
-        entt::registry& registry = *state.services.registry;
-        const entt::entity cameraEntity = state.services.scene->getCameraEntity();
-        state.selection.clear();
-        for (auto [entity, name] : registry.view<NameComponent>().each())
-        {
-            (void)name;
-            if (entity == cameraEntity || isBatchExcluded(registry, entity))
-                continue;
-            state.selection.add(entity);
-        }
-        state.pushLog(LogEntry::Level::Info,
-                      "[Editor] selected " + std::to_string(state.selection.size()) + " entities");
-    }
-    else if (ImGui::IsKeyPressed(ImGuiKey_F, false))
-    {
-        focusSelection(state);
-    }
-    else if (ImGui::IsKeyPressed(ImGuiKey_Slash, false) && shift)
-    {
-        // ? 是 Shift+/，要求 shift 是为了不抢单独的 /。
-        showShortcutSheet = !showShortcutSheet;
-    }
-    else if (showShortcutSheet && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
-    {
-        showShortcutSheet = false;
+        return;      // 一帧只处理一个快捷键，避免多个动作互相踩
     }
 }
 
@@ -546,6 +596,17 @@ void EditorLayer::drawMenuBar()
             state.gizmo.mode = GizmoMode::Rotate;
         if (ImGui::MenuItem("Scale (R)", nullptr, state.gizmo.mode == GizmoMode::Scale))
             state.gizmo.mode = GizmoMode::Scale;
+        ImGui::Separator();
+        // UX-06：这四个以前只活在快捷键里，菜单里补上门面。
+        const bool hasSelection = !state.selection.entities.empty();
+        if (ImGui::MenuItem("Duplicate Selected", "Ctrl+D", false, hasSelection))
+            duplicateSelection(state);
+        if (ImGui::MenuItem("Delete Selected", "Del", false, hasSelection))
+            deleteSelection(state);
+        if (ImGui::MenuItem("Focus Selection", "F", false, hasSelection))
+            focusSelection(state);
+        if (ImGui::MenuItem("Select All", "Ctrl+A", false, state.services.registry != nullptr))
+            selectAllEntities(state);
         ImGui::EndMenu();
     }
 
@@ -577,13 +638,6 @@ void EditorLayer::drawMenuBar()
                             editing ? "Editing" : (playing ? "Playing" : "Paused"));
         ImGui::EndMenu();
 
-        if (ImGui::IsKeyPressed(ImGuiKey_F5) && editing) enterPlay();
-        if (ImGui::IsKeyPressed(ImGuiKey_F6))
-        {
-            if (playing) pausePlay();
-            else if (paused) resumePlay();
-        }
-        if (ImGui::IsKeyPressed(ImGuiKey_F7) && !editing) stopPlay();
     }
 
     if (ImGui::BeginMenu("View"))
@@ -1064,12 +1118,12 @@ void EditorLayer::drawPanels()
         {
             // 中央区域：左右让给 Hierarchy / Inspector，底部让给 Console。
             //
-            // 用 ImGuiCond_Always 而不是 cond：视口是"计算出来的固定区域"，
-            // 不应该被用户拖动或记住历史位置。如果沿用 FirstUseEver，
-            // 一旦 imgui.ini 里存了错误位置（比如误拖过），就会一直错下去。
-            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + leftWidth, top), ImGuiCond_Always);
+            // UX-14：和其他面板一样用 cond（首帧 / 重置布局时落位），之后允许拖动与缩放，
+            // 位置由 imgui.ini 记住。View -> Reset Layout 会把 layoutNeedsReset 置真，
+            // 下一帧用 Always 重新铺一遍。
+            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + leftWidth, top), cond);
             ImGui::SetNextWindowSize(ImVec2(availableWidth - leftWidth - rightWidth,
-                                            availableHeight - bottomHeight), ImGuiCond_Always);
+                                            availableHeight - bottomHeight), cond);
         }
         else if (panelName == "Assets")
         {
@@ -1105,7 +1159,7 @@ void EditorLayer::drawPanels()
         panel->draw(state);
     }
 
-    // 记录"没被面板遮住的中央区域"，供后续做离屏视口时使用。
+    // 首帧的视口矩形初值；真正绘制后由 ViewportPanel 用窗口实际矩形覆盖（UX-14 起视口可拖动）。
     // 现在 3D 画面铺满整个交换链，这块矩形只是给扩展留的锚点。
     state.viewportX = viewport->WorkPos.x + leftWidth;
     state.viewportY = top;
@@ -1443,9 +1497,10 @@ void EditorLayer::drawShortcutSheet()
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(entry.keys);
+            const std::string keys = shortcutKeys(entry);
+            ImGui::TextUnformatted(keys.c_str());
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(entry.action);
+            ImGui::TextUnformatted(entry.actionText);
         }
         ImGui::EndTable();
     }
@@ -1693,7 +1748,7 @@ bool EditorLayer::selfTest()
     if (!EditorPreferences::selfTest())
         return false;
 
-    // ---- 0c) E4-c：速查表本身就是数据，顺手校验它没有空项/重复键 ----
+    // ---- 0c) E4-c / UX-13：快捷键表是唯一数据源，顺手校验没有空项与键位冲突 ----
     {
         if (kShortcutEntryCount < 12)
         {
@@ -1703,22 +1758,30 @@ bool EditorLayer::selfTest()
         for (size_t i = 0; i < kShortcutEntryCount; ++i)
         {
             const ShortcutEntry& entry = kShortcutEntries[i];
-            if (entry.group == nullptr || entry.keys == nullptr || entry.action == nullptr ||
-                entry.group[0] == 0 || entry.keys[0] == 0 || entry.action[0] == 0)
+            if (entry.group == nullptr || entry.actionText == nullptr ||
+                entry.group[0] == 0 || entry.actionText[0] == 0)
             {
                 std::cerr << "[Editor] shortcut sheet selfTest FAIL: empty entry at " << i << std::endl;
                 return false;
             }
+            if (shortcutKeys(entry).empty())
+            {
+                std::cerr << "[Editor] shortcut sheet selfTest FAIL: no key label at " << i << std::endl;
+                return false;
+            }
             for (size_t j = i + 1; j < kShortcutEntryCount; ++j)
             {
-                if (std::strcmp(entry.keys, kShortcutEntries[j].keys) == 0)
+                const ShortcutEntry& other = kShortcutEntries[j];
+                if (entry.key == other.key && entry.ctrl == other.ctrl && entry.shift == other.shift)
                 {
-                    std::cerr << "[Editor] shortcut sheet selfTest FAIL: duplicate keys " << entry.keys << std::endl;
+                    std::cerr << "[Editor] shortcut sheet selfTest FAIL: conflicting binding "
+                              << shortcutKeys(entry) << std::endl;
                     return false;
                 }
             }
         }
-        std::cout << "[Editor] shortcut sheet selfTest PASS | entries=" << kShortcutEntryCount << std::endl;
+        std::cout << "[Editor] shortcut sheet selfTest PASS | entries=" << kShortcutEntryCount
+                  << " conflicts=0" << std::endl;
     }
 
     // ---- 0d) E4-d：历史跳转。jumpTo 必须一步步 apply/revert，不能整段搬运 ----
@@ -3233,6 +3296,11 @@ bool EditorLayer::selfTestWithScene()
 
         std::cout << "[Editor] preferences file selfTest PASS | save + load + recent round trip" << std::endl;
     }
+
+    // 自检会故意触发"播放中禁止写文档"这类守卫：留下的 Toast 与错误摘要不该跟着进截图，
+    // 但 Console 里的日志行保留 —— 它是这条守卫真的被触发过的证据。
+    state.dismissToast();
+    state.lastErrorSummary.clear();
 
     return true;
 }

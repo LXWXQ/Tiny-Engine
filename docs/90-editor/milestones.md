@@ -121,3 +121,17 @@ updated: 2026-11-03
 - `openScene()` 失败不再只写日志：弹「无法打开场景」模态框，提供重试 / 选择其它文件 / 关闭。
 - 已读语义：本帧新产生的错误不计已读，避免徽标闪烁。
 - 回归：`b3-notices`（`[Editor] notices selfTest PASS | toast decay + error summary + unread badge`）。
+
+## B4：菜单补齐 + 快捷键单一数据源 + 面板可拖动
+
+- Edit 菜单补 `Duplicate Selected` / `Delete Selected` / `Focus Selection` / `Select All`，
+  与快捷键调同一组函数（UX-06）。
+- `kShortcutEntries` 从"给文档看的表"变成唯一数据源：`key` / `ctrl` / `shift` / `ShortcutAction`，
+  `handleShortcuts()` 遍历分发（修饰键精确匹配，一帧只做一个动作），速查表键位列由
+  `shortcutKeys()` 现算（UX-13）。
+- 自检扫空项、键位标签、三元组冲突，打印 `[Editor] shortcut sheet selfTest PASS | entries=18 conflicts=0`。
+- `drawPanels()` 里 Viewport 不再用 `ImGuiCond_Always`，所有面板统一
+  `layoutNeedsReset ? Always : FirstUseEver`：用户可拖动/缩放，`View -> Reset Layout` 复位（UX-14）。
+- 清掉 `config/imgui.ini` 里一条 `[Window][Render] ... Collapsed=1` 的旧记录（它会让渲染设置面板
+  每次启动都是一条细线）。
+- 回归：`b4-shortcuts`（`[Editor] shortcut sheet selfTest PASS` + `conflicts=0`）。

@@ -203,6 +203,13 @@ void ViewportPanel::draw(EditorState& state)
     const ImVec2 rectMax = ImGui::GetItemRectMax();
     const bool imageHovered = ImGui::IsItemHovered();
 
+    // UX-14：视口现在可以被拖动、缩放，所以布局矩形以真实窗口为准，
+    // 不再由 drawPanels 的常量推算（那边只是首帧的初值）。
+    state.viewportX = rectMin.x;
+    state.viewportY = rectMin.y;
+    state.viewportWidth = rectMax.x - rectMin.x;
+    state.viewportHeight = rectMax.y - rectMin.y;
+
     // UX-01：编辑器冷启动不加载 Sponza，画面只有天空。没有这段文字时，
     // 新用户的第一反应是「程序没跑起来」，不会想到「场景是空的」。
     if (state.services.registry != nullptr && isSceneEmpty(*state.services.registry))

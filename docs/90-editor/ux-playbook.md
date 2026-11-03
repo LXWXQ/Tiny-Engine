@@ -160,9 +160,11 @@ attrib +R Resources\Scenes
 ### B4
 
 ```powershell
-# 快捷键表里的每个 action 都应该能在菜单里找到入口
-Select-String -Path src\Editor\EditorLayer.cpp -Pattern "kShortcutEntries" -Context 0,20
+# 快捷键表是唯一数据源：条数与冲突都在自检里
+./build/Debug/TinyEditor.exe --selftest 5 --empty-scene | Select-String "shortcut sheet selfTest"
 ```
+
+已实现（B4）：`kShortcutEntries` 同时驱动 `handleShortcuts()` 与速查表，自检打印 `entries=18 conflicts=0`；Edit 菜单补齐 Duplicate/Delete/Focus/Select All（UX-06）；所有面板（含视口）改用 `FirstUseEver`，可拖动并用 `View -> Reset Layout` 复位（UX-14）。
 
 人工项：不按 `?`，仅用菜单完成"复制一个对象并聚焦到它"。
 
