@@ -7,6 +7,7 @@
 #include "Editor/panels/ConsolePanel.h"
 #include "Editor/panels/ViewportPanel.h"
 #include "Editor/panels/AssetBrowserPanel.h"
+#include "Editor/panels/HistoryPanel.h"
 
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -71,6 +72,9 @@ void EditorLayer::createDefaultPanels()
     registerPanel<AssetBrowserPanel>();
     registerPanel<InspectorPanel>();
     registerPanel<ConsolePanel>();
+    // E4-d：撤销历史。放在右栏下半部分，和 Inspector 一起构成"属性 + 历史"。
+    registerPanel<HistoryPanel>();
+
 }
 
 EditorPanel* EditorLayer::findPanel(const char* panelName) const
@@ -564,6 +568,8 @@ void EditorLayer::drawMenuBar()
             ImGui::MenuItem("Inspector", nullptr, &panel->visible);
         if (auto* panel = findPanel("Console"))
             ImGui::MenuItem("Console", nullptr, &panel->visible);
+        if (auto* panel = findPanel("History"))
+            ImGui::MenuItem("History", nullptr, &panel->visible);
         ImGui::Separator();
         if (ImGui::MenuItem("Reset Layout"))
             layoutNeedsReset = true;
@@ -711,8 +717,15 @@ void EditorLayer::drawPanels()
         }
         else if (panelName == "Inspector")
         {
+            // 右栏上 65%：属性。剩下 35% 留给 History。
             ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + availableWidth - rightWidth, top), cond);
-            ImGui::SetNextWindowSize(ImVec2(rightWidth, availableHeight), cond);
+            ImGui::SetNextWindowSize(ImVec2(rightWidth, availableHeight * 0.65f), cond);
+        }
+        else if (panelName == "History")
+        {
+            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + availableWidth - rightWidth,
+                                           top + availableHeight * 0.65f), cond);
+            ImGui::SetNextWindowSize(ImVec2(rightWidth, availableHeight * 0.35f), cond);
         }
         else if (panelName == "Console")
         {
@@ -1264,6 +1277,56 @@ bool EditorLayer::selfTest()
             }
         }
         std::cout << "[Editor] shortcut sheet selfTest PASS | entries=" << kShortcutEntryCount << std::endl;
+    }
+
+    // ---- 0d) E4-d：历史跳转。jumpTo 必须一步步 apply/revert，不能整段搬运 ----
+    {
+        struct CountingCommand : Command
+        {
+            int* value = nullptr;
+            int delta = 0;
+            void apply() override { *value += delta; }
+            void revert() override { *value -= delta; }
+            const char* name() const override { return "Counting"; }
+        };
+
+        CommandStack stack;
+        int value = 0;
+        for (int i = 0; i < 3; ++i)
+        {
+            auto command = std::make_unique<CountingCommand>();
+            command->value = &value;
+            command->delta = 1;
+            stack.execute(std::move(command));
+        }
+        if (value != 3 || stack.undoCount() != 3 || stack.undoEntries().size() != 3)
+        {
+            std::cerr << "[Editor] history jump selfTest FAIL: setup" << std::endl;
+            return false;
+        }
+
+        stack.jumpTo(0);
+        if (value != 0 || stack.undoCount() != 0 || stack.redoCount() != 3)
+        {
+            std::cerr << "[Editor] history jump selfTest FAIL: jump to 0" << std::endl;
+            return false;
+        }
+
+        stack.jumpTo(3);
+        if (value != 3 || stack.undoCount() != 3 || stack.redoCount() != 0)
+        {
+            std::cerr << "[Editor] history jump selfTest FAIL: jump to 3" << std::endl;
+            return false;
+        }
+
+        stack.jumpTo(99);   // 超出范围要 clamp 到总深度，不能越界
+        if (stack.undoCount() != 3)
+        {
+            std::cerr << "[Editor] history jump selfTest FAIL: clamp" << std::endl;
+            return false;
+        }
+
+        std::cout << "[Editor] history jump selfTest PASS | depth 0 -> 3 -> clamp" << std::endl;
     }
 
     // ---- 1) 命令栈：精确撤销 ----

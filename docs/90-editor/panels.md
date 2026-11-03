@@ -5,7 +5,7 @@ type: system
 scope: 现有面板、布局实现方式、以及没有 docking 时的注意事项
 read-when: 写新面板、改布局、或面板位置错乱
 size: ~125 行
-updated: 2026-11-01
+updated: 2026-11-03
 ---
 
 # 面板与布局
@@ -159,6 +159,20 @@ for (panel : panels) {
 首帧用 `ImGuiCond_Always` 强推默认布局，之后用 `FirstUseEver` 尊重用户拖动。
 `View -> Reset Layout` 可以强制重排。
 
+## 撤销历史（E4-d）
+
+右栏上 65% 是 Inspector，下 35% 是 `History`：把 `CommandStack` 的每一层摊开成一行，
+点任意一行就跳到那个深度。
+
+- 数据来自 `CommandStack::undoEntries()` / `redoEntries()`，面板只读，不直接改栈；
+- 跳转统一走 `CommandStack::jumpTo(targetUndoCount)`，它**一步一步** undo/redo，
+  而不是整段搬运。原因：命令的 revert/apply 可能带 GPU 副作用（材质 factor 走 SSBO），
+  整段搬运会跳过中间状态，把 GPU 缓冲留在半途；
+- 播放中禁用跳转并给出提示（文档只读，E3b）；
+- 深度 0 表示「撤销到底」，当前状态单独占一行并显示 `<当前状态>`，redo 行排在后面。
+
+`jumpTo` 会把目标 clamp 到 `undoCount + redoCount`，越界不会崩。
+
 ## 写一个新面板
 
 ```cpp
@@ -179,6 +193,9 @@ public:
 
 ## 硬约束
 
-- ImGui 可见文字**必须是 ASCII**：内置字体没有中文字形，会渲染成 `???`
+- ImGui 可见文字优先用 ASCII：内置字体只有 ASCII；E4-c 起 `ImGuiSystem` 会尝试加载系统 CJK 字体
+  （msyh/msyhl/simhei/simsun），找不到就退回内置字体，那时中文会渲染成 `?`。
+  所以**关键按钮/标题**不要把语义完全押在中文上。
+- 面板必须自己 `ImGui::Begin/End`（不 Begin 会把内容画进上一个窗口）
 - 面板不得自己创建 GPU 资源
 - 面板不得直接改 registry，必须走命令栈

@@ -77,6 +77,15 @@ public:
     size_t undoCount() const { return undoStack.size(); }
     size_t redoCount() const { return redoStack.size(); }
 
+    // E4-d：撤销历史面板要"看得见每一步"，所以把两个栈只读地暴露出去。
+    // 面板只能读名字，真正跳转必须走 jumpTo() —— 否则绕过 replaying 标记会把日志打重复。
+    const std::deque<std::unique_ptr<Command>>& undoEntries() const { return undoStack; }
+    const std::deque<std::unique_ptr<Command>>& redoEntries() const { return redoStack; }
+
+    // 跳到指定撤销深度：targetUndoCount = 要保留多少条"已执行"的命令。
+    // 小于当前 = 连续 undo，大于当前 = 连续 redo。超出范围时 clamp。
+    void jumpTo(size_t targetUndoCount);
+
 private:
     std::deque<std::unique_ptr<Command>> undoStack;
     std::deque<std::unique_ptr<Command>> redoStack;

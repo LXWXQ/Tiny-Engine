@@ -79,6 +79,19 @@ void CommandStack::redo()
     lastExecuteTime = 0.0;
 }
 
+void CommandStack::jumpTo(size_t targetUndoCount)
+{
+    const size_t total = undoStack.size() + redoStack.size();
+    const size_t target = targetUndoCount > total ? total : targetUndoCount;
+
+    // 一步步走，而不是整段搬运：每条命令的 revert/apply 都可能要改写 GPU 状态
+    // （例如材质 factor），跳过中间步骤会让这些副作用不一致。
+    while (undoStack.size() > target)
+        undo();
+    while (undoStack.size() < target)
+        redo();
+}
+
 void CommandStack::clear()
 {
     undoStack.clear();

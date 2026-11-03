@@ -3,7 +3,7 @@ id: editor/milestones
 title: 编辑器里程碑（E1 起）
 type: status
 scope: 空
-size: ~45 行
+size: ~80 行
 read-when: 想知道编辑器做过哪些轮次与每轮的验证基线
 updated: 2026-11-03
 ---
@@ -64,3 +64,14 @@ updated: 2026-11-03
   找不到就退回内置字体。
 - 可观测：`[Editor] shortcut sheet selfTest PASS | entries=16`、`[ImGui] font: C:/Windows/Fonts/msyh.ttc`。
 - 验证：编辑器自检 0/0（含截图确认中文与表格排版）；回归 47 项（新增 `e4-shortcut-sheet`）。
+
+## E4-d：撤销历史面板
+
+- 问题：`CommandStack` 只有深度（`undoCount`/`redoCount`），用户看不到「栈里有什么」，
+  也没法一次退回多步，只能连按 Ctrl+Z。
+- 实现：`CommandStack::undoEntries()` / `redoEntries()` 只读暴露两条栈，
+  `jumpTo(size_t)` 一步一步 undo/redo；新 `HistoryPanel`（右栏下 35%）列深度 + 命令名，
+  当前状态单独一行，点击任意行跳转；播放中禁用并提示。
+- 可观测：`[Editor] history jump selfTest PASS | depth 0 -> 3 -> clamp`。
+- 验证：编辑器自检 0/0、截图确认（空栈 / 两条命令合并成一条两种状态）；
+  回归 48 项（新增 `e4-history-jump`）。

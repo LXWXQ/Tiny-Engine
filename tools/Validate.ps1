@@ -251,6 +251,8 @@ $tests = @(
        MustContain = @("[Editor] preferences selfTest PASS", "preferences file selfTest PASS") },
     @{ Name = "e4-shortcut-sheet"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("shortcut sheet selfTest PASS") },
+    @{ Name = "e4-history-jump"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("history jump selfTest PASS") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

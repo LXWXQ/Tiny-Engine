@@ -5,7 +5,7 @@ type: architecture
 scope: CommandStack 的语义、合并窗口、以及"必须走命令"的硬规则
 read-when: 加任何会修改场景的交互；或撤销结果不对、撤销后数据损坏
 size: ~120 行
-updated: 2026-10-31
+updated: 2026-11-03
 ---
 
 # 撤销 / 重做
@@ -157,3 +157,13 @@ SpatialIndex，快照恢复后重新绑定回调。纯 registry 自检可不传 
 ## 历史长度
 
 上限 256 条，超出丢弃最老的。每条命令可能持有实体快照，不能无限增长。
+
+## 历史跳转：`CommandStack::jumpTo`
+
+`void jumpTo(size_t targetUndoCount)`：把撤销栈走到指定深度（0 = 全部撤销）。
+
+- 校验：`target > undoCount + redoCount` 时 clamp 到总深度；
+- 实现：`while (undoStack.size() > target) undo();` / `while (undoStack.size() < target) redo();`，
+  **不整段搬运** —— 命令的 apply/revert 可能有 GPU 副作用（`SetMaterialCommand` 会写材质 factor SSBO），
+  跳过中间状态会让缓冲停在半途；
+- 调用方：`HistoryPanel` 点击某一行；面板在跳转后自己 `markDirty()` + `transformRefreshPending = true`。
