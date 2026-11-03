@@ -677,9 +677,11 @@ void CreateEntityCommand::revert()
 CreateTerrainCommand::CreateTerrainCommand(entt::registry& registry, Scene& scene,
                                            terrain::TerrainConfig config,
                                            std::string name,
-                                           const glm::vec3& spawnPosition)
+                                           const glm::vec3& spawnPosition,
+                                           bool deferBuild)
     : registry(&registry), scene(&scene), config(std::move(config)),
-      entityName(std::move(name)), spawnPosition(spawnPosition)
+      entityName(std::move(name)), spawnPosition(spawnPosition),
+      deferBuild(deferBuild)
 {
 }
 
@@ -702,6 +704,15 @@ void CreateTerrainCommand::apply()
         scene->markTransformDirty(entity);
         scene->markSpatialDirty(entity);
         scene->refreshTransformsAndVisibility();
+        return;
+    }
+
+    if (deferBuild)
+    {
+        // 异步路径：几何还没生成，拍不到 mesh/terrain 快照，所以 redo 也走异步重建。
+        entity = scene->createTerrainEntityAsync(config, entityName, spawnPosition);
+        if (entity == entt::null || !registry->valid(entity))
+            entity = entt::null;
         return;
     }
 
@@ -999,10 +1010,11 @@ entt::entity createTerrainThroughCommand(entt::registry& registry,
                                          Scene& scene,
                                          CommandStack& commands,
                                          const terrain::TerrainConfig& config,
-                                         const std::string& name)
+                                         const std::string& name,
+                                         bool deferBuild)
 {
     auto command = std::make_unique<CreateTerrainCommand>(
-        registry, scene, config, name, terrainSpawnPosition(scene, config));
+        registry, scene, config, name, terrainSpawnPosition(scene, config), deferBuild);
     CreateTerrainCommand* raw = command.get();
     commands.execute(std::move(command));
     return raw->currentEntity();

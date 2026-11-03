@@ -148,6 +148,7 @@ public:
                                      const std::string& name,
                                      const glm::vec3& spawnPosition);
 
+
     // B-07: terrain sculpting. The brush is applied to every intersecting
     // terrain entity (streamed chunks are selected through the region index),
     // and only entities whose heightfield actually changed get a new Model.
@@ -228,6 +229,15 @@ public:
     bool regenerateTerrain(entt::entity entity, std::string& errorMessage);
 
     using TerrainGenerationCallback = std::function<void(bool, const std::string&)>;
+
+    // tech-debt #19：异步创建。实体当帧就出现（TerrainComponent::generating = true），
+    // 高度场与网格交给 requestRegenerateTerrain 的后台作业，完成时补 MeshComponent、
+    // 包围盒与空间索引。返回 entt::null 表示建实体失败（配置非法/材质槽位申请失败）。
+    entt::entity createTerrainEntityAsync(const terrain::TerrainConfig& config,
+                                          const std::string& name,
+                                          const glm::vec3& spawnPosition,
+                                          TerrainGenerationCallback onComplete = {});
+    bool supportsAsyncTerrainBuild() const { return jobSystem != nullptr; }
 
     // Stage 7: submit only CPU heightfield/mesh generation to JobSystem.
     // Scene::update() performs the GPU upload on the main thread. A newer request

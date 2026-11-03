@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **58 项引擎用例 + 2 项工具自测 = 60 项**；
+`tools/Validate.ps1` 默认跑 **59 项引擎用例 + 2 项工具自测 = 61 项**；
 加 `-EnableProfiling` 时多一项（37 + 2 = 39）。
 
 ## 1. 每项的判据（统一）
@@ -87,6 +87,7 @@ updated: 2026-11-03
 | 56 | `b5-language-console` | 状态栏数量缩写 + Console 时间戳：`formatCount()` 的 k/M 边界与 `HH:MM:SS` 形状 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] status bar selfTest PASS` | 语言分层（B5/UX-07）、Console 时间列与计数（UX-11）、状态栏三段（UX-15）、诊断入口（UX-18） |
 | 57 | `b6-console-search` | Console 关键字搜索（`matchesSearch` 的大小写/空串/中文）+ 地形创建两阶段请求 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] console filter selfTest PASS`、`[Editor] terrain create request selfTest PASS`、`entries=19 conflicts=0` | UX-11 续（Console 搜索）、UX-08（两阶段提示） |
 | 58 | `e6-asset-and-textures` | 资产拖拽落点判据（命中地形 / 相机前方 8m）+ 贴图库扩展名过滤 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] asset drop selfTest PASS`、`[Editor] texture library selfTest PASS` | E6（资产拖拽 / 材质贴图选择） |
+| 59 | `async-terrain-create` | 异步创建地形的三段状态：当帧实体存在且 generating、当帧无 MeshComponent、wait 后几何就绪（并把同步 105.9 ms / 异步提交 0.28 ms 打进日志） | `TinyEditor.exe --selftest 5 --empty-scene` | `[Scene] async terrain create selfTest PASS` | TD-24（真异步地形生成） |
 
 ## 3. 工具自测
 

@@ -183,3 +183,16 @@ updated: 2026-11-03
   `[Editor] texture library selfTest PASS | png/jpg/jpeg/tga/bmp only, hdr needs its own path`。
 - 回归：`e6-asset-and-textures`；编辑器自检 0/0、引擎 60 帧 0/0。
 - 已知未做：HDR 环境贴图不能从面板选（需要自己的采样路径）；拖拽目前只支持模型，贴图/材质拖拽未做。
+
+## E7：真异步地形生成（TD-24）
+
+- 新增 `Scene::createTerrainEntityAsync(config, name, spawn, onComplete)`：主线程只建实体 + 提交作业
+  （Debug 257² 实测 **0.28 ms**），高度场与网格复用已有的 `requestRegenerateTerrain` 后台管线，
+  完成时补 `MeshComponent` / 包围盒 / 空间索引 / 可见性。
+- `CreateTerrainCommand` 增加 `deferBuild`：编辑器创建与 redo 都走异步；同步路径保留给场景加载与诊断。
+- 编辑器 `EditorState::pendingTerrainBuild` 每帧 poll：成功 Toast「地形生成完成 | 257x257, vertices=…」，
+  失败给 `lastError`；工具栏忙碌提示在 `terrainCreatePending` 与 `pendingTerrainBuild` 两种状态下都显示。
+- 对照数据（Debug，257²）：同步 `createTerrainEntity` **105.9 ms** / 异步提交 **0.28 ms**（约 375×）。
+- 自检：`[Scene] async terrain create selfTest PASS | sync=105.94 ms, async submit=0.28 ms, vertices=96524`
+  （同时断言「实体当帧存在且 generating」「当帧没有 MeshComponent」「wait 之后几何就绪」）。
+- 回归：`async-terrain-create`。

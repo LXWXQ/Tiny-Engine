@@ -288,6 +288,12 @@ Console 顶部在「全部」按钮右侧有搜索框（占位文本 `搜索日�
 
 ## 地形创建的两阶段提示（B6 / UX-08）
 
+> TD-24 之后 `CreateTerrainCommand` 默认走 `deferBuild`（异步构建），这一段的两阶段提示仍然保留：
+> 第一帧画「地形生成中…」、第二帧提交后台作业 —— 提交本身只要 0.28 ms，但先让用户看到反馈更稳。
+> 完成后 `EditorState::pendingTerrainBuild` 的轮询会再播报一条带顶点数与耗时的成功消息。
+
+
+
 `Scene::createTerrainEntity` → `buildTerrainModel(...)` 是同步的，一次 build 会占满一帧。
 真正异步要拆渲染侧的生成流程，这一批只解决"用户看不见它在干活"：
 

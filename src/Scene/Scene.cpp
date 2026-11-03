@@ -2016,6 +2016,60 @@ entt::entity Scene::createTerrainEntity(const terrain::TerrainConfig& config,
     return entity;
 }
 
+entt::entity Scene::createTerrainEntityAsync(const terrain::TerrainConfig& config,
+                                             const std::string& name,
+                                             const glm::vec3& spawnPosition,
+                                             TerrainGenerationCallback onComplete)
+{
+    if (!device || !jobSystem)
+        return entt::null;
+
+    std::string validationError;
+    if (!config.validate(validationError))
+    {
+        std::cerr << "[Scene] createTerrainEntityAsync invalid config: " << validationError << std::endl;
+        return entt::null;
+    }
+
+    std::string materialError;
+    if (!ensureTerrainMaterialSet(config.materialSetIndex, materialError))
+    {
+        std::cerr << "[Scene] createTerrainEntityAsync material set failed: "
+                  << materialError << std::endl;
+        return entt::null;
+    }
+
+    const entt::entity entity = createTransformEntity(registry);
+    markTransformDirty(entity);
+    registry.get<TransformComponent>(entity).setTranslation(spawnPosition);
+    registry.emplace<NameComponent>(entity, NameComponent{ name });
+
+    RenderTagComponent tag;
+    tag.isTerrain = true;
+    registry.emplace<RenderTagComponent>(entity, tag);
+
+    TerrainComponent terrainComponent;
+    terrainComponent.config = config;
+    terrainComponent.generatedConfig = config;
+    terrainComponent.revision = 0;
+    terrainComponent.generated = false;
+    terrainComponent.generating = true;
+    terrainComponent.generationBackend = "pending (async)";
+    registry.emplace<TerrainComponent>(entity, std::move(terrainComponent));
+
+    attachDirtyTracking(entity);
+
+    if (!requestRegenerateTerrain(entity, std::move(onComplete)))
+    {
+        // 作业系统提交失败：实体留在场景里但永远是空的，直接撤掉更干净。
+        destroyEntity(entity);
+        return entt::null;
+    }
+
+    refreshTransformsAndVisibility();
+    return entity;
+}
+
 entt::entity Scene::createStreamingTerrain(const terrain::TerrainConfig& chunkConfig,
                                             int32_t loadRadius,
                                             uint32_t maxLoadsPerFrame,

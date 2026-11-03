@@ -112,6 +112,38 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
     if (advanceTerrainCreateRequest(state.terrainCreatePending, state.terrainCreateWaitFrames))
         createTerrainFromUi();
 
+    // tech-debt #19：异步地形构建的收尾播报（每帧最多看一次）。
+    if (state.pendingTerrainBuild != entt::null && state.services.registry != nullptr)
+    {
+        const entt::entity building = state.pendingTerrainBuild;
+        const auto* terrain = state.services.registry->try_get<TerrainComponent>(building);
+        if (terrain == nullptr)
+        {
+            state.pendingTerrainBuild = entt::null;
+        }
+        else if (!terrain->generating)
+        {
+            std::string error = terrain->lastError;
+            char buffer[256];
+            if (terrain->generated)
+            {
+                std::snprintf(buffer, sizeof(buffer),
+                              "地形生成完成 | %ux%u, vertices=%u, indices=%u, %.2f ms",
+                              terrain->generatedConfig.resolutionX,
+                              terrain->generatedConfig.resolutionZ,
+                              terrain->vertexCount, terrain->indexCount,
+                              terrain->lastGenerationMs);
+                state.notifySuccess(buffer);
+            }
+            else
+            {
+                state.notify(LogEntry::Level::Error,
+                             "地形生成失败：" + (error.empty() ? std::string("未知原因") : error));
+            }
+            state.pendingTerrainBuild = entt::null;
+        }
+    }
+
     handleShortcuts();
     updatePlayState(dt);
 }
@@ -758,9 +790,12 @@ entt::entity EditorLayer::createTerrainFromUi()
         return entt::null;
 
     terrain::TerrainConfig config;
+    // tech-debt #19：作业系统可用时就异步建 —— 实体当帧出现，几何后台合成，
+    // 一帧内的主线程成本只剩"建实体 + 提交作业"。
+    const bool asyncBuild = state.services.scene->supportsAsyncTerrainBuild();
     const entt::entity entity = createTerrainThroughCommand(
         *state.services.registry, *state.services.scene, state.commands,
-        config, "Terrain");
+        config, "Terrain", asyncBuild);
 
     if (entity == entt::null)
     {
@@ -772,13 +807,26 @@ entt::entity EditorLayer::createTerrainFromUi()
     state.markDirty();
     if (const auto* terrain = state.services.registry->try_get<TerrainComponent>(entity))
     {
-        char buffer[256];
-        std::snprintf(buffer, sizeof(buffer),
-                      "[Editor] created Terrain | %ux%u, vertices=%u, indices=%u, %.2f ms",
-                      terrain->config.resolutionX, terrain->config.resolutionZ,
-                      terrain->vertexCount, terrain->indexCount,
-                      terrain->lastGenerationMs);
-        state.notifySuccess(buffer);
+        if (terrain->generating)
+        {
+            // 异步路径：几何还没好，先盯住它，完成后由 beginFrame 里的轮询播报。
+            state.pendingTerrainBuild = entity;
+            char buffer[256];
+            std::snprintf(buffer, sizeof(buffer),
+                          "地形已创建（后台生成 %ux%u）",
+                          terrain->config.resolutionX, terrain->config.resolutionZ);
+            state.notify(LogEntry::Level::Info, buffer);
+        }
+        else
+        {
+            char buffer[256];
+            std::snprintf(buffer, sizeof(buffer),
+                          "[Editor] created Terrain | %ux%u, vertices=%u, indices=%u, %.2f ms",
+                          terrain->config.resolutionX, terrain->config.resolutionZ,
+                          terrain->vertexCount, terrain->indexCount,
+                          terrain->lastGenerationMs);
+            state.notifySuccess(buffer);
+        }
     }
     return entity;
 }
@@ -958,7 +1006,9 @@ void EditorLayer::drawToolbar()
         ImGui::SameLine();
 
         // UX-08：同步生成会占满一帧，忙碌提示必须在此之前就画出来（两阶段请求）。
-        if (state.terrainCreatePending)
+        // UX-08：同步生成会占满一帧，忙碌提示必须在此之前就画出来（两阶段请求）。
+        // tech-debt #19：异步构建期间（pendingTerrainBuild）同样要显示。
+        if (state.terrainCreatePending || state.pendingTerrainBuild != entt::null)
         {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.35f, 1.0f), "地形生成中…");
@@ -2875,6 +2925,64 @@ bool EditorLayer::selfTestWithScene()
             registry.view<TransformComponent>().size() != entitiesBefore)
         {
             std::cerr << "[Editor] selfTestWithScene FAIL: terrain test cleanup failed\n";
+            return false;
+        }
+    }
+
+    // ---- 2i) tech-debt #19：异步创建地形（实体先出现，几何后台合成） ----
+    {
+        Scene& scene = *state.services.scene;
+        const size_t meshesBefore = registry.view<MeshComponent>().size();
+
+        // 用 UI 默认档（257x257）量，这才是"点一下创建地形"的真实成本。
+        terrain::TerrainConfig asyncConfig;
+        asyncConfig.seed = 4321u;
+        asyncConfig.localColorRange = false;
+
+        // 同配置先量一次同步创建，作为"异步到底省了多少"的对照。
+        const auto syncStart = std::chrono::steady_clock::now();
+        const entt::entity syncCreated = scene.createTerrainEntity(
+            asyncConfig, "SyncTerrainProbe", glm::vec3(0.0f));
+        const double syncMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - syncStart).count();
+        if (syncCreated != entt::null)
+            scene.destroyEntity(syncCreated);
+
+        const auto submitStart = std::chrono::steady_clock::now();
+        const entt::entity created = scene.createTerrainEntityAsync(
+            asyncConfig, "AsyncTerrain", glm::vec3(0.0f));
+        const double submitMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - submitStart).count();
+
+        const auto* whileGenerating = registry.try_get<TerrainComponent>(created);
+        const bool entityExistsImmediately = created != entt::null && registry.valid(created);
+        const bool stillGenerating = whileGenerating != nullptr &&
+                                     whileGenerating->generating && !whileGenerating->generated;
+        const bool noMeshYet = registry.try_get<MeshComponent>(created) == nullptr;
+
+        scene.waitForTerrainGeneration();
+
+        const auto* built = registry.try_get<TerrainComponent>(created);
+        const auto* builtMesh = registry.try_get<MeshComponent>(created);
+        const bool geometryReady = built != nullptr && built->generated && !built->generating &&
+                                   built->vertexCount > 0u && builtMesh != nullptr &&
+                                   builtMesh->model != nullptr;
+
+        if (!entityExistsImmediately || !stillGenerating || !noMeshYet || !geometryReady)
+        {
+            std::cerr << "[Scene] async terrain create selfTest FAIL | exists="
+                      << entityExistsImmediately << " generating=" << stillGenerating
+                      << " noMesh=" << noMeshYet << " ready=" << geometryReady << std::endl;
+            return false;
+        }
+        std::cout << "[Scene] async terrain create selfTest PASS | sync=" << syncMs
+                  << " ms, async submit=" << submitMs
+                  << " ms, vertices=" << built->vertexCount << std::endl;
+
+        scene.destroyEntity(created);
+        if (registry.view<MeshComponent>().size() != meshesBefore)
+        {
+            std::cerr << "[Scene] async terrain create selfTest FAIL: cleanup mismatch" << std::endl;
             return false;
         }
     }

@@ -289,10 +289,13 @@ private:
 class CreateTerrainCommand : public Command
 {
 public:
+    // deferBuild = true 时走 Scene::createTerrainEntityAsync（tech-debt #19）：
+    // 实体当帧出现、几何后台生成；此时不拍 mesh/terrain 快照，redo 会重新提交一次异步构建。
     CreateTerrainCommand(entt::registry& registry, Scene& scene,
                          terrain::TerrainConfig config,
                          std::string name,
-                         const glm::vec3& spawnPosition = glm::vec3(0.0f));
+                         const glm::vec3& spawnPosition = glm::vec3(0.0f),
+                         bool deferBuild = false);
 
     void apply() override;
     void revert() override;
@@ -307,6 +310,7 @@ private:
     std::string entityName;
     glm::vec3 spawnPosition{ 0.0f };
     entt::entity entity = entt::null;
+    bool deferBuild = false;
 
     std::optional<MeshComponent> meshSnapshot;
     std::optional<TerrainComponent> terrainSnapshot;
@@ -449,7 +453,8 @@ entt::entity createTerrainThroughCommand(entt::registry& registry,
                                          Scene& scene,
                                          CommandStack& commands,
                                          const terrain::TerrainConfig& config,
-                                         const std::string& name);
+                                         const std::string& name,
+                                         bool deferBuild = false);
 
 // Places the terrain centre in front of the camera, flattened to world Y=0 so
 // baseHeight remains the visible ground elevation.

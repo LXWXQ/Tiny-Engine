@@ -274,6 +274,8 @@ $tests = @(
        MustContain = @("[Editor] status bar selfTest PASS") },
     @{ Name = "b4-shortcuts"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] shortcut sheet selfTest PASS", "conflicts=0") },
+    @{ Name = "async-terrain-create"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("[Scene] async terrain create selfTest PASS") },
     @{ Name = "e6-asset-and-textures"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] asset drop selfTest PASS", "[Editor] texture library selfTest PASS") },
     @{ Name = "b2-empty-state"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

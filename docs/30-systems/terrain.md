@@ -566,12 +566,10 @@ undo/redo 快照复用、`RegenerateTerrainCommand` 的新旧网格切换、碰�
 picking 与 delete/undo/redo。
 ## 11. 当前限制
 
-- 手动地形是单实体；流送 manager 已能创建独立 chunk 实体，但半径有限、
-  chunk 独立 Model 会增加 draw/上传开销；GPU mesh 组装当前只支持单 chunk，
-  多 chunk 与 fallback 仍由 CPU builder 生成；
-- LOD 边界已做拓扑级全分辨率缝合，skirts 仅作为可关闭的保守回退；换层仍用
-  0.24s 抖动 cross-fade，过渡期在运动模糊下可能看到短暂噪声；不同 LOD 的
-  粗内部法线/着色仍会有正常层级差异；
+- 手动地形是单实体；流送 chunk 的几何归 `TerrainMeshArena`，GPU mesh 组装仍只支持单 chunk，
+  多 chunk 与 fallback 走 CPU builder；
+- LOD 边界做拓扑级全分辨率缝合，skirts 是可关闭的保守回退；换层用 0.24s 抖动 cross-fade，
+  运动模糊下可能看到短暂噪声；不同 LOD 的粗内部法线/着色仍有正常层级差异；
 - GPU selection 当前容量为 384 terrain entities / 6144 chunk records（F2-d 起），每 entity 16 条命令；
   超过容量的实体跳过，不混入 CPU 命令。无 `drawIndirectCount`
   设备回退 CPU 命令构建；GPU stats 是上一已完成帧，UI 允许一帧延迟；
@@ -579,13 +577,23 @@ picking 与 delete/undo/redo。
   异步 submit/poll；同步场景加载仍走阻塞 `generate()`，全分辨率 CPU picking
   mirror 已在 F2-e 取消；F2-f 起流送 chunk 的 `Model` 只剩元数据，VBO/IBO 归 `TerrainMeshArena`；
 - B-07 已接入轻量 kinematic 角色控制器与地形雕刻：角色使用局部包围盒 + 双线性高度采样，笔刷复用 region 查询只重建相交 chunk；但雕刻只修改运行期 HeightField/Model，不写入场景 JSON；
-- 场景加载/`createTerrainEntity` 仍同步；supersede 使用协作取消，取消粒度是
-  每个顶点行，不是硬中断；
+- 场景加载仍走同步 `createTerrainEntity`（编辑器创建已异步，见下节）；supersede 用协作取消，
+  粒度是每个顶点行，不是硬中断；
 - 地形默认 set0 的 albedo/normal/height/roughness 是启动时生成的程序化纹理；set1~3 可按需加载外部 PNG，但仓库不附带美术资产；
 - 地形不参与 SSAO；大面积平滑地形使用 AO-neutral 策略，局部接触阴影留给后续；
 - Set2 的纹理数量/加载回退见 [terrain-materials](terrain-materials.md)；
 - `SpatialIndex` 用 Transform/Bounds dirty 队列（setter 自动入队，干净帧不扫描）；
   B-06 起 streaming chunk 另有 XZ region bucket；生产销毁统一走 `Scene::destroyEntity()`，
   地形实体总 AABB 仍用于视锥粗筛，chunk 剔除发生在 GeometrySystem 子网格级；
-- Scene 会把被替换的旧 Model 放入 4 帧延迟回收队列；撤销历史仍会
-  额外持有新旧 Model，历史上限 256 条。
+- Scene 把被替换的旧 Model 放进 4 帧延迟回收队列；撤销历史额外持有新旧 Model，上限 256 条。
+
+## 异步创建地形（TD-24）
+
+`Scene::createTerrainEntityAsync(config, name, spawn, onComplete)`：主线程只做「校验配置 → 申请材质槽位 →
+建实体（Transform/Name/RenderTag/TerrainComponent, `generating = true`）→ 提交后台作业」，
+高度场与网格复用 `requestRegenerateTerrain` 的既有管线，完成时主线程补 `MeshComponent`、包围盒、
+dirty 跟踪与可见性。257² 默认档 Debug 实测：同步 `createTerrainEntity` **105.9 ms**、异步提交 **0.28 ms**。
+
+编辑器侧 `CreateTerrainCommand(deferBuild = true)` 走异步，`EditorState::pendingTerrainBuild` 每帧 poll，
+完成/失败各播报一条 Toast。`generating` 期间 `raycastTerrain*` 与地形 GPU 选择都会跳过该实体
+（没有高度场、没有 MeshComponent），所以"创建后立刻点地面"可能落空 —— 等 Toast 出现即可。

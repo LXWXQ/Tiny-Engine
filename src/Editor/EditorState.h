@@ -96,6 +96,10 @@ struct EditorState
     // 点击当帧只登记，下一帧把「生成中」画出来并 present，再下一帧才真正执行。
     // 这样用户至少看得到"它在干活"，而不是界面莫名卡住。
     bool terrainCreatePending = false;
+
+    // tech-debt #19：异步地形构建的跟踪目标。实体当帧出现，几何后台合成；
+    // 每帧 poll 一次，完成时把结果播报出来（成功给顶点数/耗时，失败给原因）。
+    entt::entity pendingTerrainBuild = entt::null;
     int terrainCreateWaitFrames = 0;
     // 本帧刚产生的错误不能算「已读」：Console 画出来不代表用户看到了新加的那一行。
     // 每帧开头 tickNotices() 清掉，notify(Error) 置位。
