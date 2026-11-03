@@ -119,6 +119,9 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
         ├── commands.md          命令栈与撤销重做
         ├── gizmo.md             射线拾取与三轴手柄
         ├── materials.md         占位材质棋盘格
+        ├── ux-rules.md          多用户友好性判据（U1~U9）
+        ├── ux-audit.md          界面友好性现状审计（P0/P1/P2）
+        └── ux-playbook.md       UX 改造的 AI 执行协议
         ├── panels.md            面板与布局
         ├── serialization.md     *.scene.json 场景存读
         └── viewport.md          离屏视口
@@ -227,4 +230,7 @@ updated: 2026-10-30
 | editor | [viewport](90-editor/viewport.md) | 改视口 / 画面拉伸或发暗 |
 | editor | [gizmo](90-editor/gizmo.md) | 点选与三轴手柄 |
 | editor | [materials](90-editor/materials.md) | 占位材质棋盘格 |
+| editor | [ux-rules](90-editor/ux-rules.md) | **改任何用户可见的按钮/提示/错误反馈前** |
+| editor | [ux-audit](90-editor/ux-audit.md) | 计划一轮友好性改造前 |
+| editor | [ux-playbook](90-editor/ux-playbook.md) | 让 AI 执行改造前，作任务书输入 |
 | editor | [milestones](90-editor/milestones.md) | 看编辑器做过哪些轮次 |

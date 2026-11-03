@@ -191,6 +191,33 @@ public:
 
 然后在 `EditorLayer::createDefaultPanels()` 里 `registerPanel<MyPanel>()`。
 
+## 工具栏与状态栏（E5-a）
+
+两者都不是 `EditorPanel`，而是 `EditorLayer` 直接画的**固定矩形**：位置和高度写死，
+不使用 `SetNextWindowPos(..., FirstUseEver)`，也不进 `panels` 列表。原因很简单 ——
+它们的矩形要参与面板布局计算，必须可预测；如果让 ImGui 记忆位置，用户拖一次工具栏，
+整块工作区就会错位。
+
+| 区域 | 高度 | 内容 |
+|---|---|---|
+| 工具栏 | 34 px | Play/Stop、Move/Rotate/Scale、Snap、Focus、Undo/Redo；右侧 `saved \| Editing \| 245 FPS` |
+| 状态栏 | 26 px | 选中数量、当前手柄、吸附开关；右侧 FPS/帧耗时/draw calls/三角形/undo 深度 |
+
+布局公式（`src/Editor/EditorLayer.cpp` 的 `drawPanels()`）：
+
+```cpp
+const float top = viewport->WorkPos.y + kToolbarHeight;
+const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBarHeight;
+```
+
+**两个坑**（都踩过，写在这里省下一次调试）：
+
+1. `ImGui::BeginMainMenuBar()` 在第一帧还没有把主视口的 `WorkPos.y` 下推（那帧是 0），
+   于是第一帧算出来的面板矩形会整体偏高一个菜单栏高度，而 `imgui.ini` 会把这个错位置记住。
+   所以 `layoutNeedsReset` 要多留一帧：`if (viewport->WorkPos.y > 0.5f) layoutNeedsReset = false;`。
+2. 菜单栏右侧原来也写了一遍「保存状态 / 播放状态 / undo 深度」，和工具栏、状态栏三处重复。
+   E5-a 起菜单栏只显示文档名（脏时加 `*` 和 `(unsaved)`），状态只在一处出现。
+
 ## 硬约束
 
 - ImGui 可见文字优先用 ASCII：内置字体只有 ASCII；E4-c 起 `ImGuiSystem` 会尝试加载系统 CJK 字体

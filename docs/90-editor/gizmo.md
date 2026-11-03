@@ -344,7 +344,27 @@ build\Debug\TinyEditor.exe --empty-scene
 | `E` | 旋转 |
 | `R` | 缩放 |
 
-也可以在 `Edit` 菜单里切换。当前模式显示在菜单栏右侧状态条与视口左上角。
+也可以在 `Edit` 菜单或工具栏里切换。当前模式显示在底部状态栏与视口左上角。
+
+## 吸附（E5-a）
+
+`Gizmo` 自带三个步长：`snapTranslate = 0.5`、`snapRotateDegrees = 15`、`snapScale = 0.1`。
+勾选工具栏的 `Snap` 打开，**按住 Shift 可临时打开**（`snapping = snapEnabled || io.KeyShift`）。
+
+实现上是「按最近刻度取整」而不是「累加步长」：
+
+```cpp
+float Gizmo::snapValue(float value, float step)
+{
+    return step <= 0.0f ? value : std::round(value / step) * step;
+}
+```
+
+平移是 `snapValue(param - startAxisParam, snapTranslate)` 之后乘以轴方向；旋转在折到
+`[-pi, pi]` 之后按 `radians(snapRotateDegrees)` 取整；缩放每个轴单独取整并夹到 `>= 0.001`。
+取整方式保证不会累积误差：松手后的值一定落在刻度上，下一次拖拽从刻度开始。
+
+自检：`[Gizmo] snap selfTest PASS | steps 0.5 / 15 deg / 0.1`（`step = 0` 必须恒等）。
 
 ## 已知限制
 

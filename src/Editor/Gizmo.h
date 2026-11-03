@@ -54,6 +54,16 @@ class Gizmo
 public:
     GizmoMode mode = GizmoMode::Translate;
 
+    // E5：吸附。按住 Shift 临时生效，工具栏上的开关让它常驻。
+    //
+    // 步长取"人能口算的数"：平移 0.5 米、旋转 15 度、缩放 0.1 倍。用整数倍
+    // 吸附（round 到最近的倍数）而不是"增量累加"，是为了让拖拽可以来回微调
+    // 而不累积误差 —— 拖过头再拖回来能精确回到原来的刻度。
+    bool snapEnabled = false;
+    float snapTranslate = 0.5f;
+    float snapRotateDegrees = 15.0f;
+    float snapScale = 0.1f;
+
     // 处理命中测试与拖拽（会修改 transform 并立刻刷新世界变换）。
     // 返回 true 表示这一帧"鼠标交互被手柄吃掉"（调用方不应再去做点选）。
     //
@@ -73,6 +83,9 @@ public:
     // 这些换算错一个符号，表现就是"点不中物体"或"拖反方向"，
     // 而两者都不会有任何运行时错误 —— 只能靠断言钉住。
     static bool selfTest();
+
+    // 按步长吸附到最近的倍数；step <= 0 表示该模式不吸附（原样返回）。
+    static float snapValue(float value, float step);
 
 private:
     enum class Axis { None, X, Y, Z };

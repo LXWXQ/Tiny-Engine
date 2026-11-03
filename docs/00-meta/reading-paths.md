@@ -4,8 +4,8 @@ title: 任务导向的最小阅读集
 type: meta
 scope: 空（纯索引）
 read-when: 新会话开始，或接到一个具体任务时
-size: ~120 行
-updated: 2026-10-31
+size: ~125 行
+updated: 2026-11-03
 ---
 
 # 阅读路径
@@ -94,6 +94,16 @@ updated: 2026-10-31
 1. [acceptance](../50-validation/acceptance.md) ← **先确认测量本身可信**
 2. [troubleshooting](../40-build/troubleshooting.md)
 3. [tools](../60-debug-profiling/tools.md)
+
+### 1.11 "我要把界面改得更友好 / 别人上手用不了"
+
+1. [ux-audit](../90-editor/ux-audit.md) ← **先按编号认领问题**，不要自己发明需求
+2. [ux-rules](../90-editor/ux-rules.md) ← 判据 U1~U10 与对应实现模式
+3. [ux-playbook](../90-editor/ux-playbook.md) ← 任务卡、批次顺序、禁区、验收命令
+4. [panels](../90-editor/panels.md) ← 要动的面板归属与布局常量
+
+> 不要通读 `EditorLayer.cpp`（近 3000 行）。按 audit 的编号定位到函数即可。
+> 也不要"顺手把界面整体美化一遍"：一批只动一个编号，见 playbook 第 5 节。
 
 ## 2. 上下文预算参考
 

@@ -4,8 +4,8 @@ title: 场景编辑器
 type: system
 scope: 编辑器的整体结构、分层边界与面板清单
 read-when: 要动编辑器任何部分之前，先读这一页决定该看哪份子文档
-size: ~75 行
-updated: 2026-11-01
+size: ~90 行
+updated: 2026-11-03
 ---
 
 # 场景编辑器
@@ -35,6 +35,9 @@ updated: 2026-11-01
 | [viewport](viewport.md) | 改视口尺寸/格式 / 画面拉伸或发暗 |
 | [gizmo](gizmo.md) | 点不中物体 / 拖拽方向不对 / 加新手柄 |
 | [materials](materials.md) | 新建物体显示成纯白 / 改 G-Buffer 着色 |
+| [ux-rules](ux-rules.md) | **改任何用户可见的按钮、提示、错误反馈之前**（判据 U1~U9） |
+| [ux-audit](ux-audit.md) | 计划一轮友好性改造前，确认哪些问题还在、优先级如何 |
+| [ux-playbook](ux-playbook.md) | 让 AI 执行改造时，作为任务描述的第一份输入 |
 | [milestones](milestones.md) | 编辑器做过哪些轮次与每轮基线 |
 
 ## 当前能力（D-8 / TD-09）

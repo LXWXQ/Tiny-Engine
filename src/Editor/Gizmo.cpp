@@ -225,6 +225,13 @@ void Gizmo::drawRotate(ImDrawList* dl, const GizmoView& view, const glm::vec3& o
 // ---------------------------------------------------------------------------
 // 数学自检
 // ---------------------------------------------------------------------------
+float Gizmo::snapValue(float value, float step)
+{
+    if (step <= 0.0f)
+        return value;
+    return std::round(value / step) * step;
+}
+
 bool Gizmo::selfTest()
 {
     // 构造一个可预测的视图：相机在 (0,0,5) 朝 -Z 看，60 度 FOV，16:9。
@@ -354,6 +361,22 @@ bool Gizmo::selfTest()
             std::cerr << "[Gizmo] selfTest FAIL: rotation plane basis is not right-handed\n";
             return false;
         }
+    }
+    // E5：吸附步长。step <= 0 必须是恒等（等于关闭），否则按最近刻度取整。
+    {
+        if (snapValue(0.4f, 0.0f) != 0.4f)
+        {
+            std::cerr << "[Gizmo] selfTest FAIL: snapValue with zero step must be identity" << std::endl;
+            return false;
+        }
+        if (std::abs(snapValue(0.4f, 0.5f) - 0.5f) > 1e-5f ||
+            std::abs(snapValue(1.2f, 0.5f) - 1.0f) > 1e-5f ||
+            std::abs(snapValue(-0.7f, 0.5f) + 0.5f) > 1e-5f)
+        {
+            std::cerr << "[Gizmo] selfTest FAIL: snapValue rounding is wrong" << std::endl;
+            return false;
+        }
+        std::cout << "[Gizmo] snap selfTest PASS | steps 0.5 / 15 deg / 0.1" << std::endl;
     }
 
     return true;
@@ -488,6 +511,9 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
     }
 
     // ---- 拖拽开始 ----
+    // E5：按住 Shift 临时吸附，工具栏的开关让它常驻。两边都要看，
+    // 因为用户可能只是临时对个整数位置，不想去点开关。
+    const bool snapping = snapEnabled || ImGui::GetIO().KeyShift;
     const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     bool consumed = (hovered != Axis::None);
 
@@ -612,7 +638,12 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         if (mode == GizmoMode::Translate)
         {
             const float param = closestPointOnAxis(rayOrigin, rayDir, dragOrigin, dragAxisDir);
-            const glm::vec3 worldDelta = dragAxisDir * (param - startAxisParam);
+            // E5：吸附作用在"沿轴的位移量"上，而不是最终坐标 —— 这样物体之间的
+            // 相对位置保持不变，多个物体一起拖时仍然互相平行地跳格。
+            const float snapDelta = snapping
+                ? snapValue(param - startAxisParam, snapTranslate)
+                : (param - startAxisParam);
+            const glm::vec3 worldDelta = dragAxisDir * snapDelta;
 
             // 世界位移 → 父节点局部空间。
             // 不做这一步的话，父节点带旋转时"往世界 X 拖"会变成"往父节点的 X 拖"。
@@ -643,6 +674,10 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
                 while (delta > 3.14159265359f) delta -= 6.28318530718f;
                 while (delta < -3.14159265359f) delta += 6.28318530718f;
 
+                // E5：角度吸附到 15 度的整数倍（弧度换算后取最近刻度）。
+                if (snapping)
+                    delta = snapValue(delta, glm::radians(snapRotateDegrees));
+
                 // 在四元数空间绕**局部轴**复合：
                 //   新朝向 = 旧朝向 * angleAxis(delta, 局部单位轴)
                 // 旧实现直接改欧拉分量，在 T*Ry*Rx*Rz 的顺序下拖 X 轴并不等于
@@ -662,6 +697,9 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
             // 把手柄长度当作"1 倍"的参考尺度：拖出一个手柄长度 ≈ 放大 1 倍
             const float factor = 1.0f + delta / std::max(handleLength, 1e-4f);
             newScale[axisIndex] = std::max(startScale[axisIndex] * factor, 0.001f);
+            // E5：缩放吸附到 0.1 的整数倍（缩放是乘性的，按绝对值吸更直观）。
+            if (snapping)
+                newScale[axisIndex] = std::max(snapValue(newScale[axisIndex], snapScale), 0.001f);
         }
 
         // E2：把 primary 的世界增量施加到整组选中实体，一条命令提交。

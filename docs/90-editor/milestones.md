@@ -75,3 +75,13 @@ updated: 2026-11-03
 - 可观测：`[Editor] history jump selfTest PASS | depth 0 -> 3 -> clamp`。
 - 验证：编辑器自检 0/0、截图确认（空栈 / 两条命令合并成一条两种状态）；
   回归 48 项（新增 `e4-history-jump`）。
+
+## E5-a：工具栏 + 状态栏 + Gizmo 吸附
+
+- 问题：播放、手柄模式、聚焦全靠菜单和快捷键；帧数据只在 Statistics 面板里；Gizmo 完全没有吸附，
+  摆一个物体到「整数格」只能靠肉眼。
+- 实现：`EditorLayer::drawToolbar()` / `drawStatusBar()` 两个固定矩形窗口（34 px / 26 px），
+  面板布局减去它们的高度；菜单栏右侧只留文档名，避免三处重复；
+  `Gizmo::snapValue()` + `snapEnabled/snapTranslate/snapRotateDegrees/snapScale`，Shift 临时吸附。
+- 可观测：`[Gizmo] snap selfTest PASS | steps 0.5 / 15 deg / 0.1`。
+- 验证：编辑器自检 0/0；截图确认工具栏/状态栏/面板不重叠；回归 50 项（新增 `e5-toolbar-snap`）。

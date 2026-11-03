@@ -436,8 +436,16 @@ void EditorLayer::drawUI()
         ImGui::EndMainMenuBar();
     }
 
+    drawToolbar();
+
     drawPanels();
-    layoutNeedsReset = false;
+    // BeginMainMenuBar 在第一帧还没把主视口的 WorkPos 下推（此时 WorkPos.y == 0），
+    // 这一帧算出来的面板矩形会整体偏高一个菜单栏高度。所以布局标志要多留一帧：
+    // 等工作区稳定之后再落位，否则第一帧的错位置会被 imgui.ini 记住。
+    if (ImGui::GetMainViewport()->WorkPos.y > 0.5f)
+        layoutNeedsReset = false;
+
+    drawStatusBar();
 
     drawShortcutSheet();
 
@@ -585,26 +593,20 @@ void EditorLayer::drawMenuBar()
         ImGui::EndMenu();
     }
 
-    // 右侧状态条：脏标记 + 播放状态 + 撤销栈深度
-    const float rightWidth = 420.0f;
+    // 右侧只留文档身份。播放状态与帧率在工具栏右侧，帧数据在底部状态栏，
+    // 撤销深度在 History 面板 —— 同一件事写三处就是噪音，而且改动时容易漏改一处。
+    const std::string documentName = std::filesystem::path(state.documentPath).filename().string();
+    char documentLabel[192];
+    std::snprintf(documentLabel, sizeof documentLabel, "%s%s%s",
+                  state.documentDirty ? "* " : "",
+                  documentName.empty() ? "untitled" : documentName.c_str(),
+                  state.documentDirty ? " (unsaved)" : "");
+    const float rightWidth = ImGui::CalcTextSize(documentLabel).x + 12.0f;
     ImGui::SameLine(ImGui::GetWindowWidth() - rightWidth);
-
     if (state.documentDirty)
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "* unsaved");
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", documentLabel);
     else
-        ImGui::TextDisabled("saved");
-
-    ImGui::SameLine();
-    const char* playLabel = (state.playState == PlayState::Editing) ? "Editing"
-                          : (state.playState == PlayState::Playing) ? "Playing" : "Paused";
-    ImGui::TextDisabled("| %s", playLabel);
-
-    ImGui::SameLine();
-    ImGui::TextDisabled("| undo %d", static_cast<int>(state.commands.undoCount()));
-
-    ImGui::SameLine();
-    ImGui::TextDisabled("| %s", (state.gizmo.mode == GizmoMode::Translate) ? "move"
-                                 : (state.gizmo.mode == GizmoMode::Rotate) ? "rotate" : "scale");
+        ImGui::TextDisabled("%s", documentLabel);
 }
 
 entt::entity EditorLayer::createCharacterFromUi()
@@ -665,6 +667,196 @@ entt::entity EditorLayer::createTerrainFromUi()
     }
     return entity;
 }
+namespace
+{
+// E5：工具栏与状态栏的固定高度。面板默认矩形、视口矩形都要减掉它们，
+// 所以必须是常量 —— 让它们按内容自适应的话，视口会跟着文字宽度抖动。
+constexpr float kToolbarHeight = 34.0f;
+constexpr float kStatusBarHeight = 26.0f;
+
+const ImGuiWindowFlags kBarFlags =
+    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+    ImGuiWindowFlags_NoNav;
+
+// 一枚"当前生效"按钮：生效时用按下配色，鼠标停上去给说明。
+// 用法上它自己吃掉一个 SameLine，所以调用后可以直接画下一个。
+bool barToggle(const char* label, bool active, const char* tooltip)
+{
+    if (active)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
+    const bool pressed = ImGui::Button(label);
+    if (active)
+        ImGui::PopStyleColor(2);
+    if (tooltip != nullptr && ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", tooltip);
+    ImGui::SameLine();
+    return pressed;
+}
+
+const char* gizmoModeLabel(GizmoMode mode)
+{
+    return (mode == GizmoMode::Translate) ? "移动"
+         : (mode == GizmoMode::Rotate) ? "旋转" : "缩放";
+}
+} // namespace
+
+void EditorLayer::drawToolbar()
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    // 注意：BeginMainMenuBar 已经把主视口的 WorkPos 下推了菜单栏高度，
+    // 这里再减一次就会把工具栏顶到面板底下去。
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, kToolbarHeight), ImGuiCond_Always);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 4.0f));
+    if (ImGui::Begin("##toolbar", nullptr, kBarFlags))
+    {
+        // ---- 播放 ----
+        const bool editing = state.playState == PlayState::Editing;
+        const bool playing = state.playState == PlayState::Playing;
+
+        // 按钮上的字刻意用英文：缺中文字形时那种字体会退化成 ?，
+        // 而工具栏是"不读说明也点得对"的东西，不能赌字体加载成功。
+        if (ImGui::Button(editing ? "Play" : (playing ? "Pause" : "Resume")))
+        {
+            if (editing)
+                enterPlay();
+            else if (playing)
+                pausePlay();
+            else
+                resumePlay();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("F5 播放 / F6 暂停恢复");
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled(editing);
+        if (ImGui::Button("Stop"))
+            stopPlay();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("F7 停止并恢复播放前的场景");
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
+        // ---- 手柄模式 ----
+        if (barToggle("Move", state.gizmo.mode == GizmoMode::Translate, "W：移动手柄"))
+            state.gizmo.mode = GizmoMode::Translate;
+        if (barToggle("Rotate", state.gizmo.mode == GizmoMode::Rotate, "E：旋转手柄"))
+            state.gizmo.mode = GizmoMode::Rotate;
+        if (barToggle("Scale", state.gizmo.mode == GizmoMode::Scale, "R：缩放手柄"))
+            state.gizmo.mode = GizmoMode::Scale;
+
+        // ---- 吸附 ----
+        ImGui::Checkbox("Snap", &state.gizmo.snapEnabled);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("平移 %.2f / 旋转 %.0f 度 / 缩放 %.2f；按住 Shift 可临时吸附",
+                              state.gizmo.snapTranslate, state.gizmo.snapRotateDegrees,
+                              state.gizmo.snapScale);
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
+        // ---- 聚焦 / 撤销 ----
+        ImGui::BeginDisabled(state.selection.size() == 0);
+        if (ImGui::Button("Focus"))
+            focusSelection(state);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("F：把相机退到让选中对象占满视野的位置");
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled(!state.commands.canUndo());
+        if (ImGui::Button("Undo"))
+        {
+            state.commands.undo();
+            state.markDirty();
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Ctrl+Z");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!state.commands.canRedo());
+        if (ImGui::Button("Redo"))
+        {
+            state.commands.redo();
+            state.markDirty();
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Ctrl+Y");
+        ImGui::SameLine();
+
+        const char* playLabel = editing ? "Editing" : (playing ? "Playing" : "Paused");
+        char right[192];
+        std::snprintf(right, sizeof right, "%s | %s | %.0f FPS",
+                      state.documentDirty ? "* unsaved" : "saved", playLabel,
+                      static_cast<double>(ImGui::GetIO().Framerate));
+        const float textWidth = ImGui::CalcTextSize(right).x;
+        const float targetX = ImGui::GetWindowWidth() - textWidth - 10.0f;
+        if (targetX > ImGui::GetCursorPosX())
+            ImGui::SameLine(targetX);
+        if (state.documentDirty)
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", right);
+        else
+            ImGui::TextDisabled("%s", right);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
+void EditorLayer::drawStatusBar()
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float barY = viewport->WorkPos.y + viewport->WorkSize.y - kStatusBarHeight;
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, barY), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, kStatusBarHeight), ImGuiCond_Always);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 3.0f));
+    if (ImGui::Begin("##statusbar", nullptr, kBarFlags))
+    {
+        const size_t selected = state.selection.size();
+        if (selected == 0)
+            ImGui::TextDisabled("没有选中对象");
+        else
+            ImGui::Text("%zu 个对象选中", selected);
+        ImGui::SameLine();
+        ImGui::TextDisabled("| %s | 吸附 %s", gizmoModeLabel(state.gizmo.mode),
+                            state.gizmo.snapEnabled ? "开" : "关（按住 Shift 临时开）");
+
+        // 帧数据放这里而不是只塞进 Statistics 面板：调场景时眼睛一直在视口，
+        // 侧栏是要"转头去看"的，状态栏是余光就能扫到的。
+        const ImGuiIO& io = ImGui::GetIO();
+        unsigned int draws = 0;
+        unsigned int tris = 0;
+        if (state.services.scene != nullptr)
+        {
+            const RenderTelemetry& telemetry = state.services.scene->getTelemetry();
+            draws = telemetry.drawCalls;
+            tris = telemetry.triangles;
+        }
+        char right[192];
+        std::snprintf(right, sizeof right, "%.0f FPS (%.2f ms) | %u draws | %u tris | undo %d",
+                      static_cast<double>(io.Framerate),
+                      (io.Framerate > 0.0f) ? (1000.0f / io.Framerate) : 0.0f,
+                      draws, tris, static_cast<int>(state.commands.undoCount()));
+        const float textWidth = ImGui::CalcTextSize(right).x;
+        const float targetX = ImGui::GetWindowWidth() - textWidth - 10.0f;
+        if (targetX > ImGui::GetCursorPosX())
+            ImGui::SameLine(targetX);
+        ImGui::TextDisabled("%s", right);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
 void EditorLayer::drawPanels()
 {
     // 关键约束：ImGui::SetNextWindowPos/Size 是**单槽位**的 ——
@@ -673,15 +865,14 @@ void EditorLayer::drawPanels()
     // （那样 Console 的矩形会套到 Hierarchy 上，另外两个面板退回默认位置）。
     // 正确做法：在**每个面板 Begin 之前紧邻**设置它自己的矩形。
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float menuBarHeight = ImGui::GetFrameHeight();
 
     const float leftWidth = 280.0f;
     const float rightWidth = 340.0f;
     const float bottomHeight = 200.0f;
 
-    const float top = viewport->WorkPos.y + menuBarHeight;
+    const float top = viewport->WorkPos.y + kToolbarHeight;
     const float availableWidth = viewport->WorkSize.x;
-    const float availableHeight = viewport->WorkSize.y - menuBarHeight;
+    const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBarHeight;
 
     const ImGuiCond cond = layoutNeedsReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
 
