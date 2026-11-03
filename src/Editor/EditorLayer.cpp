@@ -9,6 +9,7 @@
 #include "Editor/panels/AssetBrowserPanel.h"
 #include "Editor/panels/HistoryPanel.h"
 #include "Editor/panels/RenderSettingsPanel.h"
+#include "Editor/EditorSceneQuery.h"
 
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -1453,6 +1454,32 @@ bool EditorLayer::selfTest()
     // ---- 0a) E5-b：渲染设置面板的输入夹取（纯函数） ----
     if (!RenderSettingsPanel::selfTest())
         return false;
+
+    // ---- 0aa) B2：空状态判据（UX-01）。天空盒与相机不算内容，地形 chunk 算。 ----
+    {
+        entt::registry probe;
+        const bool emptyAtStart = isSceneEmpty(probe);
+
+        const entt::entity skybox = probe.create();
+        probe.emplace<MeshComponent>(skybox, MeshComponent{});
+        RenderTagComponent skyTag{};
+        skyTag.isSkybox = true;
+        probe.emplace<RenderTagComponent>(skybox, skyTag);
+        const bool emptyWithSkyboxOnly = isSceneEmpty(probe);
+
+        const entt::entity realMesh = probe.create();
+        probe.emplace<MeshComponent>(realMesh, MeshComponent{});
+        probe.emplace<RenderTagComponent>(realMesh, RenderTagComponent{});
+        const bool notEmptyWithMesh = isSceneEmpty(probe);
+
+        if (!emptyAtStart || !emptyWithSkyboxOnly || notEmptyWithMesh)
+        {
+            std::cerr << "[Editor] empty state selfTest FAIL | empty=" << emptyAtStart
+                << " skyboxOnly=" << emptyWithSkyboxOnly << " withMesh=" << notEmptyWithMesh << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] empty state selfTest PASS | skybox+empty ignored, real mesh counts" << std::endl;
+    }
 
     // ---- 0b) E4-b：偏好文件往返（纯逻辑，不碰磁盘） ----
     if (!EditorPreferences::selfTest())

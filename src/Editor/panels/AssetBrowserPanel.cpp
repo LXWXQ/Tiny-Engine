@@ -60,13 +60,16 @@ void AssetBrowserPanel::refresh()
 {
     models.clear();
     scanned = true;
+    scanError.clear();
 
     const std::filesystem::path root = std::filesystem::path(TINY_RESOURCE_DIR) / "Models";
+    scannedRoot = root;
 
     std::error_code ec;
     if (!std::filesystem::exists(root, ec))
     {
-        std::cerr << "[Assets] models directory not found: " << root.string() << "\n";
+        scanError = "模型目录不存在";
+        std::cerr << "[Assets] models directory not found: " << root.string() << std::endl;
         return;
     }
 
@@ -122,6 +125,26 @@ void AssetBrowserPanel::draw(EditorState& state)
     const std::string filterText = toLower(std::string(filter));
 
     ImGui::BeginChild("asset_list", ImVec2(0, 0), ImGuiChildFlags_None);
+    // UX-16：扫描不到目录 / 目录里没有模型时，面板要说清「为什么空」和「下一步做什么」，
+    // 而不是只留一块空白 —— 空白面板唯一能得出的结论是「程序坏了」。
+    if (models.empty())
+    {
+        if (!scanError.empty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), "%s", scanError.c_str());
+            ImGui::TextDisabled("%s", scannedRoot.string().c_str());
+            ImGui::Spacing();
+            ImGui::TextWrapped("依赖不会随仓库分发：跑一次 tools/SetupDependencies.ps1，或者手动把模型放进 Resources/Models。");
+            ImGui::Spacing();
+            if (ImGui::Button("重新扫描"))
+                refresh();
+        }
+        else
+        {
+            ImGui::TextDisabled("Models 目录里没有可用的模型文件。");
+            ImGui::TextWrapped("支持 .obj / .gltf / .glb 等网格格式；放进 Resources/Models 后点上面的 Rescan。");
+        }
+    }
 
     for (const AssetEntry& asset : models)
     {

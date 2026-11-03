@@ -266,6 +266,8 @@ $tests = @(
        MustContain = @("[Window] fit selfTest PASS", "[Startup] error log selfTest PASS", "[Window] sizing") },
     @{ Name = "e5-render-settings"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("render settings selfTest PASS") },
+    @{ Name = "b2-empty-state"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("[Editor] empty state selfTest PASS") },
     @{ Name = "f2i-update-profile"; Args = @("--selftest", "240", "--streaming-world", "8", "--update-profile");
        MustContain = @("[Update] avg us |", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");

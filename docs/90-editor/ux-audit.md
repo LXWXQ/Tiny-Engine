@@ -46,6 +46,7 @@ updated: 2026-11-03
 | 影响 | 陌生人第一反应是"程序没跑起来"或"显卡有问题"，不会想到"场景是空的" |
 | 判据 | U5 空状态可继续 |
 | 修法指向 | 视口与 Hierarchy 各加一段三段式空状态，按钮复用 `createTerrainFromUi()` |
+| 状态 | **fixed**（2026-11-03）：视口中央说明卡（`ViewportPanel.cpp`，判据 `isSceneEmpty`：天空盒/相机不算内容）+ Hierarchy 空树提示 + 两个按钮走命令栈；回归用例 `b2-empty-state` |
 
 ### UX-02 没有帮助入口，未知参数被静默忽略
 
@@ -145,10 +146,10 @@ updated: 2026-11-03
 | 编号 | 现象 | 证据 | 判据 | 状态 |
 |---|---|---|---|---|
 | UX-15 | 状态栏右侧把 FPS、毫秒、draws、tris、undo 五组数字挤在一行，扫读成本高 | `drawStatusBar()` 的 `snprintf(right, ...)` | U6 | open |
-| UX-16 | Assets 扫描不到模型目录时只写 `cerr`，面板空白无解释 | `AssetBrowserPanel.cpp:69` | U3、U5 | open |
+| UX-16 | Assets 扫描不到模型目录时只写 `cerr`，面板空白无解释 | `AssetBrowserPanel.cpp:69` | U3、U5 | **fixed**（2026-11-03）：面板内显示原因 + 目录路径 + 下一步（跑 SetupDependencies.ps1 / 手动放模型），另有「没有模型」与「目录缺失」两种文案 |
 | UX-17 | 打开失败后没有"重试/换路径"入口，只能重新走 File > Open | `openScene` 失败分支 | U4 | open |
 | UX-18 | 菜单栏没有"最近失败"或诊断入口，出错后无处可去 | `drawMenuBar()` 只有 File/Edit/Create/Play/View/Help | U4 | open |
-| UX-09 | 多选时 Inspector 仍是两行英文播报"Multi-entity editing is not supported yet; use the Hierarchy panel to pick one entity."，且与中文界面混排 | `InspectorPanel.cpp:113-114` | U5、U7 | open |
+| UX-09 | 多选时 Inspector 仍是两行英文播报"Multi-entity editing is not supported yet; use the Hierarchy panel to pick one entity."，且与中文界面混排 | `InspectorPanel.cpp:113-114` | U5、U7 | **fixed**（2026-11-03）：改成中文两行「已选中 N 个对象，Inspector 一次只编辑一个。／在 Hierarchy 里点单个对象查看属性；批量删除/复制用上面的按钮。」 |
 
 ## 6. 已经满足的，不要重做
 

@@ -110,8 +110,10 @@ void InspectorPanel::draw(EditorState& state)
             }
         }
 
-        ImGui::TextDisabled("Multi-entity editing is not supported yet;");
-        ImGui::TextDisabled("use the Hierarchy panel to pick one entity.");
+        // UX-09：这里原来是两行英文播报，和中文界面混排，也没告诉用户下一步做什么。
+        ImGui::TextDisabled("已选中 %d 个对象，Inspector 一次只编辑一个。",
+            static_cast<int>(state.selection.size()));
+        ImGui::TextDisabled("在 Hierarchy 里点单个对象查看属性；批量删除/复制用上面的按钮。");
         ImGui::End();
         return;
     }
@@ -120,8 +122,8 @@ void InspectorPanel::draw(EditorState& state)
 
     if (entity == entt::null || !registry.valid(entity))
     {
-        ImGui::TextDisabled("No entity selected.");
-        ImGui::TextDisabled("Select one in the Hierarchy panel.");
+        ImGui::TextDisabled("没有选中对象。");
+        ImGui::TextDisabled("在 Hierarchy 里点一个对象，或用 Assets 双击模型加进来。");
         ImGui::End();
         return;
     }

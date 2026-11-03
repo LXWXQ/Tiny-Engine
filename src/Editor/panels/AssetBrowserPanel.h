@@ -2,6 +2,7 @@
 
 #include "Editor/EditorPanel.h"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,10 @@ private:
 
     std::vector<AssetEntry> models;
     bool scanned = false;
+    // UX-16：扫描失败要能在面板里看见，不能只写 cerr —— 面板空白时
+    // 用户唯一能得出的结论是「程序坏了」。
+    std::string scanError;
+    std::filesystem::path scannedRoot;
     char filter[64] = { 0 };
 };
 

@@ -257,3 +257,19 @@ const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBar
 - 面板必须自己 `ImGui::Begin/End`（不 Begin 会把内容画进上一个窗口）
 - 面板不得自己创建 GPU 资源
 - 面板不得直接改 registry，必须走命令栈
+
+## 空状态（B2）
+
+编辑器冷启动**不加载 Sponza**（`src/Core/Application.cpp` 的 `loadDefaultScene` 在编辑器模式恒为 false），
+所以「画面只有天空」是正常状态，不是渲染失败。三处空状态负责把这件事说出来：
+
+| 位置 | 判据 | 文案要点 |
+|---|---|---|
+| 视口中央 | `editor::isSceneEmpty(registry)`（`src/Editor/EditorSceneQuery.h`） | 「场景是空的」+ 为什么只有天空 + 下一步（双击 Assets 模型 / 创建地形）+ 两个按钮 |
+| Hierarchy | `filterBuffer` 为空且 `view<NameComponent>()` 为空 | 「场景里还没有对象。」+ 两个入口 |
+| Assets | `models.empty()` 且 `scanError` 非空或为空 | 缺目录给原因 + 路径 + 跑 SetupDependencies.ps1；目录空给支持的格式与 Rescan |
+
+`isSceneEmpty` 只看 `MeshComponent` 与 `TerrainChunkComponent`：天空盒与相机**不算内容**，
+否则空场景永远不空。判据本身有回归（`[Editor] empty state selfTest PASS`）。
+
+两个按钮都走命令栈（`createTerrainThroughCommand` / `CreateEntityCommand`），所以 Ctrl+Z 能撤销。

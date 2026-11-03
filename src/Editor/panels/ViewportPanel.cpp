@@ -1,5 +1,7 @@
 #include "Editor/panels/ViewportPanel.h"
 #include "Editor/EditorState.h"
+#include "Editor/EditorSceneQuery.h"
+#include "Editor/Commands.h"
 
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
@@ -194,12 +196,54 @@ void ViewportPanel::draw(EditorState& state)
         return;
     }
 
-    ImGui::Image(textureId, avail, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f));
 
-    // 图片在屏幕上的实际矩形。拾取与 gizmo 都用它做像素/NDC 换算。
+    ImGui::Image(textureId, avail, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f));
+    // 拾取与 gizmo 都用这个矩形做像素/NDC 换算。
     const ImVec2 rectMin = ImGui::GetItemRectMin();
     const ImVec2 rectMax = ImGui::GetItemRectMax();
     const bool imageHovered = ImGui::IsItemHovered();
+
+    // UX-01：编辑器冷启动不加载 Sponza，画面只有天空。没有这段文字时，
+    // 新用户的第一反应是「程序没跑起来」，不会想到「场景是空的」。
+    if (state.services.registry != nullptr && isSceneEmpty(*state.services.registry))
+    {
+        const float cardWidth = 420.0f;
+        ImGui::SetCursorScreenPos(ImVec2(rectMin.x + (avail.x - cardWidth) * 0.5f,
+                                     rectMin.y + avail.y * 0.32f));
+        ImGui::BeginChild("##empty_scene", ImVec2(cardWidth, 0.0f), ImGuiChildFlags_AutoResizeY);
+        ImGui::Text("场景是空的");
+        ImGui::Separator();
+        ImGui::TextWrapped("所以这里只有天空和网格 —— 渲染是正常的，只是还没有东西可看。");
+        ImGui::Spacing();
+        ImGui::TextDisabled("下一步：双击左侧 Assets 里的模型，或用下面的按钮先造一块地形。");
+        ImGui::Spacing();
+        if (ImGui::Button("创建地形"))
+        {
+            terrain::TerrainConfig config;
+            const entt::entity created = createTerrainThroughCommand(
+                *state.services.registry, *state.services.scene, state.commands, config, "Terrain");
+            if (created != entt::null)
+            {
+                state.selection.select(created);
+                state.markDirty();
+            }
+            else
+            {
+                state.pushLog(LogEntry::Level::Error, "[Editor] create terrain failed");
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("创建空对象"))
+        {
+            const entt::entity entity = state.services.scene->createEntity();
+            state.services.registry->emplace_or_replace<NameComponent>(entity, NameComponent{ "Empty" });
+            state.selection.select(entity);
+            state.markDirty();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Shift+/ 看全部快捷键");
+        ImGui::EndChild();
+    }
 
     state.viewportHovered = imageHovered;
 

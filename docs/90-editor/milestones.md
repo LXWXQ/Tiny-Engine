@@ -106,3 +106,10 @@ updated: 2026-11-03
   用一次性标志放行。
 - 可观测：`TinyEngine.exe --help`（退出码 0）、`TinyEngine.exe --not-a-flag`（退出码 2，stderr 一行）。
 - 验证：回归 53 项（新增 `b1-help` / `b1-unknown-arg`，`Validate.ps1` 新增 `ExpectedExitCode` / `AllowStderr` / `MustContainStderr` / `SkipValidationMarker` 四个可选字段）。
+
+## B2：空状态与措辞（UX-01 / UX-09 / UX-16）
+
+- **UX-01**：视口中央说明卡（居中于画面、带两个按钮）、Hierarchy 空树提示；新增纯判据 `editor::isSceneEmpty`（天空盒/相机不算内容，有网格或地形 chunk 才算）。
+- **UX-09**：Inspector 多选提示从英文播报改成中文两行，并指向批量按钮。
+- **UX-16**：Assets 面板区分「模型目录不存在」与「目录里没有模型」，都给出路径与下一步。
+- 回归：`b2-empty-state`（`TinyEditor.exe --selftest 5 --empty-scene`，标记 `[Editor] empty state selfTest PASS`）。

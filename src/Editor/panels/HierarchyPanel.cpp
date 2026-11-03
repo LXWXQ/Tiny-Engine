@@ -112,6 +112,14 @@ void HierarchyPanel::draw(EditorState& state)
 
     ImGui::Separator();
 
+    // UX-01：空树也要说话。冷启动时编辑器不加载 Sponza，Hierarchy 是空的，
+    // 用户需要知道这是「还没有东西」而不是「加载失败了」。
+    if (filterBuffer[0] == 0 && registry.view<NameComponent>().size() == 0)
+    {
+        ImGui::TextDisabled("场景里还没有对象。");
+        ImGui::TextWrapped("用上面的 Create Terrain / Create Empty，或双击左侧 Assets 里的模型开始。");
+        ImGui::Spacing();
+    }
     // 从根开始递归。用 roots 列表而不是遍历全部实体，
     // 是为了让顺序稳定（按创建顺序），否则树会随 EnTT 内部存储顺序跳动。
     std::vector<entt::entity> roots;

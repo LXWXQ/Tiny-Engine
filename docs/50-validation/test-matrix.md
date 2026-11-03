@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **52 项引擎用例 + 2 项工具自测 = 54 项**；
+`tools/Validate.ps1` 默认跑 **53 项引擎用例 + 2 项工具自测 = 55 项**；
 加 `-EnableProfiling` 时多一项（37 + 2 = 39）。
 
 ## 1. 每项的判据（统一）
@@ -81,6 +81,7 @@ updated: 2026-11-03
 | 50 | `b1-help` | `--help` 打印分组参数表 | `TinyEngine.exe --help` | `Tiny Engine -`、`--selftest [N]`、`--validation-features <list>`、`--update-profile` | 退出码 0、不创建窗口/设备（`SkipValidationMarker`）；参数表是 `kUsageLines` 数据，不是注释 |
 | 51 | `b1-unknown-arg` | 未知参数不再静默忽略 | `TinyEngine.exe --not-a-flag` | `unknown argument: --not-a-flag` | 退出码 2（`ExpectedExitCode`）、允许 stderr（`AllowStderr`）、提示走 stderr 而 stdout 保持干净；stderr 重定向时是 ANSI 代码页，只断言 ASCII |
 | 52 | `b1-window-fit` | 窗口按显示器工作区收敛（1366x768 / 150% 缩放不再把状态栏推出屏幕） | `TinyEngine.exe --selftest 5 --hidden` | `[Window] fit selfTest PASS`、`[Startup] error log selfTest PASS`、`[Window] sizing` | 1920x1080 在 1280x720 工作区收敛到 1177x662；2560x1440 保持 1920x1080；工作区缺失时退回默认 |
+| 53 | `b2-empty-state` | 冷启动空场景要有文字出口（视图中央说明卡 + Hierarchy 空树提示 + Assets 目录缺失说明） | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] empty state selfTest PASS` | 天空盒与相机不算内容；有网格才算非空；资产目录缺失时面板显示原因与下一步 |
 
 ## 3. 工具自测
 
