@@ -10,38 +10,44 @@
 class Device;
 class Model;
 
-// F2-b：地形 chunk 网格 arena。
+// F2-b / F2-g：地形 chunk 网格 arena。
 //
 // 流送世界每个 chunk 原本各持一份 device-local 顶点/索引缓冲，绘制时逐 chunk
-// 绑定、逐 chunk 一条 vkCmdDrawIndexedIndirectCount。chunk 数量上来之后这些
-// 绑定本身就是开销，也没法合并成一条 multdraw。
+// 绑定、逐 chunk 一条 indirect；这里把所有 chunk 网格拷进同一份大缓冲，绘制侧
+// 只绑一次 VBO/IBO，再用一条 vkCmdDrawIndexedIndirect 画完全部 chunk。
 //
-// 这里把所有 chunk 网格拷进同一份大缓冲的固定槽位：绘制侧只绑一次 VBO/IBO，
-// 再用一条 vkCmdDrawIndexedIndirect 画完全部 chunk（每个 chunk 的命令用
-// firstIndex/vertexOffset 指向自己的区间）。
-//
-// 槽位固定大小：流送 chunk 的配置一致（32 单位 / 33x33 / 3 级 LOD，单块约
-// 100 KB 顶点 + 50 KB 索引），槽位给到 160 KB / 80 KB 留足余量。超出槽位的
-// chunk 会让 adopt() 失败，调用方退回逐 chunk 绑定的旧路径。
+// F2-g：分配方式从「固定槽位」换成 bump + 空闲区间的首次适配分配：
+//   - 大缓冲按总容量分配（顶点 / 索引各一份），每块 chunk 只占自己实际大小；
+//   - 释放时把区间还回空闲表并与相邻区间合并；
+//   - 因此 33x33 的 chunk（约 1620 顶点 / 8544 索引）不再被 2048/12288 的
+//     固定槽位浪费，同一份显存能装下更多 chunk。
+// 分配失败（容量不足或单块超出剩余空间）时调用方退回该 chunk 自己的缓冲。
 //
 // 每个 chunk 的世界平移由顶点着色器按 set 3 的 chunk 实例表施加，所以这里只做
 // 原样拷贝，不做任何顶点变换。
 class TerrainMeshArena
 {
 public:
-    // F2-d: 384 slots cover every chunk the frustum can show at radius 12.
-    static constexpr uint32_t kSlotCount = 384u;
-    // The vertex base passed to vkCmdDrawIndexedIndirect is measured in vertices,
-    // so a slot must hold a whole number of vertices or every chunk after the
-    // first one starts at a fractional offset inside its own slice.
     static constexpr uint32_t kVertexStride = 44u; // pos3 + color3 + normal3 + uv2
-    // 33x33 chunk with 3 LODs needs ~1620 vertices and ~8550 indices; 2048 /
-    // 12288 leave headroom while keeping a slot at ~136 KB.
-    static constexpr uint32_t kSlotVertexCount = 2048u;
-    static constexpr uint32_t kSlotVertexBytes = kSlotVertexCount * kVertexStride;
-    static constexpr uint32_t kSlotIndexBytes = 12288u * 4u;
-    static constexpr uint32_t kInvalidSlot = 0xFFFFFFFFu;
     static constexpr uint32_t kVertexFloats = 11u;
+    static constexpr uint32_t kInvalidOffset = 0xFFFFFFFFu;
+
+    // 容量按「半径 12 的整环」估算：625 块 x 约 1620 顶点 x 44B 约 44.5 MB，
+    // 索引 625 x 约 8544 x 4B 约 21.4 MB；这里留约 10% 余量。
+    static constexpr uint32_t kVertexCapacity = 1100000u;  // 约 46 MB
+    static constexpr uint32_t kIndexCapacity = 5900000u;   // 约 22.5 MB
+
+    // 一块 chunk 在 arena 里的切片。offset 以顶点 / 索引为单位，
+    // 直接喂给 indirect 命令的 vertexOffset / firstIndex 基址。
+    struct Slice
+    {
+        uint32_t vertexOffset = kInvalidOffset;
+        uint32_t vertexCount = 0u;
+        uint32_t indexOffset = kInvalidOffset;
+        uint32_t indexCount = 0u;
+
+        bool isValid() const { return vertexOffset != kInvalidOffset; }
+    };
 
     explicit TerrainMeshArena(Device& device);
     ~TerrainMeshArena();
@@ -50,46 +56,49 @@ public:
     TerrainMeshArena& operator=(const TerrainMeshArena&) = delete;
 
     bool isAvailable() const { return available; }
-    uint32_t freeSlotCount() const;
-    bool hasFreeSlot() const { return freeSlotCount() != 0u; }
 
-    // Copies the model's complete vertex/index buffers into one free slot.
-    // The source buffers must be fence-complete (written by an earlier frame).
-    // F2-f: reserve a slice before the mesh is uploaded. Scene owns the mesh
-    // lifetime now, so it reserves the slot first and copies the freshly built
-    // buffers in with its own one-shot command buffer.
-    bool acquire(uint32_t vertexCount, uint32_t indexCount, uint32_t& outSlot);
-    // Records the two copies plus the read barriers. The slot must come from
-    // acquire(); adoptedCount only advances once a copy has been recorded.
-    void copyInto(VkCommandBuffer commandBuffer, uint32_t slot,
+    // 预留一块实际大小的切片；失败时不改动空闲表。
+    bool acquire(uint32_t vertexCount, uint32_t indexCount, Slice& outSlice);
+    // 记录两次 vkCmdCopyBuffer 与读屏障；切片必须来自 acquire()。
+    void copyInto(VkCommandBuffer commandBuffer, const Slice& slice,
                   VkBuffer sourceVertexBuffer, VkBuffer sourceIndexBuffer);
+    // 归还切片，并与相邻空闲区间合并。
+    void release(const Slice& slice);
 
-    // Convenience wrapper used by older call sites: reserves a slot and copies
-    // the model own buffers into it.
+    // 便于旧调用点：预留 + 拷贝模型自己的缓冲。
     bool adopt(VkCommandBuffer commandBuffer, const Model& model,
-               uint32_t& outSlot, std::string& errorMessage);
-    void release(uint32_t slot);
+               Slice& outSlice, std::string& errorMessage);
 
     VkBuffer getVertexBuffer() const { return vertexBuffer; }
     VkBuffer getIndexBuffer() const { return indexBuffer; }
-    uint32_t getVertexOffset(uint32_t slot) const;
-    uint32_t getIndexOffset(uint32_t slot) const;
-    uint32_t getAdoptedCount() const { return adoptedCount; }
-    uint32_t getVertexBytes() const { return kSlotCount * kSlotVertexBytes; }
-    uint32_t getIndexBytes() const { return kSlotCount * kSlotIndexBytes; }
+    uint32_t getAllocationCount() const { return allocationCount; }
+    VkDeviceSize getVertexBytes() const { return kVertexCapacity * kVertexStride; }
+    VkDeviceSize getIndexBytes() const { return kIndexCapacity * sizeof(uint32_t); }
+    VkDeviceSize getUsedVertexBytes() const { return usedVertexBytes; }
+    VkDeviceSize getUsedIndexBytes() const { return usedIndexBytes; }
 
 private:
+    struct Span
+    {
+        uint32_t offset = 0u;
+        uint32_t count = 0u;
+    };
+
     bool createResources();
     void destroyResources();
+    static bool allocateFrom(std::vector<Span>& freeSpans, uint32_t count, uint32_t& outOffset);
+    static void releaseTo(std::vector<Span>& freeSpans, uint32_t offset, uint32_t count);
 
     Device& device;
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
     VmaAllocation vertexAllocation = VK_NULL_HANDLE;
     VkBuffer indexBuffer = VK_NULL_HANDLE;
     VmaAllocation indexAllocation = VK_NULL_HANDLE;
-    std::vector<uint8_t> slotUsed;
-    std::vector<VkDeviceSize> slotVertexBytes;
-    std::vector<VkDeviceSize> slotIndexBytes;
-    uint32_t adoptedCount = 0;
+    std::vector<Span> vertexFreeSpans;
+    std::vector<Span> indexFreeSpans;
+    VkDeviceSize usedVertexBytes = 0u;
+    VkDeviceSize usedIndexBytes = 0u;
+    uint32_t allocationCount = 0u;
     bool available = false;
 };
+

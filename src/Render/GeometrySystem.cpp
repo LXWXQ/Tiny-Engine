@@ -746,13 +746,14 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         (*pipe)->bind(commandBuffer);
         // F2-f：地形几何在共享 arena 里（Model 只剩元数据），其余实体仍绑自己的缓冲。
         const bool terrainArenaBacked = isTerrain && terrain != nullptr &&
-            terrainMeshArena != nullptr && terrain->arenaSlot != TerrainMeshArena::kInvalidSlot;
+            terrainMeshArena != nullptr &&
+            terrain->arenaIndexBase != TerrainMeshArena::kInvalidOffset;
         uint32_t terrainArenaIndexBase = 0u;
         uint32_t terrainArenaVertexBase = 0u;
         if (terrainArenaBacked)
         {
-            terrainArenaIndexBase = terrainMeshArena->getIndexOffset(terrain->arenaSlot);
-            terrainArenaVertexBase = terrainMeshArena->getVertexOffset(terrain->arenaSlot);
+            terrainArenaIndexBase = terrain->arenaIndexBase;
+            terrainArenaVertexBase = terrain->arenaVertexBase;
             VkBuffer arenaVertexBuffer = terrainMeshArena->getVertexBuffer();
             VkDeviceSize arenaVertexOffset = 0;
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, &arenaVertexBuffer, &arenaVertexOffset);

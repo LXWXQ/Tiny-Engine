@@ -290,10 +290,10 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         uint32_t arenaVertexBase = 0u;
         bool chunkArenaBacked = false;
         if (terrainMeshArena != nullptr &&
-            terrain->arenaSlot != TerrainMeshArena::kInvalidSlot)
+            terrain->arenaIndexBase != TerrainMeshArena::kInvalidOffset)
         {
-            arenaIndexBase = terrainMeshArena->getIndexOffset(terrain->arenaSlot);
-            arenaVertexBase = terrainMeshArena->getVertexOffset(terrain->arenaSlot);
+            arenaIndexBase = terrain->arenaIndexBase;
+            arenaVertexBase = terrain->arenaVertexBase;
             chunkArenaBacked = true;
         }
         else if (terrainBatchActive)
@@ -550,7 +550,7 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
     if (terrainBatchActive && frameInfo.frameNumber % 120u == 0u)
     {
         std::cout << "[Terrain] batched draw | chunks=" << recordCursor
-                  << " arenaSlots=" << (terrainMeshArena ? terrainMeshArena->getAdoptedCount() : 0u)
+                  << " arenaAllocs=" << (terrainMeshArena ? terrainMeshArena->getAllocationCount() : 0u)
                   << " commandSpan=" << (kTerrainGpuMaxEntities * kTerrainGpuCommandsPerEntity)
                   << std::endl;
     }

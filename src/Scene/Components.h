@@ -226,9 +226,12 @@ struct TerrainComponent
     bool generated = false;
     bool generating = false;
 
-    // F2-f：几何所在的 TerrainMeshArena 槽位（0xFFFFFFFF = 未入池，走 Model 自己的缓冲）。
-    // 这里用字面量而不是 include arena 头：组件层不该依赖渲染层。
-    uint32_t arenaSlot = 0xFFFFFFFFu;
+    // F2-g：几何在 TerrainMeshArena 里的切片（base 以顶点 / 索引为单位，
+    // 0xFFFFFFFF = 未入池，走 Model 自己的缓冲）。这里用字面量而不是 include arena 头。
+    uint32_t arenaVertexBase = 0xFFFFFFFFu;
+    uint32_t arenaIndexBase = 0xFFFFFFFFu;
+    uint32_t arenaVertexCount = 0u;
+    uint32_t arenaIndexCount = 0u;
 
     // CPU-side collision source. Built alongside the mesh and replaced only
     // after a successful generation/upload; not serialized.

@@ -697,12 +697,22 @@ void Scene::destroyEntity(entt::entity entity)
         }
     }
 
-    // F2-f：销毁 chunk 时把它的 arena 槽位交还，否则流送来回跑会吃光 384 个槽。
+    // F2-g：销毁 chunk 时把 arena 切片交还，否则流送来回跑会把显存吃满。
     if (auto* terrain = registry.try_get<TerrainComponent>(entity))
     {
-        if (terrainMeshArena && terrain->arenaSlot != TerrainMeshArena::kInvalidSlot)
-            terrainMeshArena->release(terrain->arenaSlot);
-        terrain->arenaSlot = TerrainMeshArena::kInvalidSlot;
+        if (terrainMeshArena && terrain->arenaIndexBase != TerrainMeshArena::kInvalidOffset)
+        {
+            TerrainMeshArena::Slice slice{};
+            slice.vertexOffset = terrain->arenaVertexBase;
+            slice.vertexCount = terrain->arenaVertexCount;
+            slice.indexOffset = terrain->arenaIndexBase;
+            slice.indexCount = terrain->arenaIndexCount;
+            terrainMeshArena->release(slice);
+        }
+        terrain->arenaVertexBase = TerrainMeshArena::kInvalidOffset;
+        terrain->arenaIndexBase = TerrainMeshArena::kInvalidOffset;
+        terrain->arenaVertexCount = 0u;
+        terrain->arenaIndexCount = 0u;
     }
 
     if (const auto* mesh = registry.try_get<MeshComponent>(entity))
@@ -3591,32 +3601,43 @@ void Scene::processTerrainGeneration()
             continue;
         }
 
-        // F2-f：几何统一进共享 arena；成功后 Model 只留元数据，不再占 VBO/IBO。
+        // F2-g：几何统一进共享 arena（按实际大小分配）；成功后 Model 只留元数据。
         if (terrainMeshArena && terrainMeshArena->isAvailable() && model->hasGpuBuffers())
         {
-            if (terrain->arenaSlot != TerrainMeshArena::kInvalidSlot)
+            if (terrain->arenaIndexBase != TerrainMeshArena::kInvalidOffset)
             {
-                terrainMeshArena->release(terrain->arenaSlot);
-                terrain->arenaSlot = TerrainMeshArena::kInvalidSlot;
+                TerrainMeshArena::Slice previous{};
+                previous.vertexOffset = terrain->arenaVertexBase;
+                previous.vertexCount = terrain->arenaVertexCount;
+                previous.indexOffset = terrain->arenaIndexBase;
+                previous.indexCount = terrain->arenaIndexCount;
+                terrainMeshArena->release(previous);
+                terrain->arenaVertexBase = TerrainMeshArena::kInvalidOffset;
+                terrain->arenaIndexBase = TerrainMeshArena::kInvalidOffset;
+                terrain->arenaVertexCount = 0u;
+                terrain->arenaIndexCount = 0u;
             }
-            uint32_t arenaSlot = TerrainMeshArena::kInvalidSlot;
-            if (terrainMeshArena->acquire(vertexCount, indexCount, arenaSlot))
+            TerrainMeshArena::Slice slice{};
+            if (terrainMeshArena->acquire(vertexCount, indexCount, slice))
             {
                 const VkCommandBuffer arenaCmd =
                     cmdBeginSingleTime(device->getDevice(), commandPool);
                 if (arenaCmd != VK_NULL_HANDLE)
                 {
-                    terrainMeshArena->copyInto(arenaCmd, arenaSlot,
+                    terrainMeshArena->copyInto(arenaCmd, slice,
                                                model->getVertexBufferHandle(),
                                                model->getIndexBufferHandle());
                     cmdEndSingleTime(device->getDevice(), device->getGraphicsQueue(),
                                      commandPool, arenaCmd);
-                    terrain->arenaSlot = arenaSlot;
+                    terrain->arenaVertexBase = slice.vertexOffset;
+                    terrain->arenaIndexBase = slice.indexOffset;
+                    terrain->arenaVertexCount = slice.vertexCount;
+                    terrain->arenaIndexCount = slice.indexCount;
                     model->releaseGpuBuffers();
                 }
                 else
                 {
-                    terrainMeshArena->release(arenaSlot);
+                    terrainMeshArena->release(slice);
                 }
             }
         }

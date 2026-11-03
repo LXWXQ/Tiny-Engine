@@ -59,7 +59,7 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
   约 136 KB/槽、合计约 51 MB）；新增每帧流送时间预算 `maxUpdateMs`（默认 2 ms，
   `--streaming-budget` 可调），慢帧不再一次生成整环。
 - F2-b 起同一帧的地形 chunk 由**一条** indirect 提交：每个 chunk 的顶点/索引放进
-  `TerrainMeshArena` 的固定槽位（F2-d 起 2048 顶点 / 12288 索引），间接命令里带
+  `TerrainMeshArena` 里自己的切片（F2-g 起按实际尺寸分配，见下），间接命令里带
   `firstIndex`（arena 索引基址）、`vertexOffset`（arena 顶点基址）与
   `firstInstance`（该 chunk 在 set 3 实例表里的行号）。chunk 的世界矩阵不再烘进顶点，
   而是在顶点着色器里按 `gl_InstanceIndex` 从实例表取 —— 同一份网格被移动时不需要重拷。
@@ -68,8 +68,11 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
 - F2-f 起 arena 归 `Scene` 所有（`Scene::getTerrainMeshArena()`），地形网格生成完成、
   `Model` 接管完 VMA allocation 后立刻在一次性命令缓冲里 `acquire()` + `copyInto()` + 
   `releaseGpuBuffers()`：chunk 只剩子网格/包围盒/UV 这些元数据，VBO/IBO 全部落在共享 arena。
-  实体销毁时把槽位交还（`Scene::destroyEntity()`），否则流送来回会吃光 384 槽。
-  没抢到槽位（超尺寸或槽位耗尽，例如半径 12 的 625 块 > 384 槽）的 chunk **保留自己的 buffer**，
+  实体销毁时把切片交还（`Scene::destroyEntity()`）。
+- F2-g 起 arena 改成**按实际尺寸分配**：两块 device-local 大缓冲（顶点 1.1M ≈ 46 MB、
+  索引 5.9M ≈ 22.5 MB），维护有序空闲区间表做首次适配 + 前后合并；`acquire()` 返回
+  `Slice{vertexOffset, vertexCount, indexOffset, indexCount}`，`copyInto()` 按切片拷贝，
+  `release()` 归还并合并。单块超过剩余容量时该 chunk **保留自己的 buffer**，
   渲染时照旧 `Model::bind()`，所以不会丢几何，只是少了合批；`--no-terrain-batch` 同样只绑 arena。
 
 ## 2. 文件与职责

@@ -228,13 +228,13 @@ $tests = @(
     @{ Name = "f2c-origin-off"; Args = @("--selftest", "$([Math]::Max($Frames, 240))", "--streaming-world", "2", "--streaming-fly", "60", "--origin-threshold", "64", "--no-origin-rebase");
        MustContain = @("[Origin] stats | rebases=0", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2d-streaming-radius"; Args = @("--selftest", "$([Math]::Max($Frames, 150))", "--streaming-world", "8");
-       MustContain = @("[Streaming] chunks=289", "[Terrain] mesh arena ready | slots=384", "[Validation] errors=0 warnings=0") },
+       MustContain = @("[Streaming] chunks=289", "[Terrain] mesh arena ready |", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2d-streaming-budget"; Args = @("--selftest", "$([Math]::Max($Frames, 120))", "--streaming-world", "8", "--streaming-budget", "0.2");
        MustContain = @("budgetHits=", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2e-terrain-picking"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] streamed terrain PASS", "picking=OK", "[Editor] selfTest PASS") },
     @{ Name = "f2f-arena-slots"; Args = @("--selftest", "180", "--streaming-world", "8");
-       MustContain = @("[Terrain] mesh arena ready | slots=384", "arenaSlots=", "[Validation] errors=0 warnings=0") },
+       MustContain = @("[Terrain] mesh arena ready | vertexMB=", "arenaAllocs=", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

@@ -125,7 +125,7 @@ private:
         uint64_t revision = ~0ull;
         uint64_t lastFrame = 0;
         bool resetPending = false;
-        uint32_t arenaSlot = TerrainMeshArena::kInvalidSlot;
+        // F2-g：arena 切片由 Scene 管，实体槽只记录它出现在哪一帧的实例表里。
     };
 
     struct TerrainGpuFrameResources

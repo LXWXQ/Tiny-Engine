@@ -3,18 +3,9 @@
 #include "RHI/Device.h"
 #include "Scene/Model.h"
 
-#include <cstring>
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
-
-namespace
-{
-VkDeviceSize terrainArenaAlign(VkDeviceSize value)
-{
-    const VkDeviceSize alignment = 4;
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-} // namespace
 
 TerrainMeshArena::TerrainMeshArena(Device& deviceArg)
     : device(deviceArg)
@@ -31,11 +22,11 @@ TerrainMeshArena::TerrainMeshArena(Device& deviceArg)
 
     if (available)
     {
-        const uint32_t vertexBytes = getVertexBytes();
-        const uint32_t indexBytes = getIndexBytes();
-        std::cout << "[Terrain] mesh arena ready | slots=" << kSlotCount
-                  << " vertexMB=" << (vertexBytes / (1024u * 1024u))
-                  << " indexMB=" << (indexBytes / (1024u * 1024u)) << "\n";
+        std::cout << "[Terrain] mesh arena ready | vertexMB="
+                  << (getVertexBytes() / (1024u * 1024u))
+                  << " indexMB=" << (getIndexBytes() / (1024u * 1024u))
+                  << " vertexCapacity=" << kVertexCapacity
+                  << " indexCapacity=" << kIndexCapacity << "\n";
     }
 }
 
@@ -67,14 +58,14 @@ bool TerrainMeshArena::createResources()
                                &buffer, &allocation, nullptr) == VK_SUCCESS;
     };
 
-    if (!createBuffer(terrainArenaAlign(static_cast<VkDeviceSize>(kSlotCount) * kSlotVertexBytes),
+    if (!createBuffer(static_cast<VkDeviceSize>(kVertexCapacity) * kVertexStride,
                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       vertexBuffer, vertexAllocation))
     {
         return false;
     }
 
-    if (!createBuffer(terrainArenaAlign(static_cast<VkDeviceSize>(kSlotCount) * kSlotIndexBytes),
+    if (!createBuffer(static_cast<VkDeviceSize>(kIndexCapacity) * sizeof(uint32_t),
                       VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       indexBuffer, indexAllocation))
     {
@@ -82,10 +73,11 @@ bool TerrainMeshArena::createResources()
         return false;
     }
 
-    slotUsed.assign(kSlotCount, 0u);
-    slotVertexBytes.assign(kSlotCount, 0u);
-    slotIndexBytes.assign(kSlotCount, 0u);
-    adoptedCount = 0u;
+    vertexFreeSpans.assign(1, Span{ 0u, kVertexCapacity });
+    indexFreeSpans.assign(1, Span{ 0u, kIndexCapacity });
+    usedVertexBytes = 0u;
+    usedIndexBytes = 0u;
+    allocationCount = 0u;
     return true;
 }
 
@@ -107,79 +99,115 @@ void TerrainMeshArena::destroyResources()
         vertexBuffer = VK_NULL_HANDLE;
         vertexAllocation = VK_NULL_HANDLE;
     }
-    slotUsed.clear();
-    adoptedCount = 0u;
+    vertexFreeSpans.clear();
+    indexFreeSpans.clear();
+    usedVertexBytes = 0u;
+    usedIndexBytes = 0u;
+    allocationCount = 0u;
 }
 
-uint32_t TerrainMeshArena::freeSlotCount() const
+bool TerrainMeshArena::allocateFrom(std::vector<Span>& freeSpans, uint32_t count,
+                                    uint32_t& outOffset)
 {
-    uint32_t freeCount = 0u;
-    for (uint8_t used : slotUsed)
-    {
-        if (used == 0u)
-            ++freeCount;
-    }
-    return freeCount;
-}
-
-uint32_t TerrainMeshArena::getVertexOffset(uint32_t slot) const
-{
-    return slot * kSlotVertexCount;
-}
-
-uint32_t TerrainMeshArena::getIndexOffset(uint32_t slot) const
-{
-    const uint32_t slotIndices = kSlotIndexBytes / sizeof(uint32_t);
-    return slot * slotIndices;
-}
-
-bool TerrainMeshArena::acquire(uint32_t vertexCount, uint32_t indexCount, uint32_t& outSlot)
-{
-    outSlot = kInvalidSlot;
-    if (!available)
+    outOffset = kInvalidOffset;
+    if (count == 0u)
         return false;
 
-    const VkDeviceSize vertexBytes =
-        static_cast<VkDeviceSize>(vertexCount) * kVertexFloats * sizeof(float);
-    const VkDeviceSize indexBytes =
-        static_cast<VkDeviceSize>(indexCount) * sizeof(uint32_t);
-    if (vertexBytes > kSlotVertexBytes || indexBytes > kSlotIndexBytes)
-        return false;
-
-    for (uint32_t i = 0; i < kSlotCount; ++i)
+    for (size_t i = 0; i < freeSpans.size(); ++i)
     {
-        if (slotUsed[i] == 0u)
+        Span& span = freeSpans[i];
+        if (span.count < count)
+            continue;
+
+        outOffset = span.offset;
+        if (span.count == count)
+            freeSpans.erase(freeSpans.begin() + static_cast<std::ptrdiff_t>(i));
+        else
         {
-            slotUsed[i] = 1u;
-            slotVertexBytes[i] = vertexBytes;
-            slotIndexBytes[i] = indexBytes;
-            outSlot = i;
-            return true;
+            span.offset += count;
+            span.count -= count;
         }
+        return true;
     }
     return false;
 }
 
-void TerrainMeshArena::copyInto(VkCommandBuffer commandBuffer, uint32_t slot,
+void TerrainMeshArena::releaseTo(std::vector<Span>& freeSpans, uint32_t offset, uint32_t count)
+{
+    if (count == 0u)
+        return;
+
+    const auto position = std::lower_bound(
+        freeSpans.begin(), freeSpans.end(), offset,
+        [](const Span& span, uint32_t value) { return span.offset < value; });
+    const size_t index = static_cast<size_t>(position - freeSpans.begin());
+    freeSpans.insert(position, Span{ offset, count });
+
+    if (index + 1u < freeSpans.size())
+    {
+        Span& current = freeSpans[index];
+        const Span& next = freeSpans[index + 1u];
+        if (current.offset + current.count == next.offset)
+        {
+            current.count += next.count;
+            freeSpans.erase(freeSpans.begin() + static_cast<std::ptrdiff_t>(index + 1u));
+        }
+    }
+    if (index > 0u)
+    {
+        Span& previous = freeSpans[index - 1u];
+        const Span& current = freeSpans[index];
+        if (previous.offset + previous.count == current.offset)
+        {
+            previous.count += current.count;
+            freeSpans.erase(freeSpans.begin() + static_cast<std::ptrdiff_t>(index));
+        }
+    }
+}
+
+bool TerrainMeshArena::acquire(uint32_t vertexCount, uint32_t indexCount, Slice& outSlice)
+{
+    outSlice = Slice{};
+    if (!available || vertexCount == 0u || indexCount == 0u)
+        return false;
+
+    uint32_t vertexOffset = kInvalidOffset;
+    if (!allocateFrom(vertexFreeSpans, vertexCount, vertexOffset))
+        return false;
+
+    uint32_t indexOffset = kInvalidOffset;
+    if (!allocateFrom(indexFreeSpans, indexCount, indexOffset))
+    {
+        releaseTo(vertexFreeSpans, vertexOffset, vertexCount);
+        return false;
+    }
+
+    outSlice.vertexOffset = vertexOffset;
+    outSlice.vertexCount = vertexCount;
+    outSlice.indexOffset = indexOffset;
+    outSlice.indexCount = indexCount;
+    usedVertexBytes += static_cast<VkDeviceSize>(vertexCount) * kVertexStride;
+    usedIndexBytes += static_cast<VkDeviceSize>(indexCount) * sizeof(uint32_t);
+    ++allocationCount;
+    return true;
+}
+
+void TerrainMeshArena::copyInto(VkCommandBuffer commandBuffer, const Slice& slice,
                                 VkBuffer sourceVertexBuffer, VkBuffer sourceIndexBuffer)
 {
-    if (!available || commandBuffer == VK_NULL_HANDLE || slot >= kSlotCount ||
-        slotUsed[slot] == 0u)
+    if (!available || commandBuffer == VK_NULL_HANDLE || !slice.isValid())
         return;
     if (sourceVertexBuffer == VK_NULL_HANDLE || sourceIndexBuffer == VK_NULL_HANDLE)
         return;
 
-    const VkDeviceSize vertexBytes = slotVertexBytes[slot];
-    const VkDeviceSize indexBytes = slotIndexBytes[slot];
-
     VkBufferCopy vertexCopy{};
-    vertexCopy.dstOffset = static_cast<VkDeviceSize>(slot) * kSlotVertexBytes;
-    vertexCopy.size = vertexBytes;
+    vertexCopy.dstOffset = static_cast<VkDeviceSize>(slice.vertexOffset) * kVertexStride;
+    vertexCopy.size = static_cast<VkDeviceSize>(slice.vertexCount) * kVertexStride;
     vkCmdCopyBuffer(commandBuffer, sourceVertexBuffer, vertexBuffer, 1, &vertexCopy);
 
     VkBufferCopy indexCopy{};
-    indexCopy.dstOffset = static_cast<VkDeviceSize>(slot) * kSlotIndexBytes;
-    indexCopy.size = indexBytes;
+    indexCopy.dstOffset = static_cast<VkDeviceSize>(slice.indexOffset) * sizeof(uint32_t);
+    indexCopy.size = static_cast<VkDeviceSize>(slice.indexCount) * sizeof(uint32_t);
     vkCmdCopyBuffer(commandBuffer, sourceIndexBuffer, indexBuffer, 1, &indexCopy);
 
     VkBufferMemoryBarrier barrier{};
@@ -201,13 +229,27 @@ void TerrainMeshArena::copyInto(VkCommandBuffer commandBuffer, uint32_t slot,
     vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0,
                          0, nullptr, 1, &barrier, 0, nullptr);
-
-    ++adoptedCount;
 }
-bool TerrainMeshArena::adopt(VkCommandBuffer commandBuffer, const Model& model,
-                             uint32_t& outSlot, std::string& errorMessage)
+
+void TerrainMeshArena::release(const Slice& slice)
 {
-    outSlot = kInvalidSlot;
+    if (!available || !slice.isValid())
+        return;
+
+    releaseTo(vertexFreeSpans, slice.vertexOffset, slice.vertexCount);
+    releaseTo(indexFreeSpans, slice.indexOffset, slice.indexCount);
+    usedVertexBytes -= std::min<VkDeviceSize>(
+        usedVertexBytes, static_cast<VkDeviceSize>(slice.vertexCount) * kVertexStride);
+    usedIndexBytes -= std::min<VkDeviceSize>(
+        usedIndexBytes, static_cast<VkDeviceSize>(slice.indexCount) * sizeof(uint32_t));
+    if (allocationCount > 0u)
+        --allocationCount;
+}
+
+bool TerrainMeshArena::adopt(VkCommandBuffer commandBuffer, const Model& model,
+                             Slice& outSlice, std::string& errorMessage)
+{
+    outSlice = Slice{};
     if (!available)
     {
         errorMessage = "mesh arena is not available";
@@ -228,23 +270,11 @@ bool TerrainMeshArena::adopt(VkCommandBuffer commandBuffer, const Model& model,
         return false;
     }
 
-    uint32_t slot = kInvalidSlot;
-    if (!acquire(model.getVertexCount(), model.getIndexCount(), slot))
+    if (!acquire(model.getVertexCount(), model.getIndexCount(), outSlice))
     {
-        errorMessage = "mesh arena has no free slot or the mesh is too large";
+        errorMessage = "mesh arena has no room for this mesh";
         return false;
     }
-    copyInto(commandBuffer, slot, sourceVertices, sourceIndices);
-    outSlot = slot;
+    copyInto(commandBuffer, outSlice, sourceVertices, sourceIndices);
     return true;
-}
-void TerrainMeshArena::release(uint32_t slot)
-{
-    if (slot >= kSlotCount)
-        return;
-    if (slotUsed[slot] == 0u)
-        return;
-    slotUsed[slot] = 0u;
-    if (adoptedCount > 0u)
-        --adoptedCount;
 }

@@ -547,8 +547,7 @@ updated: 2026-11-02
 ## F1-b：合并顶点/索引缓冲（一次 multidraw）
 **问题**：F1-a 按模型分组、每个子网格一条间接命令，103 个子网格仍是 103 条命令；multidraw 的收益要等命令能跨模型才拿得到，而间接命令本身不带顶点缓冲绑定。
 **实现**：`Model` 为可批模型保留完整 CPU 顶点/索引（地形不留）；`ensureMergedMesh()` 按模型集合算 FNV 签名（指针 + 顶点数 + 索引数），顶点/索引分别拼进一份 device-local 缓冲、索引保持原样、每模型记 `baseVertex` 并填进间接命令的 `vertexOffset`（等价 `vkCmdDrawIndexed` 语义），所有实例共用 `ranges[0]`/`counts[0]`，一条 `vkCmdDrawIndexedIndirectCount` 画完；重建走自建 `uploadPool` + staging + 单次命令（屏障 TRANSFER_WRITE -> VERTEX_ATTRIBUTE_READ|INDEX_READ）。F1-d 起回退直接落到 CPU 路径（`--no-merged-buffers` 强制）。
-**可观测**：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时遥测 `draw calls 2 / triangles 270459 / vertices 811377`（合并前 104）。
-**回归**：`Validate.ps1` 新增 `f1b-merged-buffers` 与 `f1b-merged-off`，全套 24 项 ALL PASS；三路像素比对（合并 / 每模型 / CPU）相机 `[0,6,45]` 下 `max diff = 0`。
+可观测：`[SceneGpu] merged buffers built | vertices=192496 indices=786801 vertexMB=8 indexMB=3`；相机朝向 Sponza 时遥测 `draw calls 2 / triangles 270459 / vertices 811377`（合并前 104）。 **回归**：`Validate.ps1` 新增 `f1b-merged-buffers` 与 `f1b-merged-off`，全套 24 项 ALL PASS；三路像素比对（合并 / 每模型 / CPU）相机 `[0,6,45]` 下 `max diff = 0`。
 **性能**：同模式轮间波动约 24 FPS，仍以噪声为主；确定收益是 draw call 104 -> 2，不是本机 FPS。
 ## F1-c：按组实例化 + 材质排序 + Hi-Z 遮挡剔除
 **实现**：分组键改成 `(模型, 子网格)`（实例连续，`instanceCount = N`，一条命令画完所有实例）；去掉 counters 缓冲（组自己那 5 个 uint 直接写，被剔除写 0）；组按并集世界 AABB 剔除；合并模式按 `materialSlot` 排序、非合并按 `(model, materialSlot)`；包围盒缓存改用 `Model::getGeometryId()`（600 帧/64 条淘汰）；Hi-Z 金字塔从 `GBuffer.Position` 反算线性视深度（`R32_SFLOAT`、`floor(log2(max(w,h)))+1` 级、布局恒 GENERAL、手动屏障），`HiZBuild` 挂在 `Geometry` 之后写另一槽（错帧一帧），剔除时投影成屏幕矩形、按矩形像素选级、4 角 `textureLod` 取最大值，`nearest > farthest + 0.05` 判遮挡；`--no-hiz` 可关。
@@ -590,9 +589,11 @@ updated: 2026-11-02
 **可观测**：`[Editor] streamed terrain PASS | ... picking=OK`；`[Terrain] sculpt PASS`、`character controller PASS | grounded=1 maxGroundError=0` 不变。
 **回归**：新增 `f2e-terrain-picking`（跑 `TinyEditor.exe --selftest 5 --empty-scene`，`Validate.ps1` 增加 `Exe = "editor"` 支持与编辑器可执行发现），全套 **38 项**；批量 vs `--no-terrain-batch` 截图仍 `max 0`；半径 8 飞行 240 帧 4 次 rebase、`chunks=322 loaded=400 unloaded=78`、0/0；`--streaming-budget 0.2` 下环未填满属预算生效，自检改为「有预算命中时不强制满环」。
 **顺带**：`SceneSerializer::saveToFile()` 打开失败时带上 `errno` 与 `strerror` 文本；编辑器 streaming 自检在 TEMP 写入被拒（本机 errno 13）时回退到仓库内 `.tiny-streaming-selftest/`（已 gitignore）；`EngineConfig` 存档改存绝对坐标（局部 + `worldOrigin`），关闭 TD-22，飞行 + rebase 后不再把 ±chunk 整数倍偏移写回 `config/engine.json`。
-
 ## F2-f：地形 chunk 不再各持 Model/VBO/IBO（几何只进共享 arena）
 **问题**：F2-b 的 arena 是渲染侧按可见 chunk 惰拷贝的，chunk 仍然各持一个 `Model` 与自己的 device-local VBO/IBO；半径 12 的 625 块就是 625 份缓冲对象，与「每 chunk 固定开销」的无限世界目标冲突。
 **实现**：arena 所有权移到 `Scene`（`Scene::init()` 建、`getTerrainMeshArena()` 暴露），`TerrainMeshArena` 新增 `acquire(vertexCount, indexCount, slot)` 与 `copyInto(cmd, slot, srcVertex, srcIndex)`；地形网格一落地就在一次性命令缓冲里 acquire + copy + `Model::releaseGpuBuffers()`，`Model` 只留子网格/包围盒/UV，实体销毁时归还槽位。`GeometrySystem` 改为持有 `TerrainMeshArena*`，地形实体一律绑 arena 的 VBO/IBO 并用 `firstIndex + arenaIndexBase` / `vertexOffset = arenaVertexBase`；没抢到槽位的 chunk 保留自己的 buffer 走旧路径（半径 12 的 625 块 > 384 槽时不会丢几何）。
-**可观测**：`[Terrain] batched draw | chunks=12 arenaSlots=25 commandSpan=6144`；半径 8 飞行 600 帧 `arenaSlots` 在 305~323 之间回落（槽位回收正常），`Origin` 13 次 rebase，0/0。
-**回归**：新增 `f2f-arena-slots`；全套 **39 项**；`--gpu-scene` 与地形合批同时开启时发现并修掉「set 3 被地形换成 chunk 实例表、场景合批没绑回来 → Sponza 整片消失」的 bug（三角形数与 draw call 数都对，只是位置错），修后 `--gpu-scene` / `--no-terrain-batch` / `--no-gpu-scene` 三组 A/B 截图均 `max diff = 0`。
+可观测：`[Terrain] batched draw | chunks=12 arenaSlots=25 commandSpan=6144`；半径 8 飞行 600 帧 `arenaSlots` 在 305~323 之间回落（槽位回收正常），`Origin` 13 次 rebase，0/0。 **回归**：新增 `f2f-arena-slots`；全套 **39 项**；`--gpu-scene` 与地形合批同时开启时发现并修掉「set 3 被地形换成 chunk 实例表、场景合批没绑回来 → Sponza 整片消失」的 bug（三角形数与 draw call 数都对，只是位置错），修后 `--gpu-scene` / `--no-terrain-batch` / `--no-gpu-scene` 三组 A/B 截图均 `max diff = 0`。
+## F2-g：地形 arena 改成按实际尺寸分配（bump + 空闲区间合并）
+**问题**：F2-f 的 arena 是 384 个固定槽（2048 顶点 / 12288 索引），而一个 33x33 / 3 级 LOD 的 chunk 实际只用约 1620 顶点 / 8544 索引，近三成空间放着不用，总量还被槽数卡死。
+**实现**：`TerrainMeshArena` 换成两块 device-local 大缓冲（顶点 1.1M ≈ 46 MB、索引 5.9M ≈ 22.5 MB）+ 有序空闲区间表：`acquire()` 首次适配、`release()` 前后合并，`Slice` 记录 base/count；顶点分配成功但索引失败时回滚顶点区间。`TerrainComponent` 用 `arenaVertexBase/arenaIndexBase/arenaVertexCount/arenaIndexCount` 取代 `arenaSlot`，`Scene` 落地与销毁两侧直接搬 `Slice`。
+**可观测**：`[Terrain] mesh arena ready | vertexMB=48 indexMB=22 vertexCapacity=1100000 indexCapacity=5900000`；`[Terrain] batched draw | chunks=12 arenaAllocs=25 commandSpan=6144`；半径 8 飞行 600 帧 `arenaAllocs` 在 305~323 回落，13 次 rebase，0/0。**回归**：39 项全 PASS；三组 A/B 截图 `max diff = 0`；编辑器自检 `picking=OK rebuild=OK unload=OK`；sync 与 resize 各 0/0。顺带修掉 `Model` 自有 VBO/IBO 缺 `TRANSFER_SRC` 导致的 `VUID-vkCmdCopyBuffer-srcBuffer-00118`。
