@@ -505,6 +505,53 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         startOrientation = transform->getOrientation();
         dragOrigin = origin;
 
+        // ---- E2：把整个选中集合的快照下来 ----
+        dragEntries.clear();
+        auto captureEntry = [&](entt::entity candidate)
+        {
+            if (candidate == entt::null || !registry.valid(candidate))
+                return;
+            if (registry.any_of<TerrainChunkComponent>(candidate) ||
+                registry.any_of<TerrainStreamingComponent>(candidate) ||
+                registry.any_of<CameraComponent>(candidate))
+                return;
+            const auto* candidateTransform = registry.try_get<TransformComponent>(candidate);
+            const auto* candidateWorld = registry.try_get<WorldTransformComponent>(candidate);
+            if (candidateTransform == nullptr || candidateWorld == nullptr)
+                return;
+            for (const DragEntry& existing : dragEntries)
+                if (existing.entity == candidate)
+                    return;
+
+            DragEntry entry;
+            entry.entity = candidate;
+            entry.startTranslation = candidateTransform->getTranslation();
+            entry.startRotation = candidateTransform->getEuler();
+            entry.startScale = candidateTransform->getScale();
+            entry.startOrientation = candidateTransform->getOrientation();
+            entry.startWorld = candidateWorld->matrix;
+            entry.parentWorldInverse = glm::mat4(1.0f);
+            if (const auto* candidateHierarchy = registry.try_get<HierarchyComponent>(candidate))
+            {
+                if (candidateHierarchy->parent != entt::null &&
+                    registry.valid(candidateHierarchy->parent))
+                {
+                    if (const auto* parentWorld =
+                            registry.try_get<WorldTransformComponent>(candidateHierarchy->parent))
+                        entry.parentWorldInverse = glm::inverse(parentWorld->matrix);
+                }
+            }
+            dragEntries.push_back(entry);
+        };
+        captureEntry(entity);
+        if (state.selection.size() > 1)
+        {
+            for (entt::entity selected : state.selection.entities)
+                captureEntry(selected);
+        }
+        dragPrimaryParentWorld = glm::inverse(dragEntries.front().parentWorldInverse);
+        dragPrimaryStartWorld = dragEntries.front().startWorld;
+
         const int axisIndex = (int)hovered - 1;
         dragAxisDir = axes[axisIndex];
 
@@ -617,15 +664,71 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
             newScale[axisIndex] = std::max(startScale[axisIndex] * factor, 0.001f);
         }
 
+        // E2：把 primary 的世界增量施加到整组选中实体，一条命令提交。
+        std::vector<TransformPose> poses;
+        poses.reserve(dragEntries.size());
+
+        TransformPose primaryPose;
+        primaryPose.entity = dragEntity;
+        primaryPose.oldTranslation = startTranslation;
+        primaryPose.newTranslation = newTranslation;
+        primaryPose.oldRotation = startRotation;
+        primaryPose.newRotation = newRotation;
+        primaryPose.oldScale = startScale;
+        primaryPose.newScale = newScale;
+        primaryPose.oldOrientation = startOrientation;
+        primaryPose.newOrientation = newOrientation;
+        poses.push_back(primaryPose);
+
+        if (dragEntries.size() > 1)
+        {
+            const glm::mat4 primaryLocalNew =
+                glm::translate(glm::mat4(1.0f), newTranslation) *
+                glm::mat4_cast(glm::normalize(newOrientation)) *
+                glm::scale(glm::mat4(1.0f), newScale);
+            const glm::mat4 primaryWorldNew = dragPrimaryParentWorld * primaryLocalNew;
+            const glm::mat4 deltaWorld = primaryWorldNew * glm::inverse(dragPrimaryStartWorld);
+
+            for (size_t i = 1; i < dragEntries.size(); ++i)
+            {
+                const DragEntry& entry = dragEntries[i];
+                auto* otherTransform = registry.try_get<TransformComponent>(entry.entity);
+                if (otherTransform == nullptr)
+                    continue;
+
+                const glm::mat4 localMatrix = entry.parentWorldInverse * (deltaWorld * entry.startWorld);
+
+                glm::vec3 otherTranslation = glm::vec3(localMatrix[3]);
+                glm::vec3 otherScale{
+                    glm::length(glm::vec3(localMatrix[0])),
+                    glm::length(glm::vec3(localMatrix[1])),
+                    glm::length(glm::vec3(localMatrix[2])),
+                };
+                glm::mat3 rotationMatrix{
+                    glm::vec3(localMatrix[0]) / std::max(otherScale.x, 1e-6f),
+                    glm::vec3(localMatrix[1]) / std::max(otherScale.y, 1e-6f),
+                    glm::vec3(localMatrix[2]) / std::max(otherScale.z, 1e-6f),
+                };
+                glm::quat otherOrientation = glm::normalize(glm::quat_cast(rotationMatrix));
+
+                TransformPose pose;
+                pose.entity = entry.entity;
+                pose.oldTranslation = entry.startTranslation;
+                pose.newTranslation = otherTranslation;
+                pose.oldRotation = entry.startRotation;
+                pose.newRotation = TransformComponent::eulerFromQuat(otherOrientation);
+                pose.oldScale = entry.startScale;
+                pose.newScale = otherScale;
+                pose.oldOrientation = entry.startOrientation;
+                pose.newOrientation = otherOrientation;
+                poses.push_back(pose);
+            }
+        }
+
         // 通过命令栈提交。CommandStack 的合并窗口会把整个拖拽过程
         // 压成一条命令 —— 撤销一次就回到拖拽前，而不是退回一帧。
-        state.commands.execute(std::make_unique<SetTransformCommand>(
-            registry, dragEntity,
-            startTranslation, newTranslation,
-            startRotation, newRotation,
-            startScale, newScale,
-            startOrientation, newOrientation,
-            state.services.scene));
+        state.commands.execute(std::make_unique<SetTransformsCommand>(
+            registry, std::move(poses), state.services.scene));
         state.markDirty();
 
         // 立刻重算世界变换与包围盒，否则本帧画出来的包围盒/手柄还是旧位置

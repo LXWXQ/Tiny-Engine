@@ -25,6 +25,8 @@
 #include <glm/gtc/quaternion.hpp>
 #include <entt/entt.hpp>
 
+#include <vector>
+
 namespace editor
 {
 
@@ -119,6 +121,23 @@ private:
     glm::vec3 startScale{ 1.0f };
     // 旋转以四元数为准：拖拽过程中在四元数空间复合，避免欧拉角万向节死锁。
     glm::quat startOrientation{ 1.0f, 0.0f, 0.0f, 0.0f };
+
+    // ---- E2：多选拖拽的起始快照 ----
+    // 第一个一定是 primary（手柄所在的实体），其余是选中集合里的其他实体。
+    // startWorld / parentWorldInverse 用来把"primary 的世界增量"施加到每个实体上。
+    struct DragEntry
+    {
+        entt::entity entity = entt::null;
+        glm::vec3 startTranslation{ 0.0f };
+        glm::vec3 startRotation{ 0.0f };
+        glm::vec3 startScale{ 1.0f };
+        glm::quat startOrientation{ 1.0f, 0.0f, 0.0f, 0.0f };
+        glm::mat4 parentWorldInverse{ 1.0f };
+        glm::mat4 startWorld{ 1.0f };
+    };
+    std::vector<DragEntry> dragEntries;
+    glm::mat4 dragPrimaryParentWorld{ 1.0f };
+    glm::mat4 dragPrimaryStartWorld{ 1.0f };
 
     // 拖拽开始时的参考量
     float startAxisParam = 0.0f;    // 平移 / 缩放：沿轴的距离

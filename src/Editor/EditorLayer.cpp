@@ -1041,6 +1041,70 @@ bool EditorLayer::selfTest()
         stack.clear();
     }
 
+    // ---- 2c) E2：多对象变换一条命令 ----
+    {
+        const entt::entity a = registry.create();
+        registry.emplace<TransformComponent>(a);
+        registry.emplace<NameComponent>(a, NameComponent{ "BatchMoveA" });
+        const entt::entity b = registry.create();
+        registry.emplace<TransformComponent>(b);
+        registry.emplace<NameComponent>(b, NameComponent{ "BatchMoveB" });
+
+        auto* transformA = &registry.get<TransformComponent>(a);
+        auto* transformB = &registry.get<TransformComponent>(b);
+        const TransformPose poseA{ a, glm::vec3(0.0f), glm::vec3(1.0f, 2.0f, 3.0f),
+                                   glm::vec3(0.0f), glm::vec3(0.0f, 0.5f, 0.0f),
+                                   glm::vec3(1.0f), glm::vec3(2.0f),
+                                   glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+                                   glm::angleAxis(0.5f, glm::vec3(0.0f, 1.0f, 0.0f)) };
+        const TransformPose poseB{ b, glm::vec3(5.0f), glm::vec3(-1.0f, 0.0f, 0.0f),
+                                   glm::vec3(0.0f), glm::vec3(0.0f),
+                                   glm::vec3(1.0f), glm::vec3(1.0f),
+                                   glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+                                   glm::quat(1.0f, 0.0f, 0.0f, 0.0f) };
+
+        CommandStack moveStack;
+        moveStack.execute(std::make_unique<SetTransformsCommand>(
+            registry, std::vector<TransformPose>{ poseA, poseB }, nullptr));
+
+        if (glm::distance(transformA->getTranslation(), glm::vec3(1.0f, 2.0f, 3.0f)) > 1e-4f ||
+            glm::distance(transformB->getTranslation(), glm::vec3(-1.0f, 0.0f, 0.0f)) > 1e-4f)
+        {
+            std::cerr << "[Editor] selfTest FAIL: batch transform did not move both entities" << std::endl;
+            return false;
+        }
+        if (moveStack.undoCount() != 1)
+        {
+            std::cerr << "[Editor] selfTest FAIL: batch transform pushed " << moveStack.undoCount() << " commands (multi)" << std::endl;
+            return false;
+        }
+
+        moveStack.undo();
+        if (glm::distance(transformA->getTranslation(), glm::vec3(0.0f)) > 1e-4f ||
+            glm::distance(transformB->getTranslation(), glm::vec3(5.0f)) > 1e-4f)
+        {
+            std::cerr << "[Editor] selfTest FAIL: batch transform undo did not restore poses" << std::endl;
+            return false;
+        }
+
+        const SetTransformsCommand sameOrder(registry, std::vector<TransformPose>{ poseA, poseB }, nullptr);
+        const SetTransformsCommand otherOrder(registry, std::vector<TransformPose>{ poseB, poseA }, nullptr);
+        if (!sameOrder.mergeWith(SetTransformsCommand(registry, std::vector<TransformPose>{ poseA, poseB }, nullptr)))
+        {
+            std::cerr << "[Editor] selfTest FAIL: batch transform merge rejected same entities" << std::endl;
+            return false;
+        }
+        if (otherOrder.mergeWith(SetTransformsCommand(registry, std::vector<TransformPose>{ poseA, poseB }, nullptr)))
+        {
+            std::cerr << "[Editor] selfTest FAIL: batch transform merge accepted a different selection" << std::endl;
+            return false;
+        }
+
+        registry.destroy(a);
+        registry.destroy(b);
+        moveStack.clear();
+    }
+
     // ---- 3) 场景描述 <-> JSON 往返 ----
     {
         scene::SceneDescription input;

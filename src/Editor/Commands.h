@@ -57,6 +57,44 @@ private:
     glm::quat oldOrientation, newOrientation;
 };
 
+// E2：一次改多个实体的变换（多选拖拽 gizmo）。
+//
+// 为什么不让 Gizmo 每帧压 N 条 SetTransformCommand：那样一次拖拽会在栈里留下
+// N 条命令，撤销要按 N 次。这里一条命令持有整组 pose，并支持合并窗口内的吸收。
+struct TransformPose
+{
+    entt::entity entity = entt::null;
+    glm::vec3 oldTranslation{ 0.0f };
+    glm::vec3 newTranslation{ 0.0f };
+    glm::vec3 oldRotation{ 0.0f };
+    glm::vec3 newRotation{ 0.0f };
+    glm::vec3 oldScale{ 1.0f };
+    glm::vec3 newScale{ 1.0f };
+    glm::quat oldOrientation{ 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::quat newOrientation{ 1.0f, 0.0f, 0.0f, 0.0f };
+};
+
+class SetTransformsCommand : public Command
+{
+public:
+    SetTransformsCommand(entt::registry& registry, std::vector<TransformPose> poses,
+                         Scene* scene = nullptr);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override
+    {
+        return poses.size() > 1 ? "Modify Transforms" : "Modify Transform";
+    }
+    bool mergeWith(const Command& previous) const override;
+    void absorb(const Command& newer) override;
+
+private:
+    entt::registry* registry;
+    Scene* scene = nullptr;
+    std::vector<TransformPose> poses;
+};
+
 // 重命名实体。
 class RenameEntityCommand : public Command
 {

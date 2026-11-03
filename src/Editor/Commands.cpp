@@ -112,6 +112,75 @@ void SetTransformCommand::absorb(const Command& newer)
 }
 
 // ---------------------------------------------------------------------------
+// SetTransformsCommand（E2：多选拖拽）
+// ---------------------------------------------------------------------------
+SetTransformsCommand::SetTransformsCommand(entt::registry& registryArg,
+                                          std::vector<TransformPose> posesArg,
+                                          Scene* sceneArg)
+    : registry(&registryArg), scene(sceneArg), poses(std::move(posesArg))
+{
+}
+
+void SetTransformsCommand::apply()
+{
+    for (const TransformPose& pose : poses)
+    {
+        if (!registry->valid(pose.entity))
+            continue;
+        if (auto* transform = registry->try_get<TransformComponent>(pose.entity))
+        {
+            transform->setPose(pose.newTranslation, pose.newRotation, pose.newScale,
+                               pose.newOrientation);
+            if (scene)
+                scene->markTransformDirty(pose.entity);
+        }
+    }
+}
+
+void SetTransformsCommand::revert()
+{
+    for (const TransformPose& pose : poses)
+    {
+        if (!registry->valid(pose.entity))
+            continue;
+        if (auto* transform = registry->try_get<TransformComponent>(pose.entity))
+        {
+            transform->setPose(pose.oldTranslation, pose.oldRotation, pose.oldScale,
+                               pose.oldOrientation);
+            if (scene)
+                scene->markTransformDirty(pose.entity);
+        }
+    }
+}
+
+bool SetTransformsCommand::mergeWith(const Command& previous) const
+{
+    const auto* other = dynamic_cast<const SetTransformsCommand*>(&previous);
+    if (other == nullptr || other->poses.size() != poses.size())
+        return false;
+    for (size_t i = 0; i < poses.size(); ++i)
+        if (other->poses[i].entity != poses[i].entity)
+            return false;
+    return true;
+}
+
+void SetTransformsCommand::absorb(const Command& newer)
+{
+    const auto* other = dynamic_cast<const SetTransformsCommand*>(&newer);
+    if (other == nullptr || other->poses.size() != poses.size())
+        return;
+    for (size_t i = 0; i < poses.size(); ++i)
+    {
+        if (other->poses[i].entity != poses[i].entity)
+            return;
+        poses[i].newTranslation = other->poses[i].newTranslation;
+        poses[i].newRotation = other->poses[i].newRotation;
+        poses[i].newScale = other->poses[i].newScale;
+        poses[i].newOrientation = other->poses[i].newOrientation;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // RenameEntityCommand
 // ---------------------------------------------------------------------------
 RenameEntityCommand::RenameEntityCommand(entt::registry& registry, entt::entity entity,

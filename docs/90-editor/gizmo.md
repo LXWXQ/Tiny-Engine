@@ -253,6 +253,23 @@ const float tanHalfFov = std::abs(1.0f / view.projection[1][1]);   // 必须取�
 这个 bug 只能靠**看截图**发现（没有任何运行时错误），见
 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 26。
 
+## 多对象拖拽（E2）
+
+选中多个实体时，只有 primary（手柄所在的实体）算增量，其余实体跟着**同一个世界增量**走：
+
+```cpp
+deltaWorld = primaryWorldNew * inverse(primaryStartWorld);
+otherLocal = otherParentWorldInverse * (deltaWorld * otherStartWorld);
+```
+
+再从这个 `otherLocal` 的列里拆出平移、缩放（列长）与旋转（列归一化后 `quat_cast`），
+连同欧拉角写进 `TransformPose`。整组拖拽**只提交一条** `SetTransformsCommand`，
+所以撤销一次就回到拖拽前。
+
+过滤规则：地形 chunk、流送 manager、相机不参与；没有 `TransformComponent` /
+`WorldTransformComponent` 的实体也跳过。父节点同时被选中时，父子各自都在组里，
+靠世界增量保持相对关系不变。
+
 ## 撤销
 
 每一帧拖拽都提交一条 `SetTransformCommand`，靠 `CommandStack` 的合并窗口

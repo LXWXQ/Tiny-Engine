@@ -67,6 +67,15 @@ stack.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(ch
 
 批量删除前先 `selectionRoots()` 过滤：父节点被同时选中时跳过子节点，否则同一棵子树会被删两次。
 
+## SetTransformsCommand：多对象一条命令
+
+多选拖拽不能用 N 条 `SetTransformCommand` —— 撤销要按 N 次。`SetTransformsCommand`
+持有一个 `std::vector<TransformPose>`（每项含实体 + 旧/新的平移、欧拉角、缩放、四元数），
+`apply()` / `revert()` 逐项写回并 `markTransformDirty`。
+
+`mergeWith()` 要求**实体列表顺序完全一致**（数量相同、逐个实体相同），这样拖拽过程中的
+每帧命令会并进第一条，`absorb()` 只覆盖各项的 `new*` 值，旧值保留为拖拽起点。
+
 ## 删除实体的撤销（最容易写错的地方）
 
 EnTT 销毁后重建会拿到**新 ID**，所以撤销不能指望 ID 不变。构造时必须存下：
