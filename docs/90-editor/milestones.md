@@ -44,3 +44,13 @@ updated: 2026-11-03
 - 实现：`EditorState::PendingDocumentAction{None,New,Open,Exit}` + `requestDocumentAction()` 单一路口（干净或播放中直接执行，脏则只记意图），`drawUnsavedPrompt()` 一个模态框（保存并继续 / 放弃修改 / 取消；保存失败不吞意图）；`EngineServices::setWindowTitle` / `requestExit` 两个回调；标题 = `文件名 + " *" + " - Tiny Editor"`，只在变化时推送；主循环拦截窗口关闭按钮转成确认。
 - 可观测：`[Editor] unsaved changes prompt selfTest PASS | dirty blocks new/open/exit until resolved`。
 - 验证：编辑器自检 0/0、`--selftest 60` 202 FPS 0/0；回归 45 项（新增 `e4-unsaved-prompt`）。
+
+## E4-b：编辑器偏好持久化（config/editor.json + Open Recent）
+
+- 问题：关掉编辑器再打开，面板可见性和 Gizmo 模式全部回到默认；反复打开的场景每次都要重新找文件。
+- 实现：`EditorPreferences`（`panelVisibility` 按面板名、`gizmoMode`、`recentScenes` 上限 8）+
+  `config/editor.json`（不进版本库）；`EditorLayer::endFrame()` 单向同步 state -> preferences，
+  变化后延迟 0.75s 落盘；File → Open Recent 走 `requestOpenScene()`，仍然经过未保存确认。
+- 可观测：`[Editor] preferences selfTest PASS | round trip + recent dedupe/cap + broken json`、
+  `[Editor] preferences file selfTest PASS | save + load + recent round trip`。
+- 验证：编辑器自检 0/0、引擎冒烟 0/0；回归 46 项（新增 `e4-preferences`）。

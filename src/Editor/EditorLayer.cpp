@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -35,10 +36,23 @@ void EditorLayer::initialize(const EngineServices& services, const std::string& 
     state.playState = PlayState::Editing;
     state.documentDirty = false;
 
+    // E4-b：本机偏好。读不到就当首次运行，用默认值，不阻塞启动。
+    preferencesPath = TINY_EDITOR_CONFIG_PATH;
+    {
+        std::string preferencesError;
+        if (preferences.load(preferencesPath, preferencesError))
+            state.pushLog(LogEntry::Level::Info, "[Editor] preferences: " + preferencesPath);
+        else
+            state.pushLog(LogEntry::Level::Info, "[Editor] preferences default (" + preferencesError + ")");
+    }
+
     createDefaultPanels();
 
     for (auto& panel : panels)
         panel->onAttach(state);
+
+    // 必须等面板建好之后再套：applyPreferences() 按名字找面板，先套等于没有面板可套。
+    applyPreferences();
 
     state.pushLog(LogEntry::Level::Info, "[Editor] initialized");
     if (!defaultScenePath.empty())
@@ -404,6 +418,18 @@ void EditorLayer::drawMenuBar()
             requestDocumentAction(EditorState::PendingDocumentAction::New);
         if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, writable))
             requestDocumentAction(EditorState::PendingDocumentAction::Open);
+        if (ImGui::BeginMenu("Open Recent", writable && !state.recentScenes.empty()))
+        {
+            for (const std::string& recent : state.recentScenes)
+            {
+                const std::string label = std::filesystem::path(recent).filename().string();
+                if (ImGui::MenuItem(label.c_str(), nullptr, false, writable))
+                    requestOpenScene(recent);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", recent.c_str());
+            }
+            ImGui::EndMenu();
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Save", "Ctrl+S", false, writable)) saveScene();
         if (ImGui::MenuItem("Save As...", nullptr, false, writable)) saveSceneAs();
@@ -659,6 +685,16 @@ void EditorLayer::endFrame()
     if (!initialized || !active)
         return;
     state.scrollLogToBottom = false;
+
+    // E4-b：偏好不逐帧写盘。先同步一次当前状态，变化后等 0.75s 再落盘，
+    // 这样连点 View 菜单里的开关只会产生一次 IO。
+    syncPreferencesFromState();
+    if (preferencesDirty)
+    {
+        preferencesSaveDelay += ImGui::GetIO().DeltaTime;
+        if (preferencesSaveDelay >= 0.75f)
+            savePreferences();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -752,7 +788,7 @@ bool EditorLayer::openScene(const std::string& path)
     return true;
 }
 
-bool EditorLayer::loadSceneFromPath(const std::string& path, std::string& errorMessage)
+bool EditorLayer::loadSceneFromPath(const std::string& path, std::string& errorMessage, bool recordRecent)
 {
     if (!state.documentWritable())
     {
@@ -777,6 +813,14 @@ bool EditorLayer::loadSceneFromPath(const std::string& path, std::string& errorM
     state.commands.clear();
     state.documentPath = path;
     state.documentDirty = false;
+
+    if (recordRecent)
+    {
+        preferences.pushRecent(path);
+        state.recentScenes = preferences.recentScenes;
+        preferencesDirty = true;
+        preferencesSaveDelay = 0.0f;
+    }
 
     char buffer[512];
     std::snprintf(buffer, sizeof(buffer), "[Editor] loaded %d entities from %s",
@@ -870,6 +914,25 @@ void EditorLayer::requestDocumentAction(EditorState::PendingDocumentAction actio
     unsavedPromptRequested = true;
 }
 
+void EditorLayer::requestOpenScene(const std::string& path)
+{
+    if (path.empty())
+        return;
+
+    if (!state.documentDirty || !state.documentWritable())
+    {
+        std::string error;
+        if (!loadSceneFromPath(path, error))
+            state.pushLog(LogEntry::Level::Error, "[Editor] open failed: " + error);
+        return;
+    }
+
+    // 有未保存修改：记下目标，等用户在模态框里选完再打开。
+    state.pendingDocumentPath = path;
+    state.pendingDocumentAction = EditorState::PendingDocumentAction::Open;
+    unsavedPromptRequested = true;
+}
+
 void EditorLayer::performDocumentAction(EditorState::PendingDocumentAction action)
 {
     switch (action)
@@ -878,8 +941,22 @@ void EditorLayer::performDocumentAction(EditorState::PendingDocumentAction actio
         newScene();
         break;
     case EditorState::PendingDocumentAction::Open:
-        openSceneDialog();
+    {
+        // 从 File -> Open Recent 进来时路径已经定了，不要再弹一次对话框。
+        const std::string target = state.pendingDocumentPath;
+        state.pendingDocumentPath.clear();
+        if (target.empty())
+        {
+            openSceneDialog();
+        }
+        else
+        {
+            std::string error;
+            if (!loadSceneFromPath(target, error))
+                state.pushLog(LogEntry::Level::Error, "[Editor] open failed: " + error);
+        }
         break;
+    }
     case EditorState::PendingDocumentAction::Exit:
         if (state.services.requestExit)
             state.services.requestExit();
@@ -948,6 +1025,77 @@ void EditorLayer::drawUnsavedPrompt()
     ImGui::EndPopup();
 }
 
+// ---- E4-b：偏好 ------------------------------------------------------------
+//
+// 单向同步：EditorState 是"现在是什么样子"，EditorPreferences 是"上次存下来的样子"。
+// 每帧把 state 投影到 preferences，两者不同才标记脏 + 重置延迟，避免逐帧写盘。
+
+void EditorLayer::applyPreferences()
+{
+    for (auto& panel : panels)
+    {
+        if (!panel)
+            continue;
+        panel->visible = preferences.panelVisible(panel->name());
+    }
+
+    switch (preferences.gizmoMode)
+    {
+    case 1: state.gizmo.mode = GizmoMode::Rotate; break;
+    case 2: state.gizmo.mode = GizmoMode::Scale; break;
+    default: state.gizmo.mode = GizmoMode::Translate; break;
+    }
+
+    state.recentScenes = preferences.recentScenes;
+}
+
+void EditorLayer::syncPreferencesFromState()
+{
+    bool changed = false;
+
+    for (const auto& panel : panels)
+    {
+        if (!panel)
+            continue;
+        const std::string name = panel->name();
+        if (preferences.panelVisible(name) != panel->visible)
+        {
+            preferences.setPanelVisible(name, panel->visible);
+            changed = true;
+        }
+    }
+
+    const int mode = static_cast<int>(state.gizmo.mode);
+    if (preferences.gizmoMode != mode)
+    {
+        preferences.gizmoMode = mode;
+        changed = true;
+    }
+
+    if (!changed)
+        return;
+    preferencesDirty = true;
+    preferencesSaveDelay = 0.0f;
+}
+
+void EditorLayer::savePreferences()
+{
+    if (preferencesPath.empty())
+        return;
+
+    std::string error;
+    if (!preferences.save(preferencesPath, error))
+    {
+        state.pushLog(LogEntry::Level::Warning, "[Editor] preferences save failed: " + error);
+        preferencesDirty = false;
+        preferencesSaveDelay = 0.0f;
+        return;
+    }
+
+    preferencesDirty = false;
+    preferencesSaveDelay = 0.0f;
+}
+
 void EditorLayer::updateWindowTitle()
 {
     if (!state.services.setWindowTitle)
@@ -987,6 +1135,10 @@ bool EditorLayer::selfTest()
 
     // ---- 0) Gizmo 数学：投影/反投影往返、射线-轴最近点、射线-平面求交 ----
     if (!Gizmo::selfTest())
+        return false;
+
+    // ---- 0b) E4-b：偏好文件往返（纯逻辑，不碰磁盘） ----
+    if (!EditorPreferences::selfTest())
         return false;
 
     // ---- 1) 命令栈：精确撤销 ----
@@ -2416,6 +2568,40 @@ bool EditorLayer::selfTestWithScene()
         state.documentDirty = dirtyBefore;
         state.pendingDocumentAction = pendingBefore;
         std::cout << "[Editor] unsaved changes prompt selfTest PASS | dirty blocks new/open/exit until resolved" << std::endl;
+    }
+
+    // ---- 2g) E4-b：偏好落盘往返（真写一次文件，但落在 .tmp 下） ----
+    {
+        std::error_code code;
+        std::filesystem::create_directories(".tmp", code);
+        const std::string path = ".tmp/editor-preferences-selftest.json";
+
+        EditorPreferences prefs;
+        prefs.setPanelVisible("Console", false);
+        prefs.gizmoMode = 2;
+        prefs.pushRecent("Resources/Scenes/main.scene.json");
+        std::string error;
+        if (!prefs.save(path, error))
+        {
+            std::cerr << "[Editor] preferences file selfTest FAIL: save: " << error << std::endl;
+            return false;
+        }
+
+        EditorPreferences loaded;
+        if (!loaded.load(path, error))
+        {
+            std::cerr << "[Editor] preferences file selfTest FAIL: load: " << error << std::endl;
+            return false;
+        }
+        if (loaded.gizmoMode != 2 || loaded.panelVisible("Console") ||
+            loaded.recentScenes.size() != 1 ||
+            loaded.recentScenes[0] != "Resources/Scenes/main.scene.json")
+        {
+            std::cerr << "[Editor] preferences file selfTest FAIL: values lost on disk" << std::endl;
+            return false;
+        }
+
+        std::cout << "[Editor] preferences file selfTest PASS | save + load + recent round trip" << std::endl;
     }
 
     return true;

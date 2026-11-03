@@ -24,6 +24,10 @@
 //   * 进版本库，充当"默认预设"
 #define TINY_CONFIG_PATH  "@TINY_CONFIG_DIR@/engine.json"
 
+// 编辑器偏好（面板可见性 / Gizmo 模式 / 最近打开的场景）。
+// 与 engine.json 分开：那份是进版本库的默认预设，这份是本机习惯，不进版本库。
+#define TINY_EDITOR_CONFIG_PATH "@TINY_CONFIG_DIR@/editor.json"
+
 // ImGui 的窗口布局持久化文件。和 engine.json 放在同一个目录，
 // 保证仓库根目录始终只有 README.md。
 #define TINY_IMGUI_INI_PATH "@TINY_CONFIG_DIR@/imgui.ini"

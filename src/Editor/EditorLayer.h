@@ -20,6 +20,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorPanel.h"
+#include "Editor/EditorPreferences.h"
 
 #include <memory>
 #include <string>
@@ -93,6 +94,16 @@ private:
     void drawUnsavedPrompt();
     void updateWindowTitle();
     void cancelPendingDocumentAction();
+
+    // ---- E4-b：偏好持久化（面板可见性 / Gizmo 模式 / 最近场景） ----
+    void applyPreferences();
+    void syncPreferencesFromState();
+    void savePreferences();
+    void requestOpenScene(const std::string& path);
+    EditorPreferences preferences;
+    std::string preferencesPath;
+    bool preferencesDirty = false;
+    float preferencesSaveDelay = 0.0f;
     bool unsavedPromptRequested = false;
     std::string lastWindowTitle;
     void updatePlayState(float dt);
@@ -107,7 +118,7 @@ private:
     bool saveScene();
     bool saveSceneAs();
     bool openSceneDialog();
-    bool loadSceneFromPath(const std::string& path, std::string& errorMessage);
+    bool loadSceneFromPath(const std::string& path, std::string& errorMessage, bool recordRecent = true);
 
     void enterPlay();
     void pausePlay();

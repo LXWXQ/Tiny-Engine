@@ -74,6 +74,12 @@ struct EditorState
     bool hasPlaySnapshot = false;
 
     // ---- 面板可见性（View 菜单控制）----
+    // E4-b：最近打开的场景（由 EditorPreferences 维护，File -> Open Recent 直接用）。
+    std::vector<std::string> recentScenes;
+
+    // 排队中的"打开"动作要打开哪个文件；空 = 弹文件对话框。
+    std::string pendingDocumentPath;
+
     bool showHierarchy = true;
     bool showInspector = true;
     bool showConsole = true;

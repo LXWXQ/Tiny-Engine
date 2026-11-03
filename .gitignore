@@ -27,3 +27,6 @@ out/
 .tiny-streaming-selftest/
 node_modules/
 node_modules.orig/
+
+# 编辑器偏好（本机习惯，不进版本库）
+config/editor.json

@@ -55,6 +55,29 @@ CPU 网格交给 JobSystem，旧网格继续渲染。生成期间再次点击 Ge
 
 地形 chunk / 流送管理器实体不参与这些批量操作：它们由流送系统回收，删掉会让地图出现空洞。
 
+## 面板可见性与偏好（E4-b）
+
+本机习惯存 `config/editor.json`（**不进版本库**，`.gitignore` 已加）。它和 `config/engine.json` 分开：
+那份是引擎运行参数，进版本库当默认预设；这份是本机习惯，换台机器就该是默认值。
+
+```json
+{
+  "version": 1,
+  "panels": { "Hierarchy": true, "Inspector": true, "Console": false },
+  "gizmoMode": 0,
+  "recentScenes": [ "Resources/Scenes/main.scene.json" ]
+}
+```
+
+- **键是面板名**（`EditorPanel::name()`）：加面板只需 `registerPanel<T>()` + View 菜单 +1 行，
+  偏好文件自动跟着走；缺失的键按 `true` 处理，所以删掉某个面板不会留下"隐形"状态。
+- **写盘是延迟合并的**：`endFrame()` 把 `EditorState` 投影到 `EditorPreferences`，变化才标脏，
+  再等 0.75s 落盘 —— 连点 View 里的开关只产生一次 IO。
+- **读失败不是错误**：首次运行没有文件、JSON 坏了、字段类型不对，都退回默认值并留一条日志，
+  不会让编辑器起不来（`gizmoMode` 会 clamp 到 0..2）。
+- **File → Open Recent**：最近 8 条（`kMaxRecentScenes`），去重 + 置顶；打开时会先走
+  `requestDocumentAction` 的未保存确认，所以它不会绕过脏文档保护。
+
 ## 布局：为什么是手写的
 
 本项目的 ImGui 是 **1.92.6 非 docking 分支**（没有 `DockSpace`）。
