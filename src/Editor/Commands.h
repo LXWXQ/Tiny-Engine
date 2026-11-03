@@ -148,6 +148,40 @@ private:
     Scene* scene = nullptr;
 };
 
+// E6：材质贴图替换。贴图对象由 Scene::loadMaterialTexture 加载并缓存，
+// 命令只负责"换指针 + 刷新描述符"，这样撤销就是把指针换回去。
+class SetMaterialTextureCommand : public Command
+{
+public:
+    enum class Slot
+    {
+        Albedo,
+        Normal,
+        MetallicRoughness,
+        Emissive,
+        Ao
+    };
+
+    SetMaterialTextureCommand(entt::registry& registry, entt::entity entity, Slot slot,
+                              std::shared_ptr<Texture> texture, Scene* scene = nullptr);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Modify Material Texture"; }
+
+    // 槽位对应的贴图指针（apply / revert / UI 显示共用，避免三处各写一份 switch）。
+    static std::shared_ptr<Texture>& slotTexture(Material& material, Slot slot);
+
+private:
+    void writeState(const std::shared_ptr<Texture>& texture);
+
+    entt::registry* registry;
+    entt::entity entity;
+    Slot slot;
+    std::shared_ptr<Texture> before, after;
+    Scene* scene = nullptr;
+};
+
 // E3：Render Tag（Skybox / Grid）开关，同样要能撤销。
 class SetRenderTagCommand : public Command
 {

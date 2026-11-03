@@ -7,8 +7,12 @@
 #include <imgui.h>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <filesystem>
 #include <random>
+#include <string>
 
 namespace editor
 {
@@ -190,10 +194,32 @@ void InspectorPanel::drawTransform(EditorState& state, entt::entity entity)
     glm::vec3 rotationDegrees = glm::degrees(oldRotation);
     glm::vec3 scale = oldScale;
 
+    // E6：数值行统一成"拖动修改 + Ctrl 点击输入精确值 + 右键重置"。
+    // 之前只有 DragFloat3 本体，用户想回默认值只能手敲三个 0/1。
+    auto dragRow = [](const char* label, glm::vec3& value, float speed, const char* format,
+                      const glm::vec3& resetValue, const char* tip) -> bool
+    {
+        bool moved = ImGui::DragFloat3(label, glm::value_ptr(value), speed, 0.0f, 0.0f, format);
+        if (ImGui::BeginPopupContextItem(label))
+        {
+            if (ImGui::MenuItem("重置"))
+            {
+                value = resetValue;
+                moved = true;
+            }
+            ImGui::EndPopup();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+            ImGui::SetTooltip("%s | 拖动修改 Ctrl+点击输入精确值 右键重置", tip);
+        return moved;
+    };
+
     bool changed = false;
-    changed |= ImGui::DragFloat3("Translation", glm::value_ptr(translation), 0.05f);
-    changed |= ImGui::DragFloat3("Rotation", glm::value_ptr(rotationDegrees), 0.5f);
-    changed |= ImGui::DragFloat3("Scale", glm::value_ptr(scale), 0.05f, 0.001f, 1000.0f);
+    changed |= dragRow("Translation", translation, 0.05f, "%.3f", glm::vec3(0.0f),
+                       "世界坐标（父级旋转时是父级空间）");
+    changed |= dragRow("Rotation", rotationDegrees, 0.5f, "%.1f", glm::vec3(0.0f),
+                       "欧拉角，单位度");
+    changed |= dragRow("Scale", scale, 0.05f, "%.3f", glm::vec3(1.0f), "局部缩放，最小 0.001");
 
     if (changed)
     {
@@ -549,7 +575,8 @@ void InspectorPanel::drawMaterial(EditorState& state, entt::entity entity)
     if (!materialComp || !materialComp->material)
         return;
 
-    if (!ImGui::CollapsingHeader("Material"))
+    // E6：材质默认展开 —— 「做出效果」十次有八次是从这里开始的。
+    if (!ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen))
         return;
 
     Material& m = *materialComp->material;
@@ -591,17 +618,111 @@ void InspectorPanel::drawMaterial(EditorState& state, entt::entity entity)
         state.markDirty();
     }
 
-    ImGui::TextDisabled("Textures:");
-    auto showTex = [](const char* label, const std::shared_ptr<Texture>& tex)
+    // E6：贴图可以换 —— 之前只显示路径，等于告诉用户"这里有什么"却不让改。
+    // 颜色贴图走 sRGB，法线/金属粗糙度/AO 是数据贴图，必须保持 UNORM。
+    ImGui::SeparatorText("贴图");
+    drawTextureRow(state, entity, m, "Albedo", SetMaterialTextureCommand::Slot::Albedo, true);
+    drawTextureRow(state, entity, m, "Normal", SetMaterialTextureCommand::Slot::Normal, false);
+    drawTextureRow(state, entity, m, "MetalRough",
+                   SetMaterialTextureCommand::Slot::MetallicRoughness, false);
+    drawTextureRow(state, entity, m, "Emissive", SetMaterialTextureCommand::Slot::Emissive, true);
+    drawTextureRow(state, entity, m, "AO", SetMaterialTextureCommand::Slot::Ao, false);
+}
+
+void InspectorPanel::drawTextureRow(EditorState& state, entt::entity entity, Material& material,
+                                    const char* label, SetMaterialTextureCommand::Slot slot,
+                                    bool srgb)
+{
+    ImGui::PushID(label);
+
+    const std::shared_ptr<Texture>& current = SetMaterialTextureCommand::slotTexture(material, slot);
+    const std::string currentName = current ? std::filesystem::path(current->getPath()).filename().string()
+                                            : std::string("(none)");
+
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(92.0f);
+    if (current)
+        ImGui::TextDisabled("%s", currentName.c_str());
+    else
+        ImGui::TextDisabled("(none)");
+
+    ImGui::SameLine();
+    const bool pickClicked = ImGui::SmallButton("选择…");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("从 Resources/Texture 里选一张%s；当前：%s", srgb ? "颜色贴图" : "数据贴图", current ? current->getPath().c_str() : "未设置");
+
+    if (pickClicked)
     {
-        if (tex)
-            ImGui::Text("  %s: %s", label, tex->getPath().c_str());
-        else
-            ImGui::TextDisabled("  %s: (none)", label);
-    };
-    showTex("Albedo", m.albedoMap);
-    showTex("Normal", m.normalMap);
-    showTex("MetalRough", m.metallicRoughnessMap);
+        if (!texturesScanned)
+        {
+            textures.refresh();
+            texturesScanned = true;
+        }
+        ImGui::OpenPopup("##texture_picker");
+    }
+
+    bool clearRequested = false;
+    std::string chosenPath;
+    if (ImGui::BeginPopup("##texture_picker"))
+    {
+        ImGui::TextDisabled("%s · %zu 张", textures.scannedRoot().c_str(), textures.entries().size());
+        ImGui::SetNextItemWidth(320.0f);
+        ImGui::InputTextWithHint("##tex_filter", "过滤…", textureFilter, IM_ARRAYSIZE(textureFilter));
+        if (ImGui::Button("重新扫描"))
+            textures.refresh();
+        ImGui::SameLine();
+        if (ImGui::Button("清除"))
+            clearRequested = true;
+
+        ImGui::BeginChild("##tex_list", ImVec2(360.0f, 260.0f));
+        std::string filter = textureFilter;
+        std::transform(filter.begin(), filter.end(), filter.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        for (const TextureEntry& entry : textures.entries())
+        {
+            if (!filter.empty())
+            {
+                std::string name = entry.displayName;
+                std::transform(name.begin(), name.end(), name.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (name.find(filter) == std::string::npos)
+                    continue;
+            }
+            if (ImGui::Selectable(entry.displayName.c_str()))
+                chosenPath = entry.absolutePath;
+        }
+        ImGui::EndChild();
+        ImGui::EndPopup();
+    }
+
+    if (clearRequested || !chosenPath.empty())
+    {
+        std::shared_ptr<Texture> next;
+        if (!chosenPath.empty())
+        {
+            if (state.services.scene == nullptr)
+            {
+                state.notify(LogEntry::Level::Error, "无法加载贴图：场景不可用");
+            }
+            else if ((next = state.services.scene->loadMaterialTexture(chosenPath, srgb)) == nullptr)
+            {
+                state.notify(LogEntry::Level::Error, "贴图加载失败：" + chosenPath);
+            }
+        }
+
+        if (clearRequested || next != nullptr)
+        {
+            state.commands.execute(std::make_unique<SetMaterialTextureCommand>(
+                *state.services.registry, entity, slot, next, state.services.scene));
+            state.markDirty();
+            if (clearRequested)
+                state.notifySuccess(std::string("已清除 ") + label + " 贴图");
+            else
+                state.notifySuccess(std::string("已更换 ") + label + " 贴图");
+        }
+    }
+
+    ImGui::PopID();
 }
 
 void InspectorPanel::drawRenderTag(EditorState& state, entt::entity entity)

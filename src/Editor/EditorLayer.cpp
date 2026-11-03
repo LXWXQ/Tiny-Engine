@@ -4,6 +4,7 @@
 
 #include "Editor/panels/HierarchyPanel.h"
 #include "Editor/panels/InspectorPanel.h"
+#include "Editor/TextureLibrary.h"
 #include "Editor/panels/ConsolePanel.h"
 #include "Editor/panels/ViewportPanel.h"
 #include "Editor/panels/AssetBrowserPanel.h"
@@ -861,6 +862,7 @@ const char* gizmoModeLabel(GizmoMode mode)
 
 void EditorLayer::drawToolbar()
 {
+
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     // 注意：BeginMainMenuBar 已经把主视口的 WorkPos 下推了菜单栏高度，
     // 这里再减一次就会把工具栏顶到面板底下去。
@@ -1840,6 +1842,28 @@ bool EditorLayer::selfTest()
 
     // ---- 0a) E5-b：渲染设置面板的输入夹取（纯函数） ----
     if (!RenderSettingsPanel::selfTest())
+        return false;
+
+    // ---- 0ad) E6：资产拖放落点 + 贴图库扩展名过滤 ----
+    {
+        const glm::vec3 camera{ 10.0f, 5.0f, 20.0f };
+        const glm::vec3 forward{ 0.0f, 0.0f, 1.0f };
+        const glm::vec3 groundHit{ 3.0f, 1.5f, 7.0f };
+        const glm::vec3 onTerrain = ViewportPanel::assetDropPosition(true, groundHit, camera, forward);
+        const glm::vec3 inAir = ViewportPanel::assetDropPosition(false, groundHit, camera, forward);
+        const bool terrainUsesHit = onTerrain == groundHit;
+        const bool airUsesCameraFront = inAir == camera + forward * 8.0f;
+        if (!terrainUsesHit || !airUsesCameraFront)
+        {
+            std::cerr << "[Editor] asset drop selfTest FAIL | terrain=" << terrainUsesHit
+                      << " air=" << airUsesCameraFront << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] asset drop selfTest PASS | terrain hit point, otherwise camera + 8"
+                  << std::endl;
+    }
+
+    if (!TextureLibrary::selfTest())
         return false;
 
     // ---- 0ab) B6：Console 过滤判据（级别开关 + 关键字大小写折叠） ----

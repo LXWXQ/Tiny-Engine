@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
+#include <string>
 
 namespace editor
 {
@@ -141,6 +143,15 @@ entt::entity pickEntity(entt::registry& registry, const glm::vec3& origin, const
 }
 } // namespace
 
+glm::vec3 ViewportPanel::assetDropPosition(bool terrainHit, const glm::vec3& hitPoint,
+                                           const glm::vec3& cameraPosition,
+                                           const glm::vec3& forward, float fallbackDistance)
+{
+    if (terrainHit)
+        return hitPoint;
+    return cameraPosition + forward * (fallbackDistance > 0.0f ? fallbackDistance : 8.0f);
+}
+
 void ViewportPanel::draw(EditorState& state)
 {
     // 视口窗口不要标题栏、不要滚动条、内边距为 0：
@@ -202,6 +213,54 @@ void ViewportPanel::draw(EditorState& state)
     const ImVec2 rectMin = ImGui::GetItemRectMin();
     const ImVec2 rectMax = ImGui::GetItemRectMax();
     const bool imageHovered = ImGui::IsItemHovered();
+
+    // E6：把 Assets 面板里的模型拖进来 = 在落点生成实体（走命令栈，可撤销）。
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("TINY_ASSET_PATH"))
+        {
+            const std::string assetPath(static_cast<const char*>(payload->Data));
+            if (!assetPath.empty() && state.services.scene != nullptr &&
+                state.services.registry != nullptr)
+            {
+                glm::vec3 rayOrigin{ 0.0f };
+                glm::vec3 rayDirection{ 0.0f, 0.0f, 1.0f };
+                screenToRay(ImGui::GetIO().MousePos, rectMin, rectMax,
+                            state.services.scene->getCamera().getView(),
+                            state.services.scene->getCamera().getProjection(),
+                            rayOrigin, rayDirection);
+
+                glm::vec3 hitPoint{ 0.0f };
+                entt::entity hitTerrain = entt::null;
+                float hitDistance = 0.0f;
+                const bool terrainHit = state.services.scene->raycastTerrainWorld(
+                    rayOrigin, rayDirection, hitPoint, hitTerrain, hitDistance);
+
+                const TransformComponent& cameraTransform =
+                    state.services.scene->getCameraTransform();
+                const glm::vec3 forward = glm::normalize(glm::vec3(
+                    std::sin(cameraTransform.getEuler().y) *
+                        std::cos(cameraTransform.getEuler().x),
+                    -std::sin(cameraTransform.getEuler().x),
+                    std::cos(cameraTransform.getEuler().y) *
+                        std::cos(cameraTransform.getEuler().x)));
+                const glm::vec3 spawn = assetDropPosition(
+                    terrainHit, hitPoint, cameraTransform.getTranslation(), forward);
+
+                const std::filesystem::path path(assetPath);
+                auto command = std::make_unique<CreateEntityCommand>(
+                    *state.services.registry, *state.services.scene, assetPath,
+                    path.stem().string(), spawn);
+                CreateEntityCommand* raw = command.get();
+                state.commands.execute(std::move(command));
+                if (raw->currentEntity() != entt::null)
+                    state.selection.select(raw->currentEntity());
+                state.markDirty();
+                state.notifySuccess("已从资产拖入：" + path.filename().string());
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
 
     // UX-14：视口现在可以被拖动、缩放，所以布局矩形以真实窗口为准，
     // 不再由 drawPanels 的常量推算（那边只是首帧的初值）。

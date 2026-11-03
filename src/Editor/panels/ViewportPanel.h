@@ -2,6 +2,8 @@
 
 #include "Editor/EditorPanel.h"
 
+#include <glm/glm.hpp>
+
 namespace editor
 {
 
@@ -18,6 +20,13 @@ class ViewportPanel : public EditorPanel
 public:
     const char* name() const override { return "Viewport"; }
     void draw(EditorState& state) override;
+
+    // E6：把 Assets 里的模型拖进视口时，实体放在哪里。
+    // 命中地形就落在命中点（模型底边贴地更好用，所以不再往上抬）；
+    // 没命中就落在相机前方固定距离 —— 落在原点会让用户以为"没生成"。
+    static glm::vec3 assetDropPosition(bool terrainHit, const glm::vec3& hitPoint,
+                                       const glm::vec3& cameraPosition, const glm::vec3& forward,
+                                       float fallbackDistance = 8.0f);
 };
 
 } // namespace editor

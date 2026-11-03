@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Editor/EditorPanel.h"
+#include "Editor/Commands.h"
+#include "Editor/TextureLibrary.h"
 
 #include <entt/entt.hpp>
 
@@ -24,6 +26,15 @@ private:
     void drawMesh(EditorState& state, entt::entity entity);
     void drawMaterial(EditorState& state, entt::entity entity);
     void drawRenderTag(EditorState& state, entt::entity entity);
+
+    // E6：一行贴图（当前文件名 + 选择按钮 + 弹窗列表）。
+    // srgb 由贴图语义决定：颜色类 true，法线/金属粗糙度/AO 必须 false。
+    void drawTextureRow(EditorState& state, entt::entity entity, Material& material,
+                        const char* label, SetMaterialTextureCommand::Slot slot, bool srgb);
+
+    TextureLibrary textures;
+    bool texturesScanned = false;
+    char textureFilter[64] = {};
 };
 
 } // namespace editor

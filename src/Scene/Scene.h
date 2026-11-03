@@ -105,6 +105,10 @@ public:
     MaterialSystem& getMaterialSystem() { return materialSystem; }
     // E3：材质 factor 的 GPU 侧写入（编辑器改参数后立刻生效）。
     DescriptorManager* getDescriptorManager() const { return descriptorManager; }
+    // E6：编辑器选材质贴图时用。编辑器不持有 Device / commandPool，所以贴图的
+    // 创建与缓存（MaterialSystem 内部按路径缓存）留在这里；srgb 由调用方按贴图
+    // 语义决定：颜色类为 true，法线/粗糙度/AO 这类数据贴图必须为 false。
+    std::shared_ptr<Texture> loadMaterialTexture(const std::string& filepath, bool srgb);
 
     // ---- 场景描述（编辑器 / 序列化用）----
     // captureDescription: 把当前 registry 导出成纯数据（不含任何 GPU 句柄）。

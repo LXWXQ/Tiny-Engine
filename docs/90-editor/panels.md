@@ -383,6 +383,29 @@ const ImGuiCond cond = layoutNeedsReset ? ImGuiCond_Always : ImGuiCond_FirstUseE
 典型事故：某次运行把 `[Window][Render]` 存成 `Collapsed=1`，之后每次启动渲染设置面板都是一条细线 ——
 当场删掉那一段或点 `View -> Reset Layout` 即可，不用改代码。
 
+## 贴图选择（E6）
+
+Inspector 的 `Material` 段默认展开（`ImGuiTreeNodeFlags_DefaultOpen`），下面是 `贴图` 分组：Albedo / Normal /
+MetalRough / Emissive / AO 五行，每行「当前文件名 + 选择…按钮」。
+
+- 换图的完整链路：`TextureLibrary` 列出 `Resources/Texture` 下的候选 → `Scene::loadMaterialTexture(path, srgb)`
+  （编辑器不持有 Device，所以加载入口放在 Scene）→ `SetMaterialTextureCommand` → `Material` 换指针后
+  `DescriptorManager::refreshMaterialTextures(slot, material)` 重写材质 set。整条链走命令栈，Ctrl+Z 能还原。
+- 只有 `.png/.jpg/.jpeg/.tga/.bmp` 进列表；HDR 是另一种采样（`VK_FORMAT_R16G16B16A16_SFLOAT` + 线性空间），
+  混进来只会得到一张黑图，所以故意不做。
+- 加载失败不静默：`notify(Error, "贴图加载失败：<path>")`，Toast + 状态栏 + Console 三处可见（B3）。
+
+## 资产拖拽到视口（E6）
+
+Assets 列表的每一项都是 `ImGuiDragDropSource`（载荷 `TINY_ASSET_PATH`，绝对路径字节串 + NUL）。
+视口用 `ImGui::Image` 之后的 `BeginDragDropTarget` 接收，落点由纯函数
+`ViewportPanel::assetDropPosition(terrainHit, hitPoint, cameraPosition, forward, 8.0f)` 决定：
+
+- 命中地形 → 就用命中点（模型底边贴地，不用再抬高）；
+- 没命中 → 相机前方 8 米（落在世界原点会让人以为"没生成"）。
+
+生成同样走 `CreateEntityCommand`，所以 Ctrl+Z 一次撤掉；生成后自动选中并 Toast 提示文件名。
+
 ## 快捷键表（B4 / UX-13）
 
 快捷键只有一份数据（`src/Editor/EditorLayer.cpp` 的 `kShortcutEntries`）：

@@ -3937,3 +3937,10 @@ void Scene::refreshTransformsAndVisibility()
     refreshSpatialIndex();
     updateVisibility(camera.getProjection() * camera.getView());
 }
+
+std::shared_ptr<Texture> Scene::loadMaterialTexture(const std::string& filepath, bool srgb)
+{
+    if (device == nullptr || commandPool == VK_NULL_HANDLE || filepath.empty())
+        return nullptr;
+    return materialSystem.loadTexture(filepath, *device, commandPool, srgb);
+}

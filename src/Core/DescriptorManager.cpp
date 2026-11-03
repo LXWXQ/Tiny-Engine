@@ -525,6 +525,12 @@ uint32_t DescriptorManager::allocateMaterialSet(const Material& material)
 	return slot;
 }
 
+void DescriptorManager::refreshMaterialTextures(uint32_t slot, const Material& material)
+{
+	writeMaterialSet(slot, material.getAlbedoInfo(), material.getNormalInfo(),
+		material.getMetallicRoughnessInfo(), material.getMetallicRoughnessInfo());
+}
+
 VkDescriptorSet DescriptorManager::allocateSet(VkDescriptorSetLayout layout)
 {
 	VkDescriptorSetAllocateInfo allocInfo{};

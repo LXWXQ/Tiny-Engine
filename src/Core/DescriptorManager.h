@@ -134,6 +134,11 @@ public:
 	void updateMaterialFactors(uint32_t slot, const glm::vec4& baseColor, float metallic,
 		float roughness);
 
+	// E6: 材质贴图被替换后刷新该槽位的四个纹理数组项。
+	// 编辑器要能"换贴图并立刻看到效果"，但 writeMaterialSet 是内部细节，
+	// 所以这里只暴露"按材质对象刷新"这一个动作。
+	void refreshMaterialTextures(uint32_t slot, const Material& material);
+
 private:
 	void createGlobalLayout();
 	void createMaterialLayout(uint32_t capacity);

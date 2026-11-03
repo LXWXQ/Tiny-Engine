@@ -168,3 +168,18 @@ updated: 2026-11-03
   字体 `16 × scale`；编辑器用 `uiScaleFactor()`（由字号倒推）放大工具栏/状态栏高度与侧栏宽度；
   自检 `[Window] ui scale selfTest PASS | 1x1 -> 1, 1.5x1.5 -> 1.5, 0.9x0.9 -> 1, 4x4 -> 3`。
 - 回归：`b6-console-search` / `b2-empty-state` 两条新用例；编辑器自检 0/0、引擎 60 帧 0/0、DocCheck 通过。
+
+## E6：让"做出效果"少几步（资产拖拽 / 贴图选择 / 数值行）
+
+- **资产拖拽到视口**：Assets 每项是 `ImGuiDragDropSource`（载荷 `TINY_ASSET_PATH`），视口 `BeginDragDropTarget`
+  接收；落点由纯函数 `ViewportPanel::assetDropPosition()` 决定（命中地形用命中点，否则相机前方 8m）；
+  生成走 `CreateEntityCommand`，可撤销，成功后自动选中 + Toast。
+- **材质贴图选择**：`TextureLibrary` 扫 `Resources/Texture`（png/jpg/jpeg/tga/bmp），`Scene::loadMaterialTexture`
+  加载，`SetMaterialTextureCommand` 记录前后指针，`DescriptorManager::refreshMaterialTextures` 重写材质 set；
+  Inspector 的 `Material` 段默认展开，五行贴图各有「选择…」与「清除」。
+- **Inspector 数值行**：Translation / Rotation / Scale 改 `DragFloat3`，hover 提示
+  「拖动修改 / Ctrl+点击输入精确值 / 右键重置」，右键菜单 `重置` 回默认值。
+- 自检：`[Editor] asset drop selfTest PASS | terrain hit point, otherwise camera + 8`、
+  `[Editor] texture library selfTest PASS | png/jpg/jpeg/tga/bmp only, hdr needs its own path`。
+- 回归：`e6-asset-and-textures`；编辑器自检 0/0、引擎 60 帧 0/0。
+- 已知未做：HDR 环境贴图不能从面板选（需要自己的采样路径）；拖拽目前只支持模型，贴图/材质拖拽未做。

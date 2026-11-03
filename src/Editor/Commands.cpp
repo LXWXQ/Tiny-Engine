@@ -239,6 +239,77 @@ void SetMaterialCommand::absorb(const Command& newer)
 }
 
 // ---------------------------------------------------------------------------
+// SetMaterialTextureCommand（E6）
+// ---------------------------------------------------------------------------
+SetMaterialTextureCommand::SetMaterialTextureCommand(entt::registry& registryArg,
+                                                     entt::entity entityArg, Slot slotArg,
+                                                     std::shared_ptr<Texture> textureArg,
+                                                     Scene* sceneArg)
+    : registry(&registryArg), entity(entityArg), slot(slotArg), after(std::move(textureArg)),
+      scene(sceneArg)
+{
+    if (registry->valid(entity))
+    {
+        if (auto* materialComp = registry->try_get<MaterialComponent>(entity))
+        {
+            if (materialComp->material)
+                before = slotTexture(*materialComp->material, slot);
+        }
+    }
+}
+
+std::shared_ptr<Texture>& SetMaterialTextureCommand::slotTexture(Material& material, Slot slot)
+{
+    switch (slot)
+    {
+    case Slot::Albedo: return material.albedoMap;
+    case Slot::Normal: return material.normalMap;
+    case Slot::MetallicRoughness: return material.metallicRoughnessMap;
+    case Slot::Emissive: return material.emissiveMap;
+    case Slot::Ao: return material.aoMap;
+    }
+    return material.albedoMap;
+}
+
+void SetMaterialTextureCommand::writeState(const std::shared_ptr<Texture>& texture)
+{
+    if (!registry->valid(entity))
+        return;
+    auto* materialComp = registry->try_get<MaterialComponent>(entity);
+    if (materialComp == nullptr || !materialComp->material)
+        return;
+
+    Material& material = *materialComp->material;
+    slotTexture(material, slot) = texture;
+
+    if (scene == nullptr)
+        return;
+    DescriptorManager* descriptors = scene->getDescriptorManager();
+    if (descriptors == nullptr)
+        return;
+
+    // 槽位以 MaterialComponent 为准（push constant 里传的就是它）；
+    // 极端情况下没同步过，再退回 Material 自己记的那份。
+    const uint32_t materialSlot = materialComp->materialSetIndex != kInvalidMaterialSlot
+        ? materialComp->materialSetIndex
+        : material.descriptorSetIndex;
+    if (materialSlot == kInvalidMaterialSlot)
+        return;
+
+    descriptors->refreshMaterialTextures(materialSlot, material);
+}
+
+void SetMaterialTextureCommand::apply()
+{
+    writeState(after);
+}
+
+void SetMaterialTextureCommand::revert()
+{
+    writeState(before);
+}
+
+// ---------------------------------------------------------------------------
 // SetRenderTagCommand（E3）
 // ---------------------------------------------------------------------------
 SetRenderTagCommand::SetRenderTagCommand(entt::registry& registryArg, entt::entity entityArg,

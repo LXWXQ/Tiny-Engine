@@ -193,8 +193,19 @@ void AssetBrowserPanel::draw(EditorState& state)
             }
         }
 
+        // E6：拖到视口里就在落点生成实体（落点由 ViewportPanel 决定）。
+        // 载荷是绝对路径的字节串，ImGui 会自己拷一份，所以生命周期不用管。
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+        {
+            ImGui::SetDragDropPayload("TINY_ASSET_PATH", asset.absolutePath.c_str(),
+                                      asset.absolutePath.size() + 1);
+            ImGui::Text("%s", asset.displayName.c_str());
+            ImGui::TextDisabled("拖到视口里生成");
+            ImGui::EndDragDropSource();
+        }
+
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", asset.absolutePath.c_str());
+            ImGui::SetTooltip("%s (拖到视口可生成)", asset.absolutePath.c_str());
 
         ImGui::PopID();
     }

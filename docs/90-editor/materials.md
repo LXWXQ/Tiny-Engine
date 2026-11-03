@@ -176,3 +176,18 @@ dpdy.x -= round(dpdy.x);
 **踩过的坑**：一开始声明成结构体运行时数组 `readonly buffer { vec4 a; vec4 b; } factors[];`，glslang 生成 SPIR-V 时**漏掉了这个运行时数组的 `ArrayStride`**（`spirv-val` 也不报），驱动按 0 步长取值 —— 表现是滑杆完全没效果、Sponza 整片变黑。改成扁平 `vec4 factors[]`（stride 16）后正常。
 
 排查手法值得留着：先用常量下标读（`factors[0]` 能读到 → 绑定没问题），再用动态下标读（读到 0 → 步长或索引有问题）；再用颜色编码的探针分支（discard / 纯色）把着色器内部的值可视化。
+
+## 编辑器换贴图（E6）
+
+Inspector 的五行贴图不是只读预览，换图链路是：
+
+```
+TextureLibrary（列 Resources/Texture 下的候选）
+  -> Scene::loadMaterialTexture(path, srgb)          // 编辑器没有 Device，加载入口挂在 Scene
+  -> SetMaterialTextureCommand（记录前后两个 shared_ptr）
+  -> DescriptorManager::refreshMaterialTextures(slot, material)   // 重写材质 set 的 5 张图
+```
+
+`SetMaterialTextureCommand` 里 `slotTexture(Material&, Slot)` 是唯一一处 switch，apply/revert/UI 都调它 ——
+这样"撤销"和"第一次应用"走的是同一段代码，不会出现只改了一半的状态。材质槽位优先用
+`MaterialComponent::materialSetIndex`，无效时退回 `Material::descriptorSetIndex`。
