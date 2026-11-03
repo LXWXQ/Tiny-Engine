@@ -61,6 +61,7 @@ updated: 2026-11-03
 | 16 | arena 是两块大缓冲（F2-h 起按流送环尺寸算，半径 24 约 171 MB + 82 MB），不能增长；单块超过剩余容量时该 chunk 退回自有 buffer | 显存随半径平方增长，半径 32 就要 ~400 MB | 需要更大世界时改成分页/多块 arena |
 | 17 | 性能结论只有 Release 构建才算数：同一 2401 对象场景 `updateVisibility` 在 Debug 2.08 ms、Release 61 µs（`SpatialIndex::query` 时代差距约 100 倍） | 用 Debug 数字做容量决策会得出完全错误的瓶颈结论（「半径 24 只有 17 FPS」就是这么来的） | 所有性能验收都在 Release 跑（`--update-profile` 分段计时），Debug 只保证功能与验证层 0；文档里的 FPS 一律标注构建类型 |
 | 18 | 地形噪声锚点是 `float` 绝对值，1e6 量级量化步长约 0.06 | 极远处地形细节变粗（相邻 chunk 同网格，不会裂缝） | 噪声改 double 或分块重锚定时 |
+| 19 | 地形创建是同步的：`Scene::createTerrainEntity` → `buildTerrainModel(...)` 在一帧内跑完，B6 只加了"先画忙碌帧再执行"的两阶段提示（`advanceTerrainCreateRequest`），用户不会以为程序卡死，但长任务仍然阻塞帧 | 半径大或多块连建时会出现明显掉帧；`--update-profile` 能看到尖峰 | chunk 数量或分辨率再上一档时，把生成挪到 JobSystem 或分成多帧执行（编辑器侧两阶段入口已就位） |
 
 ## 3. 明确"不打算做"的
 

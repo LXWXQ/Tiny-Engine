@@ -6,6 +6,10 @@
 #include <backends/imgui_impl_vulkan.h>
 #include "Core/FrameInfo.h"
 
+// UX-19：把显示器/窗口的 content scale 折成字号与样式缩放因子。
+// 只放大不缩小（<1 会让字发虚），上限 3 倍。抽成自由函数便于自检。
+float computeUiScale(float contentScaleX, float contentScaleY);
+
 class ImGuiSystem
 {
 public:
@@ -27,6 +31,9 @@ public:
 	// Called when acquire fails before this ImGui frame can be rendered.
 	void discardFrame();
 
+	// UX-19：字号与样式缩放（100% 缩放的机器上恒为 1.0）。
+	float getUiScale() const { return uiScale; }
+
 private:
 	void renderPerformancePanel(float dt, const RenderTelemetry& telemetry, EngineSettings& settings);
 	void renderSSAOPanel(EngineSettings& settings);
@@ -40,4 +47,5 @@ private:
 	VkDescriptorPool imguiPool;
 	// ImGui 后端会保存这个指针，所以必须由我们持有到 shutdown
 	VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
+	float uiScale = 1.0f;
 };

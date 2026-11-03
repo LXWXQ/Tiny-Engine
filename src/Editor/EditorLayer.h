@@ -127,6 +127,8 @@ private:
 
     // Shared top-level Create menu entry. Uses CreateTerrainCommand and selects the result.
     entt::entity createTerrainFromUi();
+    // UX-08：登记一次地形创建（真正的 build 在下一帧的 beginFrame 里做）。
+    void requestTerrainCreate();
 
     // B-07: create a kinematic character at the camera's ground position.
     entt::entity createCharacterFromUi();

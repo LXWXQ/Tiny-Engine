@@ -107,13 +107,13 @@ updated: 2026-11-03
 | 编号 | 现象 | 证据 | 判据 | 状态 |
 |---|---|---|---|---|
 | UX-07 | ~~同一屏三种语言层级：按钮英文、tooltip 中文、状态栏中文；概念词不统一~~ | `EditorLayer.cpp` 工具栏 714 行起；状态栏 818 行起 | U7 | **fixed**（2026-11-03）：语言分层写进 ux-rules 的 U7（命令与提示中文、区域名与行业参数英文），词汇表收敛 gizmo / unsaved / selection；菜单、工具栏、状态栏同一套用词 |
-| UX-08 | 地形生成同步阻塞，无进度、不禁用按钮 | `createTerrainFromUi()` 完成后才记录 `lastGenerationMs` | U2、U6 | open |
+| ~~UX-08~~ | 地形生成同步阻塞，无进度、不禁用按钮 | `createTerrainFromUi()` 完成后才记录 `lastGenerationMs` | U2、U6 | **fixed**（2026-11-03）：两阶段请求 —— 入队当帧只画「地形生成中…」，下一帧才同步 build（`advanceTerrainCreateRequest`，自检 `terrain create request selfTest PASS`）；遗留：build 本身仍是同步的（见 tech-debt TD-25） |
 | UX-10 | 成功动作没有回执：创建成功、保存成功都只在 Console 留一行 | 同 UX-03 的 `pushLog(Info)` 调用 | U3 | **fixed**（2026-11-03）：`notifySuccess()` 给 2 秒 Toast（保存/打开/新建/创建地形与角色/删除/停止播放），并顺手清掉「最近错误」 |
 | UX-11 | ~~Console 无时间戳、无等级计数、无复制、无"仅看错误"快捷开关~~ | `ConsolePanel.cpp` 全文（约 70 行） | U6 | **fixed**（2026-11-03）：每行 HH:MM:SS 时间列（`LogEntry::time` + `currentLogClock()`）；Info/Warn/Error 各带计数；「仅错误」「全部」两个视图；「复制」导出当前可见行，与显示共用 `levelVisible()` 判据 |
 | UX-12 | 错误发生但 Console 关着时，界面上没有任何标记 | 无错误计数徽标；`state.log` 无未读概念 | U6 | **fixed**（2026-11-03）：`unreadErrors` + 工具栏红色「错误 N」徽标；本帧新产生的错误不算已读（`errorRaisedThisFrame`），Console 真正显示过之后才清零 |
-| UX-13 | ~~快捷键不可自定义，没有冲突检测，速查表与实际处理是两份代码~~ | `kShortcutEntries` 现在同时驱动 `handleShortcuts()` 与速查表（key/ctrl/shift/action）；键位文本由 `shortcutKeys()` 现算 | U1 | **fixed**（2026-11-03）：单一数据源；自检扫空项与键位冲突（`entries=18 conflicts=0`）；用户自定义键位另算一项 |
+| UX-13 | ~~快捷键不可自定义，没有冲突检测，速查表与实际处理是两份代码~~ | `kShortcutEntries` 现在同时驱动 `handleShortcuts()` 与速查表（key/ctrl/shift/action）；键位文本由 `shortcutKeys()` 现算 | U1 | **fixed**（2026-11-03）：单一数据源；自检扫空项与键位冲突（`entries=19 conflicts=0`）；用户自定义键位另算一项 |
 | UX-14 | ~~面板位置被 `ImGuiCond_Always` 钉死，用户拖不动~~ | `drawPanels()` 现在对所有面板都用 `layoutNeedsReset ? Always : FirstUseEver` | U6 | **fixed**（2026-11-03）：Viewport 也能拖动/缩放，位置记进 `config/imgui.ini`；`View -> Reset Layout` 重新铺一遍 |
-| UX-19 | 窗口固定 1920x1080 创建，不读显示器工作区；字体固定 16px，无 DPI 缩放；面板宽度硬编码 | `src/Core/FrameInfo.h:11-12`、`src/Core/Application.cpp:980`、`src/Core/ImGuiSystem.cpp:60`、`drawPanels()` | U10 | 窗口：fixed；字体缩放：open |
+| ~~UX-19~~ | 窗口固定 1920x1080 创建，不读显示器工作区；字体固定 16px，无 DPI 缩放；面板宽度硬编码 | `src/Core/FrameInfo.h:11-12`、`src/Core/Application.cpp:980`、`src/Core/ImGuiSystem.cpp:60`、`drawPanels()` | U10 | 窗口：fixed；字体缩放：open **fixed**（2026-11-03）：`computeUiScale` + `ScaleAllSizes` + 字号 16×scale，编辑器布局常量同因子放大；自检 `[Window] ui scale selfTest PASS` |
 
 ### UX-09 补充
 
@@ -140,8 +140,10 @@ updated: 2026-11-03
 判定方法（窗口部分已修，2026-11-03）：启动日志里应出现
 `[Window] sizing | workarea=<w>x<h> scale=<sx>x<sy> -> <w>x<h> (fits|clamped)`；
 `FirstApp::computeWindowSize` 按工作区 92% 收敛，1920x1080 的固定尺寸在
-1280x720 工作区会变成 1177x662。仍 open 的是**字体固定 16px、不随 DPI 缩放**：
-150% 缩放下中文会偏小。回归：`b1-window-fit`。
+1280x720 工作区会变成 1177x662。字体部分也已在 B6 收掉：`computeUiScale()` 取两轴较大值（< 1 夹到 1、> 3 夹到 3），
+`ImGuiSystem` 按 `16 × scale` 加载字体并 `ScaleAllSizes(uiScale)`，编辑器内的
+工具栏/状态栏高度与侧栏宽度用 `uiScaleFactor()`（由字号倒推）同因子放大。
+回归：`b1-window-fit`（含 `[Window] ui scale selfTest PASS`）。
 
 ## 5. P2：打磨项
 

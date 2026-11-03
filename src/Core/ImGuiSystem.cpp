@@ -6,6 +6,14 @@
 #include <filesystem>
 #include <iostream>
 
+float computeUiScale(float contentScaleX, float contentScaleY)
+{
+	const float scale = contentScaleX > contentScaleY ? contentScaleX : contentScaleY;
+	if (!(scale > 1.0f))          // NaN 与小屏都落到 1.0
+		return 1.0f;
+	return scale > 3.0f ? 3.0f : scale;
+}
+
 ImGuiSystem::ImGuiSystem(GLFWwindow* window, Device& device, VkFormat swapchainFormat, uint32_t imageCount, VkCommandPool commandPool)
 	: vulkanDevice(device), swapchainFormat(swapchainFormat)
 {
@@ -42,6 +50,20 @@ ImGui::GetIO().IniFilename = TINY_IMGUI_INI_PATH;
 
 ImGui::StyleColorsDark();
 
+	// UX-19：150% 缩放的屏幕上固定 16px 的字会偏小，面板/内边距也跟着挤。
+	// 做法是"字体按 scale 加载 + 样式尺寸整体 ScaleAllSizes"，两者必须同一个因子，
+	// 否则行高与控件尺寸对不上。100% 的机器上这段完全等价于旧行为。
+	{
+		float scaleX = 1.0f;
+		float scaleY = 1.0f;
+		glfwGetWindowContentScale(window, &scaleX, &scaleY);
+		uiScale = computeUiScale(scaleX, scaleY);
+		std::cout << "[ImGui] ui scale | content=" << scaleX << "x" << scaleY
+		          << " -> " << uiScale << " (font " << (16.0f * uiScale) << " px)" << std::endl;
+		if (uiScale > 1.0f)
+			ImGui::GetStyle().ScaleAllSizes(uiScale);
+	}
+
 	// E4-c：中文字形。ImGui 自带字体只有 ASCII，编辑器里的中文日志 / 提示 / 模态框
 	// 会全部显示成 '?'。这里从系统字体里挑一个装进去（不随仓库分发，避免字体授权问题），
 	// 找不到就保持内置字体 —— 英文界面照常可用，只是中文变问号。
@@ -57,7 +79,7 @@ ImGui::StyleColorsDark();
 		ImFontConfig fontConfig;
 		fontConfig.OversampleH = 2;
 		fontConfig.PixelSnapH = true;
-		if (ImGui::GetIO().Fonts->AddFontFromFileTTF(candidate, 16.0f, &fontConfig) != nullptr)
+		if (ImGui::GetIO().Fonts->AddFontFromFileTTF(candidate, 16.0f * uiScale, &fontConfig) != nullptr)
 		{
 			std::cout << "[ImGui] font: " << candidate << std::endl;
 			break;

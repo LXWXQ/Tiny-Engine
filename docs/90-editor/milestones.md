@@ -129,7 +129,7 @@ updated: 2026-11-03
 - `kShortcutEntries` 从"给文档看的表"变成唯一数据源：`key` / `ctrl` / `shift` / `ShortcutAction`，
   `handleShortcuts()` 遍历分发（修饰键精确匹配，一帧只做一个动作），速查表键位列由
   `shortcutKeys()` 现算（UX-13）。
-- 自检扫空项、键位标签、三元组冲突，打印 `[Editor] shortcut sheet selfTest PASS | entries=18 conflicts=0`。
+- 自检扫空项、键位标签、三元组冲突，打印 `[Editor] shortcut sheet selfTest PASS | entries=19 conflicts=0`。
 - `drawPanels()` 里 Viewport 不再用 `ImGuiCond_Always`，所有面板统一
   `layoutNeedsReset ? Always : FirstUseEver`：用户可拖动/缩放，`View -> Reset Layout` 复位（UX-14）。
 - 清掉 `config/imgui.ini` 里一条 `[Window][Render] ... Collapsed=1` 的旧记录（它会让渲染设置面板
@@ -154,3 +154,17 @@ updated: 2026-11-03
 - 自检：`[Editor] status bar selfTest PASS | counts k/M + log clock HH:MM:SS`
   （`formatCount(42)="42"`、`(270459)="270.5k"`、`(2704590)="2.7M"`，`currentLogClock()` 长度 8）。
 - 回归：`b5-language-console`（`[Editor] status bar selfTest PASS`）。
+
+## B6：收掉最后三条 UX 项（Console 搜索 / UX-08 / UX-19）
+
+- **Console 关键字搜索**：`matchesSearch()`（空串全匹配、ASCII 大小写折叠），与级别开关、复制共用判据；
+  `Ctrl+F` 进搜索框（快捷键表 19 条），无匹配时正文给出提示而不是空白；自检
+  `[Editor] console filter selfTest PASS | level switches + case-insensitive search`。
+- **UX-08 地形创建两阶段**：`requestTerrainCreate()` 只入队，`advanceTerrainCreateRequest()` 在下一帧才执行 build，
+  于是先画出一帧「地形生成中…」（工具栏黄字 + Toast + 视口按钮旁的「生成中…」）；
+  pending 期间重复点击不叠地形；自检 `[Editor] terrain create request selfTest PASS | busy frame first, build on the next`。
+  遗留：build 仍是同步的（tech-debt 第 19 条）。
+- **UX-19 字体与布局 DPI**：`computeUiScale()`（取较大轴、<1 夹 1、>3 夹 3）+ `Style.ScaleAllSizes` +
+  字体 `16 × scale`；编辑器用 `uiScaleFactor()`（由字号倒推）放大工具栏/状态栏高度与侧栏宽度；
+  自检 `[Window] ui scale selfTest PASS | 1x1 -> 1, 1.5x1.5 -> 1.5, 0.9x0.9 -> 1, 4x4 -> 3`。
+- 回归：`b6-console-search` / `b2-empty-state` 两条新用例；编辑器自检 0/0、引擎 60 帧 0/0、DocCheck 通过。

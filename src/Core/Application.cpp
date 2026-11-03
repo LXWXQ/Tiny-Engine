@@ -1603,6 +1603,20 @@ int FirstApp::runHeadlessSelfTest(int frames)
 			throw std::runtime_error("window fit selfTest failed");
 		}
 		std::cout << "[Window] fit selfTest PASS | 1280x720 -> 1177x662, 2560x1440 -> 1920x1080" << std::endl;
+
+		// UX-19：字体与样式的缩放因子 —— 只放大不缩小，上限 3 倍。
+		const float scaleOne = computeUiScale(1.0f, 1.0f);
+		const float scaleOneHalf = computeUiScale(1.5f, 1.5f);
+		const float scaleBelowOne = computeUiScale(0.9f, 0.9f);
+		const float scaleTooBig = computeUiScale(4.0f, 4.0f);
+		if (scaleOne != 1.0f || scaleOneHalf != 1.5f || scaleBelowOne != 1.0f || scaleTooBig != 3.0f)
+		{
+			std::cout << "[Window] ui scale selfTest FAIL | 1x1 -> " << scaleOne
+				<< " 1.5x1.5 -> " << scaleOneHalf << " 0.9x0.9 -> " << scaleBelowOne
+				<< " 4x4 -> " << scaleTooBig << std::endl;
+			throw std::runtime_error("ui scale selfTest failed");
+		}
+		std::cout << "[Window] ui scale selfTest PASS | 1x1 -> 1, 1.5x1.5 -> 1.5, 0.9x0.9 -> 1, 4x4 -> 3" << std::endl;
 	}
 
 	// UX-04：致命错误落地文件 —— 真写一次再读回，确认「双击启动看不到控制台」时还有线索。

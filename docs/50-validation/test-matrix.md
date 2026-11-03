@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **56 项引擎用例 + 2 项工具自测 = 58 项**；
+`tools/Validate.ps1` 默认跑 **57 项引擎用例 + 2 项工具自测 = 59 项**；
 加 `-EnableProfiling` 时多一项（37 + 2 = 39）。
 
 ## 1. 每项的判据（统一）
@@ -85,6 +85,7 @@ updated: 2026-11-03
 | 54 | `b3-notices` | 通知状态机：Toast 衰减、错误摘要、未读徽标、打开失败重试状态 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] notices selfTest PASS` | 本帧新错误不算已读；`notifySuccess` 清摘要；`failedOpenPath` 可清空 |
 | 55 | `b4-shortcuts` | 快捷键单一数据源：条目数、键位标签、键位冲突检测 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] shortcut sheet selfTest PASS`、`conflicts=0` | `kShortcutEntries` 同时驱动速查表与分发；`Ctrl+Z` 与 `Ctrl+Shift+Z` 是两条精确匹配的条目 |
 | 56 | `b5-language-console` | 状态栏数量缩写 + Console 时间戳：`formatCount()` 的 k/M 边界与 `HH:MM:SS` 形状 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] status bar selfTest PASS` | 语言分层（B5/UX-07）、Console 时间列与计数（UX-11）、状态栏三段（UX-15）、诊断入口（UX-18） |
+| 57 | `b6-console-search` | Console 关键字搜索（`matchesSearch` 的大小写/空串/中文）+ 地形创建两阶段请求 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] console filter selfTest PASS`、`[Editor] terrain create request selfTest PASS`、`entries=19 conflicts=0` | UX-11 续（Console 搜索）、UX-08（两阶段提示） |
 
 ## 3. 工具自测
 

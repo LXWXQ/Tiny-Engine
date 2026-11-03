@@ -268,6 +268,8 @@ $tests = @(
        MustContain = @("render settings selfTest PASS") },
     @{ Name = "b3-notices"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] notices selfTest PASS") },
+    @{ Name = "b6-console-search"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("[Editor] console filter selfTest PASS", "[Editor] terrain create request selfTest PASS", "entries=19 conflicts=0") },
     @{ Name = "b5-language-console"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] status bar selfTest PASS") },
     @{ Name = "b4-shortcuts"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

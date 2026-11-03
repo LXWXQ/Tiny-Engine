@@ -90,6 +90,13 @@ struct EditorState
     size_t lastErrorLogIndex = 0;   // 指向 log 里的下标，Console 用它高亮
     uint32_t unreadErrors = 0;
     bool focusConsoleRequest = false;
+    // B6：Ctrl+F 把焦点放进 Console 的搜索框（只请求一次）。
+    bool consoleSearchFocusRequest = false;
+    // UX-08：地形创建是同步的（一次 build 会占满一帧），用两阶段请求：
+    // 点击当帧只登记，下一帧把「生成中」画出来并 present，再下一帧才真正执行。
+    // 这样用户至少看得到"它在干活"，而不是界面莫名卡住。
+    bool terrainCreatePending = false;
+    int terrainCreateWaitFrames = 0;
     // 本帧刚产生的错误不能算「已读」：Console 画出来不代表用户看到了新加的那一行。
     // 每帧开头 tickNotices() 清掉，notify(Error) 置位。
     bool errorRaisedThisFrame = false;

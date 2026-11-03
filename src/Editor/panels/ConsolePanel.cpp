@@ -3,6 +3,8 @@
 
 #include <imgui.h>
 
+#include <cstring>
+#include <iostream>
 #include <string>
 
 namespace editor
@@ -27,7 +29,65 @@ bool levelVisible(const LogEntry::Level level, bool showInfo, bool showWarning, 
     return true;
 }
 
+// B6：关键字过滤。只做 ASCII 大小写折叠 —— 中文没有大小写，
+// 逐字节比较就够，硬上 locale 反而会拖慢每帧的过滤。
+bool matchesSearch(const LogEntry& entry, const char* needle)
+{
+    if (needle == nullptr || needle[0] == 0)
+        return true;
+    const std::string haystack = entry.text;
+    const size_t needleLength = std::strlen(needle);
+    if (needleLength > haystack.size())
+        return false;
+    for (size_t i = 0; i + needleLength <= haystack.size(); ++i)
+    {
+        size_t j = 0;
+        for (; j < needleLength; ++j)
+        {
+            unsigned char a = static_cast<unsigned char>(haystack[i + j]);
+            unsigned char b = static_cast<unsigned char>(needle[j]);
+            if (a >= 'A' && a <= 'Z')
+                a = static_cast<unsigned char>(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z')
+                b = static_cast<unsigned char>(b - 'A' + 'a');
+            if (a != b)
+                break;
+        }
+        if (j == needleLength)
+            return true;
+    }
+    return false;
+}
+
 } // namespace
+
+bool ConsolePanel::selfTest()
+{
+    LogEntry info;
+    info.level = LogEntry::Level::Info;
+    info.text = "Terrain rebuilt in 12.4 ms";
+    LogEntry error;
+    error.level = LogEntry::Level::Error;
+    error.text = "打开失败：cannot open scene";
+
+    const bool filtersHold = levelVisible(LogEntry::Level::Info, true, false, false) &&
+                             !levelVisible(LogEntry::Level::Info, false, false, true) &&
+                             levelVisible(LogEntry::Level::Error, false, false, true);
+    const bool searchCaseInsensitive = matchesSearch(info, "terrain") &&
+                                       matchesSearch(info, "REBUILT") &&
+                                       !matchesSearch(info, "missing");
+    const bool searchEmptyMatchesAll = matchesSearch(error, "");
+    const bool searchUnicode = matchesSearch(error, "打开失败") && !matchesSearch(error, "打开成功");
+    if (!filtersHold || !searchCaseInsensitive || !searchEmptyMatchesAll || !searchUnicode)
+    {
+        std::cerr << "[Editor] console filter selfTest FAIL | level=" << filtersHold
+                  << " case=" << searchCaseInsensitive << " empty=" << searchEmptyMatchesAll
+                  << " unicode=" << searchUnicode << std::endl;
+        return false;
+    }
+    std::cout << "[Editor] console filter selfTest PASS | level switches + case-insensitive search" << std::endl;
+    return true;
+}
 
 void ConsolePanel::draw(EditorState& state)
 {
@@ -80,6 +140,22 @@ void ConsolePanel::draw(EditorState& state)
         showError = true;
     }
 
+    ImGui::SameLine(0.0f, 16.0f);
+    ImGui::SetNextItemWidth(200.0f);
+    if (state.consoleSearchFocusRequest)
+    {
+        ImGui::SetKeyboardFocusHere();
+        state.consoleSearchFocusRequest = false;
+    }
+    ImGui::InputTextWithHint("##console_search", "搜索日志（Ctrl+F）", searchBuffer,
+                             IM_ARRAYSIZE(searchBuffer));
+    if (searchBuffer[0] != 0)
+    {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("清除搜索"))
+            searchBuffer[0] = 0;
+    }
+
     ImGui::SameLine();
     ImGui::Checkbox("自动滚动", &autoScroll);
 
@@ -91,6 +167,8 @@ void ConsolePanel::draw(EditorState& state)
         for (const LogEntry& entry : state.log)
         {
             if (!levelVisible(entry.level, showInfo, showWarning, showError))
+                continue;
+            if (!matchesSearch(entry, searchBuffer))
                 continue;
             text += entry.time;
             text += ' ';
@@ -117,11 +195,15 @@ void ConsolePanel::draw(EditorState& state)
 
     // B3：循环带下标，才能把「最近一次错误」那一行高亮出来 ——
     // 用户从状态栏/Toast 点进来时，要能一眼看到是哪一行。
+    size_t visibleLines = 0;
     for (size_t index = 0; index < state.log.size(); ++index)
     {
         const LogEntry& entry = state.log[index];
         if (!levelVisible(entry.level, showInfo, showWarning, showError))
             continue;
+        if (!matchesSearch(entry, searchBuffer))
+            continue;
+        ++visibleLines;
 
         ImVec4 color(1.0f, 1.0f, 1.0f, 1.0f);
         if (entry.level == LogEntry::Level::Warning)
@@ -145,6 +227,9 @@ void ConsolePanel::draw(EditorState& state)
             ImGui::TextColored(color, "%s", entry.text.c_str());
         }
     }
+
+    if (visibleLines == 0 && !state.log.empty())
+        ImGui::TextDisabled("没有匹配的日志行（检查级别开关或搜索词）。");
 
     if (autoScroll && state.scrollLogToBottom)
     {

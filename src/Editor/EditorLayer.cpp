@@ -87,6 +87,12 @@ EditorPanel* EditorLayer::findPanel(const char* panelName) const
     return it == panelsByName.end() ? nullptr : it->second;
 }
 
+namespace
+{
+// UX-08：定义在下方匿名 namespace 里，这里先声明，beginFrame 要用。
+bool advanceTerrainCreateRequest(bool& pending, int& waitFrames);
+} // namespace
+
 void EditorLayer::beginFrame(float dt, bool viewportHovered)
 {
     if (!initialized || !active)
@@ -101,6 +107,9 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
     state.wantsKeyboard = io.WantTextInput;
 
     updateWindowTitle();
+
+    if (advanceTerrainCreateRequest(state.terrainCreatePending, state.terrainCreateWaitFrames))
+        createTerrainFromUi();
 
     handleShortcuts();
     updatePlayState(dt);
@@ -292,6 +301,7 @@ enum class ShortcutAction
     Stop,
     ToggleShortcutSheet,
     CloseShortcutSheet,
+    FocusConsoleSearch,
 };
 
 struct ShortcutEntry
@@ -324,6 +334,7 @@ const ShortcutEntry kShortcutEntries[] =
     { "播放", ImGuiKey_F7, false, false, ShortcutAction::Stop, "停止并恢复快照" },
     { "视图", ImGuiKey_Slash, false, true, ShortcutAction::ToggleShortcutSheet, "打开 / 关闭本速查表（Shift+/ 就是 ?）" },
     { "视图", ImGuiKey_Escape, false, false, ShortcutAction::CloseShortcutSheet, "关闭速查表" },
+    { "视图", ImGuiKey_F, true, false, ShortcutAction::FocusConsoleSearch, "跳到 Console 的日志搜索框" },
 };
 
 constexpr size_t kShortcutEntryCount = sizeof(kShortcutEntries) / sizeof(kShortcutEntries[0]);
@@ -427,6 +438,13 @@ void EditorLayer::handleShortcuts()
         case ShortcutAction::CloseShortcutSheet:
             if (showShortcutSheet)
                 showShortcutSheet = false;
+            break;
+        case ShortcutAction::FocusConsoleSearch:
+            if (EditorPanel* console = findPanel("Console"); console != nullptr)
+            {
+                console->visible = true;
+                state.consoleSearchFocusRequest = true;
+            }
             break;
         }
         return;      // 一帧只处理一个快捷键，避免多个动作互相踩
@@ -613,8 +631,9 @@ void EditorLayer::drawMenuBar()
 
     if (ImGui::BeginMenu("创建"))
     {
-        if (ImGui::MenuItem("地形"))
-            createTerrainFromUi();
+        if (ImGui::MenuItem("地形", nullptr, false,
+                            !state.terrainCreatePending && state.services.scene != nullptr))
+            requestTerrainCreate();
         if (ImGui::MenuItem("角色"))
             createCharacterFromUi();
         ImGui::EndMenu();
@@ -722,6 +741,16 @@ entt::entity EditorLayer::createCharacterFromUi()
     return entity;
 }
 
+void EditorLayer::requestTerrainCreate()
+{
+    if (state.terrainCreatePending)
+        return;      // 已经排队：连点不会叠出两块地形
+    state.terrainCreatePending = true;
+    state.terrainCreateWaitFrames = 0;
+    // 这条提示是"已经收下请求"，不是"已经生成完"；完成时还会再来一条带尺寸与耗时的。
+    state.notify(LogEntry::Level::Info, "正在生成地形…");
+}
+
 entt::entity EditorLayer::createTerrainFromUi()
 {
     if (!state.services.scene || !state.services.registry)
@@ -756,8 +785,37 @@ namespace
 {
 // E5：工具栏与状态栏的固定高度。面板默认矩形、视口矩形都要减掉它们，
 // 所以必须是常量 —— 让它们按内容自适应的话，视口会跟着文字宽度抖动。
+// UX-08：地形创建的两阶段请求。返回 true 表示"这一帧该真正执行了"。
+// 第 1 次调用只把 waitFrames 抬到 1（这一帧用于把"生成中"画出来并 present），
+// 第 2 次调用才返回 true 并清空状态。抽成自由函数是为了自检能直接驱动它。
+bool advanceTerrainCreateRequest(bool& pending, int& waitFrames)
+{
+    if (!pending)
+        return false;
+    if (waitFrames < 1)
+    {
+        ++waitFrames;
+        return false;
+    }
+    pending = false;
+    waitFrames = 0;
+    return true;
+}
+
 constexpr float kToolbarHeight = 34.0f;
 constexpr float kStatusBarHeight = 26.0f;
+
+// UX-19：布局常量要跟着字体一起放大。字体是按 content scale 加载的，
+// 反过来用字号倒推缩放因子，就不用把 uiScale 从 ImGuiSystem 一路传进来。
+// 100% 缩放的机器上恒为 1.0，布局与旧版本逐像素一致。
+float uiScaleFactor()
+{
+    const float size = ImGui::GetFontSize();
+    return size > 16.0f ? size / 16.0f : 1.0f;
+}
+
+float toolbarHeight() { return kToolbarHeight * uiScaleFactor(); }
+float statusBarHeight() { return kStatusBarHeight * uiScaleFactor(); }
 
 const ImGuiWindowFlags kBarFlags =
     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
@@ -807,7 +865,7 @@ void EditorLayer::drawToolbar()
     // 注意：BeginMainMenuBar 已经把主视口的 WorkPos 下推了菜单栏高度，
     // 这里再减一次就会把工具栏顶到面板底下去。
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, kToolbarHeight), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, toolbarHeight()), ImGuiCond_Always);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 4.0f));
@@ -897,6 +955,14 @@ void EditorLayer::drawToolbar()
             ImGui::SetTooltip("Ctrl+Y");
         ImGui::SameLine();
 
+        // UX-08：同步生成会占满一帧，忙碌提示必须在此之前就画出来（两阶段请求）。
+        if (state.terrainCreatePending)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.35f, 1.0f), "地形生成中…");
+            ImGui::SameLine();
+        }
+
         // B3 / UX-12：Console 关着时，错误必须有可见入口。徽标常驻工具栏右侧。
         if (state.unreadErrors > 0)
         {
@@ -955,7 +1021,7 @@ void EditorLayer::drawToast()
     const float maxWidth = viewport->WorkSize.x * 0.5f;
     ImGui::SetNextWindowPos(
         ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-               viewport->WorkPos.y + viewport->WorkSize.y - kStatusBarHeight - 12.0f),
+               viewport->WorkPos.y + viewport->WorkSize.y - statusBarHeight() - 12.0f),
         ImGuiCond_Always, ImVec2(0.5f, 1.0f));
     ImGui::SetNextWindowBgAlpha(0.92f);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -1040,9 +1106,9 @@ void EditorLayer::drawOpenFailurePrompt()
 void EditorLayer::drawStatusBar()
 {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float barY = viewport->WorkPos.y + viewport->WorkSize.y - kStatusBarHeight;
+    const float barY = viewport->WorkPos.y + viewport->WorkSize.y - statusBarHeight();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, barY), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, kStatusBarHeight), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, statusBarHeight()), ImGuiCond_Always);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 3.0f));
     if (ImGui::Begin("##statusbar", nullptr, kBarFlags))
@@ -1192,13 +1258,14 @@ void EditorLayer::drawPanels()
     // 正确做法：在**每个面板 Begin 之前紧邻**设置它自己的矩形。
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    const float leftWidth = 280.0f;
-    const float rightWidth = 340.0f;
+    // UX-19：侧栏宽度也跟字体缩放走，150% 下中文才不会被挤成两行。
+    const float leftWidth = 280.0f * uiScaleFactor();
+    const float rightWidth = 340.0f * uiScaleFactor();
     const float bottomHeight = 200.0f;
 
-    const float top = viewport->WorkPos.y + kToolbarHeight;
+    const float top = viewport->WorkPos.y + toolbarHeight();
     const float availableWidth = viewport->WorkSize.x;
-    const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBarHeight;
+    const float availableHeight = viewport->WorkSize.y - toolbarHeight() - statusBarHeight();
 
     const ImGuiCond cond = layoutNeedsReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
 
@@ -1774,6 +1841,31 @@ bool EditorLayer::selfTest()
     // ---- 0a) E5-b：渲染设置面板的输入夹取（纯函数） ----
     if (!RenderSettingsPanel::selfTest())
         return false;
+
+    // ---- 0ab) B6：Console 过滤判据（级别开关 + 关键字大小写折叠） ----
+    if (!ConsolePanel::selfTest())
+        return false;
+
+    // ---- 0ac) B6：地形创建的两阶段请求（先画忙碌帧，再执行） ----
+    {
+        bool pending = true;
+        int waitFrames = 0;
+        const bool firstCallRunsNow = advanceTerrainCreateRequest(pending, waitFrames);
+        const bool firstFrameStillQueued = pending && waitFrames == 1;
+        const bool secondCallRunsNow = advanceTerrainCreateRequest(pending, waitFrames);
+        const bool clearedAfterRun = !pending && waitFrames == 0;
+        const bool idleStaysIdle = !advanceTerrainCreateRequest(pending, waitFrames);
+        if (firstCallRunsNow || !firstFrameStillQueued || !secondCallRunsNow ||
+            !clearedAfterRun || !idleStaysIdle)
+        {
+            std::cerr << "[Editor] terrain create request selfTest FAIL | run1=" << firstCallRunsNow
+                      << " queued=" << firstFrameStillQueued << " run2=" << secondCallRunsNow
+                      << " cleared=" << clearedAfterRun << " idle=" << idleStaysIdle << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] terrain create request selfTest PASS | busy frame first, build on the next"
+                  << std::endl;
+    }
 
     // ---- 0aa) B2：空状态判据（UX-01）。天空盒与相机不算内容，地形 chunk 算。 ----
     {

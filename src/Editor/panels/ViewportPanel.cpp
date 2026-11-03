@@ -224,20 +224,14 @@ void ViewportPanel::draw(EditorState& state)
         ImGui::Spacing();
         ImGui::TextDisabled("下一步：双击左侧 Assets 里的模型，或用下面的按钮先造一块地形。");
         ImGui::Spacing();
+        // UX-08：这里不直接建地形 —— 交给 EditorLayer 的两阶段请求，
+        // 先把"生成中"画出来，下一帧再真正 build（同样一条逻辑覆盖菜单与快捷键）。
         if (ImGui::Button("创建地形"))
+            state.terrainCreatePending = true;
+        if (state.terrainCreatePending)
         {
-            terrain::TerrainConfig config;
-            const entt::entity created = createTerrainThroughCommand(
-                *state.services.registry, *state.services.scene, state.commands, config, "Terrain");
-            if (created != entt::null)
-            {
-                state.selection.select(created);
-                state.markDirty();
-            }
-            else
-            {
-                state.pushLog(LogEntry::Level::Error, "[Editor] create terrain failed");
-            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("生成中…");
         }
         ImGui::SameLine();
         if (ImGui::Button("创建空对象"))

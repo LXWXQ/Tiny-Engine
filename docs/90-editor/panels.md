@@ -272,6 +272,36 @@ const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBar
 - 「复制」把**当前可见的**行拼成 `时间 正文` 写入剪贴板 —— 与显示共用同一个 `levelVisible()` 判据，绝不出现「看到的和复制的不一样」。
 - `清空` 与 `自动滚动` 沿用原语义；清空时同时清「最近错误」摘要与未读计数。
 
+## Console 搜索（B6 / UX-11 续）
+
+Console 顶部在「全部」按钮右侧有搜索框（占位文本 `搜索日志（Ctrl+F）`，宽度 200px），
+`Ctrl+F` 会把焦点直接送进来。
+
+- 判据是纯函数 `matchesSearch(const LogEntry&, const char* needle)`：空串匹配全部；
+  非空时逐字节做 ASCII 大小写折叠的子串比较（中文按字节比较，不走 locale）——
+  所以 `打开失败` 能命中，`打开成功` 不会。
+- 与级别开关是**与**关系，和「复制」共用同一组判据：复制出去的就是屏幕上看见的行。
+- 搜索词非空时出现「清除搜索」；一行都没匹配上时正文区给出提示，而不是留一片空白。
+
+自检 `ConsolePanel::selfTest()` 覆盖级别三态、大小写、空串、中文四组，
+打印 `[Editor] console filter selfTest PASS | level switches + case-insensitive search`。
+
+## 地形创建的两阶段提示（B6 / UX-08）
+
+`Scene::createTerrainEntity` → `buildTerrainModel(...)` 是同步的，一次 build 会占满一帧。
+真正异步要拆渲染侧的生成流程，这一批只解决"用户看不见它在干活"：
+
+- 请求先入队：`EditorState::terrainCreatePending` + `terrainCreateWaitFrames`，
+  辅助函数 `advanceTerrainCreateRequest(pending, waitFrames)` 返回"这一帧该执行了吗"。
+- `Q_beginFrame` 里先 tick 一次：入队当帧返回 false（只画忙碌），下一帧才真正建地形
+  —— 于是用户至少能看到一帧"地形生成中…"。
+- 入口三处都走 `requestTerrainCreate()`：`Create -> 地形` 菜单、视口空状态卡、
+  工具栏忙碌提示（黄字「地形生成中…」，在错误徽标之前）。
+- 重复点击不会叠出两块地形（pending 期间直接 return）。
+- 自检打印 `[Editor] terrain create request selfTest PASS | busy frame first, build on the next`。
+
+遗留：地形生成仍然是同步的，chunk 数量再上一档就要挪到后台线程或分帧。
+
 ## 状态栏三段（B5 / UX-15）
 
 `EditorLayer::drawStatusBar()`：
@@ -374,7 +404,7 @@ struct ShortcutEntry
 - 速查表的键位列由 `shortcutKeys(entry)` 现算（`Ctrl+` / `Shift+` + `ImGui::GetKeyName`），
   不另存字符串 —— 以前速查表写「Ctrl+D」、代码里判断 `ImGuiKey_D`，两边漂移过。
 - `EditorLayer::selfTest()` 扫描这张表：条目数 ≥ 12、分组与描述非空、键位标签非空、
-  (key, ctrl, shift) 三元组不重复，打印 `[Editor] shortcut sheet selfTest PASS | entries=18 conflicts=0`。
+  (key, ctrl, shift) 三元组不重复，打印 `[Editor] shortcut sheet selfTest PASS | entries=19 conflicts=0`。
 - `?` 就是 `Shift+/`：表里存的是 `ImGuiKey_Slash + shift`，所以显示成 `Shift+Slash`，
   描述里补一句「（Shift+/ 就是 ?）」。
 
