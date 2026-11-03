@@ -114,10 +114,19 @@ B5 依赖 B4 的菜单结构（术语统一要在入口确定之后做）。
 
 ### B1
 
-```powershell
-.\build\Debug\TinyEditor.exe --help          # 输出分组参数表，退出码 0
-.\build\Debug\TinyEditor.exe --not-a-flag    # 输出 unknown argument，退出码 2
-```
+这两条已经进回归（`tools/Validate.ps1` 的 `b1-help` / `b1-unknown-arg`），判据写在用例里：
+
+| 用例 | 命令 | 期望 |
+|---|---|---|
+| `b1-help` | `TinyEngine.exe --help` | 退出码 0；stdout 有 `--selftest [N]` 等分组表；不创建窗口/设备 |
+| `b1-unknown-arg` | `TinyEngine.exe --not-a-flag` | 退出码 2；stderr 有 `unknown argument: --not-a-flag`；stdout 保持干净 |
+
+错误路径用例靠三个开关给基线开口子：`ExpectedExitCode`、`AllowStderr`、`SkipValidationMarker`。
+默认仍然是「退出码 0 + stderr 0 字节」，其余用例没有放宽。
+
+实现注意：`--selftest` 的帧数**不是**用 `++i` 消费的（它是唯一一个），所以「未知参数」检测不能
+简单补一个 `else` —— 否则 `--selftest 60` 里的 `60` 会被判成未知参数，整套回归立刻全红。
+现在的做法是一个一次性标志（`selfTestFramesPending`）先放行它。
 
 再加两条人工项：
 
@@ -181,6 +190,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\DocCheck.ps1
 | 删除或放宽自检断言 | 断言是唯一能挡住"改好了但改坏了"的东西 |
 | 用 `ImGui::Text(userString)` 直接打印可变字符串 | 格式串漏洞；必须 `TextUnformatted` 或 `Text("%s", s)` |
 | 硬编码绝对路径 | 换机器即失效；用 `TINY_RESOURCE_DIR` 等编译期常量 |
+| 在未知参数/帮助路径上创建窗口或设备 | 参数错误必须立刻退（退出码 2），否则用户看到的是"程序启动了但参数没生效" |
 
 ## 8. 证据要求
 

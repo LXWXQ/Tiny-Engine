@@ -4,7 +4,7 @@
 重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
 
 - 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> Bloom -> Present(ACES+gamma+ImGui)`
-- 一条命令完成：依赖准备 -> 全新 configure/build -> 51 项回归
+- 一条命令完成：依赖准备 -> 全新 configure/build -> 53 项回归
 - 验收基线：**退出码 0** + **stderr 0 字节** + `[Validation] errors=0 warnings=0`
 
 > 本文件是仓库根目录**唯一**的文档。所有细节在 [`docs/`](docs/README.md) 下，按类型分层。
@@ -120,7 +120,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/20-pipeline/`](docs/20-pipeline/README.md) | Pass 顺序、G-Buffer/中间目标、IBL、Shader 清单 | 改 `src/Render/` 或 `shaders/` |
 | [`docs/30-systems/`](docs/30-systems/README.md) | ECS/场景、JobSystem、配置、ImGui | 改 `src/Scene/`、`src/Core/` 对应模块 |
 | [`docs/40-build/`](docs/40-build/README.md) | 依赖版本、构建运行、排障 | 构建失败 / 换机器 |
-| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、51 项回归矩阵、验收标准 | 加测试 / 定位回归 |
+| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、53 项回归矩阵、验收标准 | 加测试 / 定位回归 |
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
 | [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
@@ -153,7 +153,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 
 | 项 | 值 |
 |---|---|
-| 回归 | `tools/Validate.ps1`：**51 项全 PASS**，stderr 全 0 字节 |
+| 回归 | `tools/Validate.ps1`：**53 项全 PASS**，stderr 全 0 字节 |
 | 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |
 | 场景 | Sponza：103 个组 + 天空盒；CPU 路径 `draw calls 104`，合并模式 `draw calls 2`（相机朝向 Sponza 时） |
 | 绑定 | `desc binds 2`（Set0/1/2 + Set3 实例 SSBO；bindless 生效） |

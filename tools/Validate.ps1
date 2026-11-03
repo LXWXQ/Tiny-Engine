@@ -255,6 +255,13 @@ $tests = @(
        MustContain = @("history jump selfTest PASS") },
     @{ Name = "e5-toolbar-snap"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("snap selfTest PASS", "[Editor] selfTest PASS") },
+    # UX-02（B1）：帮助与未知参数。这两条是错误路径用例，显式声明退出码并允许 stderr ——
+    # 默认的「退出码 0 + stderr 0 字节」没有放宽，只是给这两条开了口子。
+    @{ Name = "b1-help"; Exe = "engine"; Args = @("--help"); SkipValidationMarker = $true;
+       MustContain = @("Tiny Engine -", "--selftest [N]", "--validation-features <list>", "--update-profile") },
+    @{ Name = "b1-unknown-arg"; Exe = "engine"; Args = @("--not-a-flag"); ExpectedExitCode = 2;
+       AllowStderr = $true; SkipValidationMarker = $true;
+       MustContainStderr = @("unknown argument: --not-a-flag") },
     @{ Name = "e5-render-settings"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("render settings selfTest PASS") },
     @{ Name = "f2i-update-profile"; Args = @("--selftest", "240", "--streaming-world", "8", "--update-profile");
@@ -288,11 +295,15 @@ foreach ($test in $tests) {
     $stdout = if ($null -eq $result.Stdout) { "" } else { [string]$result.Stdout }
     $errorText = if ($null -eq $result.Stderr) { "" } else { [string]$result.Stderr }
 
+    # UX-B1：错误路径的用例要能声明期望退出码（例如 --not-a-flag 约定返回 2），
+    # 并且允许在 stderr 上写一行可行动的错误提示。默认仍是「退出码 0 + stderr 0 字节」。
+    $expectedExit = if ($null -ne $test.ExpectedExitCode) { [int]$test.ExpectedExitCode } else { 0 }
+    $allowStderr = [bool]$test.AllowStderr
     $reasons = @()
-    if ($result.ExitCode -ne 0) {
-        $reasons += "exit code $($result.ExitCode)"
+    if ($result.ExitCode -ne $expectedExit) {
+        $reasons += "exit code $($result.ExitCode) (expected $expectedExit)"
     }
-    if ($result.StderrBytes -ne 0) {
+    if (-not $allowStderr -and $result.StderrBytes -ne 0) {
         $reasons += "stderr is not empty ($($result.StderrBytes) bytes)"
     }
     foreach ($pattern in $test.MustContain) {
@@ -301,9 +312,20 @@ foreach ($test in $tests) {
         }
     }
 
+    # 错误路径用例的提示走 stderr（stdout 保持干净），所以标记也要能对 stderr 断言。
+    if ($null -ne $test.MustContainStderr) {
+        foreach ($pattern in $test.MustContainStderr) {
+            if ($errorText.IndexOf($pattern, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                $reasons += "missing stderr marker '$pattern'"
+            }
+        }
+    }
+
     # P0: every test that creates a Vulkan device must report zero validation messages.
     # (jobtest / config-test / --build-info / --diagnostics-test return before the Vulkan device exists.)
-    if ($test.Name -notin @('jobtest', 'td09-config-migration', 'p0-build-info', 'p0-diagnostics-selftest', 'f2e-terrain-picking')) {
+    $needsValidationMarker = -not $test.SkipValidationMarker -and
+        $test.Name -notin @('jobtest', 'td09-config-migration', 'p0-build-info', 'p0-diagnostics-selftest', 'f2e-terrain-picking')
+    if ($needsValidationMarker) {
         if ($stdout.IndexOf("[Validation] errors=0 warnings=0", [StringComparison]::OrdinalIgnoreCase) -lt 0) {
             $reasons += "missing zero-validation marker '[Validation] errors=0 warnings=0'"
         }
@@ -321,7 +343,8 @@ foreach ($test in $tests) {
             Get-Content -LiteralPath $result.StdoutPath -Tail 40
         }
     } else {
-        Write-Host "[validate] PASS $($test.Name) (stderr=0 bytes)" -ForegroundColor Green
+        $stderrNote = if ($allowStderr) { "stderr allowed" } else { "stderr=0 bytes" }
+        Write-Host "[validate] PASS $($test.Name) ($stderrNote, exit=$($result.ExitCode))" -ForegroundColor Green
     }
 }
 

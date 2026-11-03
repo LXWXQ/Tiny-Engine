@@ -95,3 +95,14 @@ updated: 2026-11-03
   `clampKernelSize()` 把 SSAO 核夹到 4..64 偶数。
 - 可观测：`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
 - 验证：编辑器自检 0/0；截图确认面板可读、按钮在顶部不用滚动；回归 51 项（新增 `e5-render-settings`）。
+
+## B1（部分）：`--help` 与未知参数退出码
+
+- 问题：[UX-02](../90-editor/ux-audit.md) —— `--help` 什么都不打印，参数写错也照常启动，用户以为参数生效了。
+- 实现：`main.cpp` 里参数表改成数据（`kUsageLines`，43 条、按运行模式/窗口/截图/渲染/地形/自检/剖析/帮助分组）；
+  `--help` / `-h` 打印后退出码 0，且在创建窗口与设备之前；未知参数收集到 `unknownArgs`，
+  在创建窗口前打印 `unknown argument: xxx` 到 stderr 并按约定返回 2。
+- 坑：`--selftest` 的帧数是唯一不用 `++i` 消费的取值参数，直接加 `else` 会把 `--selftest 60` 的 `60` 判成未知；
+  用一次性标志放行。
+- 可观测：`TinyEngine.exe --help`（退出码 0）、`TinyEngine.exe --not-a-flag`（退出码 2，stderr 一行）。
+- 验证：回归 53 项（新增 `b1-help` / `b1-unknown-arg`，`Validate.ps1` 新增 `ExpectedExitCode` / `AllowStderr` / `MustContainStderr` / `SkipValidationMarker` 四个可选字段）。

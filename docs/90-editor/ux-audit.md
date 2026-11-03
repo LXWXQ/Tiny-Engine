@@ -35,7 +35,7 @@ updated: 2026-11-03
 
 ## 3. P0：阻断首个闭环
 
-这六条任意一条不修，陌生人就走不完一遍完整流程。**按编号顺序修，不要并行。**
+这六条任意一条不修，陌生人就走不完一遍完整流程。**开工顺序看 [ux-playbook](ux-playbook.md) §4 的批次表**，不要按这里的编号顺序排 —— 编号只是条目 ID，代表登记顺序，不代表陌生人撞上它的先后。
 
 ### UX-01 冷启动是一个没有任何文字的空画面
 
@@ -51,11 +51,12 @@ updated: 2026-11-03
 
 | 项 | 内容 |
 |---|---|
-| 现象 | `TinyEditor.exe --help` 不会打印任何东西；42 个参数只写在 `main.cpp` 顶部注释里 |
-| 证据 | `main.cpp` 全文无 `help` / `usage` / `unknown argument` 分支；参数解析是 42 个 `else if (arg == ...)` |
+| 现象 | `TinyEditor.exe --help` 不会打印任何东西；43 个参数只写在 `main.cpp` 顶部注释里 |
+| 证据 | `main.cpp` 全文无 `help` / `usage` / `unknown argument` 分支；参数解析是 1 个 `if` + 42 个 `else if (arg == ...)`，共 43 个参数 |
 | 影响 | 参数写错时程序照常启动，用户以为参数生效了；排查方向完全错 |
 | 判据 | U1 入口存在、U4 失败可行动 |
 | 修法指向 | 加 `--help`（打印参数表并按组分节）；未知参数打印一行 `unknown argument: xxx` + `--help` 提示，退出码 2 |
+| 状态 | **fixed**（2026-11-03）：`kUsageLines` 表驱动 `--help`（退出码 0、不建窗口），未知参数在创建窗口前退出码 2 并把提示写 stderr；回归用例 `b1-help` / `b1-unknown-arg` |
 
 ### UX-03 错误只写内存日志，界面不变化
 
@@ -83,7 +84,7 @@ updated: 2026-11-03
 |---|---|
 | 现象 | 找不到 `msyh.ttc` / `simhei.ttf` 时，全部中文变 `?` |
 | 证据 | `src/Core/ImGuiSystem.cpp:45-65`：按四个系统路径依次尝试，全部失败则保持内置字体；注释已写明后果 |
-| 影响 | 界面"能看但读不懂"，且用户无法判断是编码问题还是字体问题 |
+| 影响 | 界面"能看但读不懂"，且用户无法判断是编码问题还是字体问题。注意这条的阻断性依赖环境：字体齐全的机器上不影响闭环，缺字体的机器上才是 P0 |
 | 判据 | U9 降级可见 |
 | 修法指向 | 首帧检测 `io.Fonts->Fonts.Size <= 1`，状态栏红色提示"字体降级：中文不可用"，tooltip 给出缺失路径与解决办法 |
 
@@ -103,7 +104,6 @@ updated: 2026-11-03
 |---|---|---|---|---|
 | UX-07 | 同一屏三种语言层级：按钮英文、tooltip 中文、状态栏中文；概念词不统一 | `EditorLayer.cpp` 工具栏 714 行起；状态栏 818 行起 | U7 | open |
 | UX-08 | 地形生成同步阻塞，无进度、不禁用按钮 | `createTerrainFromUi()` 完成后才记录 `lastGenerationMs` | U2、U6 | open |
-| UX-09 | 多选时 Inspector 输出"Multi-entity editing is not supported yet"，暴露实现状态 | `InspectorPanel.cpp:113` | U5 | open |
 | UX-10 | 成功动作没有回执：创建成功、保存成功都只在 Console 留一行 | 同 UX-03 的 `pushLog(Info)` 调用 | U3 | open |
 | UX-11 | Console 无时间戳、无等级计数、无复制、无"仅看错误"快捷开关 | `ConsolePanel.cpp` 全文（约 70 行） | U6 | open |
 | UX-12 | 错误发生但 Console 关着时，界面上没有任何标记 | 无错误计数徽标；`state.log` 无未读概念 | U6 | open |
@@ -116,13 +116,16 @@ updated: 2026-11-03
 这条容易被误判为"功能缺失"。它不是：多选本身可用（批量删除、批量复制、整组拖拽都已实现），
 缺的是**多选状态下的属性编辑**。对用户而言，"不支持"三个字等于死路。
 
-改法不是补一句更好的提示，而是给一条出路：
+批量出口已经在 E1 补齐了（`InspectorPanel.cpp:60-111`：`N entities selected` + Duplicate / Delete 按钮），
+所以这条剩下的只是**措辞**：那两行英文既暴露实现状态，又和中文界面混排。
 
 ```text
 已选中 3 个对象
 批量操作：复制 / 删除
 要改属性：在 Hierarchy 里点其中一个（多选会变成单选）
 ```
+
+修法就是把 113-114 两行换成上面第三句，并把按钮那两行的英文标签一起收敛（UX-07 的同类问题）。
 
 ### UX-19 补充
 
@@ -142,6 +145,7 @@ updated: 2026-11-03
 | UX-16 | Assets 扫描不到模型目录时只写 `cerr`，面板空白无解释 | `AssetBrowserPanel.cpp:69` | U3、U5 | open |
 | UX-17 | 打开失败后没有"重试/换路径"入口，只能重新走 File > Open | `openScene` 失败分支 | U4 | open |
 | UX-18 | 菜单栏没有"最近失败"或诊断入口，出错后无处可去 | `drawMenuBar()` 只有 File/Edit/Create/Play/View/Help | U4 | open |
+| UX-09 | 多选时 Inspector 仍是两行英文播报"Multi-entity editing is not supported yet; use the Hierarchy panel to pick one entity."，且与中文界面混排 | `InspectorPanel.cpp:113-114` | U5、U7 | open |
 
 ## 6. 已经满足的，不要重做
 

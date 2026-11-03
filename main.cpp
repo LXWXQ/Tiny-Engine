@@ -6,6 +6,11 @@
 #include <cstdlib>
 #include <string>
 #include <sstream>
+#include <cstdio>
+#include <cstring>
+#include <cctype>
+#include <vector>
+#include <filesystem>
 
 // ---------------------------------------------------------------------------
 // 命令行参数
@@ -56,6 +61,78 @@
 //   是否"编译进来"由 CMake option -> TINY_ENABLE_* 宏决定；
 //   是否"本次开启"由上面的 flag 决定。关闭时不分配、不插命令、不落盘。
 // ---------------------------------------------------------------------------
+// UX-02（B1）：帮助入口。参数表是数据，不写在注释里 —— 注释会烂掉，表格能被 grep 和测试引用。
+// 新增参数时必须同时在 kUsageLines 里加一行，tools/Validate.ps1 的 b1-help 用例会核对总数。
+struct UsageLine
+{
+    const char* group;
+    const char* flags;
+    const char* text;
+};
+
+const UsageLine kUsageLines[] = {
+    { "运行模式", "--selftest [N]", "跑 N 帧后退出（默认 600），无人值守回归用" },
+    { "运行模式", "--editor", "以场景编辑器模式启动（TinyEditor.exe 默认开启）" },
+    { "运行模式", "--empty-scene", "不加载 Sponza / 天空盒，只留相机" },
+    { "窗口", "--hidden / --visible", "不显示 / 强制显示窗口（自检与截图默认 --hidden）" },
+    { "窗口", "--minimized", "启动后最小化（最小化会跳过渲染）" },
+    { "截图", "--screenshot <path>", "把第 --screenshot-frame 帧写成 PNG" },
+    { "截图", "--screenshot-frame <n>", "截图/抓帧的目标帧号" },
+    { "截图", "--screenshot-viewport", "截图只拍编辑器离屏视口（纯 3D，不含 UI）" },
+    { "截图", "--capture-frame <n>", "RenderDoc 在第 n 帧抓帧（需注入 RenderDoc）" },
+    { "截图", "--render-scale <f>", "动态分辨率初始倍率 0.25..1.0" },
+    { "渲染", "--no-bloom / --no-ssao", "关掉 Bloom / SSAO（同 UI 复选框）" },
+    { "渲染", "--gpu-scene / --no-gpu-scene", "强制开 / 关 GPU 驱动提交" },
+    { "渲染", "--gpu-scene-min-px <px>", "GPU 提交的屏幕空间剔除阈值（像素）" },
+    { "渲染", "--gpu-scene-external <n>", "外部实例数（粒子/体素共用的提交入口）" },
+    { "渲染", "--no-merged-buffers", "不合并静态网格缓冲" },
+    { "渲染", "--no-hiz", "关掉 Hi-Z 遮挡剔除" },
+    { "渲染", "--no-terrain-batch", "关掉地形合批（逐 chunk 绘制）" },
+    { "地形", "--terrain-test", "启动时创建持久地形，用于地形回归" },
+    { "地形", "--streaming-world [r]", "流送世界，半径 r（1..24，默认 3）" },
+    { "地形", "--streaming-fly [speed]", "沿 +X 直线飞行，用于流送/卸载回归" },
+    { "地形", "--streaming-fly-radius <r>", "绕圆飞行半径（0 = 直线）" },
+    { "地形", "--streaming-budget <ms>", "每帧地形生成预算（毫秒）" },
+    { "地形", "--no-origin-rebase", "关掉浮动原点（默认开启）" },
+    { "地形", "--origin-threshold <u>", "浮动原点触发距离（世界单位，最低 64）" },
+    { "自检", "--cross-queue-test", "TD-02 跨队列探针" },
+    { "自检", "--resize-test", "自检中连续缩放窗口并切换动态分辨率（需配 --selftest）" },
+    { "自检", "--material-stress", "每帧分配/延迟归还材质槽位（TD-04）" },
+    { "自检", "--subresource-test / --subresource-error-test", "TD-05 正向 / 反例探针" },
+    { "自检", "--compute-test", "D-5 compute probe 独立回归" },
+    { "自检", "--config-test", "配置迁移 / 损坏配置保护自检" },
+    { "自检", "--diagnostics-test [path]", "诊断管线自检（合成消息 -> 计数 + JSONL）" },
+    { "自检", "--device-fault-test", "VK_EXT_device_fault 自检" },
+    { "自检", "--jobtest", "JobSystem 自检" },
+    { "剖析", "--build-info", "打印本二进制的调试能力后退出" },
+    { "剖析", "--gpu-timing", "每 pass GPU 计时，退出时写 gpu_timing.csv" },
+    { "剖析", "--gpu-timing-csv <path>", "指定计时 CSV 路径（隐含 --gpu-timing）" },
+    { "剖析", "--validation-features <list>", "验证层增强：bp / sync / all" },
+    { "剖析", "--validation-jsonl <path>", "验证层消息写 JSONL" },
+    { "剖析", "--update-profile", "每 60 帧打印 Scene::update 分段耗时" },
+    { "帮助", "--help / -h", "打印这张表并退出（退出码 0）" },
+};
+
+void printUsage(const char* exeName)
+{
+        std::string displayName = "TinyEngine";
+    if (exeName != nullptr)
+        displayName = std::filesystem::path(exeName).filename().string();
+    std::printf("Tiny Engine - %s\n\n", displayName.c_str());
+    std::printf("用法: TinyEngine.exe [选项]\n\n");
+    const char* currentGroup = nullptr;
+    for (const UsageLine& line : kUsageLines)
+    {
+        if (currentGroup == nullptr || std::strcmp(currentGroup, line.group) != 0)
+        {
+            std::printf("%s\n", line.group);
+            currentGroup = line.group;
+        }
+        std::printf("  %-34s %s\n", line.flags, line.text);
+    }
+    std::printf("\n未知参数会以退出码 2 结束，并在 stderr 打印一行说明。\n");
+}
+
 int main(int argc, char** argv)
 {
     // stdout 关闭缓冲：日志重定向到文件时也能实时看到加载进度，
@@ -111,13 +188,29 @@ int main(int argc, char** argv)
     int  selfTestFrames = 600;
 
     diag::Options diagOptions;
+    // UX-02（B1）：未知参数不再静默忽略。--selftest 的帧数是唯一一个"值不跟 ++i 走"的
+    // 分支，所以用一个一次性标志把它放过去，别的多余 token 一律记进 unknownArgs。
+    std::vector<std::string> unknownArgs;
+    bool selfTestFramesPending = false;
 
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg = argv[i];
+        if (arg == "--help" || arg == "-h")
+        {
+            printUsage(argv[0]);
+            return EXIT_SUCCESS;
+        }
+        if (selfTestFramesPending && !arg.empty() &&
+            std::isdigit(static_cast<unsigned char>(arg[0])) != 0)
+        {
+            selfTestFramesPending = false;
+            continue;
+        }
         if (arg == "--selftest")
         {
             selfTest = true;
+            selfTestFramesPending = true;
             if (i + 1 < argc)
             {
                 try { selfTestFrames = std::stoi(argv[i + 1]); }
@@ -266,6 +359,19 @@ int main(int argc, char** argv)
                     diagOptions.validationGpuAssisted = true;
             }
         }
+        else
+        {
+            unknownArgs.push_back(arg);
+        }
+    }
+
+    // UX-02（B1）：未知参数在创建窗口/设备之前就退出，避免"参数写错却照常启动"。
+    if (!unknownArgs.empty())
+    {
+        for (const std::string& unknown : unknownArgs)
+            std::cerr << "unknown argument: " << unknown << std::endl;
+        std::cerr << "用 --help 查看全部参数。" << std::endl;
+        return 2;
     }
 
     // 无人值守运行默认不显示窗口：每次跑测试都把窗口弹到最前会打断用户。
