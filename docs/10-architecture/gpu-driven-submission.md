@@ -170,6 +170,16 @@ resize 有两个坑，都已修：
 - **不能遗留旧视图**：G-Buffer 重建会销毁旧 `VkImageView`，`destroyHiZ()` 必须 `hizPositionViews.fill(VK_NULL_HANDLE)`，否则重建描述符时把已失效的句柄写进描述符集，驱动直接崩（`--resize-test` 里表现为 access violation）。
 - **录制期不要写描述符**：每帧 `vkUpdateDescriptorSets` 会让在录的命令缓冲失效（`UNASSIGNED-CoreValidation-DrawState-InvalidCommandBuffer-VkDescriptorSet`）。视图变化只在 `init()/resize()`（设备空闲）时写；尺寸变化时先 `vkDeviceWaitIdle` 再重建。
 
+
+### 5.1 set 3 是共享的：地形合批与场景合批必须各自重绑
+
+地形合批（`TerrainMeshArena` 的 chunk 实例表）和网格合批（`SceneGpuBatch` 的实例表）
+共用同一个 `sceneInstanceSetLayout`（set 3、binding 0、`InstanceRecord` 224B）。
+`GeometrySystem::render()` 在帧首绑一次场景实例表；地形合批提交时会把 set 3 换成 chunk
+实例表，因此**场景合批提交前必须再绑回自己的实例表**，否则网格会拿地形行当模型矩阵，
+表现为「Sponza 整片消失」（三角形数与 draw call 数都对，只是位置错）。
+F2-f 调试时就是踩了这条：`--gpu-scene` 与地形合批同时开启时场景消失，单独开任一个都正常。
+
 ## 6. 开关与阈值
 
 | 设置 | 默认 | 作用 |

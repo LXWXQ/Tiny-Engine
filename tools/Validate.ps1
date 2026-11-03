@@ -233,6 +233,8 @@ $tests = @(
        MustContain = @("budgetHits=", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2e-terrain-picking"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] streamed terrain PASS", "picking=OK", "[Editor] selfTest PASS") },
+    @{ Name = "f2f-arena-slots"; Args = @("--selftest", "180", "--streaming-world", "8");
+       MustContain = @("[Terrain] mesh arena ready | slots=384", "arenaSlots=", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

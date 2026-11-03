@@ -19,7 +19,8 @@ public:
                  RenderGraph& graph, RenderResources& resources,
                  VkDescriptorSetLayout globalSetLayout,
                  VkDescriptorSetLayout materialSetLayout,
-                 VkDescriptorSetLayout terrainSetLayout);
+                 VkDescriptorSetLayout terrainSetLayout,
+                 TerrainMeshArena* terrainMeshArena);
     ~GeometryPass() override;
 
     void init() override;
@@ -40,6 +41,9 @@ private:
     // F1：GPU 驱动提交的实例/命令/计数缓冲。必须比 geometrySystem 活得久，
     // 因为 GeometrySystem 只持有裸指针。
     std::unique_ptr<SceneGpuBatch> sceneGpuBatch;
+
+    // F2-f：地形几何的 arena 由 Scene 持有，这里只借用。
+    TerrainMeshArena* terrainMeshArena = nullptr;
 
     std::unique_ptr<GeometrySystem> geometrySystem;
 };

@@ -13,6 +13,7 @@
 #include "Render/TerrainMaterial.h"
 #include "Render/TerrainComputeGenerator.h"
 #include "Render/TerrainGpuMeshBuilder.h"
+#include "Render/TerrainMeshArena.h"
 #include "Terrain/TerrainBrush.h"
 
 #include <GLFW/glfw3.h>
@@ -167,6 +168,9 @@ public:
     void setStreamingTerrainBudget(float milliseconds);
     double getLastStreamingUpdateMs() const { return lastStreamingUpdateMs; }
     double getMaxStreamingUpdateMs() const { return maxStreamingUpdateMs; }
+
+    // F2-f：地形几何的共享 arena。Scene 持有生命周期，GeometrySystem 只拿裸指针绘制。
+    TerrainMeshArena* getTerrainMeshArena() const { return terrainMeshArena.get(); }
     // F2-a：流送统计。loaded/unloaded 是累计值，*LastFrame 是上一帧的增量，
     // 用来在自检里断言"相机飞行时真的发生了加载与卸载"。
     uint64_t getStreamingChunksLoadedTotal() const { return streamingChunksLoadedTotal; }
@@ -352,6 +356,9 @@ private:
     uint32_t streamingUnloadsLastFrame = 0;
     uint64_t streamingBudgetHits = 0;
     double maxStreamingUpdateMs = 0.0;
+
+    // F2-f：地形 chunk 的顶点/索引统一放这里，Model 只保留元数据。
+    std::unique_ptr<TerrainMeshArena> terrainMeshArena;
     // F2-c：浮动原点状态。delta 一律吸到整块 chunk，实体与流送 key 才能整体平移。
     glm::dvec3 worldOrigin{ 0.0, 0.0, 0.0 };
     uint64_t originRebaseCount = 0;

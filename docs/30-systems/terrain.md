@@ -63,8 +63,14 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
   `firstIndex`（arena 索引基址）、`vertexOffset`（arena 顶点基址）与
   `firstInstance`（该 chunk 在 set 3 实例表里的行号）。chunk 的世界矩阵不再烘进顶点，
   而是在顶点着色器里按 `gl_InstanceIndex` 从实例表取 —— 同一份网格被移动时不需要重拷。
-  命令区固定为 2048 条（64 实体 x 32 命令），绘制前用 `vkCmdFillBuffer` 清零，
+  命令区固定为 6144 条（384 实体 x 16 命令，F2-d 起），绘制前用 `vkCmdFillBuffer` 清零，
   `indexCount == 0` 的条目就是空绘制。`--no-terrain-batch` 回退到逐 chunk 绑定 + 逐 chunk draw。
+- F2-f 起 arena 归 `Scene` 所有（`Scene::getTerrainMeshArena()`），地形网格生成完成、
+  `Model` 接管完 VMA allocation 后立刻在一次性命令缓冲里 `acquire()` + `copyInto()` + 
+  `releaseGpuBuffers()`：chunk 只剩子网格/包围盒/UV 这些元数据，VBO/IBO 全部落在共享 arena。
+  实体销毁时把槽位交还（`Scene::destroyEntity()`），否则流送来回会吃光 384 槽。
+  没抢到槽位（超尺寸或槽位耗尽，例如半径 12 的 625 块 > 384 槽）的 chunk **保留自己的 buffer**，
+  渲染时照旧 `Model::bind()`，所以不会丢几何，只是少了合批；`--no-terrain-batch` 同样只绑 arena。
 
 ## 2. 文件与职责
 
@@ -557,12 +563,12 @@ picking 与 delete/undo/redo。
 - LOD 边界已做拓扑级全分辨率缝合，skirts 仅作为可关闭的保守回退；换层仍用
   0.24s 抖动 cross-fade，过渡期在运动模糊下可能看到短暂噪声；不同 LOD 的
   粗内部法线/着色仍会有正常层级差异；
-- GPU selection 当前容量为 64 terrain entities / 1024 chunk records，每 entity
-  32 条命令；超过容量的实体跳过，不混入 CPU 命令。无 `drawIndirectCount`
+- GPU selection 当前容量为 384 terrain entities / 6144 chunk records（F2-d 起），每 entity 16 条命令；
+  超过容量的实体跳过，不混入 CPU 命令。无 `drawIndirectCount`
   设备回退 CPU 命令构建；GPU stats 是上一已完成帧，UI 允许一帧延迟；
 - 异步 Generate/流送已改用 8 槽 GPU 高度场请求，GPU mesh 组装也已是 4 槽
   异步 submit/poll；同步场景加载仍走阻塞 `generate()`，全分辨率 CPU picking
-  mirror 已在 F2-e 取消。流送 chunk 仍各自一个 Model（GPU 合批后共用 arena）；
+  mirror 已在 F2-e 取消；F2-f 起流送 chunk 的 `Model` 只剩元数据，VBO/IBO 归 `TerrainMeshArena`；
 - B-07 已接入轻量 kinematic 角色控制器与地形雕刻：角色使用局部包围盒 + 双线性高度采样，笔刷复用 region 查询只重建相交 chunk；但雕刻只修改运行期 HeightField/Model，不写入场景 JSON；
 - 场景加载/`createTerrainEntity` 仍同步；supersede 使用协作取消，取消粒度是
   每个顶点行，不是硬中断；

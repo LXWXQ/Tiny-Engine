@@ -178,8 +178,7 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         if (destroyed || it->second.lastFrame + 8u < frameInfo.frameNumber)
         {
             terrainGpuSlotUsed[it->second.slot] = false;
-            if (terrainMeshArena && it->second.arenaSlot != TerrainMeshArena::kInvalidSlot)
-                terrainMeshArena->release(it->second.arenaSlot);
+            // F2-f：arena 槽位的生命周期归 Scene，实体槽回收不再动它。
             it = terrainGpuEntitySlots.erase(it);
         }
         else
@@ -277,12 +276,6 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
                 slotIt->second.model = mesh->model.get();
                 slotIt->second.revision = terrain->revision;
                 slotIt->second.resetPending = true;
-                if (terrainMeshArena &&
-                    slotIt->second.arenaSlot != TerrainMeshArena::kInvalidSlot)
-                {
-                    terrainMeshArena->release(slotIt->second.arenaSlot);
-                    slotIt->second.arenaSlot = TerrainMeshArena::kInvalidSlot;
-                }
             }
             slotIt->second.lastFrame = frameInfo.frameNumber;
         }
@@ -291,39 +284,28 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         const uint32_t slotIndex = slot.slot;
         run.entitySlots[entityId] = slotIndex;
 
+        // F2-f：arena 基址与是否合批无关——不合批时逐 chunk 的 indirect 命令同样要指向
+        // 自己那块 arena 切片，否则会拿模型内的偏移去索引整份缓冲，画出来是拉伸的乱几何。
         uint32_t arenaIndexBase = 0u;
         uint32_t arenaVertexBase = 0u;
-        if (terrainBatchActive)
+        bool chunkArenaBacked = false;
+        if (terrainMeshArena != nullptr &&
+            terrain->arenaSlot != TerrainMeshArena::kInvalidSlot)
         {
-            if (slot.arenaSlot == TerrainMeshArena::kInvalidSlot)
-            {
-                if (!terrainMeshArena)
-                    terrainMeshArena = std::make_unique<TerrainMeshArena>(vulkanDevice);
-                uint32_t adopted = TerrainMeshArena::kInvalidSlot;
-                std::string arenaError;
-                if (terrainMeshArena && terrainMeshArena->adopt(commandBuffer, *mesh->model,
-                                                               adopted, arenaError))
-                {
-                    slot.arenaSlot = adopted;
-                }
-                else if (!terrainArenaWarned)
-                {
-                    terrainArenaWarned = true;
-                    std::cout << "[Terrain] mesh arena adopt failed | " << arenaError
-                              << "; falling back to per-chunk draws" << std::endl;
-                }
-            }
-            if (slot.arenaSlot != TerrainMeshArena::kInvalidSlot)
-            {
-                arenaIndexBase = terrainMeshArena->getIndexOffset(slot.arenaSlot);
-                arenaVertexBase = terrainMeshArena->getVertexOffset(slot.arenaSlot);
-            }
-            else
-            {
-                terrainBatchActive = false;
-            }
+            arenaIndexBase = terrainMeshArena->getIndexOffset(terrain->arenaSlot);
+            arenaVertexBase = terrainMeshArena->getVertexOffset(terrain->arenaSlot);
+            chunkArenaBacked = true;
         }
-
+        else if (terrainBatchActive)
+        {
+            if (!terrainArenaWarned)
+            {
+                terrainArenaWarned = true;
+                std::cout << "[Terrain] chunk has no arena slice | falling back to per-chunk draws"
+                          << std::endl;
+            }
+            terrainBatchActive = false;
+        }
         if (terrainBatchActive && chunkInstanceBytes != nullptr)
         {
             auto* row = reinterpret_cast<float*>(chunkInstanceBytes +
@@ -382,7 +364,7 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
                     slot.resetPending ? 1u : 0u,
                     slotIndex);
                 record.arena = glm::uvec4(arenaIndexBase, arenaVertexBase,
-                                          terrainBatchActive ? 1u : 0u, 0u);
+                                          chunkArenaBacked ? 1u : 0u, 0u);
                 parityExpected.push_back({});
                 hasRecords = true;
             }
@@ -476,11 +458,6 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
     }
 
     terrainBatchActive = terrainBatchActive && recordCursor > 0u;
-    if (!terrainBatchActive && recordCursor > 0u)
-    {
-        for (uint32_t i = 0; i < recordCursor; ++i)
-            records[i].arena = glm::uvec4(0u);
-    }
 
     frameRes.recordCount = recordCursor;
     if (frameInfo.settings.terrainGpuSelectionSelfTest)

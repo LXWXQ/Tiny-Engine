@@ -6,10 +6,11 @@ GeometryPass::GeometryPass(Device& device, const std::array<GBuffer*, kFramesInF
                            RenderGraph& graph, RenderResources& resources,
                            VkDescriptorSetLayout globalSetLayout,
                            VkDescriptorSetLayout materialSetLayout,
-                           VkDescriptorSetLayout terrainSetLayout)
+                           VkDescriptorSetLayout terrainSetLayout,
+                           TerrainMeshArena* terrainMeshArena)
     : vulkanDevice(device), gBuffers(gBuffers), renderGraph(graph), resources(resources),
       globalSetLayout(globalSetLayout), materialSetLayout(materialSetLayout),
-      terrainSetLayout(terrainSetLayout)
+      terrainSetLayout(terrainSetLayout), terrainMeshArena(terrainMeshArena)
 {
 }
 
@@ -53,7 +54,8 @@ void GeometryPass::init()
     geometrySystem = std::make_unique<GeometrySystem>(vulkanDevice, gBuffers[0]->getDepth().format,
                                                       globalSetLayout, materialSetLayout, terrainSetLayout,
                                                       sceneGpuBatch->getInstanceSetLayout(),
-                                                      sceneGpuBatch.get());
+                                                      sceneGpuBatch.get(),
+                                                      terrainMeshArena);
 }
 
 void GeometryPass::resize(VkExtent2D extent)

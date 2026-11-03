@@ -777,7 +777,7 @@ streamingConfig.skirtsEnabled = false;
 
 	auto geoPass = std::make_unique<GeometryPass>(*vulkanDevice, gBufferPtrs, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),
-		descriptorManager->getTerrainSetLayout());
+		descriptorManager->getTerrainSetLayout(), scene->getTerrainMeshArena());
 	auto ssaoPass = std::make_unique<SSAOPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	auto lightPass = std::make_unique<LightingPass>(*vulkanDevice, *gBuffers[0], *vulkanSwapchain,

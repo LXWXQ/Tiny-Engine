@@ -590,3 +590,9 @@ updated: 2026-11-02
 **可观测**：`[Editor] streamed terrain PASS | ... picking=OK`；`[Terrain] sculpt PASS`、`character controller PASS | grounded=1 maxGroundError=0` 不变。
 **回归**：新增 `f2e-terrain-picking`（跑 `TinyEditor.exe --selftest 5 --empty-scene`，`Validate.ps1` 增加 `Exe = "editor"` 支持与编辑器可执行发现），全套 **38 项**；批量 vs `--no-terrain-batch` 截图仍 `max 0`；半径 8 飞行 240 帧 4 次 rebase、`chunks=322 loaded=400 unloaded=78`、0/0；`--streaming-budget 0.2` 下环未填满属预算生效，自检改为「有预算命中时不强制满环」。
 **顺带**：`SceneSerializer::saveToFile()` 打开失败时带上 `errno` 与 `strerror` 文本；编辑器 streaming 自检在 TEMP 写入被拒（本机 errno 13）时回退到仓库内 `.tiny-streaming-selftest/`（已 gitignore）；`EngineConfig` 存档改存绝对坐标（局部 + `worldOrigin`），关闭 TD-22，飞行 + rebase 后不再把 ±chunk 整数倍偏移写回 `config/engine.json`。
+
+## F2-f：地形 chunk 不再各持 Model/VBO/IBO（几何只进共享 arena）
+**问题**：F2-b 的 arena 是渲染侧按可见 chunk 惰拷贝的，chunk 仍然各持一个 `Model` 与自己的 device-local VBO/IBO；半径 12 的 625 块就是 625 份缓冲对象，与「每 chunk 固定开销」的无限世界目标冲突。
+**实现**：arena 所有权移到 `Scene`（`Scene::init()` 建、`getTerrainMeshArena()` 暴露），`TerrainMeshArena` 新增 `acquire(vertexCount, indexCount, slot)` 与 `copyInto(cmd, slot, srcVertex, srcIndex)`；地形网格一落地就在一次性命令缓冲里 acquire + copy + `Model::releaseGpuBuffers()`，`Model` 只留子网格/包围盒/UV，实体销毁时归还槽位。`GeometrySystem` 改为持有 `TerrainMeshArena*`，地形实体一律绑 arena 的 VBO/IBO 并用 `firstIndex + arenaIndexBase` / `vertexOffset = arenaVertexBase`；没抢到槽位的 chunk 保留自己的 buffer 走旧路径（半径 12 的 625 块 > 384 槽时不会丢几何）。
+**可观测**：`[Terrain] batched draw | chunks=12 arenaSlots=25 commandSpan=6144`；半径 8 飞行 600 帧 `arenaSlots` 在 305~323 之间回落（槽位回收正常），`Origin` 13 次 rebase，0/0。
+**回归**：新增 `f2f-arena-slots`；全套 **39 项**；`--gpu-scene` 与地形合批同时开启时发现并修掉「set 3 被地形换成 chunk 实例表、场景合批没绑回来 → Sponza 整片消失」的 bug（三角形数与 draw call 数都对，只是位置错），修后 `--gpu-scene` / `--no-terrain-batch` / `--no-gpu-scene` 三组 A/B 截图均 `max diff = 0`。

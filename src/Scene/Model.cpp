@@ -131,6 +131,22 @@ std::shared_ptr<Model> Model::createFromGpuMesh(
         uvMinArg, uvMaxArg, uvValidArg));
 }
 
+void Model::releaseGpuBuffers()
+{
+    if (vertexBuffer != VK_NULL_HANDLE)
+    {
+        vmaDestroyBuffer(device.getVmaAllocator(), vertexBuffer, vertexAllocation);
+        vertexBuffer = VK_NULL_HANDLE;
+        vertexAllocation = VK_NULL_HANDLE;
+    }
+    if (hasIndexBuffer && indexBuffer != VK_NULL_HANDLE)
+    {
+        vmaDestroyBuffer(device.getVmaAllocator(), indexBuffer, indexAllocation);
+        indexBuffer = VK_NULL_HANDLE;
+        indexAllocation = VK_NULL_HANDLE;
+        hasIndexBuffer = false;
+    }
+}
 Model::~Model()
 {
     vmaDestroyBuffer(device.getVmaAllocator(), vertexBuffer, vertexAllocation);
@@ -353,6 +369,9 @@ void Model::uploadViaStaging(VkBuffer dstBuffer, const void* srcData, VkDeviceSi
 
 void Model::bind(VkCommandBuffer commandBuffer) const
 {
+    if (vertexBuffer == VK_NULL_HANDLE)
+        return;
+
     VkBuffer buffers[] = { vertexBuffer };
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);

@@ -22,7 +22,8 @@ public:
                    VkDescriptorSetLayout materialSetLayout,
                    VkDescriptorSetLayout terrainSetLayout,
                    VkDescriptorSetLayout sceneInstanceSetLayout,
-                   SceneGpuBatch* sceneGpuBatch);
+                   SceneGpuBatch* sceneGpuBatch,
+                   TerrainMeshArena* terrainMeshArena);
     ~GeometrySystem();
 
     GeometrySystem(const GeometrySystem&) = delete;
@@ -167,7 +168,8 @@ private:
     // F2-b: terrain chunk meshes copied into one arena so a single indirect draw
     // covers every chunk; per-chunk transforms come from a set 3 instance table.
     static constexpr uint32_t kTerrainChunkInstanceStride = 224u; // SceneGpuBatch::InstanceRecord
-    std::unique_ptr<TerrainMeshArena> terrainMeshArena;
+    // F2-f：arena 由 Scene 持有并负责把几何拷进去，这里只借用指针绘制。
+    TerrainMeshArena* terrainMeshArena = nullptr;
     std::array<TerrainGpuBuffer, kFramesInFlight> terrainChunkInstances{};
     std::array<VkDescriptorSet, kFramesInFlight> terrainChunkInstanceSets{};
     VkDescriptorPool terrainChunkInstancePool = VK_NULL_HANDLE;

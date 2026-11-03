@@ -1,6 +1,7 @@
 #include "Scene/Scene.h"
 #include "AssetPaths.h"
 #include "RHI/Texture.h"
+#include "RHI/CommandUtils.h"
 #include "Scene/GLTFLoader.h"
 #include "Render/TerrainMaterial.h"
 #include "Render/TerrainComputeGenerator.h"
@@ -515,6 +516,8 @@ void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorMana
     // 它天然应该记得自己是用哪个设备创建出来的。
     device = &deviceArg;
     commandPool = commandPoolArg;
+    // F2-f：地形几何的共享 arena 由 Scene 持有，生成完成时直接拷进来。
+    terrainMeshArena = std::make_unique<TerrainMeshArena>(deviceArg);
     descriptorManager = &descriptorManagerArg;
     jobSystem = jobSystemArg;
 
@@ -692,6 +695,14 @@ void Scene::destroyEntity(entt::entity entity)
                     childHierarchy->parent = entt::null;
             }
         }
+    }
+
+    // F2-f：销毁 chunk 时把它的 arena 槽位交还，否则流送来回跑会吃光 384 个槽。
+    if (auto* terrain = registry.try_get<TerrainComponent>(entity))
+    {
+        if (terrainMeshArena && terrain->arenaSlot != TerrainMeshArena::kInvalidSlot)
+            terrainMeshArena->release(terrain->arenaSlot);
+        terrain->arenaSlot = TerrainMeshArena::kInvalidSlot;
     }
 
     if (const auto* mesh = registry.try_get<MeshComponent>(entity))
@@ -3580,6 +3591,35 @@ void Scene::processTerrainGeneration()
             continue;
         }
 
+        // F2-f：几何统一进共享 arena；成功后 Model 只留元数据，不再占 VBO/IBO。
+        if (terrainMeshArena && terrainMeshArena->isAvailable() && model->hasGpuBuffers())
+        {
+            if (terrain->arenaSlot != TerrainMeshArena::kInvalidSlot)
+            {
+                terrainMeshArena->release(terrain->arenaSlot);
+                terrain->arenaSlot = TerrainMeshArena::kInvalidSlot;
+            }
+            uint32_t arenaSlot = TerrainMeshArena::kInvalidSlot;
+            if (terrainMeshArena->acquire(vertexCount, indexCount, arenaSlot))
+            {
+                const VkCommandBuffer arenaCmd =
+                    cmdBeginSingleTime(device->getDevice(), commandPool);
+                if (arenaCmd != VK_NULL_HANDLE)
+                {
+                    terrainMeshArena->copyInto(arenaCmd, arenaSlot,
+                                               model->getVertexBufferHandle(),
+                                               model->getIndexBufferHandle());
+                    cmdEndSingleTime(device->getDevice(), device->getGraphicsQueue(),
+                                     commandPool, arenaCmd);
+                    terrain->arenaSlot = arenaSlot;
+                    model->releaseGpuBuffers();
+                }
+                else
+                {
+                    terrainMeshArena->release(arenaSlot);
+                }
+            }
+        }
         terrain->generatedConfig = config;
         terrain->revision += 1;
         terrain->vertexCount = vertexCount;

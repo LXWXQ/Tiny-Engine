@@ -17,9 +17,11 @@ GeometrySystem::GeometrySystem(Device& device, VkFormat depthFormat,
                                VkDescriptorSetLayout materialSetLayout,
                                VkDescriptorSetLayout terrainSetLayout,
                                VkDescriptorSetLayout sceneInstanceSetLayout,
-                               SceneGpuBatch* sceneGpuBatch)
+                               SceneGpuBatch* sceneGpuBatch,
+                               TerrainMeshArena* terrainMeshArena)
     : vulkanDevice(device), depthFormat(depthFormat),
-      sceneGpuBatch(sceneGpuBatch), sceneInstanceSetLayout(sceneInstanceSetLayout)
+      sceneGpuBatch(sceneGpuBatch), sceneInstanceSetLayout(sceneInstanceSetLayout),
+      terrainMeshArena(terrainMeshArena)
 {
     createPipelineLayout(globalSetLayout, materialSetLayout, terrainSetLayout, sceneInstanceSetLayout);
     createPipelines();
@@ -328,7 +330,8 @@ void GeometrySystem::destroyTerrainChunkInstances()
         vkDestroyDescriptorPool(vulkanDevice.getDevice(), terrainChunkInstancePool, nullptr);
     terrainChunkInstancePool = VK_NULL_HANDLE;
     terrainChunkInstancesReady = false;
-    terrainMeshArena.reset();
+    // F2-f：arena 归 Scene 所有，这里只清掉借用指针。
+    terrainMeshArena = nullptr;
 }
 void GeometrySystem::createTerrainIndirectBuffers()
 {
@@ -741,7 +744,25 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         else if (isGrid) pipe = &gridPipeline;
 
         (*pipe)->bind(commandBuffer);
-        mesh->model->bind(commandBuffer);
+        // F2-f：地形几何在共享 arena 里（Model 只剩元数据），其余实体仍绑自己的缓冲。
+        const bool terrainArenaBacked = isTerrain && terrain != nullptr &&
+            terrainMeshArena != nullptr && terrain->arenaSlot != TerrainMeshArena::kInvalidSlot;
+        uint32_t terrainArenaIndexBase = 0u;
+        uint32_t terrainArenaVertexBase = 0u;
+        if (terrainArenaBacked)
+        {
+            terrainArenaIndexBase = terrainMeshArena->getIndexOffset(terrain->arenaSlot);
+            terrainArenaVertexBase = terrainMeshArena->getVertexOffset(terrain->arenaSlot);
+            VkBuffer arenaVertexBuffer = terrainMeshArena->getVertexBuffer();
+            VkDeviceSize arenaVertexOffset = 0;
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, &arenaVertexBuffer, &arenaVertexOffset);
+            vkCmdBindIndexBuffer(commandBuffer, terrainMeshArena->getIndexBuffer(), 0,
+                                 VK_INDEX_TYPE_UINT32);
+        }
+        else
+        {
+            mesh->model->bind(commandBuffer);
+        }
 
         const uint32_t entityIndirectStart = indirectCursor;
         uint32_t entityIndirectCount = 0;
@@ -846,7 +867,17 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0, sizeof(SimplePushConstantData), &push);
 
-            mesh->model->drawSubMesh(commandBuffer, subMesh);
+            if (terrainArenaBacked)
+            {
+                // 地形几何在 arena，subMesh 的 firstIndex 是模型内偏移，要加上槽位基址。
+                vkCmdDrawIndexed(commandBuffer, subMesh.indexCount, 1,
+                                 subMesh.firstIndex + terrainArenaIndexBase,
+                                 terrainArenaVertexBase, 0);
+            }
+            else
+            {
+                mesh->model->drawSubMesh(commandBuffer, subMesh);
+            }
 
             if (isTerrain && subMesh.isTerrainChunk)
             {
@@ -969,6 +1000,13 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(SimplePushConstantData), &batchPush);
         geometryPipeline->bind(commandBuffer);
+        // 地形合批会把 set 3 换成 chunk 实例表，这里必须换回场景实例表，
+        // 否则实例矩阵取到地形行，网格会被画到错误位置。
+        VkDescriptorSet sceneSets[] =
+            { sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex) };
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipelineLayout, 3, 1, sceneSets, 0, nullptr);
+        frameInfo.telemetry.descriptorBinds += 1u;
         sceneGpuBatch->recordDraw(commandBuffer, frameInfo);
     }
 

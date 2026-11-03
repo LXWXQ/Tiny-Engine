@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 # 当前技术债
 
-## 1. 已关闭（TD-01 ~ TD-22）
+## 1. 已关闭（TD-01 ~ TD-23）
 
 | ID | 问题 | 修法要点 |
 |---|---|---|
@@ -36,6 +36,7 @@ updated: 2026-11-03
 | TD-19 | 世界坐标全程是 `float`，相机走远后矩阵/深度抖动；流送世界没有原点概念 | 万米量级地形与阴影都会糊 | 局部坐标 + `Scene::worldOrigin`（double）的浮动原点：超阈值时吸到整块 chunk、平移所有 Transform 与相机平滑状态、重排 chunk 索引与 key 表；地形噪声锚点保持绝对。实测 600 帧 13 次 rebase、chunk 数稳定 35 |
 | TD-20 | 流送半径上限 8、地形 GPU 选择 64 槽 / 命令区 4096 / arena 96 槽，半径超过 3 就开始回退 CPU 路径；单帧生成无预算 | 扩容到半径 12（625 块）：选择 384 槽、命令区 12288、arena 384 槽（2048 顶点 / 12288 索引，约 51 MB），并加每帧 `maxUpdateMs` 预算（默认 2 ms，`--streaming-budget`） | 实测半径 8 = 289 块全量落地、draw calls 2；预算 0.2 ms 时 budgetHits 明显非零 |
 | TD-21 | 地形每 chunk 保留全分辨率 CPU picking mirror（33x33 约 38 KB，257x257 约 1.3 MB），由 `std::async` 生成 | 取消 mirror：`Scene::raycastTerrain()` 改走 `HeightField` 沿射线步进 + 二分；`TerrainGpuMeshBuilder` 不再调 `buildPickingMirror()`；GPU/同步/流送三条路径都传空 picking 数组 | sculpt / character controller / 编辑器 streamed terrain 自检 picking=OK |
+| TD-23 | 地形每个 chunk 各持一个 `Model` 与自己的 device-local VBO/IBO，生成时各拷贝一次、渲染时逐 chunk 绑定 | 半径 12 的 625 块就是 625 份缓冲对象 + 625 次 bind；与「每 chunk 固定开销」的无限世界目标冲突 | 把 arena 所有权移到 `Scene`（`getTerrainMeshArena()`），网格一落地就 `acquire()` + `copyInto()` + `Model::releaseGpuBuffers()`，Model 只留子网格/包围盒/UV 元数据；实体销毁时归还槽位；抢不到槽位的 chunk 保留自己的 buffer 走旧路径 |
 | TD-22 | 浮动原点只在运行时生效，`EngineConfig::save()` 直接写局部坐标 | 存档写绝对坐标（局部 + `worldOrigin`），`loadConfig()` 落 Transform 时再减去当前原点；顺带把 `saveToFile()` 打开失败的 `errno`/`strerror` 带进错误串 | 飞行 + rebase 后退出，`config/engine.json` 不再出现 ±chunk 整数倍偏移 |
 ## 2. 未关闭（按"何时必须处理"排序）
 
@@ -49,7 +50,7 @@ updated: 2026-11-03
 | 6 | 长时间运行未验证（回归都在 120 帧内） | 可能存在缓慢泄漏 | 做"长时运行"需求前 |
 | 7 | `LightingPass` 兼任"导入交换链" | 职责不对称 | 清理窗口期 |
 | 8 | 地形 LOD 全部预生成并常驻显存；B-04 只把单 chunk 顶点/索引组装迁到 GPU（流送 chunk 均为 1×1，仍走 GPU mesh；仅单实体 chunkGrid>1 回退 CPU builder） | 大世界显存仍随层级线性增长；GPU mesh 尚未覆盖多 chunk/流送合批 | 大世界/多 chunk GPU 合批时 |
-| 9 | 流送 chunk 各持独立 Model；GPU selection 已按 entity 输出 indirect count，B-07 笔刷可局部重建单个 chunk，但选择/撤销仍以 manager 为单位 | chunk 数量增加后 model bind/上传开销上升；chunk 编辑撤销粒度不足 | 多 chunk 编辑/撤销需求时 |
+| 9 | 流送 chunk 的 Model 已只剩元数据（F2-f），但选择/撤销仍以 manager 为单位；GPU selection 已按 entity 输出 indirect count，B-07 笔刷可局部重建单个 chunk | chunk 数量增加后 model bind/上传开销上升；chunk 编辑撤销粒度不足 | 多 chunk 编辑/撤销需求时 |
 | 10 | 地形雕刻只改运行期 HeightField/Model，不写场景 JSON；CharacterControllerComponent 已序列化但 Play 快照不保存雕刻 | 保存重载/Play 停止会丢失雕刻成果；编辑器无法持久化地形修改 | 后续/地形编辑持久化需求 |
 | 11 | 地形材质最多 4 个 Set2 set，但渲染按实体顺序遇到变化即重绑，未按材质集排序/合批 | 交替材质会增加 descriptor switch，材质集切换次数不设上限 | 多材质 chunk profiling 时 |
 | 12 | 合并缓冲的源数据要 CPU 侧完整顶点/索引副本（`Model::cpuVertices/cpuIndices`），Sponza 约 11MB；地形模型不留 | CPU 内存随可批模型总量线性增长 | 资产规模上去、或改走 GPU 回读重建时 |

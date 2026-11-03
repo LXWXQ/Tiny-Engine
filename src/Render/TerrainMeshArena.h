@@ -55,6 +55,17 @@ public:
 
     // Copies the model's complete vertex/index buffers into one free slot.
     // The source buffers must be fence-complete (written by an earlier frame).
+    // F2-f: reserve a slice before the mesh is uploaded. Scene owns the mesh
+    // lifetime now, so it reserves the slot first and copies the freshly built
+    // buffers in with its own one-shot command buffer.
+    bool acquire(uint32_t vertexCount, uint32_t indexCount, uint32_t& outSlot);
+    // Records the two copies plus the read barriers. The slot must come from
+    // acquire(); adoptedCount only advances once a copy has been recorded.
+    void copyInto(VkCommandBuffer commandBuffer, uint32_t slot,
+                  VkBuffer sourceVertexBuffer, VkBuffer sourceIndexBuffer);
+
+    // Convenience wrapper used by older call sites: reserves a slot and copies
+    // the model own buffers into it.
     bool adopt(VkCommandBuffer commandBuffer, const Model& model,
                uint32_t& outSlot, std::string& errorMessage);
     void release(uint32_t slot);
@@ -77,6 +88,8 @@ private:
     VkBuffer indexBuffer = VK_NULL_HANDLE;
     VmaAllocation indexAllocation = VK_NULL_HANDLE;
     std::vector<uint8_t> slotUsed;
+    std::vector<VkDeviceSize> slotVertexBytes;
+    std::vector<VkDeviceSize> slotIndexBytes;
     uint32_t adoptedCount = 0;
     bool available = false;
 };

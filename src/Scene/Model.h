@@ -147,6 +147,11 @@ public:
 
     static std::shared_ptr<Model> createModelFromFile(Device& device, VkCommandPool commandPool, const std::string& filepath);
 
+    // F2-f: 地形 chunk 的几何已经拷进共享 arena，Model 只保留元数据
+    // （子网格、包围盒、UV 范围）供绘制与编辑器选中使用；释放后 bind() 变成空操作。
+    void releaseGpuBuffers();
+    bool hasGpuBuffers() const { return vertexBuffer != VK_NULL_HANDLE; }
+
     void bind(VkCommandBuffer commandBuffer) const;
     void draw(VkCommandBuffer commandBuffer) const;                                 // 画全部子网格
     void drawSubMesh(VkCommandBuffer commandBuffer, const SubMesh& subMesh) const;  // 只画一个子网格
