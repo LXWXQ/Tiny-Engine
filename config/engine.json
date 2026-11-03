@@ -31,7 +31,12 @@
         1.0,
         0.0
       ],
-      "exposure": 1.0190000534057617
+      "exposure": 1.0190000534057617,
+      "shadows": {
+        "distance": 90.0,
+        "enabled": true,
+        "strength": 0.65
+      }
     },
     "motionBlur": {
       "enabled": true,
@@ -39,7 +44,6 @@
       "strength": 1.3899999856948853
     },
     "planned": {
-      "shadowEnabled": false,
       "ssrEnabled": false
     },
     "renderScale": 1.0,

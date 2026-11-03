@@ -28,6 +28,7 @@ class PresentPass;
 class UiCompositePass;
 class EditorOverlayPass;
 class SSAOPass;
+class ShadowPass;
 class SubresourceProbePass;
 
 class FirstApp
@@ -53,6 +54,8 @@ public:
 	void setGpuSceneForced(bool forced);
 	void setGpuMergedBuffers(bool enabled);
 	void setHiZEnabled(bool enabled);
+	// F6：关掉级联阴影（排查 / 对比截图用）。
+	void setShadowsEnabled(bool enabled);
 	void setTerrainBatchEnabled(bool enabled);
 	void setGpuSceneMinScreenPixels(float pixels);
 	void setGpuSceneExternalDebugCount(uint32_t count);
@@ -126,6 +129,9 @@ private:
 	EditorOverlayPass* editorOverlayPassPtr = nullptr;
 	bool editorOverlayInitialized = false;
 	SSAOPass* ssaoPassPtr = nullptr;
+	// F6：级联阴影。指针不拥有对象（unique_ptr 在 init 里，随渲染管线走）。
+	ShadowPass* shadowPassPtr = nullptr;
+
 
 	RenderPipeline renderPipeline;
 

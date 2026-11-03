@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~520 行
+size: ~545 行
 updated: 2026-11-02
 ---
 
@@ -588,8 +588,13 @@ updated: 2026-11-02
   [UX-19](../90-editor/ux-audit.md) 窗口固定 1920x1080，1366x768 与 150% 缩放下状态栏被推出屏幕。
 - 实现：新增 `src/Core/StartupLog.h/.cpp` 的 `tiny::writeStartupErrorLog(stage, message, directory = "")`，
   `main.cpp` 的 catch 把错误写进**可执行文件旁**的 `startup-error.log` 并在 stderr 打印路径；
-  `Device::reportDeviceFault` 在驱动没有 `VK_EXT_device_fault` 时打印原因/下一步并写同一个文件；
-  `FirstApp::computeWindowSize(workWidth, workHeight, width, height)` 按工作区 92% 收敛，
-  `initWindow` 打印 `[Window] sizing | workarea=... scale=... -> WxH (fits|clamped)`。
+  `Device::reportDeviceFault` 在驱动没有 `VK_EXT_device_fault` 时打印原因/下一步并写同一文件；
+  `FirstApp::computeWindowSize` 按工作区 92% 收敛，`initWindow` 打印 `[Window] sizing | workarea=... -> WxH`。
 - 可观测：`[Startup] error log selfTest PASS`、`[Window] fit selfTest PASS | 1280x720 -> 1177x662`。
 - 验证：回归 54 项（新增 `b1-window-fit`）。
+
+## F6-a：级联阴影（3 级 CSM + PCF）
+**实现**：`src/Render/ShadowPass.h/.cpp` 三级联（2048²、2D 数组 3 层）+ 纹素吸附 + AABB 8 角点剔除 + 3x3 PCF；`GlobalUbo` 尾部追加 `shadowMatrices[3]`/`shadowCascadeSplits`/`shadowParams`，全局 set 加 binding 11（`sampler2DArray`）；`--no-shadows` 与渲染面板「阴影」分组可关。
+**关键坑**：`glm::ortho` 在右手视空间 + `GLM_FORCE_DEPTH_ZERO_TO_ONE` 下把场景压到负深度，阴影图全空 —— 改手写正交矩阵（`z_ndc = (-z_view - r)/(2r)`）；单点包围球剔除会把整栋 Sponza 剔掉，改 8 角点 AABB。
+**已知限制**：默认场景阴影偏淡（IBL 占主导，方向光只占约 5% 亮度；此前 README 的已知边界是「无阴影」）；室内机位 on/off 差异 `mean 15.6 / gt5 1,020,849`。
+**回归**：新增 `f6-shadows`，全套 **62 项**。

@@ -38,6 +38,14 @@ struct GlobalUbo
 	// reproject each pixel's world position into screen space and derive a
 	// camera motion vector for motion blur.
 	glm::mat4 previousProjectionView{ 1.f };
+
+	// F6：3 级联阴影。矩阵放在 UBO 尾部而不是单独的 SSBO —— 光照着色器本来
+	// 每帧就要读这个 block，多 3 个 mat4 比多一次描述符绑定便宜。
+	glm::mat4 shadowMatrices[3]{ glm::mat4(1.f), glm::mat4(1.f), glm::mat4(1.f) };
+	// xyz = 每级联覆盖的最远视深度（用来选级），w = 实际启用的级联数
+	alignas(16) glm::vec4 shadowCascadeSplits{ 0.f, 0.f, 0.f, 3.f };
+	// x = 1/分辨率（纹素尺寸）, y = 强度, z = PCF 半径（纹素）, w = 是否启用
+	alignas(16) glm::vec4 shadowParams{ 1.f / 2048.f, 0.65f, 1.5f, 1.f };
 };
 
 // ---------------------------------------------------------------------------
@@ -56,7 +64,17 @@ static_assert(offsetof(GlobalUbo, pointLights)       == 144, "GlobalUbo.pointLig
 static_assert(sizeof(PointLight) == 32, "PointLight 应等于两个 vec4 的大小");
 static_assert(offsetof(GlobalUbo, previousProjectionView) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight),
 	"GlobalUbo.previousProjectionView offset mismatch");
-static_assert(sizeof(GlobalUbo) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight) + sizeof(glm::mat4),
+static_assert(offsetof(GlobalUbo, shadowMatrices) ==
+		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + sizeof(glm::mat4),
+	"GlobalUbo.shadowMatrices offset mismatch");
+static_assert(offsetof(GlobalUbo, shadowCascadeSplits) ==
+		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + sizeof(glm::mat4) + 3 * sizeof(glm::mat4),
+	"GlobalUbo.shadowCascadeSplits offset mismatch");
+static_assert(offsetof(GlobalUbo, shadowParams) ==
+		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) + sizeof(glm::vec4),
+	"GlobalUbo.shadowParams offset mismatch");
+static_assert(sizeof(GlobalUbo) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) +
+		2 * sizeof(glm::vec4),
 	"GlobalUbo size mismatch");
 
 struct SimplePushConstantData
@@ -191,7 +209,13 @@ struct EngineSettings
 	int ssaoKernelSize = 16;
 
 	bool ssrEnabled = false;
-	bool shadowEnabled = false;
+	// F6：方向光级联阴影（3 级 / 2048²）。默认开 —— 阴影是「画面像不像真的」里
+	// 性价比最高的一项，关掉只是排查用。
+	bool shadowEnabled = true;
+	// 最远阴影距离（米）。越大覆盖越远，但同样的 2048² 摊到更大范围就更糊。
+	float shadowDistance = 90.0f;
+	// 阴影强度：0 = 完全不加暗，1 = 全黑遮挡。0.65 是不把暗部压死的经验值。
+	float shadowStrength = 0.65f;
 	// B-03: compare GPU-selected LOD/visibility against a CPU mirror. Enabled
 	// only by --terrain-test; production frames skip the mirror entirely.
 	bool terrainGpuSelectionSelfTest = false;

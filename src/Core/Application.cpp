@@ -26,6 +26,7 @@
 #include "Render/UiCompositePass.h"
 #include "Render/EditorOverlayPass.h"
 #include "Render/SSAOPass.h"
+#include "Render/ShadowPass.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
 #include "Render/SubresourceProbePass.h"
@@ -779,6 +780,10 @@ streamingConfig.skirtsEnabled = false;
 	createUniformBuffers();
 	initMaterials();
 
+	// F6：级联阴影。必须在 GeometryPass 之前注册 —— 它写阴影图，Lighting 读，
+	// 而渲染图按注册顺序执行。
+	auto shadowPass = std::make_unique<ShadowPass>(*vulkanDevice, *renderGraph, scene->getTerrainMeshArena());
+
 	auto geoPass = std::make_unique<GeometryPass>(*vulkanDevice, gBufferPtrs, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),
 		descriptorManager->getTerrainSetLayout(), scene->getTerrainMeshArena());
@@ -804,6 +809,7 @@ streamingConfig.skirtsEnabled = false;
 		descriptorManager.get());
 	auto subresourceProbePass = std::make_unique<SubresourceProbePass>(*vulkanDevice, *renderGraph);
 
+	shadowPassPtr = shadowPass.get();
 	presentPassPtr = presentPass.get();
 	uiCompositePassPtr = uiComposite.get();
 	editorOverlayPassPtr = editorOverlay.get();
@@ -812,6 +818,7 @@ streamingConfig.skirtsEnabled = false;
 	crossQueueProbePassPtr = crossQueueProbePass.get();
 	subresourceProbePassPtr = subresourceProbePass.get();
 
+	renderPipeline.addPass(std::move(shadowPass));
 	renderPipeline.addPass(std::move(geoPass));
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
@@ -1157,9 +1164,20 @@ void FirstApp::rebuildGlobalDescriptors()
 		constGBufferPtrs[frame] = gBuffers[frame].get();
 	}
 
+	// F6：阴影图每帧槽位一份；没有 ShadowPass 时给空句柄（着色器按 shadowParams.w 跳过）。
+	std::array<VkImageView, kFramesInFlight> shadowViews{};
+	VkSampler shadowSampler = VK_NULL_HANDLE;
+	if (shadowPassPtr != nullptr)
+	{
+		shadowSampler = shadowPassPtr->getShadowSampler();
+		for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+			shadowViews[frame] = shadowPassPtr->getShadowView(frame);
+	}
+
 	descriptorManager->buildGlobalSet(globalUboBuffers, envInfo, constGBufferPtrs,
 	ssaoPassPtr->getOutputSampler(), ssaoViews,
-	irradianceInfo, prefilteredInfo, brdfLutInfo);
+	irradianceInfo, prefilteredInfo, brdfLutInfo,
+	shadowSampler, shadowViews);
 }
 
 bool FirstApp::handleWindowMaintenance()
@@ -1462,6 +1480,11 @@ void FirstApp::setHiZEnabled(bool enabled)
 	scene->getSettings().hizEnabled = enabled;
 }
 
+void FirstApp::setShadowsEnabled(bool enabled)
+{
+	scene->getSettings().shadowEnabled = enabled;
+}
+
 void FirstApp::setGpuSceneMinScreenPixels(float pixels)
 {
 	scene->getSettings().gpuSceneMinScreenPixels = pixels;
@@ -1579,6 +1602,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// 所以先把匹配规则本身证伪，再靠帧循环后的簿记断言确认真的生效。
 	if (!renderGraphSwitchboardSelfTest())
 		throw std::runtime_error("RenderGraph setPassEnabled selfTest failed");
+
+	// F6：级联阴影的数学自检（split 递增、角点落在裁剪体内、远处被剔除）。
+	if (!ShadowPass::selfTest())
+		throw std::runtime_error("ShadowPass selfTest failed");
 
 	// UX-19：窗口尺寸要按工作区收敛 —— 1366x768 的笔记本上 1920x1080 会把
 	// 状态栏和右下角面板推到屏幕外；150% 缩放下工作区只有 1280x720 更严重。
@@ -2196,6 +2223,26 @@ void FirstApp::render(float dt)
 		ubo.lightColor = scene->getSettings().directionalLightColor;
 		ubo.numLights = 0;
 		ubo.exposure = scene->getSettings().exposure;
+
+		// F6：级联矩阵每帧重算（相机一动阴影就要跟），然后写进 UBO 尾部。
+		const EngineSettings& settings = scene->getSettings();
+		if (shadowPassPtr != nullptr)
+		{
+			shadowPassPtr->setEnabled(settings.shadowEnabled);
+			shadowPassPtr->updateCascades(scene->getCamera().getView(),
+				scene->getCamera().getProjection(), settings.directionalLightDir);
+
+			const auto& cascades = shadowPassPtr->getCascades();
+			for (uint32_t cascade = 0; cascade < ShadowPass::kCascadeCount; ++cascade)
+				ubo.shadowMatrices[cascade] = cascades[cascade].viewProjection;
+			ubo.shadowCascadeSplits = glm::vec4(cascades[0].splitDistance,
+				cascades[1].splitDistance, cascades[2].splitDistance,
+				static_cast<float>(ShadowPass::kCascadeCount));
+
+			ubo.shadowParams = glm::vec4(1.0f / static_cast<float>(ShadowPass::kResolution),
+				settings.shadowEnabled ? settings.shadowStrength : 0.0f, 1.5f,
+				settings.shadowEnabled ? 1.0f : 0.0f);
+		}
 
 		memcpy(uboMapped[frameInFlight], &ubo, sizeof(ubo));
 		// 持久映射的 UBO 不保证落在 HOST_COHERENT 内存，必须显式 flush，

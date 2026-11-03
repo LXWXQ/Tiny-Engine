@@ -111,11 +111,17 @@ namespace
 		writeVec(light, "direction", s.directionalLightDir);
 		writeVec(light, "color", s.directionalLightColor);
 		light["exposure"] = s.exposure;
+
+		// F6：阴影从 planned 挪进 lighting —— 它已经是真实功能，不再是「计划中的项」。
+		json shadows;
+		shadows["enabled"] = s.shadowEnabled;
+		shadows["distance"] = s.shadowDistance;
+		shadows["strength"] = s.shadowStrength;
+		light["shadows"] = std::move(shadows);
 		j["lighting"] = std::move(light);
 
 		json planned;
 		planned["ssrEnabled"] = s.ssrEnabled;
-		planned["shadowEnabled"] = s.shadowEnabled;
 		j["planned"] = std::move(planned);
 
 		return j;
@@ -165,7 +171,22 @@ namespace
 		{
 			const json& n = j["planned"];
 			out.ssrEnabled = read(n, "ssrEnabled", out.ssrEnabled, warnings);
+			// 旧配置把 shadowEnabled 放在 planned 里；新配置在 lighting.shadows。
+			// 先读这里当兜底，下面 lighting.shadows 有值时再覆盖。
 			out.shadowEnabled = read(n, "shadowEnabled", out.shadowEnabled, warnings);
+		}
+
+		// lighting.shadows 是 F6 起的新位置；有它就覆盖上面的兜底值。
+		if (j.contains("lighting") && j["lighting"].is_object())
+		{
+			const json& lighting = j["lighting"];
+			if (lighting.contains("shadows") && lighting["shadows"].is_object())
+			{
+				const json& n = lighting["shadows"];
+				out.shadowEnabled = read(n, "enabled", out.shadowEnabled, warnings);
+				out.shadowDistance = read(n, "distance", out.shadowDistance, warnings);
+				out.shadowStrength = read(n, "strength", out.shadowStrength, warnings);
+			}
 		}
 	}
 

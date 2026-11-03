@@ -13,6 +13,7 @@ updated: 2026-10-30
 | 文档 | 回答的问题 |
 |---|---|
 | [pass-order](pass-order.md) | Pass 顺序是什么？为什么是这个顺序？ |
+| [shadow](shadow.md) | 阴影怎么做的？为什么不用 glm::ortho？为什么默认场景阴影偏淡？ |
 | [gbuffer](gbuffer.md) | G-Buffer 5 个附件的格式与内容？天空盒怎么"借道"？ |
 | [intermediate](intermediate.md) | 中间目标有哪些？Bloom 金字塔怎么组织？ |
 | [ibl](ibl.md) | IBL 三步烘焙怎么实现？ |

@@ -18,6 +18,11 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     int numLights;
     float exposure;
     PointLight pointLights[100];
+    // F6：阴影数据接在 UBO 尾部 —— 顺序必须和 C++ 的 GlobalUbo 一致。
+    mat4 previousProjectionView;
+    mat4 shadowMatrices[3];
+    vec4 shadowCascadeSplits;   // xyz = 每级最远视深度，w = 级联数
+    vec4 shadowParams;          // x = 1/分辨率, y = 强度, z = PCF 半径, w = 启用
 } ubo;
 
 layout(set = 0, binding = 1) uniform sampler2D environmentMap;
@@ -29,6 +34,9 @@ layout(set = 0, binding = 5) uniform sampler2D inPbr;
 layout(set = 0, binding = 6) uniform sampler2D inSSAO;
 
 // IBL 三件套（由 IBLBaker 在初始化阶段预烘焙）
+// F6：3 级联阴影图（每级一个 layer）。
+layout(set = 0, binding = 11) uniform sampler2DArray shadowMaps;
+
 layout(set = 0, binding = 7) uniform samplerCube irradianceMap;   // 漫反射：余弦卷积
 layout(set = 0, binding = 8) uniform samplerCube prefilteredMap;  // 镜面：GGX 预过滤 + mip 链
 layout(set = 0, binding = 9) uniform sampler2D   brdfLut;         // split-sum 的 BRDF 积分表
@@ -94,10 +102,55 @@ vec3 CalcLightBRDF(vec3 L, vec3 V, vec3 N, vec3 albedo, float roughness, float m
     return (kD * albedo / PI + specular) * radiance * NdotL;
 }
 
-vec3 CalcDirectionalLight(vec3 N, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0) {
+// 选级 + 3x3 PCF。自己比较深度而不是用比较采样器：比较采样器会让 PCF 的
+// 软化程度无法和强度参数解耦，而且还要多一套 sampler 状态。
+float SampleShadow(vec3 fragPosWorld, float viewDepth, vec3 N, float NdotL) {
+    if (ubo.shadowParams.w < 0.5)
+        return 1.0;
+
+    uint cascade = 0u;
+    if (viewDepth <= ubo.shadowCascadeSplits.x)
+        cascade = 0u;
+    else if (viewDepth <= ubo.shadowCascadeSplits.y)
+        cascade = 1u;
+    else if (viewDepth <= ubo.shadowCascadeSplits.z)
+        cascade = 2u;
+    else
+        return 1.0;   // 超出最后一级：不投影，直接受光
+
+    // 法线偏移（世界空间）：沿法线抬起半个纹素对应的世界距离，压住自遮蔽。
+    vec3 samplePos = fragPosWorld + N * 0.05;
+    vec4 lightSpace = ubo.shadowMatrices[cascade] * vec4(samplePos, 1.0);
+    vec3 proj = lightSpace.xyz / lightSpace.w;
+    proj.xy = proj.xy * 0.5 + 0.5;   // Vulkan 的 z 已经是 [0,1]，只有 xy 要重映射
+    if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0)
+        return 1.0;
+
+    // 斜射面需要更大的偏移：N·L 越小，同一深度差对应的世界距离越长。
+    // 斜率放大 + 常量兜底：正交阴影图覆盖 2r 的深度范围，1024 纹素下
+    // 1 纹素≈0.015 世界单位，bias 太小会让大面积平面自己遮自己。
+    float bias = max(0.0008, 0.0030 * (1.0 - NdotL));
+    float compare = proj.z - bias;
+    vec2 texel = vec2(ubo.shadowParams.x * max(ubo.shadowParams.z, 1.0));
+    float lit = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float stored = texture(shadowMaps, vec3(proj.xy + vec2(x, y) * texel, cascade)).r;
+            lit += compare <= stored ? 1.0 : 0.0;
+        }
+    }
+    return lit / 9.0;
+}
+
+vec3 CalcDirectionalLight(vec3 N, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0,
+                          vec3 fragPosWorld, float viewDepth) {
     vec3 L = normalize(-ubo.lightDirection.xyz);
     vec3 radiance = ubo.lightColor.xyz * ubo.lightColor.w;
-    return CalcLightBRDF(L, V, N, albedo, roughness, metallic, F0, radiance);
+    vec3 direct = CalcLightBRDF(L, V, N, albedo, roughness, metallic, F0, radiance);
+    float NdotL = max(dot(N, L), 0.0);
+    float shadow = SampleShadow(fragPosWorld, viewDepth, N, NdotL);
+    // 强度做 mix 而不是乘法：0 强度等于完全不加暗，而不是把方向光一起关掉。
+    return direct * mix(1.0, shadow, clamp(ubo.shadowParams.y, 0.0, 1.0));
 }
 
 vec3 CalcPointLight(PointLight light, vec3 N, vec3 fragPos, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0) {
@@ -137,7 +190,10 @@ void main() {
     F0 = mix(F0, albedo, metallic);
 
     vec3 Lo = vec3(0.0);
-    Lo += CalcDirectionalLight(N, V, albedo, roughness, metallic, F0);
+    // 用视空间深度选级：世界距离在透视下和屏幕上的密度对不上。
+    // 透视投影下 clip.w 恰好等于 -z_view，正好就是要的值，省一次矩阵乘法。
+    float viewDepth = (ubo.projectionView * vec4(fragPosWorld, 1.0)).w;
+    Lo += CalcDirectionalLight(N, V, albedo, roughness, metallic, F0, fragPosWorld, viewDepth);
 
     for (int i = 0; i < ubo.numLights; i++)
         Lo += CalcPointLight(ubo.pointLights[i], N, fragPosWorld, V, albedo, roughness, metallic, F0);

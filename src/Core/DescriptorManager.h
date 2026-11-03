@@ -58,7 +58,10 @@ public:
 		VkSampler ssaoSampler, const std::array<VkImageView, kFramesInFlight>& ssaoViews,
 		const VkDescriptorImageInfo& irradianceInfo,
 		const VkDescriptorImageInfo& prefilteredInfo,
-		const VkDescriptorImageInfo& brdfLutInfo);
+		const VkDescriptorImageInfo& brdfLutInfo,
+		// F6：3 级联阴影图（sampler2DArray，每帧槽位一份）。没有阴影时传空句柄，
+		// 着色器那边用 shadowParams.w 关掉采样，不会读到未定义内容。
+		VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews);
 	VkDescriptorSet getGlobalSet(uint32_t frameInFlightIndex) const
 	{
 		return globalSets[frameInFlightIndex];

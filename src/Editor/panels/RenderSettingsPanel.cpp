@@ -125,6 +125,16 @@ void RenderSettingsPanel::draw(EditorState& state)
         ImGui::SliderFloat("Max Radius", &settings->motionBlurMaxRadius, 0.0f, 0.2f, "%.3f");
     }
 
+    // F6：阴影（3 级 CSM）。strength 是"阴影方向的衰减比例"，
+    // 0 = 完全无阴影，1 = 全黑；默认 0.65 是有意留一点环境光，纯黑看着像贴纸。
+    if (ImGui::CollapsingHeader("阴影", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Checkbox("Enabled##shadows", &settings->shadowEnabled);
+        ImGui::SliderFloat("Distance", &settings->shadowDistance, 20.0f, 200.0f, "%.0f");
+        ImGui::SliderFloat("Strength", &settings->shadowStrength, 0.0f, 1.0f, "%.2f");
+        ImGui::TextDisabled("三级联 | 2048x2048 | 方向光越斜阴影越长");
+    }
+
     drawLight(*settings);
     drawAdvanced(*settings);
 

@@ -90,6 +90,7 @@ const UsageLine kUsageLines[] = {
     { "渲染", "--gpu-scene-external <n>", "外部实例数（粒子/体素共用的提交入口）" },
     { "渲染", "--no-merged-buffers", "不合并静态网格缓冲" },
     { "渲染", "--no-hiz", "关掉 Hi-Z 遮挡剔除" },
+    { "渲染", "--no-shadows", "关掉方向光级联阴影（排查 / 对比用）" },
     { "渲染", "--no-terrain-batch", "关掉地形合批（逐 chunk 绘制）" },
     { "地形", "--terrain-test", "启动时创建持久地形，用于地形回归" },
     { "地形", "--streaming-world [r]", "流送世界，半径 r（1..24，默认 3）" },
@@ -154,6 +155,7 @@ int main(int argc, char** argv)
     uint32_t gpuSceneExternal = 0u;
     bool noMergedBuffers = false;
     bool noHiZ = false;
+    bool noShadows = false;
     bool noTerrainBatch = false;
     // F2-a：流送世界。radius 默认 3（7x7=49 个 chunk 实体，低于地形 GPU 选择的 64 个 slot 上限）。
     bool streamingWorld = false;
@@ -226,6 +228,7 @@ int main(int argc, char** argv)
         else if (arg == "--gpu-scene") forceGpuScene = true;
         else if (arg == "--no-merged-buffers") noMergedBuffers = true;
         else if (arg == "--no-hiz") noHiZ = true;
+        else if (arg == "--no-shadows") noShadows = true;
         else if (arg == "--no-terrain-batch") noTerrainBatch = true;
         else if (arg == "--gpu-scene-min-px" && i + 1 < argc)
         {
@@ -439,6 +442,7 @@ int main(int argc, char** argv)
         if (forceGpuScene) app.setGpuSceneForced(true);
         if (noMergedBuffers) app.setGpuMergedBuffers(false);
         if (noHiZ) app.setHiZEnabled(false);
+        if (noShadows) app.setShadowsEnabled(false);
         if (noTerrainBatch) app.setTerrainBatchEnabled(false);
         if (gpuSceneMinPixels > 0.0f) app.setGpuSceneMinScreenPixels(gpuSceneMinPixels);
         if (gpuSceneExternal > 0u) app.setGpuSceneExternalDebugCount(gpuSceneExternal);

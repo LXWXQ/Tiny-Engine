@@ -150,7 +150,8 @@ void DescriptorManager::createGlobalLayout()
 	//   7 irradiance cubemap（漫反射 IBL）
 	//   8 prefiltered cubemap（镜面 IBL）
 	//   9 BRDF 积分表
-	std::vector<VkDescriptorSetLayoutBinding> bindings(11);
+	// F6：binding 11 = 3 级联阴影图（sampler2DArray）。
+	std::vector<VkDescriptorSetLayoutBinding> bindings(12);
 
 	bindings[0].binding = 0;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -162,6 +163,11 @@ void DescriptorManager::createGlobalLayout()
 	bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[10].descriptorCount = 1;
 	bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	bindings[11].binding = 11;
+	bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	bindings[11].descriptorCount = 1;
+	bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	for (uint32_t i = 1; i <= 9; i++)
 	{
@@ -330,7 +336,8 @@ void DescriptorManager::buildGlobalSet(
 	VkSampler ssaoSampler, const std::array<VkImageView, kFramesInFlight>& ssaoViews,
 	const VkDescriptorImageInfo& irradianceInfo,
 	const VkDescriptorImageInfo& prefilteredInfo,
-	const VkDescriptorImageInfo& brdfLutInfo)
+	const VkDescriptorImageInfo& brdfLutInfo,
+	VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews)
 {
 	// TD-03: rebuild in place so repeated resizes do not exhaust the descriptor pool.
 	if (globalSets.size() != kFramesInFlight)
@@ -363,7 +370,16 @@ void DescriptorManager::buildGlobalSet(
 			irradianceCopy, prefilteredCopy, brdfLutCopy
 		};
 
-		std::array<VkWriteDescriptorSet, 11> writes{};
+		std::array<VkWriteDescriptorSet, 12> writes{};
+
+		VkDescriptorImageInfo shadowInfo{ shadowSampler, shadowViews[frame],
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[11].dstSet = globalSets[frame];
+		writes[11].dstBinding = 11;
+		writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		writes[11].descriptorCount = 1;
+		writes[11].pImageInfo = &shadowInfo;
 
 		writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		writes[0].dstSet = globalSets[frame];

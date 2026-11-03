@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **59 项引擎用例 + 2 项工具自测 = 61 项**；
+`tools/Validate.ps1` 默认跑 **60 项引擎用例 + 2 项工具自测 = 62 项**；
 加 `-EnableProfiling` 时多一项（37 + 2 = 39）。
 
 ## 1. 每项的判据（统一）
@@ -88,6 +88,7 @@ updated: 2026-11-03
 | 57 | `b6-console-search` | Console 关键字搜索（`matchesSearch` 的大小写/空串/中文）+ 地形创建两阶段请求 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] console filter selfTest PASS`、`[Editor] terrain create request selfTest PASS`、`entries=19 conflicts=0` | UX-11 续（Console 搜索）、UX-08（两阶段提示） |
 | 58 | `e6-asset-and-textures` | 资产拖拽落点判据（命中地形 / 相机前方 8m）+ 贴图库扩展名过滤 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] asset drop selfTest PASS`、`[Editor] texture library selfTest PASS` | E6（资产拖拽 / 材质贴图选择） |
 | 59 | `async-terrain-create` | 异步创建地形的三段状态：当帧实体存在且 generating、当帧无 MeshComponent、wait 后几何就绪（并把同步 105.9 ms / 异步提交 0.28 ms 打进日志） | `TinyEditor.exe --selftest 5 --empty-scene` | `[Scene] async terrain create selfTest PASS` | TD-24（真异步地形生成） |
+| 60 | `f6-shadows` | 级联阴影：三级联矩阵自检（split 递增、末级被 90 夹住、8 角点落在光空间裁剪体内、远处球被剔除）+ 首帧确实注册了 Shadow pass | `TinyEngine.exe --selftest 20` | `[Shadow] selfTest PASS`、`[Shadow] first frame \| cascades=3` | 手写正交投影（`glm::ortho` 在 ZERO_TO_ONE+右手空间下深度落在 [0,1] 之外）；AABB 8 角点剔除；默认场景阴影偏淡是光照配比所致（方向光约占 5% 亮度） |
 
 ## 3. 工具自测
 
