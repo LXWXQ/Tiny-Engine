@@ -765,8 +765,9 @@ void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCa
     collectRetiredModels();
     const auto terrainPollStart = std::chrono::steady_clock::now();
     processTerrainGeneration();
-    recordTerrainPollMs(std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - terrainPollStart).count());
+    const double genPollMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - terrainPollStart).count();
+    recordTerrainPollMs(genPollMs);
 
     TransformComponent& cameraTransform = getCameraTransform();
     cameraController.inputEnabled = allowCameraInput;
@@ -777,6 +778,38 @@ void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCa
     maybeRebaseWorldOrigin();
     camera.setViewYXZ(cameraTransform.getTranslation(), cameraTransform.getEuler());
     camera.setPerspectiveProjection(glm::radians(60.0f), aspectRatio, 0.1f, 5000.0f);
+
+    // F2 收尾：分阶段计时（默认关闭，计时器在关闭时也被跳过）。
+    double streamingMs = 0.0;
+    double worldMs = 0.0;
+    double spatialMs = 0.0;
+    double visibilityMs = 0.0;
+    if (updateProfiling)
+    {
+        const auto streamingStart = std::chrono::steady_clock::now();
+        refreshStreamingTerrain();
+        streamingMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - streamingStart).count();
+
+        const auto worldStart = std::chrono::steady_clock::now();
+        updateWorldTransforms();
+        worldMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - worldStart).count();
+
+        const auto spatialStart = std::chrono::steady_clock::now();
+        refreshSpatialIndex();
+        spatialMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - spatialStart).count();
+
+        const auto visibilityStart = std::chrono::steady_clock::now();
+        updateVisibility(camera.getProjection() * camera.getView());
+        visibilityMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - visibilityStart).count();
+
+        reportUpdateProfile(genPollMs * 1000.0, streamingMs * 1000.0, worldMs * 1000.0,
+                            spatialMs * 1000.0, visibilityMs * 1000.0);
+        return;
+    }
 
     refreshStreamingTerrain();
 
@@ -932,26 +965,30 @@ void Scene::updateVisibility(const glm::mat4& viewProjection)
     visibleEntities.clear();
 
     const Frustum frustum = extractFrustum(viewProjection);
-    const AABB broadBounds = frustumBroadBounds(viewProjection);
 
-    for (auto [entity, mesh, tag] : registry.view<MeshComponent, RenderTagComponent>().each())
+    // F2 收尾：直接线性扫描 renderable，不再走 spatialIndex.query(broadBounds)。
+    //
+    // 旧路径的问题：宽包围盒在小 cell 上经常超过 4096 个 cell，于是退化成
+    // collectAll() —— 按 cell 把同一实体重复展开（半径 24 时 2401 个 chunk
+    // 展开成约 1.5 万条），再 sortUnique() 排序去重。这两步在半径 24 时占了
+    // Scene::update() 的大头，而且每帧还要算一次 viewProjection 的逆。
+    // 线性扫描是 O(n)、无重复、无排序，剔除判据（6 个平面 vs 世界 AABB）不变。
+    for (auto [entity, mesh] : registry.view<MeshComponent>().each())
     {
-        if (tag.isSkybox)
-            visibleEntities.push_back(entity);
-    }
-
-    std::vector<entt::entity> candidates;
-    spatialIndex.query(broadBounds, candidates);
-
-    for (entt::entity entity : candidates)
-    {
+        (void)mesh;
         const auto* tag = registry.try_get<RenderTagComponent>(entity);
+        if (tag != nullptr && tag->isSkybox)
+        {
+            // 天空盒跟相机走，永远要画。
+            visibleEntities.push_back(entity);
+            continue;
+        }
+
         const auto* worldBounds = registry.try_get<WorldBoundsComponent>(entity);
-        if (!worldBounds)
+        if (worldBounds == nullptr)
             continue;
 
-        // Skybox is camera-following and always needed as the background.
-        if ((tag && tag->isSkybox) || intersectsAABB(frustum, worldBounds->world))
+        if (intersectsAABB(frustum, worldBounds->world))
             visibleEntities.push_back(entity);
     }
 }
@@ -2291,6 +2328,24 @@ void Scene::updateTerrainStreaming()
                                       kMaxTerrainStreamingRadius);
     const int32_t unloadRadius = radius + std::max(0, streaming->unloadPadding);
 
+    // F2 收尾：稳态早退。
+    //
+    // 这趟扫描每帧要做 ~(2r+1)^2 次 map 查找、排序候选，再逐个检查已有 chunk；
+    // 半径 24（2401 块）时实测约 70 us/帧，是 Scene::update() 里最大的一项。
+    // 但相机还停在同一个 chunk 里、环也填满、没有待办任务时，这一帧不可能有
+    // 任何 chunk 生命周期的变化，所以整趟可以跳过。
+    const size_t ringChunks = static_cast<size_t>(2 * static_cast<int64_t>(radius) + 1) *
+                              static_cast<size_t>(2 * static_cast<int64_t>(radius) + 1);
+    if (centerX == lastStreamingCenterX && centerZ == lastStreamingCenterZ &&
+        radius == lastStreamingRadius && pendingStreamingTerrainChunks.empty() &&
+        streamingTerrainChunks.size() == ringChunks)
+    {
+        return;
+    }
+    lastStreamingCenterX = centerX;
+    lastStreamingCenterZ = centerZ;
+    lastStreamingRadius = radius;
+
     // Retire chunks beyond the hysteresis ring and notice completed/failed
     // asynchronous jobs. Destroying an entity also erases it from the map, so
     // defer those calls until this iteration has finished.
@@ -3245,6 +3300,38 @@ bool Scene::requestRegenerateTerrain(entt::entity entity,
     }
 
     return true;
+}
+
+void Scene::reportUpdateProfile(double genPollUs, double streamingUs, double worldUs,
+                               double spatialUs, double visibilityUs)
+{
+    const double totalUs = genPollUs + streamingUs + worldUs + spatialUs + visibilityUs;
+    profileGenPollUs += genPollUs;
+    profileStreamingUs += streamingUs;
+    profileWorldUs += worldUs;
+    profileSpatialUs += spatialUs;
+    profileVisibilityUs += visibilityUs;
+    profileMaxTotalUs = std::max(profileMaxTotalUs, totalUs);
+    ++profileFrames;
+
+    if (profileFrames < 60)
+        return;
+
+    const double frames = static_cast<double>(profileFrames);
+    std::cout << "[Update] avg us | genPoll=" << (profileGenPollUs / frames)
+              << " streaming=" << (profileStreamingUs / frames)
+              << " world=" << (profileWorldUs / frames)
+              << " spatial=" << (profileSpatialUs / frames)
+              << " visibility=" << (profileVisibilityUs / frames)
+              << " | maxTotal=" << profileMaxTotalUs << std::endl;
+
+    profileFrames = 0;
+    profileGenPollUs = 0.0;
+    profileStreamingUs = 0.0;
+    profileWorldUs = 0.0;
+    profileSpatialUs = 0.0;
+    profileVisibilityUs = 0.0;
+    profileMaxTotalUs = 0.0;
 }
 
 void Scene::recordTerrainPollMs(double ms)

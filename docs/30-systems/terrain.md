@@ -294,7 +294,7 @@ chunk entities (runtime)
 
 当前流送使用 8 槽异步 GPU 高度场请求；单 chunk GPU mesh 组装使用 4 槽
 异步 submit/poll，主线程只做提交与轮询，完成后再安装 Model。`createTerrainEntity()`
-与场景加载仍是同步路径。F2-h 起半径上限 24（2401 块），实测 1080p 下半径 2/12/16/24 约 190/70/36/17 FPS：瓶颈是每 chunk 每帧的 CPU 簿记（Transform / 空间索引 / 地形 record / 实例表行），不是显存。
+与场景加载仍是同步路径。F2-h 起半径上限 24（2401 块）。**性能数字必须注明构建类型**：Debug 下半径 24 只有 17 FPS（没优化时 `updateVisibility` 一段就占 12.9 ms），Release 下同一场景 **208 FPS**，`--update-profile` 给出 `Scene::update()` 全程约 62 µs/帧（genPoll 0.4 / streaming 0.4 / world 0.06 / spatial 0.06 / visibility 61.5 µs），CPU 只占帧时间约 1%。F2-i 把可见性从 `SpatialIndex::query(broadBounds)` 换成对 `MeshComponent` 的线性扫描（旧路径在小 cell 上超过 4096 个 cell 会退化成 `collectAll()`，按 cell 重复展开再排序去重），并给流送扫描加了稳态早退（相机没换 chunk、环已填满、无待办时整趟跳过，70 µs → 0.4 µs）。
 
 编辑器语义：
 

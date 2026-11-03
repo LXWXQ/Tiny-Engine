@@ -61,6 +61,8 @@ public:
 
 	void setStreamingFlyRadius(float radius);
 	void setStreamingBudget(float milliseconds);
+	// --update-profile：把分阶段计时开关转给 Scene。
+	void setUpdateProfiling(bool enabled);
 	void setOriginRebaseEnabled(bool enabled);
 	void setOriginRebaseThreshold(float threshold);
 	void setCrossQueueTestEnabled(bool enabled);

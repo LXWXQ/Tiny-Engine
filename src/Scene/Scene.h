@@ -79,6 +79,10 @@ public:
     RenderTelemetry& getTelemetry() { return currentTelemetry; }
     const RenderTelemetry& getDisplayTelemetry() const { return displayTelemetry; }
     uint32_t getLastWorldTransformUpdates() const { return lastWorldTransformUpdates; }
+
+    // F2 收尾：每帧 CPU 分段时间。默认关闭（零开销），--update-profile 打开后
+    // 每 60 帧打印一次各阶段的平均耗时与窗口内最大总耗时。
+    void setUpdateProfiling(bool enabled) { updateProfiling = enabled; }
     uint32_t getLastSpatialIndexUpdates() const { return lastSpatialIndexUpdates; }
     size_t getRetiredModelCount() const { return retiredModels.size(); }
 
@@ -319,6 +323,8 @@ private:
     bool queryGroundAtWorld(float worldX, float worldZ, float& outHeight,
                             entt::entity& outEntity, float* outSlopeDegrees = nullptr) const;
     void recordTerrainPollMs(double ms);
+    void reportUpdateProfile(double genPollUs, double streamingUs, double worldUs,
+                             double spatialUs, double visibilityUs);
     void updateTerrainStreaming();
     void discardPendingTerrainCallbacks();
     void cancelPendingTerrainGenerations();
@@ -344,6 +350,21 @@ private:
     std::unordered_set<entt::entity> dirtySpatialEntities;
     std::vector<entt::entity> visibleEntities;
     uint32_t lastWorldTransformUpdates = 0;
+
+    // F2 收尾：流送扫描的稳态早退。三者与环内块数都没变时不需要重扫。
+    int64_t lastStreamingCenterX = INT64_MIN;
+    int64_t lastStreamingCenterZ = INT64_MIN;
+    int32_t lastStreamingRadius = -1;
+
+    // --update-profile：只累加 double，不做字符串与分配。
+    bool updateProfiling = false;
+    uint32_t profileFrames = 0;
+    double profileGenPollUs = 0.0;
+    double profileStreamingUs = 0.0;
+    double profileWorldUs = 0.0;
+    double profileSpatialUs = 0.0;
+    double profileVisibilityUs = 0.0;
+    double profileMaxTotalUs = 0.0;
     uint32_t lastSpatialIndexUpdates = 0;
     uint64_t frameCounter = 0;
     std::vector<RetiredModel> retiredModels;

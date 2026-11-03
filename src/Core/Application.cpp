@@ -1461,6 +1461,11 @@ void FirstApp::setStreamingBudget(float milliseconds)
 	scene->setStreamingTerrainBudget(milliseconds);
 }
 
+void FirstApp::setUpdateProfiling(bool enabled)
+{
+	scene->setUpdateProfiling(enabled);
+}
+
 void FirstApp::setCrossQueueTestEnabled(bool enabled)
 {
 	crossQueueProbePassPtr->setEnabled(enabled);

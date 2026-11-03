@@ -219,6 +219,7 @@ int main(int argc, char** argv)
         }
         else if (arg == "--editor") editorMode = true;
         else if (arg == "--screenshot-viewport") diagOptions.screenshotViewport = true;
+        else if (arg == "--update-profile") diagOptions.updateProfile = true;
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
         else if (arg == "--terrain-test") diagOptions.terrainTest = true;
         else if (arg == "--hidden") windowHiddenFlag = true;
@@ -329,6 +330,7 @@ int main(int argc, char** argv)
         if (originThreshold > 0.0f) app.setOriginRebaseThreshold(originThreshold);
         if (streamingFlyRadius > 0.0f) app.setStreamingFlyRadius(streamingFlyRadius);
         if (streamingBudgetMs > 0.0f) app.setStreamingBudget(streamingBudgetMs);
+        if (diagOptions.updateProfile) app.setUpdateProfiling(true);
         if (crossQueueTest) app.setCrossQueueTestEnabled(true);
         if (resizeTest) app.setResizeTestEnabled(true);
         if (materialStress) app.setMaterialStressEnabled(true);

@@ -54,6 +54,10 @@ namespace diag
 // 写文档 / 做视觉回归时后者才是想要的。
 bool screenshotViewport = false;
 
+// --update-profile：每 60 帧打印一次 Scene::update() 的分阶段 CPU 耗时。
+// 关闭时零开销（连计时器都不取）。
+bool updateProfile = false;
+
 // --empty-scene：不加载 Sponza / 天空盒，只留相机。
 // 编辑器调试单个物体时用 —— Sponza 的包围盒包住整个场景，
 // 会干扰"点选/包围盒/手柄"这类交互的观察。
