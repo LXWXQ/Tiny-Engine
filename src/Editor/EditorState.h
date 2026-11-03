@@ -57,6 +57,10 @@ struct EditorState
     bool documentDirty = false;
     void markDirty() { documentDirty = true; }
 
+    // 播放期间文档只读：运行期状态不回写磁盘，也不允许 New/Open 把播放快照盖掉。
+    // 这是状态机的约束而不是 UI 限制，所以放在 state 上，菜单、快捷键、面板都能查。
+    bool documentWritable() const { return playState == PlayState::Editing; }
+
     // ---- 播放状态机 ----
     PlayState playState = PlayState::Editing;
 

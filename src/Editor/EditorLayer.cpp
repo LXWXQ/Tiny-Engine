@@ -394,11 +394,12 @@ void EditorLayer::drawMenuBar()
 
     if (ImGui::BeginMenu("File"))
     {
-        if (ImGui::MenuItem("New Scene", "Ctrl+N")) newScene();
-        if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) openSceneDialog();
+        const bool writable = state.documentWritable();
+        if (ImGui::MenuItem("New Scene", "Ctrl+N", false, writable)) newScene();
+        if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, writable)) openSceneDialog();
         ImGui::Separator();
-        if (ImGui::MenuItem("Save", "Ctrl+S")) saveScene();
-        if (ImGui::MenuItem("Save As...")) saveSceneAs();
+        if (ImGui::MenuItem("Save", "Ctrl+S", false, writable)) saveScene();
+        if (ImGui::MenuItem("Save As...", nullptr, false, writable)) saveSceneAs();
         ImGui::Separator();
         if (ImGui::MenuItem("Reload Config") && state.services.reloadConfig)
             state.services.reloadConfig();
@@ -657,6 +658,12 @@ void EditorLayer::endFrame()
 // ---------------------------------------------------------------------------
 bool EditorLayer::newScene()
 {
+    if (!state.documentWritable())
+    {
+        state.pushLog(LogEntry::Level::Warning, "[Editor] new scene blocked: 播放中不重置场景（按 F7 停止）");
+        return false;
+    }
+
     if (!state.services.scene)
         return false;
 
@@ -671,6 +678,13 @@ bool EditorLayer::newScene()
 
 bool EditorLayer::saveScene()
 {
+    // 播放期间场景是运行期状态，写盘会把玩家跑出来的位姿存进文档。
+    if (!state.documentWritable())
+    {
+        state.pushLog(LogEntry::Level::Warning, "[Editor] save blocked: 播放中不写入文档（按 F7 停止后保存）");
+        return false;
+    }
+
     if (state.documentPath.empty())
         return saveSceneAs();
 
@@ -732,6 +746,12 @@ bool EditorLayer::openScene(const std::string& path)
 
 bool EditorLayer::loadSceneFromPath(const std::string& path, std::string& errorMessage)
 {
+    if (!state.documentWritable())
+    {
+        errorMessage = "播放中不能打开场景：先按 F7 停止播放";
+        return false;
+    }
+
     if (!state.services.scene)
     {
         errorMessage = "no scene bound";
@@ -2174,6 +2194,48 @@ bool EditorLayer::selfTestWithScene()
 
         scene.destroyEntity(sphere);
         scene.refreshTransformsAndVisibility();
+    }
+
+    // ---- 2e) E3b：播放期间文档只读（快照不落盘，也不被 New/Open 盖掉）----
+    {
+        const PlayState savedPlayState = state.playState;
+        const bool writableBefore = state.documentWritable();
+
+        state.playState = PlayState::Playing;
+        if (state.documentWritable())
+        {
+            std::cerr << "[Editor] selfTest FAIL: document must be read-only while playing" << std::endl;
+            return false;
+        }
+
+        state.log.clear();
+        if (saveScene() || newScene())
+        {
+            std::cerr << "[Editor] selfTest FAIL: save/new must be blocked while playing" << std::endl;
+            return false;
+        }
+        if (state.log.empty() || state.log.back().text.find("播放中") == std::string::npos)
+        {
+            std::cerr << "[Editor] selfTest FAIL: blocked document ops must log a reason" << std::endl;
+            return false;
+        }
+
+        std::string playLockError;
+        if (loadSceneFromPath(".tmp/play-lock-missing.scene.json", playLockError) ||
+            playLockError.find("播放中") == std::string::npos)
+        {
+            std::cerr << "[Editor] selfTest FAIL: open must be blocked while playing" << std::endl;
+            return false;
+        }
+
+        state.playState = savedPlayState;
+        if (state.documentWritable() != writableBefore)
+        {
+            std::cerr << "[Editor] selfTest FAIL: play state not restored after lock test" << std::endl;
+            return false;
+        }
+
+        std::cout << "[Editor] play document lock selfTest PASS | save/new/open blocked while playing" << std::endl;
     }
 
     return true;

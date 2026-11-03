@@ -5,7 +5,7 @@ type: architecture
 scope: EditorContext / EditorState / EngineServices / EditorLayer 的职责划分
 read-when: 加新面板、给编辑器接新能力、或怀疑编辑器越界碰了引擎内部
 size: ~80 行
-updated: 2026-10-30
+updated: 2026-11-03
 ---
 
 # 编辑器架构
@@ -64,6 +64,17 @@ std::function<bool()> isEditorMode;
 - **true**  → 调 `onBuildEditorUI()`，内置面板不再绘制
 
 两套面板不并存，是为了避免它们同时修改同一批 `EngineSettings` 造成控制权歧义。
+
+## 播放期间文档只读（E3b）
+
+播放是运行期状态，不是文档内容 —— 所以 `Playing` / `Paused` 期间 `EditorState::documentWritable()` 返回 false：
+
+- `saveScene()` 拒绝写盘，日志 `[Editor] save blocked: 播放中不写入文档（按 F7 停止后保存）`；否则 F5 跑出来的位姿会被 Ctrl+S 存进 `.scene.json`；
+- `newScene()` / `loadSceneFromPath()` 同样拒绝，否则会替换掉 `playSnapshot`，Stop 时把用户恢复到别人家的场景；
+- File 菜单里 New / Open / Save / Save As 在播放期间置灰，但快捷键仍会打一条 Warning 日志 —— 显式提示，不静默失败；
+- `playSnapshot` 只在内存里，`stopPlay()` 后立即清空，不参与任何序列化路径。
+
+播放状态切换本身（F5 / F6 / F7）**不进撤销栈**：它不是"文档被修改"，塞进栈里会让运行期的 Ctrl+Z 语义变得不可预测；播放前的改动已经在快照里。
 
 ## 脏标记
 

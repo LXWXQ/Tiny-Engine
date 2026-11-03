@@ -592,3 +592,9 @@ updated: 2026-11-02
 - 实现：`MaterialFactorRecord`（32 字节）+ 全局 set `binding 10` 的 SSBO，`updateMaterialFactors()` 只写 32 字节 + flush；`mrt.frag` 按 glTF 规范把 factor 乘到采样结果上；`SetMaterialCommand` / `SetRenderTagCommand` 接管面板写操作。
 - 可观测：`[Editor] selfTest PASS | ... + material/render tag + ...`；Sponza 墙面从 186 降到 161（资源自带 `baseColorFactor = 0.588`，现在才真正生效）。
 - 验证：编辑器自检 0/0、`--selftest 60` 154 FPS 0/0；回归 43 项（新增 `e3-material-undo`）。
+
+## E3b：播放期间文档只读
+
+- 问题：播放中 Ctrl+S 会把运行期位姿写进文档；New / Open 会替换 `playSnapshot`，Stop 后恢复到错误的场景。
+- 实现：`EditorState::documentWritable()` 作为单一判据；`saveScene` / `newScene` / `loadSceneFromPath` 在非 Editing 状态直接拒绝并打 Warning；File 菜单相应项置灰。
+- 可观测：`[Editor] play document lock selfTest PASS | save/new/open blocked while playing`。 决定：播放状态切换不进撤销栈（运行期状态不是文档内容）。

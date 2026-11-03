@@ -243,6 +243,8 @@ $tests = @(
        MustContain = @("multi transform", "[Editor] selfTest PASS") },
     @{ Name = "e3-material-undo"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("material/render tag", "[Editor] selfTest PASS") },
+    @{ Name = "e3-play-doc-lock"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("play document lock selfTest PASS") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )
