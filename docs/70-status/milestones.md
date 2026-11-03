@@ -574,27 +574,5 @@ updated: 2026-11-02
 **实现**：`TerrainMeshArena` 换成两块 device-local 大缓冲（顶点 1.1M ≈ 46 MB、索引 5.9M ≈ 22.5 MB）+ 有序空闲区间表：`acquire()` 首次适配、`release()` 前后合并，`Slice` 记录 base/count；顶点分配成功但索引失败时回滚顶点区间。`TerrainComponent` 用 `arenaVertexBase/arenaIndexBase/arenaVertexCount/arenaIndexCount` 取代 `arenaSlot`，`Scene` 落地与销毁两侧直接搬 `Slice`。
 **可观测**：`[Terrain] mesh arena ready | vertexMB=48 indexMB=22 vertexCapacity=1100000 indexCapacity=5900000`；`[Terrain] batched draw | chunks=12 arenaAllocs=25 commandSpan=6144`；半径 8 飞行 600 帧 `arenaAllocs` 在 305~323 回落，13 次 rebase，0/0。**回归**：39 项全 PASS；三组 A/B 截图 `max diff = 0`；编辑器自检 `picking=OK rebuild=OK unload=OK`；sync 与 resize 各 0/0。顺带修掉 `Model` 自有 VBO/IBO 缺 `TRANSFER_SRC` 导致的 `VUID-vkCmdCopyBuffer-srcBuffer-00118`。
 ## F2-h：chunk 坐标 int64 + 采样锚点 double（流送半径上限 24） **问题**：半径 12 的 625 块是 int32 chunk key 与 float 绝对锚点能撑的上限，再放大就会出现量化与哈希碰撞。 **实现**：`Scene::TerrainChunkCoord{int64_t x, z}` + 64 位哈希替换 `int64_t` 打包 key，`TerrainChunkComponent::chunkX/Z` 与 rebase 的 key 重排全部改宽；`TerrainConfig::sampleOriginX/Z` 与 `HeightField` 成员改 `double`（噪声本身仍按 `float` 采样，保证 CPU/GPU 逐位一致），校验上限 ±1e12；arena 容量由 `Scene::createStreamingTerrain()` 按环尺寸算（`ring*1700` 顶点 / `ring*9000` 索引）并新增 `TerrainMeshArena::reconfigure()` 原地重建（渲染侧只持 `this` 指针）；GPU selection 槽位 384 → 1024、命令区 12288 → 32768。 **可观测**：`mesh arena resized | radius=24 chunks=2401 vertexCapacity=4081700 indexCapacity=21609000`、`[Streaming] chunks=2401 loaded=2401`、`draw calls 2`、`[Validation] errors=0 warnings=0`；半径 2/12/16/24 = 190/70/36/17 FPS。 **回归**：新增 `f2h-large-radius`；全套 **40 项**；三组 A/B 截图 `max diff = 0`；编辑器自检、sync、resize 各 0/0。
-## E1：选择与批量操作（多选 / 复制 / 聚焦）
-**问题**：编辑器只有单选；`Selection` 内部虽是 vector，但只暴露替换语义；删除只作用于 `primary()`，没有复制/聚焦，层级面板没有搜索。
-**实现**：`Selection::add/remove/toggle/size`；`CompositeCommand`（多条子命令 = 一步撤销，revert 反序）+ `DuplicateEntityCommand`（白名单组件拷贝、子树 BFS、拒绝地形/流送/相机）；快捷键 `Delete` 批量删除、`Ctrl+D` 复制、`Ctrl+A` 全选、`F` 聚焦；Hierarchy 的 Ctrl/Shift 多选 + 搜索过滤 + 多选右键菜单；Viewport Ctrl 点击 toggle；Inspector 多选摘要与批量按钮。
-**可观测**：`[Editor] selfTest PASS | commands + delete-undo + batch delete/duplicate + serialization round trip`。**回归**：新增 `e1-batch-commands`；全套 **41 项**；编辑器自检、`--selftest 60` 冒烟、Validate 全 PASS。
 
-## E2：多对象拖拽（一组选中共用一条命令）
-
-- 问题：Gizmo 只作用 `selection.primary()`，多选拖拽时其余物体不动。
-- 实现：`SetTransformsCommand` + `TransformPose`；拖拽起点快照整组（局部 pose、世界矩阵、父世界逆），每帧用 `deltaWorld = primaryWorldNew * inverse(primaryStartWorld)` 施加到其余实体，再从矩阵列拆 T/R/S；地形 chunk / 流送 / 相机不参与。
-- 可观测：`[Editor] selfTest PASS | commands + delete-undo + batch delete/duplicate + multi transform + serialization round trip`；合并窗口保证一次拖拽 = 一条撤销。
-- 验证：`TinyEditor.exe --selftest 5 --empty-scene` 0/0；回归 42 项（新增 `e2-multi-transform`）。
-
-## E3：材质参数与渲染标记进撤销栈
-
-- 问题：Inspector 的 Base Color / Metallic / Roughness / Alpha Mode 与 Render Tag 复选框直接写组件，不进命令栈；而且这些 factor 当时根本没进 GPU，滑杆是安慰剂。
-- 实现：`MaterialFactorRecord`（32 字节）+ 全局 set `binding 10` 的 SSBO，`updateMaterialFactors()` 只写 32 字节 + flush；`mrt.frag` 按 glTF 规范把 factor 乘到采样结果上；`SetMaterialCommand` / `SetRenderTagCommand` 接管面板写操作。
-- 可观测：`[Editor] selfTest PASS | ... + material/render tag + ...`；Sponza 墙面从 186 降到 161（资源自带 `baseColorFactor = 0.588`，现在才真正生效）。
-- 验证：编辑器自检 0/0、`--selftest 60` 154 FPS 0/0；回归 43 项（新增 `e3-material-undo`）。
-
-## E3b：播放期间文档只读
-
-- 问题：播放中 Ctrl+S 会把运行期位姿写进文档；New / Open 会替换 `playSnapshot`，Stop 后恢复到错误的场景。
-- 实现：`EditorState::documentWritable()` 作为单一判据；`saveScene` / `newScene` / `loadSceneFromPath` 在非 Editing 状态直接拒绝并打 Warning；File 菜单相应项置灰。
-- 可观测：`[Editor] play document lock selfTest PASS | save/new/open blocked while playing`。 决定：播放状态切换不进撤销栈（运行期状态不是文档内容）。
+> 编辑器侧里程碑（E1 起）见 [editor/milestones](../90-editor/milestones.md)。

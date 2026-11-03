@@ -76,6 +76,17 @@ std::function<bool()> isEditorMode;
 
 播放状态切换本身（F5 / F6 / F7）**不进撤销栈**：它不是"文档被修改"，塞进栈里会让运行期的 Ctrl+Z 语义变得不可预测；播放前的改动已经在快照里。
 
+## 未保存修改的确认（E4）
+
+所有"会替换文档"的入口先走 `requestDocumentAction()`：
+
+- 文档干净，或正在播放（E3b 的只读语义）→ 直接执行；
+- 有未保存修改 → 只把意图记进 `state.pendingDocumentAction`，下一帧由 `drawUnsavedPrompt()` 弹出模态框；
+- 三个按钮：保存并继续（保存失败就停在框里，不吞掉意图）/ 放弃修改 / 取消；
+- 点窗口关闭按钮也会被主循环拦截，转成同一条确认流程（`EditorLayer::requestExitConfirmation()`）；
+- 菜单与快捷键共用这一个路口，不会再各写一套判断。
+
+窗口标题由编辑器算好再请引擎设置：`EngineServices::setWindowTitle` / `requestExit` 是两个回调，编辑器仍然拿不到 GLFW 窗口。
 ## 脏标记
 
 `EditorState::markDirty()` 只置位 `documentDirty`。**不**自动写盘 ——

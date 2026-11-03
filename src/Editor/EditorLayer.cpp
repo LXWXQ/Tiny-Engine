@@ -77,6 +77,8 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
     ImGuiIO& io = ImGui::GetIO();
     state.wantsKeyboard = io.WantTextInput;
 
+    updateWindowTitle();
+
     handleShortcuts();
     updatePlayState(dt);
 }
@@ -267,11 +269,11 @@ void EditorLayer::handleShortcuts()
     }
     else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false))
     {
-        newScene();
+        requestDocumentAction(EditorState::PendingDocumentAction::New);
     }
     else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
     {
-        openSceneDialog();
+        requestDocumentAction(EditorState::PendingDocumentAction::Open);
     }
     else if (ImGui::IsKeyPressed(ImGuiKey_W, false))
     {
@@ -378,6 +380,9 @@ void EditorLayer::drawUI()
     drawPanels();
     layoutNeedsReset = false;
 
+    // 未保存确认放在所有面板之后：它要盖在最上层，且本帧的改动要先算进 dirty。
+    drawUnsavedPrompt();
+
     // 本帧有面板改过变换 -> 在提交渲染之前把世界变换与包围盒算准。
     // 放在这里而不是各个面板里，是为了"多个面板同帧改动只刷新一次"。
     if (state.transformRefreshPending)
@@ -395,8 +400,10 @@ void EditorLayer::drawMenuBar()
     if (ImGui::BeginMenu("File"))
     {
         const bool writable = state.documentWritable();
-        if (ImGui::MenuItem("New Scene", "Ctrl+N", false, writable)) newScene();
-        if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, writable)) openSceneDialog();
+        if (ImGui::MenuItem("New Scene", "Ctrl+N", false, writable))
+            requestDocumentAction(EditorState::PendingDocumentAction::New);
+        if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, writable))
+            requestDocumentAction(EditorState::PendingDocumentAction::Open);
         ImGui::Separator();
         if (ImGui::MenuItem("Save", "Ctrl+S", false, writable)) saveScene();
         if (ImGui::MenuItem("Save As...", nullptr, false, writable)) saveSceneAs();
@@ -406,7 +413,8 @@ void EditorLayer::drawMenuBar()
         if (ImGui::MenuItem("Save Config") && state.services.saveConfig)
             state.services.saveConfig();
         ImGui::Separator();
-        if (ImGui::MenuItem("Exit")) io.WantCaptureKeyboard = false;  // 由窗口关闭处理
+        if (ImGui::MenuItem("Exit"))
+            requestDocumentAction(EditorState::PendingDocumentAction::Exit);
         ImGui::EndMenu();
     }
 
@@ -836,6 +844,129 @@ void EditorLayer::stopPlay()
     state.selection.clear();
     state.commands.clear();
     state.pushLog(LogEntry::Level::Info, "[Editor] stopped, scene restored");
+}
+
+// ---------------------------------------------------------------------------
+// E4：文档安全（未保存确认 + 窗口标题）
+//
+// 原来 Ctrl+N / Ctrl+O / File->Exit 会静默丢掉未保存的修改，标题栏也从不显示
+// 当前文档与脏标记。现在所有"会替换文档"的入口都先经过 requestDocumentAction()：
+//   干净 或 播放中 -> 直接执行（播放中由 saveScene/newScene 的守卫拒绝并打日志）
+//   有未保存修改   -> 只记下意图，画模态框，用户选完再执行
+// 这样"确认"只有一处实现，菜单与快捷键不会各写一套。
+// ---------------------------------------------------------------------------
+void EditorLayer::requestDocumentAction(EditorState::PendingDocumentAction action)
+{
+    if (action == EditorState::PendingDocumentAction::None)
+        return;
+
+    if (!state.documentDirty || !state.documentWritable())
+    {
+        performDocumentAction(action);
+        return;
+    }
+
+    state.pendingDocumentAction = action;
+    unsavedPromptRequested = true;
+}
+
+void EditorLayer::performDocumentAction(EditorState::PendingDocumentAction action)
+{
+    switch (action)
+    {
+    case EditorState::PendingDocumentAction::New:
+        newScene();
+        break;
+    case EditorState::PendingDocumentAction::Open:
+        openSceneDialog();
+        break;
+    case EditorState::PendingDocumentAction::Exit:
+        if (state.services.requestExit)
+            state.services.requestExit();
+        break;
+    case EditorState::PendingDocumentAction::None:
+        break;
+    }
+}
+
+void EditorLayer::cancelPendingDocumentAction()
+{
+    state.pendingDocumentAction = EditorState::PendingDocumentAction::None;
+    unsavedPromptRequested = false;
+}
+
+void EditorLayer::drawUnsavedPrompt()
+{
+    constexpr const char* kPopupId = "未保存的修改";
+
+    if (unsavedPromptRequested)
+    {
+        ImGui::OpenPopup(kPopupId);
+        unsavedPromptRequested = false;
+    }
+
+    if (state.pendingDocumentAction == EditorState::PendingDocumentAction::None)
+        return;
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal(kPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    const std::string name = state.documentPath.empty() ? std::string("untitled") : state.documentPath;
+    ImGui::TextUnformatted("当前场景有未保存的修改：");
+    ImGui::TextUnformatted(name.c_str());
+    ImGui::Separator();
+
+    const EditorState::PendingDocumentAction action = state.pendingDocumentAction;
+
+    if (ImGui::Button("保存并继续", ImVec2(120, 0)))
+    {
+        // 保存失败（没有路径又取消了另存为对话框）就停在提示框里，
+        // 不能把用户的意图吞掉 —— 否则"保存并继续"变成了"什么都没发生"。
+        if (saveScene())
+        {
+            state.pendingDocumentAction = EditorState::PendingDocumentAction::None;
+            ImGui::CloseCurrentPopup();
+            performDocumentAction(action);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("放弃修改", ImVec2(120, 0)))
+    {
+        state.documentDirty = false;
+        state.pendingDocumentAction = EditorState::PendingDocumentAction::None;
+        ImGui::CloseCurrentPopup();
+        performDocumentAction(action);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("取消", ImVec2(120, 0)))
+    {
+        state.pendingDocumentAction = EditorState::PendingDocumentAction::None;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+void EditorLayer::updateWindowTitle()
+{
+    if (!state.services.setWindowTitle)
+        return;
+
+    std::string name = "untitled";
+    if (!state.documentPath.empty())
+        name = std::filesystem::path(state.documentPath).filename().string();
+
+    std::string title = name;
+    if (state.documentDirty)
+        title += " *";
+    title += " - Tiny Editor";
+
+    // 标题每帧都会变 → 只在真正变化时调一次引擎回调，避免每帧 glfwSetWindowTitle。
+    if (title == lastWindowTitle)
+        return;
+    lastWindowTitle = title;
+    state.services.setWindowTitle(title);
 }
 
 
@@ -2236,6 +2367,55 @@ bool EditorLayer::selfTestWithScene()
         }
 
         std::cout << "[Editor] play document lock selfTest PASS | save/new/open blocked while playing" << std::endl;
+    }
+
+    // ---- 2f) E4：脏文档的操作确认（不执行、不丢意图）----
+    {
+        const bool dirtyBefore = state.documentDirty;
+        const EditorState::PendingDocumentAction pendingBefore = state.pendingDocumentAction;
+        const size_t namesBefore = registry.view<NameComponent>().size();
+
+        state.documentDirty = true;
+        requestDocumentAction(EditorState::PendingDocumentAction::New);
+        if (state.pendingDocumentAction != EditorState::PendingDocumentAction::New)
+        {
+            std::cerr << "[Editor] selfTest FAIL: dirty document must queue the action" << std::endl;
+            return false;
+        }
+        if (registry.view<NameComponent>().size() != namesBefore)
+        {
+            std::cerr << "[Editor] selfTest FAIL: dirty document performed the action anyway" << std::endl;
+            return false;
+        }
+
+        cancelPendingDocumentAction();
+        if (state.pendingDocumentAction != EditorState::PendingDocumentAction::None)
+        {
+            std::cerr << "[Editor] selfTest FAIL: cancel did not clear the pending action" << std::endl;
+            return false;
+        }
+
+        // 标题必须带脏标记，且只在变化时推给引擎。
+        if (state.services.setWindowTitle)
+        {
+            updateWindowTitle();
+            if (lastWindowTitle.find(" *") == std::string::npos)
+            {
+                std::cerr << "[Editor] selfTest FAIL: dirty title missing marker: " << lastWindowTitle << std::endl;
+                return false;
+            }
+            state.documentDirty = false;
+            updateWindowTitle();
+            if (lastWindowTitle.find(" *") != std::string::npos)
+            {
+                std::cerr << "[Editor] selfTest FAIL: clean title keeps dirty marker" << std::endl;
+                return false;
+            }
+        }
+
+        state.documentDirty = dirtyBefore;
+        state.pendingDocumentAction = pendingBefore;
+        std::cout << "[Editor] unsaved changes prompt selfTest PASS | dirty blocks new/open/exit until resolved" << std::endl;
     }
 
     return true;

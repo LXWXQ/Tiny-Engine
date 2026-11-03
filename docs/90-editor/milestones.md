@@ -1,0 +1,46 @@
+---
+id: editor/milestones
+title: 编辑器里程碑（E1 起）
+type: status
+scope: 空
+size: ~45 行
+read-when: 想知道编辑器做过哪些轮次与每轮的验证基线
+updated: 2026-11-03
+---
+
+# 编辑器里程碑
+
+> 引擎侧（D / F 系列）的里程碑与实测基线见 [milestones](../70-status/milestones.md)。
+> 本页记录编辑器从 E1 开始的逐轮改动，编号与提交信息一一对应。
+
+## E1：选择与批量操作（多选 / 复制 / 聚焦）
+**问题**：编辑器只有单选；`Selection` 内部虽是 vector，但只暴露替换语义；删除只作用于 `primary()`，没有复制/聚焦，层级面板没有搜索。
+**实现**：`Selection::add/remove/toggle/size`；`CompositeCommand`（多条子命令 = 一步撤销，revert 反序）+ `DuplicateEntityCommand`（白名单组件拷贝、子树 BFS、拒绝地形/流送/相机）；快捷键 `Delete` 批量删除、`Ctrl+D` 复制、`Ctrl+A` 全选、`F` 聚焦；Hierarchy 的 Ctrl/Shift 多选 + 搜索过滤 + 多选右键菜单；Viewport Ctrl 点击 toggle；Inspector 多选摘要与批量按钮。
+**可观测**：`[Editor] selfTest PASS | commands + delete-undo + batch delete/duplicate + serialization round trip`。**回归**：新增 `e1-batch-commands`；全套 **41 项**；编辑器自检、`--selftest 60` 冒烟、Validate 全 PASS。
+
+## E2：多对象拖拽（一组选中共用一条命令）
+
+- 问题：Gizmo 只作用 `selection.primary()`，多选拖拽时其余物体不动。
+- 实现：`SetTransformsCommand` + `TransformPose`；拖拽起点快照整组（局部 pose、世界矩阵、父世界逆），每帧用 `deltaWorld = primaryWorldNew * inverse(primaryStartWorld)` 施加到其余实体，再从矩阵列拆 T/R/S；地形 chunk / 流送 / 相机不参与。
+- 可观测：`[Editor] selfTest PASS | commands + delete-undo + batch delete/duplicate + multi transform + serialization round trip`；合并窗口保证一次拖拽 = 一条撤销。
+- 验证：`TinyEditor.exe --selftest 5 --empty-scene` 0/0；回归 42 项（新增 `e2-multi-transform`）。
+
+## E3：材质参数与渲染标记进撤销栈
+
+- 问题：Inspector 的 Base Color / Metallic / Roughness / Alpha Mode 与 Render Tag 复选框直接写组件，不进命令栈；而且这些 factor 当时根本没进 GPU，滑杆是安慰剂。
+- 实现：`MaterialFactorRecord`（32 字节）+ 全局 set `binding 10` 的 SSBO，`updateMaterialFactors()` 只写 32 字节 + flush；`mrt.frag` 按 glTF 规范把 factor 乘到采样结果上；`SetMaterialCommand` / `SetRenderTagCommand` 接管面板写操作。
+- 可观测：`[Editor] selfTest PASS | ... + material/render tag + ...`；Sponza 墙面从 186 降到 161（资源自带 `baseColorFactor = 0.588`，现在才真正生效）。
+- 验证：编辑器自检 0/0、`--selftest 60` 154 FPS 0/0；回归 43 项（新增 `e3-material-undo`）。
+
+## E3b：播放期间文档只读
+
+- 问题：播放中 Ctrl+S 会把运行期位姿写进文档；New / Open 会替换 `playSnapshot`，Stop 后恢复到错误的场景。
+- 实现：`EditorState::documentWritable()` 作为单一判据；`saveScene` / `newScene` / `loadSceneFromPath` 在非 Editing 状态直接拒绝并打 Warning；File 菜单相应项置灰。
+- 可观测：`[Editor] play document lock selfTest PASS | save/new/open blocked while playing`。 决定：播放状态切换不进撤销栈（运行期状态不是文档内容）。
+
+## E4-a：文档安全（未保存确认 + 窗口标题）
+
+- 问题：有未保存修改时 `Ctrl+N` / `Ctrl+O` / File→Exit 会静默丢改动；标题栏从不显示当前文档与脏标记；点窗口关闭按钮也是直接退。
+- 实现：`EditorState::PendingDocumentAction{None,New,Open,Exit}` + `requestDocumentAction()` 单一路口（干净或播放中直接执行，脏则只记意图），`drawUnsavedPrompt()` 一个模态框（保存并继续 / 放弃修改 / 取消；保存失败不吞意图）；`EngineServices::setWindowTitle` / `requestExit` 两个回调；标题 = `文件名 + " *" + " - Tiny Editor"`，只在变化时推送；主循环拦截窗口关闭按钮转成确认。
+- 可观测：`[Editor] unsaved changes prompt selfTest PASS | dirty blocks new/open/exit until resolved`。
+- 验证：编辑器自检 0/0、`--selftest 60` 202 FPS 0/0；回归 45 项（新增 `e4-unsaved-prompt`）。

@@ -55,6 +55,9 @@ public:
     // 引擎侧查询：编辑器是否吃掉了键盘输入（避免相机同时响应 WASD）
     bool wantsKeyboardInput() const { return state.wantsKeyboard; }
 
+    // 引擎拦截窗口关闭按钮时调这里：有未保存修改就先弹确认框。
+    void requestExitConfirmation() { requestDocumentAction(EditorState::PendingDocumentAction::Exit); }
+
     // 打开指定场景文件（供命令行 --scene 使用）
     bool openScene(const std::string& path);
 
@@ -83,6 +86,15 @@ private:
     bool layoutNeedsReset = true;
 
     void handleShortcuts();
+
+    // ---- E4：文档安全（未保存确认 + 标题） ----
+    void requestDocumentAction(EditorState::PendingDocumentAction action);
+    void performDocumentAction(EditorState::PendingDocumentAction action);
+    void drawUnsavedPrompt();
+    void updateWindowTitle();
+    void cancelPendingDocumentAction();
+    bool unsavedPromptRequested = false;
+    std::string lastWindowTitle;
     void updatePlayState(float dt);
 
     // Shared top-level Create menu entry. Uses CreateTerrainCommand and selects the result.

@@ -1328,6 +1328,16 @@ void FirstApp::run()
 while (!glfwWindowShouldClose(window))
 {
 glfwPollEvents();
+
+// 点窗口关闭按钮时，编辑器有未保存修改就先撤销关闭、转成"确认后再退出"。
+// 放在这里是因为只有引擎知道窗口要关了，而"要不要拦"是编辑器的文档语义。
+if (glfwWindowShouldClose(window) && editorLayer &&
+        editorLayer->getState().documentWritable() &&
+        editorLayer->getState().documentDirty)
+{
+    glfwSetWindowShouldClose(window, GLFW_FALSE);
+    editorLayer->requestExitConfirmation();
+}
 if (!handleWindowMaintenance())
 {
 ImGui_ImplGlfw_Sleep(10);
@@ -1867,6 +1877,21 @@ void FirstApp::initEditor()
     };
 
     services.pushLog = [](const std::string&) { /* 预留：接引擎日志流 */ };
+
+    // 标题由编辑器算（含未保存标记），引擎只负责落到窗口上。
+    services.setWindowTitle = [this](const std::string& title)
+    {
+        if (window == nullptr || title.empty())
+            return;
+        glfwSetWindowTitle(window, title.c_str());
+    };
+
+    // 退出也走编辑器的确认流程：确认后编辑器主动请求关闭。
+    services.requestExit = [this]
+    {
+        if (window != nullptr)
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+    };
 
     services.openFileDialog = [](const char* filter, const char* title) -> std::string
     {

@@ -227,3 +227,4 @@ updated: 2026-10-30
 | editor | [viewport](90-editor/viewport.md) | 改视口 / 画面拉伸或发暗 |
 | editor | [gizmo](90-editor/gizmo.md) | 点选与三轴手柄 |
 | editor | [materials](90-editor/materials.md) | 占位材质棋盘格 |
+| editor | [milestones](90-editor/milestones.md) | 看编辑器做过哪些轮次 |

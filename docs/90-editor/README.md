@@ -35,6 +35,7 @@ updated: 2026-11-01
 | [viewport](viewport.md) | 改视口尺寸/格式 / 画面拉伸或发暗 |
 | [gizmo](gizmo.md) | 点不中物体 / 拖拽方向不对 / 加新手柄 |
 | [materials](materials.md) | 新建物体显示成纯白 / 改 G-Buffer 着色 |
+| [milestones](milestones.md) | 编辑器做过哪些轮次与每轮基线 |
 
 ## 当前能力（D-8 / TD-09）
 

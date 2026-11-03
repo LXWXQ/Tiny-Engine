@@ -61,6 +61,11 @@ struct EditorState
     // 这是状态机的约束而不是 UI 限制，所以放在 state 上，菜单、快捷键、面板都能查。
     bool documentWritable() const { return playState == PlayState::Editing; }
 
+    // ---- 未保存修改的确认 ----
+    // 非 None 表示有一个文档操作被"脏"挡住，等待用户在模态框里选。
+    enum class PendingDocumentAction { None, New, Open, Exit };
+    PendingDocumentAction pendingDocumentAction = PendingDocumentAction::None;
+
     // ---- 播放状态机 ----
     PlayState playState = PlayState::Editing;
 

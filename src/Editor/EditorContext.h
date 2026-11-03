@@ -142,6 +142,13 @@ struct EngineServices
     // 取视口纹理的 ImGui 句柄。按 frame slot 区分：
     // 两帧在飞时第 N+1 帧写视口会覆盖 GPU 仍在采样的第 N 帧内容。
     std::function<ImTextureID(uint32_t frameSlot)> getViewportTextureId;
+
+    // 窗口标题。编辑器要把"文档名 + 未保存标记"显示出来，但它不拥有 GLFW 窗口，
+    // 所以只能请引擎代劳。
+    std::function<void(const std::string& title)> setWindowTitle;
+
+    // 请求退出。未保存提示点了"保存并继续"或"放弃修改"之后才会调到这里。
+    std::function<void()> requestExit;
 };
 
 } // namespace editor
