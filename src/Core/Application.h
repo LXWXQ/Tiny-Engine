@@ -60,6 +60,7 @@ public:
 	void setStreamingFly(bool enabled, float speed);
 
 	void setStreamingFlyRadius(float radius);
+	void setStreamingBudget(float milliseconds);
 	void setOriginRebaseEnabled(bool enabled);
 	void setOriginRebaseThreshold(float threshold);
 	void setCrossQueueTestEnabled(bool enabled);

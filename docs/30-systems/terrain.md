@@ -48,13 +48,17 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
   manager + 多个独立 chunk 实体，每个 chunk 拥有自己的 Model/Mesh/Bounds，
   在相机周围有限半径内加载/卸载；
 - GPU compute 已负责高度场噪声与单 chunk 顶点/索引组装；多 chunk 手动地形仍由
-  CPU builder 生成。LOD 选择/剔除走 GPU selection；流送半径有限（1~8），尚不是无缝
-  无限世界。
+  CPU builder 生成。LOD 选择/剔除走 GPU selection；流送半径上限 12（`--streaming-world`
+  最大 625 块），仍以 float 局部坐标 + 浮动原点为基础，尚不是真正无缝的无限世界。
 - F2-a 起有可持续运行的载体：`--streaming-world [radius]` 在构造期建立 manager，
-  半径 3 时 49 个 chunk 实体（低于地形 GPU 选择的 64 个 slot 上限）；
-  `--streaming-fly [speed]` 让相机沿半径 220 的圆周前移，使加载/卸载持续发生。
+  半径 r 时 (2r+1)^2 个 chunk 实体；`--streaming-fly [speed]` 让相机沿 +X 直线
+  巡航（F2-c 起，`--streaming-fly-radius` 控制侧向摆动幅度），使加载/卸载持续发生。
+- F2-d 起半径上限 8 → 12（625 块）：地形 GPU 选择槽位 64 → 384（只受同屏可见
+  chunk 数约束）、命令区 4096 → 12288，arena 96 → 384 槽（2048 顶点 / 12288 索引，
+  约 136 KB/槽、合计约 51 MB）；新增每帧流送时间预算 `maxUpdateMs`（默认 2 ms，
+  `--streaming-budget` 可调），慢帧不再一次生成整环。
 - F2-b 起同一帧的地形 chunk 由**一条** indirect 提交：每个 chunk 的顶点/索引放进
-  `TerrainMeshArena` 的固定槽位（4096 顶点 / 20480 索引），间接命令里带
+  `TerrainMeshArena` 的固定槽位（F2-d 起 2048 顶点 / 12288 索引），间接命令里带
   `firstIndex`（arena 索引基址）、`vertexOffset`（arena 顶点基址）与
   `firstInstance`（该 chunk 在 set 3 实例表里的行号）。chunk 的世界矩阵不再烘进顶点，
   而是在顶点着色器里按 `gl_InstanceIndex` 从实例表取 —— 同一份网格被移动时不需要重拷。
@@ -263,7 +267,8 @@ chunk entities (runtime)
   `config.sampleOriginX/Z`，因此独立生成的噪声高度在边界连续；
 - `localColorRange=false`，避免各 chunk 按自己的 min/max 拉伸顶点色产生色带；
 - 相机所在 chunk 为中心，Chebyshev 半径内按距离排序加载；
-- `maxLoadsPerFrame` 控制每帧新请求数，卸载半径 = loadRadius + 1；
+- `maxLoadsPerFrame` 控制每帧新请求数（上限 16），`maxUpdateMs` 是同一帧里的
+  生成时间预算（默认 2 ms），先到者生效；卸载半径 = loadRadius + 1；
 - 加载中的 chunk 先有 TerrainComponent、没有 MeshComponent；GPU 高度场完成后
   优先走 `TerrainGpuMeshBuilder` 组装并安装 Mesh/Bounds；GPU mesh 不可用或
   构建失败时再提交 CPU JobSystem fallback；
@@ -272,7 +277,7 @@ chunk entities (runtime)
 
 当前流送使用 8 槽异步 GPU 高度场请求；单 chunk GPU mesh 组装使用 4 槽
 异步 submit/poll，主线程只做提交与轮询，完成后再安装 Model。`createTerrainEntity()`
-与场景加载仍是同步路径。流送半径上限 8，属于有限世界基础，不是最终无限地形。
+与场景加载仍是同步路径。流送半径上限 12（625 块，实测 1080p 下约 68 FPS，瓶颈在每 chunk 的 CPU 簿记），属于有限世界基础，不是最终无限地形。
 
 编辑器语义：
 

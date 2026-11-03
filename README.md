@@ -4,7 +4,7 @@
 重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
 
 - 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> Bloom -> Present(ACES+gamma+ImGui)`
-- 一条命令完成：依赖准备 -> 全新 configure/build -> 35 项回归
+- 一条命令完成：依赖准备 -> 全新 configure/build -> 37 项回归
 - 验收基线：**退出码 0** + **stderr 0 字节** + `[Validation] errors=0 warnings=0`
 
 > 本文件是仓库根目录**唯一**的文档。所有细节在 [`docs/`](docs/README.md) 下，按类型分层。
@@ -120,7 +120,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/20-pipeline/`](docs/20-pipeline/README.md) | Pass 顺序、G-Buffer/中间目标、IBL、Shader 清单 | 改 `src/Render/` 或 `shaders/` |
 | [`docs/30-systems/`](docs/30-systems/README.md) | ECS/场景、JobSystem、配置、ImGui | 改 `src/Scene/`、`src/Core/` 对应模块 |
 | [`docs/40-build/`](docs/40-build/README.md) | 依赖版本、构建运行、排障 | 构建失败 / 换机器 |
-| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、35 项回归矩阵、验收标准 | 加测试 / 定位回归 |
+| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、37 项回归矩阵、验收标准 | 加测试 / 定位回归 |
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
 | [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
@@ -153,13 +153,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 
 | 项 | 值 |
 |---|---|
-| 回归 | `tools/Validate.ps1`：**35 项全 PASS**，stderr 全 0 字节 |
+| 回归 | `tools/Validate.ps1`：**37 项全 PASS**，stderr 全 0 字节 |
 | 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |
 | 场景 | Sponza：103 个组 + 天空盒；CPU 路径 `draw calls 104`，合并模式 `draw calls 2`（相机朝向 Sponza 时） |
 | 绑定 | `desc binds 2`（Set0/1/2 + Set3 实例 SSBO；bindless 生效） |
 | 帧率 | Debug / RTX 2070：`--selftest 300` 约 240~260 FPS（仅作同机相对比较） |
 | 流送世界 | `--streaming-world 2`（半径 2）→ `chunks=25`、`maxUpdateMs≈0.7`；`--streaming-fly 60` 飞 150 帧 → `loaded=54 unloaded=19`，验证层 0/0 |
-| 地形合批 | F2-b：可见 chunk 惰拷贝进 `TerrainMeshArena`（96 槽），实例表放 set 3，一条 `vkCmdDrawIndexedIndirect` 覆盖 2048 条命令；`--streaming-world 2` 的 `draw calls` 从 13 降到 2，两路截图逐像素一致；`--no-terrain-batch` 回退到逐 chunk 提交 |
+| 地形合批 | F2-b/F2-d：可见 chunk 惰拷贝进 `TerrainMeshArena`（384 槽，单槽 2048 顶点 / 12288 索引，约 51 MB），实例表放 set 3，一条 `vkCmdDrawIndexedIndirect` 覆盖 2048 条命令；`--streaming-world 2` 的 `draw calls` 从 13 降到 2，两路截图逐像素一致；`--no-terrain-batch` 回退到逐 chunk 提交。F2-d 半径上限 12（625 块），地形 GPU 选择 384 槽 / 命令区 12288，每帧生成预算 `--streaming-budget`（默认 2 ms）；实测半径 2/4/8/12 = 190/164/117/68 FPS |
 | GPU 批 | F1-a~e：实例数 ≥ 256 才走 GPU 驱动提交（当前 103 实例默认走 CPU 路径，`--gpu-scene` 可强制）。按 `(模型, 子网格)` 分组实例化，合并顶点/索引缓冲后一条 `vkCmdDrawIndexedIndirect` 画完所有组（跨模型 single draw，`--no-merged-buffers` 整条退回 CPU），组按材质排序；结构签名命中时跳过摊平与实例上传（稳定帧 439µs → 9µs，只写 256B `frameData`）；`vec4 screen` 做屏幕空间误差剔除（`--gpu-scene-min-px`）；`ExternalInstance` 让粒子/体素共用同一提交路径（`--gpu-scene-external` 调试注入）；Hi-Z 遮挡剔除当前场景 `hizCulled=0`（Sponza 子网格太大，组级保守剔除不命中），`--no-hiz` 可关。 |
 
 > 这些数字随硬件与代码变化。**更新基线时请成对更新本表与

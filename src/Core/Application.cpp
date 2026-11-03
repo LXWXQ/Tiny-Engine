@@ -875,7 +875,7 @@ streamingConfig.skirtsEnabled = false;
 		config.lodLevelCount = 3u;
 		config.skirtsEnabled = false;
 		config.localColorRange = false;
-		streamingWorldRadius = std::clamp(options.streamingRadius, 1, 8);
+		streamingWorldRadius = std::clamp(options.streamingRadius, 1, 12);
 		streamingWorldEntity = scene->createStreamingTerrain(
 			config, streamingWorldRadius, 4, "StreamingWorld");
 		if (streamingWorldEntity == entt::null)
@@ -1446,6 +1446,10 @@ void FirstApp::setOriginRebaseThreshold(float threshold)
 {
 	scene->getSettings().originRebaseThreshold = threshold > 1.0f ? threshold : 1024.0f;
 }
+void FirstApp::setStreamingBudget(float milliseconds)
+{
+	scene->setStreamingTerrainBudget(milliseconds);
+}
 
 void FirstApp::setCrossQueueTestEnabled(bool enabled)
 {
@@ -1596,6 +1600,7 @@ if (streamingWorldEnabled)
 	std::cout << "[Streaming] chunks=" << chunks
 		<< " loaded=" << scene->getStreamingChunksLoadedTotal()
 		<< " unloaded=" << scene->getStreamingChunksUnloadedTotal()
+		<< " budgetHits=" << scene->getStreamingBudgetHits()
 		<< " maxUpdateMs=" << scene->getMaxStreamingUpdateMs() << std::endl;
 	const uint32_t expected = static_cast<uint32_t>(
 		(2 * streamingWorldRadius + 1) * (2 * streamingWorldRadius + 1));

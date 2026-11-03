@@ -39,7 +39,7 @@ updated: 2026-11-02
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 35 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 37 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -578,4 +578,9 @@ updated: 2026-11-02
 **问题**：世界坐标一直是 `float`，相机走到万米量级后矩阵与深度开始抖；流送世界也没有「原点会移动」的概念。
 **实现**：registry 里所有 `TransformComponent` 只存局部坐标，绝对位移记在 `Scene::worldOrigin`（`glm::dvec3`）。相机局部水平距离超过 `originRebaseThreshold`（默认 1024）时，位移吸到整块 chunk（`floor(local / chunkSize) * chunkSize`），一次性平移所有 Transform、调 `CameraController::offsetWorldPosition` 把平滑状态（`smoothPosition` / `focusPoint` / `lastAppliedPosition`）一起挪、重排流送 chunk 的 `chunkX/Z` 与两张 key 表，`worldOrigin += delta`。地形噪声锚点 `sampleOrigin` **保持绝对**（rebase 后新建 chunk 写 `worldOrigin + 局部中心`），`HeightField::sample()` 本来就不读它，所以查询/碰撞/接缝都不受影响。`--streaming-fly` 从圆周改成直线巡航：圆周半径恒定会让 rebase 每帧触发一次。
 **可观测**：`[Origin] rebased | delta=(x, y, z) origin=(X, Y, Z) rebases=<n>`、`[Origin] stats | rebases=<n> origin=(X, Y, Z) maxLocal=<f> threshold=<f>`；自检断言「飞行距离超过两倍阈值时必须 rebase」「`maxLocal` 不得超过阈值 +128」，关闭 rebase 时这两条自动跳过。
-**回归**：新增 `f2c-origin-rebase` 与 `f2c-origin-off`，全套 **35 项**；`--streaming-world 2 --streaming-fly 60 --origin-threshold 64` 240 帧 4 次 rebase、`chunks=35`；600 帧 13 次 rebase、`loaded=138 unloaded=103`、`chunks=35` 稳定；rebase 与不 rebase 两路截图逐像素对比 `max 14 / mean 0.9`（只差 float 光栅化）、地形几何一致；`--validation-features sync` 0/0。
+**回归**：新增 `f2c-origin-rebase` 与 `f2c-origin-off`，当时全套 **35 项**；`--streaming-world 2 --streaming-fly 60 --origin-threshold 64` 240 帧 4 次 rebase、`chunks=35`；600 帧 13 次 rebase、`loaded=138 unloaded=103`、`chunks=35` 稳定；rebase 与不 rebase 两路截图逐像素对比 `max 14 / mean 0.9`（只差 float 光栅化）、地形几何一致；`--validation-features sync` 0/0。
+## F2-d：流送半径 8 → 12（625 块）与每帧生成预算
+**问题**：流送半径上限 8，地形 GPU 选择只有 64 个实体槽、命令区 4096、arena 96 槽，半径超过 3 就开始回退；单帧生成没有预算，慢帧会一次拉起整环。
+**实现**：`kMaxTerrainStreamingRadius` 8 → 12（625 块）、`kMaxTerrainStreamingLoadsPerFrame` 8 → 16；`kTerrainGpuMaxEntities` 64 → 384、`kTerrainGpuCommandsPerEntity` 32 → 16、`kTerrainIndirectCapacity` 4096 → 12288；`TerrainMeshArena` 96 → 384 槽、单槽 2048 顶点 / 12288 索引（约 136 KB，合计约 51 MB）；新增 `TerrainStreamingComponent::maxUpdateMs`（默认 2 ms）与 `--streaming-budget`。
+**可观测**：`[Terrain] GPU selection ready | entities=384 records=6144 commandsPerEntity=16`、`[Terrain] mesh arena ready | slots=384 vertexMB=33 indexMB=18`、`[Streaming] chunks=<n> ... budgetHits=<n>`；`--streaming-budget 0.2` 时 budgetHits 明显非零。
+**回归**：新增 `f2d-streaming-radius`（半径 8 → chunks=289）与 `f2d-streaming-budget`，全套 **37 项**；半径 2/4/8/12 = 190/164/117/68 FPS（625 块瓶颈在每 chunk 的 CPU 簿记）；半径 8 飞行 600 帧 `chunks=323 loaded=599 unloaded=276`、13 次 rebase、0/0。

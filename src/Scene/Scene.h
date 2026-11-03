@@ -164,6 +164,7 @@ public:
                                          int32_t maxRegionX, int32_t maxRegionZ,
                                          std::vector<entt::entity>& outEntities) const;
     bool adoptStreamingTerrainManager(entt::entity entity);
+    void setStreamingTerrainBudget(float milliseconds);
     double getLastStreamingUpdateMs() const { return lastStreamingUpdateMs; }
     double getMaxStreamingUpdateMs() const { return maxStreamingUpdateMs; }
     // F2-a：流送统计。loaded/unloaded 是累计值，*LastFrame 是上一帧的增量，
@@ -172,6 +173,9 @@ public:
     uint64_t getStreamingChunksUnloadedTotal() const { return streamingChunksUnloadedTotal; }
     uint32_t getStreamingLoadsLastFrame() const { return streamingLoadsLastFrame; }
     uint32_t getStreamingUnloadsLastFrame() const { return streamingUnloadsLastFrame; }
+    // F2-d: frames where the per-frame build budget stopped issuing new
+    // chunks. A steadily climbing number means the budget is the limiter.
+    uint64_t getStreamingBudgetHits() const { return streamingBudgetHits; }
     // F2-c：浮动原点。worldOrigin 是当前局部原点在绝对世界里的位置（double 累计）；
     // 实体 Transform 一律存相对这个原点的坐标，所以渲染与剔除看到的数值始终很小。
     glm::dvec3 getWorldOrigin() const { return worldOrigin; }
@@ -346,6 +350,7 @@ private:
     uint64_t streamingChunksUnloadedTotal = 0;
     uint32_t streamingLoadsLastFrame = 0;
     uint32_t streamingUnloadsLastFrame = 0;
+    uint64_t streamingBudgetHits = 0;
     double maxStreamingUpdateMs = 0.0;
     // F2-c：浮动原点状态。delta 一律吸到整块 chunk，实体与流送 key 才能整体平移。
     glm::dvec3 worldOrigin{ 0.0, 0.0, 0.0 };

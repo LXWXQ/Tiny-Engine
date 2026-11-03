@@ -52,8 +52,8 @@ struct Scene::PendingTerrainBuild
 namespace
 {
     constexpr bool kLoadSponza = true;
-    constexpr int32_t kMaxTerrainStreamingRadius = 8;
-    constexpr uint32_t kMaxTerrainStreamingLoadsPerFrame = 8;
+    constexpr int32_t kMaxTerrainStreamingRadius = 12;
+    constexpr uint32_t kMaxTerrainStreamingLoadsPerFrame = 16;
 
     int64_t terrainChunkKey(int32_t x, int32_t z)
     {
@@ -2067,6 +2067,15 @@ bool Scene::adoptStreamingTerrainManager(entt::entity entity)
     return true;
 }
 
+void Scene::setStreamingTerrainBudget(float milliseconds)
+{
+    if (terrainStreamingEntity == entt::null || !registry.valid(terrainStreamingEntity))
+        return;
+    if (TerrainStreamingComponent* streaming =
+            registry.try_get<TerrainStreamingComponent>(terrainStreamingEntity))
+        streaming->maxUpdateMs = std::max(0.0f, milliseconds);
+}
+
 void Scene::rebaseWorldOrigin(const glm::vec3& delta)
 {
 if (delta.x == 0.0f && delta.y == 0.0f && delta.z == 0.0f)
@@ -2314,10 +2323,23 @@ void Scene::updateTerrainStreaming()
         });
 
     uint32_t issued = 0;
+    bool budgetExhausted = false;
+    const auto budgetStart = std::chrono::steady_clock::now();
     for (const Candidate& candidate : candidates)
     {
         if (issued >= streaming->maxLoadsPerFrame)
             break;
+        // F2-d: a single slow frame must not try to spawn the whole ring.
+        if (issued > 0u && streaming->maxUpdateMs > 0.0f)
+        {
+            const double spentMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - budgetStart).count();
+            if (spentMs >= static_cast<double>(streaming->maxUpdateMs))
+            {
+                budgetExhausted = true;
+                break;
+            }
+        }
 
         terrain::TerrainConfig config = streaming->chunkConfig;
         config.chunkGridX = 1u;
@@ -2376,6 +2398,8 @@ void Scene::updateTerrainStreaming()
         ++streamingChunksLoadedTotal;
         pendingStreamingTerrainChunks.insert(candidate.key);
     }
+    if (budgetExhausted)
+        ++streamingBudgetHits;
 }
 
 bool Scene::regenerateTerrain(entt::entity entity, std::string& errorMessage)

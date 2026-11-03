@@ -44,6 +44,7 @@ updated: 2026-11-02
 | `--streaming-fly-radius <r>` | 巡航摆幅半径，默认 220；`--origin-threshold` 小于它时更容易触发 rebase |
 | `--origin-threshold <units>` | 浮动原点阈值（默认 1024）：相机局部水平距离超过它就 rebase 一次 |
 | `--no-origin-rebase` | 关闭浮动原点；相机走远后局部坐标会一直变大（用来做对照） |
+| `--streaming-budget <ms>` | 每帧流送生成预算（默认 2 ms）；超预算时本帧不再发起新 chunk，避免慢帧雪崩 |
 | `--render-scale F` | 动态分辨率倍率 0.25~1.0 |
 | `--resize-test` | 自检中连续缩放、切动态分辨率、最小化/恢复 |
 | `--material-stress` | 反复分配/延迟归还材质槽位 |

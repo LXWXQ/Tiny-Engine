@@ -247,6 +247,10 @@ struct TerrainStreamingComponent
     int32_t loadRadius = 1;
     int32_t unloadPadding = 1;
     uint32_t maxLoadsPerFrame = 1;
+    // F2-d: the per-frame build budget. maxLoadsPerFrame is a hard cap,
+    // this one stops issuing as soon as the frame has spent that long
+    // generating chunks, so a slow frame cannot snowball into stalls.
+    float maxUpdateMs = 2.0f;
     bool enabled = true;
 };
 

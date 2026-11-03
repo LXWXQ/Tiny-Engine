@@ -29,14 +29,17 @@ class Model;
 class TerrainMeshArena
 {
 public:
-    static constexpr uint32_t kSlotCount = 96;
+    // F2-d: 384 slots cover every chunk the frustum can show at radius 12.
+    static constexpr uint32_t kSlotCount = 384u;
     // The vertex base passed to vkCmdDrawIndexedIndirect is measured in vertices,
     // so a slot must hold a whole number of vertices or every chunk after the
     // first one starts at a fractional offset inside its own slice.
     static constexpr uint32_t kVertexStride = 44u; // pos3 + color3 + normal3 + uv2
-    static constexpr uint32_t kSlotVertexCount = 4096u;
+    // 33x33 chunk with 3 LODs needs ~1620 vertices and ~8550 indices; 2048 /
+    // 12288 leave headroom while keeping a slot at ~136 KB.
+    static constexpr uint32_t kSlotVertexCount = 2048u;
     static constexpr uint32_t kSlotVertexBytes = kSlotVertexCount * kVertexStride;
-    static constexpr uint32_t kSlotIndexBytes = 80u * 1024u;
+    static constexpr uint32_t kSlotIndexBytes = 12288u * 4u;
     static constexpr uint32_t kInvalidSlot = 0xFFFFFFFFu;
     static constexpr uint32_t kVertexFloats = 11u;
 

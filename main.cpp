@@ -84,6 +84,7 @@ int main(int argc, char** argv)
     bool originRebase = true;
     float originThreshold = 0.0f;
     float streamingFlyRadius = 0.0f;
+    float streamingBudgetMs = 0.0f;
     bool jobTest = false;
     bool crossQueueTest = false;
     bool resizeTest = false;
@@ -185,6 +186,14 @@ int main(int argc, char** argv)
             if (i + 1 < argc && argv[i + 1][0] != '-')
             {
                 try { streamingFlyRadius = std::stof(argv[i + 1]); }
+                catch (...) { }
+                ++i;
+            }
+        }        else if (arg == "--streaming-budget")
+        {
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                try { streamingBudgetMs = std::stof(argv[i + 1]); }
                 catch (...) { }
                 ++i;
             }
@@ -319,6 +328,7 @@ int main(int argc, char** argv)
         if (!originRebase) app.setOriginRebaseEnabled(false);
         if (originThreshold > 0.0f) app.setOriginRebaseThreshold(originThreshold);
         if (streamingFlyRadius > 0.0f) app.setStreamingFlyRadius(streamingFlyRadius);
+        if (streamingBudgetMs > 0.0f) app.setStreamingBudget(streamingBudgetMs);
         if (crossQueueTest) app.setCrossQueueTestEnabled(true);
         if (resizeTest) app.setResizeTestEnabled(true);
         if (materialStress) app.setMaterialStressEnabled(true);
