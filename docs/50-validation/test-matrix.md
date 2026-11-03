@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **51 项引擎用例 + 2 项工具自测 = 53 项**；
+`tools/Validate.ps1` 默认跑 **52 项引擎用例 + 2 项工具自测 = 54 项**；
 加 `-EnableProfiling` 时多一项（37 + 2 = 39）。
 
 ## 1. 每项的判据（统一）
@@ -80,6 +80,7 @@ updated: 2026-11-03
 | 49 | `terrain-render` | `--selftest 20 --empty-scene --terrain-test` | `[Terrain] selfTest PASS`、`[Terrain] LOD stitching PASS`、`[Terrain] GPU mesh assembly selfTest PASS`、`[Terrain] GPU selection selfTest PASS`、`[Terrain] GPU selection transition PASS`、`[Terrain] demo entity created`、`chunks=4`、`lods=3`、`submeshes=12`、`[Terrain] async generation PASS`、`[Terrain] build task retirement PASS`、`[Terrain] async GPU upload PASS`、`[Terrain] spatial region query PASS | chunks=9 regions=5x5`、`[Terrain] sculpt PASS | chunks=9 rebuilt=1`、`[Terrain] character controller PASS | grounded=1`、`[Terrain] character serialization PASS | captured=1`、`[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`、`streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9` | CPU 算法/16 张源纹理缓冲 + height/roughness packing + JobSystem 异步构建 + chunk/LOD 子网格/AABB/裙边 + 稳定帧 indirect 合批 + GPU 高度场 + GPU compute 单 chunk 顶点/索引组装 + device-local VBO/IBO Model 接管 + 独立 chunk 流送 smoke + 8 槽异步高度场 + 4 槽异步 GPU mesh submit/poll + 257² 单 chunk 非阻塞重建基线 + CPU 构建中销毁实体的任务退役（retiring 队列） + XZ region 查询/组件私有字段/统一销毁 + 区域限定运行期雕刻 + kinematic 角色控制器/贴地/跳跃/序列化 + 4 个 Set2 材质集/按需外部 16 PNG/程序化回退/`materialSetIndex` 序列化/按材质批次重绑 + chunk→manager picking/删除撤销 + 全 LOD 邻接缝合（skirts=off） + GPU selection parity/过渡（4-int state slot） + CPU 高度/射线碰撞 + 地形 G-Buffer / 12-sampler Set2 四层 PBR 材质 / Surface Style / SSAO 策略 |
 | 50 | `b1-help` | `--help` 打印分组参数表 | `TinyEngine.exe --help` | `Tiny Engine -`、`--selftest [N]`、`--validation-features <list>`、`--update-profile` | 退出码 0、不创建窗口/设备（`SkipValidationMarker`）；参数表是 `kUsageLines` 数据，不是注释 |
 | 51 | `b1-unknown-arg` | 未知参数不再静默忽略 | `TinyEngine.exe --not-a-flag` | `unknown argument: --not-a-flag` | 退出码 2（`ExpectedExitCode`）、允许 stderr（`AllowStderr`）、提示走 stderr 而 stdout 保持干净；stderr 重定向时是 ANSI 代码页，只断言 ASCII |
+| 52 | `b1-window-fit` | 窗口按显示器工作区收敛（1366x768 / 150% 缩放不再把状态栏推出屏幕） | `TinyEngine.exe --selftest 5 --hidden` | `[Window] fit selfTest PASS`、`[Startup] error log selfTest PASS`、`[Window] sizing` | 1920x1080 在 1280x720 工作区收敛到 1177x662；2560x1440 保持 1920x1080；工作区缺失时退回默认 |
 
 ## 3. 工具自测
 

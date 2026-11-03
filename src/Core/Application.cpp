@@ -15,6 +15,10 @@
 #endif
 #include "AssetPaths.h"
 #include "Core/FrameInfo.h"
+#include "Core/StartupLog.h"
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include "Render/GeometryPass.h"
 #include "Render/LightingPass.h"
 #include "Render/BloomPass.h"
@@ -977,11 +981,54 @@ void FirstApp::initWindow(const std::string& title)
 	// 有一次可见窗口抢焦点。
 	if (diagnosticsOptions.windowHidden || diagnosticsOptions.windowMinimized)
 		glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-	window = glfwCreateWindow(WIDTH, HEIGHT, title.c_str(), nullptr, nullptr);
+
+	int windowWidth = WIDTH;
+	int windowHeight = HEIGHT;
+	if (GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor())
+	{
+		int workX = 0;
+		int workY = 0;
+		int workWidth = 0;
+		int workHeight = 0;
+		glfwGetMonitorWorkarea(primaryMonitor, &workX, &workY, &workWidth, &workHeight);
+		if (workWidth > 0 && workHeight > 0)
+		{
+			float scaleX = 1.0f;
+			float scaleY = 1.0f;
+			glfwGetMonitorContentScale(primaryMonitor, &scaleX, &scaleY);
+			computeWindowSize(workWidth, workHeight, windowWidth, windowHeight);
+			std::cout << "[Window] sizing | workarea=" << workWidth << "x" << workHeight
+				<< " scale=" << scaleX << "x" << scaleY
+				<< " -> " << windowWidth << "x" << windowHeight
+				<< (windowWidth == WIDTH && windowHeight == HEIGHT ? " (fits)" : " (clamped)")
+				<< std::endl;
+		}
+		else
+		{
+			std::cout << "[Window] sizing | 工作区不可用，使用默认 " << WIDTH << "x" << HEIGHT << std::endl;
+		}
+	}
+
+	window = glfwCreateWindow(windowWidth, windowHeight, title.c_str(), nullptr, nullptr);
 	const char* presentation = diagnosticsOptions.windowMinimized ? "minimized"
 		: (diagnosticsOptions.windowHidden ? "hidden" : "visible");
-	std::cout << "[Window] presentation=" << presentation << " | " << WIDTH << "x" << HEIGHT
+	std::cout << "[Window] presentation=" << presentation << " | " << windowWidth << "x" << windowHeight
 		<< " (--hidden/--minimized/--visible)" << std::endl;
+}
+
+void FirstApp::computeWindowSize(int workWidth, int workHeight, int& width, int& height)
+{
+	width = WIDTH;
+	height = HEIGHT;
+	if (workWidth <= 0 || workHeight <= 0)
+		return;
+	// 留 8% 余量：任务栏、窗口边框、以及用户把窗口拖到副屏时的取整误差。
+	const int maxWidth = static_cast<int>(static_cast<float>(workWidth) * 0.92f);
+	const int maxHeight = static_cast<int>(static_cast<float>(workHeight) * 0.92f);
+	if (maxWidth > 0 && width > maxWidth)
+		width = maxWidth;
+	if (maxHeight > 0 && height > maxHeight)
+		height = maxHeight;
 }
 
 void FirstApp::setResizeTestEnabled(bool enabled)
@@ -1532,6 +1579,45 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// 所以先把匹配规则本身证伪，再靠帧循环后的簿记断言确认真的生效。
 	if (!renderGraphSwitchboardSelfTest())
 		throw std::runtime_error("RenderGraph setPassEnabled selfTest failed");
+
+	// UX-19：窗口尺寸要按工作区收敛 —— 1366x768 的笔记本上 1920x1080 会把
+	// 状态栏和右下角面板推到屏幕外；150% 缩放下工作区只有 1280x720 更严重。
+	{
+		int fitWidth = 0;
+		int fitHeight = 0;
+		computeWindowSize(1280, 720, fitWidth, fitHeight);
+		const bool smallScreenFits = fitWidth == 1177 && fitHeight == 662;
+		int wideWidth = 0;
+		int wideHeight = 0;
+		computeWindowSize(2560, 1440, wideWidth, wideHeight);
+		const bool wideScreenKeepsDefault = wideWidth == WIDTH && wideHeight == HEIGHT;
+		int missingWidth = 0;
+		int missingHeight = 0;
+		computeWindowSize(0, 0, missingWidth, missingHeight);
+		const bool noWorkareaKeepsDefault = missingWidth == WIDTH && missingHeight == HEIGHT;
+		if (!smallScreenFits || !wideScreenKeepsDefault || !noWorkareaKeepsDefault)
+		{
+			std::cout << "[Window] fit selfTest FAIL | 1280x720 -> " << fitWidth << "x" << fitHeight
+				<< " 2560x1440 -> " << wideWidth << "x" << wideHeight
+				<< " none -> " << missingWidth << "x" << missingHeight << std::endl;
+			throw std::runtime_error("window fit selfTest failed");
+		}
+		std::cout << "[Window] fit selfTest PASS | 1280x720 -> 1177x662, 2560x1440 -> 1920x1080" << std::endl;
+	}
+
+	// UX-04：致命错误落地文件 —— 真写一次再读回，确认「双击启动看不到控制台」时还有线索。
+	{
+		std::error_code logEc;
+		const std::filesystem::path logDir = std::filesystem::current_path(logEc) / ".tmp";
+		std::filesystem::create_directories(logDir, logEc);
+		const std::string marker = "startup log selfTest marker";
+		const std::string logPath = tiny::writeStartupErrorLog("selfTest", marker, logDir.string());
+		std::ifstream logFile(logPath);
+		const std::string logText((std::istreambuf_iterator<char>(logFile)), std::istreambuf_iterator<char>());
+		if (logPath.empty() || logText.find(marker) == std::string::npos)
+			throw std::runtime_error("startup error log selfTest failed");
+		std::cout << "[Startup] error log selfTest PASS | " << logPath << std::endl;
+	}
 
 	// D-8：编辑器自检（命令栈 / 删除撤销 / 序列化往返）。
 	// 放在场景自检之后：它只依赖 entt 与 JSON，不需要 Vulkan 设备。

@@ -75,6 +75,10 @@ public:
 	// TD-03 dynamic-resolution interface: change intermediate render targets
 	// without recreating pipelines or the swapchain.
 	void setRenderScale(float scale);
+	// UX-19：按显示器工作区收敛窗口尺寸。工作区是逻辑像素（150% 缩放时
+	// 1920x1080 的屏幕在 GLFW 里就是 1280x720），所以固定用 1920x1080 会把
+	// 窗口撑出屏幕，右下角的面板和状态栏永远点不到。
+	static void computeWindowSize(int workWidth, int workHeight, int& width, int& height);
 	int  runHeadlessSelfTest(int frames);
 
 

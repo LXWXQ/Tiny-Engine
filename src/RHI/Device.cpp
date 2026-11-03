@@ -1,4 +1,5 @@
 #include "Device.h"
+#include "Core/StartupLog.h"
 #include <iostream>
 #include <stdexcept>
 #include <set>
@@ -124,7 +125,16 @@ bool Device::reportDeviceFault()
 {
     if (!deviceFaultSupported || pfnGetDeviceFaultInfoEXT == nullptr)
     {
-        std::cout << "[DeviceFault] VK_EXT_device_fault not enabled on this device\n";
+        std::cout << "[DeviceFault] VK_EXT_device_fault not enabled on this device" << std::endl;
+        // UX-04：设备丢了却查不到故障地址时，光打一行 log 用户不知道该干什么。
+        std::cout << "[DeviceFault] 说明：当前驱动/GPU 没有暴露 VK_EXT_device_fault，无法给出故障地址。" << std::endl;
+        std::cout << "[DeviceFault] 常见原因：显卡驱动较旧、核显不支持、在远程桌面或容器里运行。" << std::endl;
+        std::cout << "[DeviceFault] 下一步：更新显卡驱动后重试；仍复现就把 startup-error.log 与验证层日志一起提供。" << std::endl;
+        const std::string faultLog = tiny::writeStartupErrorLog(
+            "GPU 设备丢失（VK_ERROR_DEVICE_LOST）",
+            "当前驱动未启用 VK_EXT_device_fault，无法定位故障地址。常见原因：驱动较旧 / 核显不支持 / 远程桌面。建议更新显卡驱动后重试。");
+        if (!faultLog.empty())
+            std::cout << "[DeviceFault] 详情已写入 " << faultLog << std::endl;
         return false;
     }
 

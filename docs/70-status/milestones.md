@@ -581,3 +581,15 @@ updated: 2026-11-02
 **回归**：新增 `f2i-update-profile`；全套 **49 项**。
 
 > 编辑器侧里程碑（E1 起）见 [editor/milestones](../90-editor/milestones.md)。
+
+## B1 剩余：启动失败可读 + 窗口按工作区收敛
+
+- 问题：[UX-04](../90-editor/ux-audit.md) 双击启动失败只有 `std::cerr`，用户什么都看不到；
+  [UX-19](../90-editor/ux-audit.md) 窗口固定 1920x1080，1366x768 与 150% 缩放下状态栏被推出屏幕。
+- 实现：新增 `src/Core/StartupLog.h/.cpp` 的 `tiny::writeStartupErrorLog(stage, message, directory = "")`，
+  `main.cpp` 的 catch 把错误写进**可执行文件旁**的 `startup-error.log` 并在 stderr 打印路径；
+  `Device::reportDeviceFault` 在驱动没有 `VK_EXT_device_fault` 时打印原因/下一步并写同一个文件；
+  `FirstApp::computeWindowSize(workWidth, workHeight, width, height)` 按工作区 92% 收敛，
+  `initWindow` 打印 `[Window] sizing | workarea=... scale=... -> WxH (fits|clamped)`。
+- 可观测：`[Startup] error log selfTest PASS`、`[Window] fit selfTest PASS | 1280x720 -> 1177x662`。
+- 验证：回归 54 项（新增 `b1-window-fit`）。

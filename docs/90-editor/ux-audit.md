@@ -77,6 +77,7 @@ updated: 2026-11-03
 | 影响 | 陌生人的结论是"这是个坏程序"，而不是"我的显卡缺 maintenance4" |
 | 判据 | U4 失败可行动、U9 降级可见 |
 | 修法指向 | 启动早期捕获初始化异常，弹一个原生 MessageBox（或最小 ImGui 窗口）说明缺哪个特性、去哪看 `--help`；同时写 `startup-error.log` 到可执行文件同目录 |
+| 状态 | **部分 fixed**（2026-11-03）：`main.cpp` 的 catch 已把「阶段 + 消息 + 工作目录 + 提示」追加进可执行文件旁的 `startup-error.log`（`tiny::writeStartupErrorLog`，`src/Core/StartupLog.cpp`），并在 stderr 打印文件路径；设备丢失且驱动未启用 `VK_EXT_device_fault` 时，`Device::reportDeviceFault` 会打印原因与下一步并调用同一个写入函数。仍缺：原生 MessageBox（无控制台时仍要靠用户主动找文件）。回归：`b1-window-fit`（断言 `[Startup] error log selfTest PASS`） |
 
 ### UX-05 中文字体缺失时静默退化为问号
 
@@ -109,7 +110,7 @@ updated: 2026-11-03
 | UX-12 | 错误发生但 Console 关着时，界面上没有任何标记 | 无错误计数徽标；`state.log` 无未读概念 | U6 | open |
 | UX-13 | 快捷键不可自定义，没有冲突检测，速查表与实际处理是两份代码 | `handleShortcuts()` 是 else-if 链；`kShortcutEntries` 是另一份表 | U1 | open |
 | UX-14 | 面板位置被 `ImGuiCond_Always` 钉死，用户拖不动；只有 Reset Layout | `drawPanels()` 对 Viewport 用 `ImGuiCond_Always` | U6 | open |
-| UX-19 | 窗口固定 1920x1080 创建，不读显示器工作区；字体固定 16px，无 DPI 缩放；面板宽度硬编码 | `src/Core/FrameInfo.h:11-12`、`src/Core/Application.cpp:980`、`src/Core/ImGuiSystem.cpp:60`、`drawPanels()` | U10 | open |
+| UX-19 | 窗口固定 1920x1080 创建，不读显示器工作区；字体固定 16px，无 DPI 缩放；面板宽度硬编码 | `src/Core/FrameInfo.h:11-12`、`src/Core/Application.cpp:980`、`src/Core/ImGuiSystem.cpp:60`、`drawPanels()` | U10 | 窗口：fixed；字体缩放：open |
 
 ### UX-09 补充
 
@@ -133,9 +134,11 @@ updated: 2026-11-03
 窗口比工作区大时标题栏被推出屏幕，用户既拖不动也找不到关闭按钮，
 首个闭环在第一步就断了。
 
-判定方法：启动后按 `Win + 左方向键` 让窗口贴边，如果窗口高度仍超过屏幕，
-说明没有做工作区适配。另一种判定：看 `--help` 里是否存在窗口尺寸参数，
-若只有 `--hidden` / `--minimized` 而没有 `--width` / `--height`，说明尺寸不可调。
+判定方法（窗口部分已修，2026-11-03）：启动日志里应出现
+`[Window] sizing | workarea=<w>x<h> scale=<sx>x<sy> -> <w>x<h> (fits|clamped)`；
+`FirstApp::computeWindowSize` 按工作区 92% 收敛，1920x1080 的固定尺寸在
+1280x720 工作区会变成 1177x662。仍 open 的是**字体固定 16px、不随 DPI 缩放**：
+150% 缩放下中文会偏小。回归：`b1-window-fit`。
 
 ## 5. P2：打磨项
 

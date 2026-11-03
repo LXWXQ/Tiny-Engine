@@ -1,6 +1,7 @@
 #include "src/Core/Application.h"
 #include "src/Core/JobSystem.h"
 #include "src/Core/Diagnostics.h"
+#include "src/Core/StartupLog.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
@@ -9,6 +10,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cctype>
+#include <filesystem>
+#include <system_error>
 #include <vector>
 #include <filesystem>
 
@@ -389,6 +392,15 @@ int main(int argc, char** argv)
     if (minimizedIgnored && !windowVisibleFlag)
         std::cout << "[Window] --minimized ignored for unattended run; staying hidden" << std::endl;
 
+    // UX-04：致命错误写到可执行文件旁边，双击启动（没有控制台）时也能找到。
+    std::string errorLogDirectory;
+    {
+        std::error_code exeEc;
+        const std::filesystem::path exePath = std::filesystem::absolute(argv[0], exeEc);
+        if (!exeEc && !exePath.parent_path().empty())
+            errorLogDirectory = exePath.parent_path().string();
+    }
+
     try
     {
         // --build-info：不需要 Vulkan / 窗口，直接打印能力清单后退出。
@@ -457,7 +469,11 @@ int main(int argc, char** argv)
     }
     catch (const std::exception& e)
     {
-        std::cerr << "致命错误: " << e.what() << '\n';
+        std::cerr << "致命错误: " << e.what() << std::endl;
+        // UX-04：双击启动没有可读的控制台，所以把致命错误落到文件里。
+        const std::string logPath = tiny::writeStartupErrorLog("启动/运行", e.what(), errorLogDirectory);
+        if (!logPath.empty())
+            std::cerr << "详情已写入 " << logPath << "（没用控制台启动时看这个文件）" << std::endl;
         return EXIT_FAILURE;
     }
 

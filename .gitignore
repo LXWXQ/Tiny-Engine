@@ -30,3 +30,6 @@ node_modules.orig/
 
 # 编辑器偏好（本机习惯，不进版本库）
 config/editor.json
+
+# 启动失败日志（运行时产物）
+startup-error.log
