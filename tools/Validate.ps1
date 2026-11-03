@@ -151,6 +151,11 @@ if ([string]::IsNullOrWhiteSpace($exe)) {
     throw "TinyEngine.exe was not found under $BuildDir."
 }
 Write-Host "[validate] Executable: $exe"
+$editorExe = Join-Path (Split-Path -Parent $exe) "TinyEditor.exe"
+if (-not (Test-Path -LiteralPath $editorExe -PathType Leaf)) {
+    $editorExe = ""
+}
+Write-Host "[validate] Editor executable: $editorExe"
 
 $null = New-Item -ItemType Directory -Force (Join-Path $logDir "tests")
 $tests = @(
@@ -226,6 +231,8 @@ $tests = @(
        MustContain = @("[Streaming] chunks=289", "[Terrain] mesh arena ready | slots=384", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2d-streaming-budget"; Args = @("--selftest", "$([Math]::Max($Frames, 120))", "--streaming-world", "8", "--streaming-budget", "0.2");
        MustContain = @("budgetHits=", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f2e-terrain-picking"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("[Editor] streamed terrain PASS", "picking=OK", "[Editor] selfTest PASS") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )
@@ -239,7 +246,16 @@ if ($EnableProfiling) {
 $failed = @()
 foreach ($test in $tests) {
     Write-Host "[validate] Test: $($test.Name)"
-    $result = Invoke-Native -FilePath $exe -Arguments $test.Args -LogStem (Join-Path "tests" $test.Name)
+    $caseExe = $exe
+    if ($test.ContainsKey("Exe") -and $test.Exe -eq "editor") {
+        if ([string]::IsNullOrWhiteSpace($editorExe)) {
+            $failed += "$($test.Name): TinyEditor.exe was not found next to TinyEngine.exe"
+            Write-Host "[validate] FAIL $($test.Name): TinyEditor.exe missing" -ForegroundColor Red
+            continue
+        }
+        $caseExe = $editorExe
+    }
+    $result = Invoke-Native -FilePath $caseExe -Arguments $test.Args -LogStem (Join-Path "tests" $test.Name)
     # Windows PowerShell 5.1: casting $null to [string] still yields $null, and the
     # later $stdout.IndexOf(...) throws InvokeMethodOnNull - which aborts the whole
     # suite instead of reporting a FAIL (e.g. when the exe writes an empty log).
@@ -261,7 +277,7 @@ foreach ($test in $tests) {
 
     # P0: every test that creates a Vulkan device must report zero validation messages.
     # (jobtest / config-test / --build-info / --diagnostics-test return before the Vulkan device exists.)
-    if ($test.Name -notin @('jobtest', 'td09-config-migration', 'p0-build-info', 'p0-diagnostics-selftest')) {
+    if ($test.Name -notin @('jobtest', 'td09-config-migration', 'p0-build-info', 'p0-diagnostics-selftest', 'f2e-terrain-picking')) {
         if ($stdout.IndexOf("[Validation] errors=0 warnings=0", [StringComparison]::OrdinalIgnoreCase) -lt 0) {
             $reasons += "missing zero-validation marker '[Validation] errors=0 warnings=0'"
         }

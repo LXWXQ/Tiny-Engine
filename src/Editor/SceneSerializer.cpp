@@ -2,6 +2,8 @@
 #include "AssetPaths.h"
 
 #include <json.hpp>
+#include <cstring>
+#include <cerrno>
 #include <fstream>
 #include <sstream>
 
@@ -282,10 +284,13 @@ bool SceneSerializer::saveToFile(const scene::SceneDescription& description,
                                  const std::string& filepath,
                                  std::string& errorMessage)
 {
+    errno = 0;
     std::ofstream out(filepath, std::ios::binary | std::ios::trunc);
     if (!out)
     {
-        errorMessage = "cannot open for writing: " + filepath;
+        const int openError = errno;
+        errorMessage = "cannot open for writing: " + filepath + " (errno " +
+                       std::to_string(openError) + ": " + std::strerror(openError) + ")";
         return false;
     }
     out << toJson(description).dump(2);

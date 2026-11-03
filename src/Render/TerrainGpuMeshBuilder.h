@@ -211,7 +211,7 @@ private:
         bool submitted = false;
         Layout layout;
         TerrainGpuMeshBuildResult result;
-        std::future<void> pickingFuture;
+
         std::chrono::steady_clock::time_point startTime;
     };
 

@@ -35,7 +35,8 @@ GPU compute 组装，多 chunk 仍保留 CPU builder 作为兼容/回退路径�
   varying；这样 indirect 合批不再牺牲逐 chunk cross-fade；
 - B-04 起 `chunkGridX/Z == 1` 的 terrain 由 `terrain_mesh.comp` 直接写
   device-local 顶点/索引 buffer；`Model::createFromGpuMesh()` 接管 VMA
-  allocation，渲染不再经过 CPU staging copy。CPU 仅保留 picking mirror；
+  allocation，渲染不再经过 CPU staging copy。F2-e 起 CPU 侧不再保留 picking
+  mirror，拾取直接走 HeightField；
 - 复用现有 `Model` / `Scene` / `GeometrySystem` / G-Buffer，不新增 RenderPass 或
   RenderQueue；阶段 6 后续新增**专用 terrain descriptor sets（最多 4 套）**，不占 bindless
   材质槽；
@@ -211,8 +212,9 @@ chunk 手动地形；多 chunk 继续走 CPU `TerrainMeshBuilder`。
   compute 并 `vkQueueSubmit`，不在主线程等 fence；`poll()` 用
   `vkGetFenceStatus`，`release()/collectFinished()` 回收放弃请求，`waitAll()`
   用于取消/关闭；
-- 全分辨率 picking mirror 由 `buildPickingMirror()` 在 `std::async` 工作线程
-  生成，与 GPU assembly 并行；`poll()` 只做零等待检查，未完成返回 `Pending`；
+- F2-e 起不再生成全分辨率 picking mirror（原先每 chunk 约 38 KB 的
+  `pickingPositions/pickingIndices`，由 `std::async` 与 GPU assembly 并行）；
+  地形 raycast 改为沿射线步进采样 `HeightField::worldHeightAt()` 再二分细化；
 - 构建失败、设备无 compute 或多 chunk 配置回退 CPU builder + staging；
   `TerrainComponent::meshGeneratedOnGpu` 记录实际来源；
 - `createTerrainEntity()`/场景加载仍用阻塞 `build()`；运行时 Generate、重建与
@@ -397,13 +399,14 @@ HeightField readback
 buffer，避免 half-built terrain。
 
 CPU 侧仍保留：
-- `TerrainComponent::cpuHeightField`：collision / 高度采样；
-- 全分辨率 `pickingPositions/pickingIndices`：编辑器 raycast 和 chunk picking；
+- `TerrainComponent::cpuHeightField`：collision、高度采样，以及**地形 raycast**
+  （`Scene::raycastTerrain()` 沿射线步进 + 二分，命中点由 `worldHeightAt()` 决定）；
 - `SubMesh::firstIndex/indexCount/terrainSurfaceIndexCount/bounds`：GPU selection
   和 indirect draw 所需元数据。
 
-这些 CPU 镜像不是渲染数据源；当前为了兼容既有 picking API 暂时保留，后续可
-改为 HeightField raycast 或 GPU readback 的按需 picking。
+地形 Model 不再持有 CPU 顶点/索引（F2-e）：GPU mesh 组装、同步生成、流送三条
+路径都传空的 picking 数组，`Model::getPickingPositions()` 对地形返回空，任何
+依赖网格拾取的地形代码都应改用 `Scene::raycastTerrain()`。
 
 地形材质（Set2 的 12 个 sampler、四套材质集的加载/回退、四层 PBR 混合与
 Surface Style）单独写在 [terrain-materials](terrain-materials.md)，这里只保留
@@ -559,7 +562,7 @@ picking 与 delete/undo/redo。
   设备回退 CPU 命令构建；GPU stats 是上一已完成帧，UI 允许一帧延迟；
 - 异步 Generate/流送已改用 8 槽 GPU 高度场请求，GPU mesh 组装也已是 4 槽
   异步 submit/poll；同步场景加载仍走阻塞 `generate()`，全分辨率 CPU picking
-  mirror 仍要额外生成并常驻。流送 chunk 仍各自一个 Model/indirect group；
+  mirror 已在 F2-e 取消。流送 chunk 仍各自一个 Model（GPU 合批后共用 arena）；
 - B-07 已接入轻量 kinematic 角色控制器与地形雕刻：角色使用局部包围盒 + 双线性高度采样，笔刷复用 region 查询只重建相交 chunk；但雕刻只修改运行期 HeightField/Model，不写入场景 JSON；
 - 场景加载/`createTerrainEntity` 仍同步；supersede 使用协作取消，取消粒度是
   每个顶点行，不是硬中断；

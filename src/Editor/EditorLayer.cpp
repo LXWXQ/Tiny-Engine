@@ -1371,15 +1371,14 @@ bool EditorLayer::selfTestWithScene()
 
         const entt::entity pickedChunk = leftIt->second;
         const auto* pickedTransform = registry.try_get<TransformComponent>(pickedChunk);
-        const auto* pickedWorld = registry.try_get<WorldTransformComponent>(pickedChunk);
-        const auto* pickedMesh = registry.try_get<MeshComponent>(pickedChunk);
+        glm::vec3 pickedHit{};
         float pickedDistance = 0.0f;
-        if (!pickedTransform || !pickedWorld || !pickedMesh || !pickedMesh->model ||
-            !pickedMesh->model->intersectRay(
-                pickedWorld->matrix,
+        if (!pickedTransform ||
+            !scene.raycastTerrain(
+                pickedChunk,
                 glm::vec3(pickedTransform->getTranslation().x, 100.0f,
                           pickedTransform->getTranslation().z),
-                glm::vec3(0.0f, -1.0f, 0.0f), pickedDistance) ||
+                glm::vec3(0.0f, -1.0f, 0.0f), pickedHit, pickedDistance) ||
             pickedDistance <= 0.0f ||
             scene.resolveTerrainChunkOwner(pickedChunk) != manager)
         {
@@ -1490,11 +1489,29 @@ bool EditorLayer::selfTestWithScene()
             return false;
         }
 
-        // File-level save/load smoke, not only in-memory roundTrip.
-        const std::filesystem::path scenePath =
-            std::filesystem::temp_directory_path() / "tiny_streaming_selftest.scene.json";
+        // File-level save/load smoke, not only in-memory roundTrip. Some Windows
+        // setups deny writes to the user TEMP directory (errno 13) even though it
+        // is listed as writable, so fall back to a repo-local scratch directory.
         std::string fileError;
-        if (!SceneSerializer::saveToFile(serialized, scenePath.string(), fileError))
+        std::filesystem::path scenePath =
+            std::filesystem::temp_directory_path() / "tiny_streaming_selftest.scene.json";
+        bool saved = SceneSerializer::saveToFile(serialized, scenePath.string(), fileError);
+        if (!saved)
+        {
+            std::error_code scratchError;
+            const std::filesystem::path scratchRoot =
+                std::filesystem::current_path(scratchError) / ".tiny-streaming-selftest";
+            if (!scratchError)
+            {
+                std::filesystem::create_directories(scratchRoot, scratchError);
+                if (!scratchError)
+                {
+                    scenePath = scratchRoot / "tiny_streaming_selftest.scene.json";
+                    saved = SceneSerializer::saveToFile(serialized, scenePath.string(), fileError);
+                }
+            }
+        }
+        if (!saved)
         {
             std::cerr << "[Editor] selfTestWithScene FAIL: streaming save -> "
                       << fileError << "\n";

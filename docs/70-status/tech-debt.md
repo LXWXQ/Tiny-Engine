@@ -5,12 +5,12 @@ type: status
 scope: 空
 read-when: 决定下一步做什么之前
 size: ~160 行
-updated: 2026-11-02
+updated: 2026-11-03
 ---
 
 # 当前技术债
 
-## 1. 已关闭（TD-01 ~ TD-20）
+## 1. 已关闭（TD-01 ~ TD-22）
 
 | ID | 问题 | 修法要点 |
 |---|---|---|
@@ -35,6 +35,8 @@ updated: 2026-11-02
 
 | TD-19 | 世界坐标全程是 `float`，相机走远后矩阵/深度抖动；流送世界没有原点概念 | 万米量级地形与阴影都会糊 | 局部坐标 + `Scene::worldOrigin`（double）的浮动原点：超阈值时吸到整块 chunk、平移所有 Transform 与相机平滑状态、重排 chunk 索引与 key 表；地形噪声锚点保持绝对。实测 600 帧 13 次 rebase、chunk 数稳定 35 |
 | TD-20 | 流送半径上限 8、地形 GPU 选择 64 槽 / 命令区 4096 / arena 96 槽，半径超过 3 就开始回退 CPU 路径；单帧生成无预算 | 扩容到半径 12（625 块）：选择 384 槽、命令区 12288、arena 384 槽（2048 顶点 / 12288 索引，约 51 MB），并加每帧 `maxUpdateMs` 预算（默认 2 ms，`--streaming-budget`） | 实测半径 8 = 289 块全量落地、draw calls 2；预算 0.2 ms 时 budgetHits 明显非零 |
+| TD-21 | 地形每 chunk 保留全分辨率 CPU picking mirror（33x33 约 38 KB，257x257 约 1.3 MB），由 `std::async` 生成 | 取消 mirror：`Scene::raycastTerrain()` 改走 `HeightField` 沿射线步进 + 二分；`TerrainGpuMeshBuilder` 不再调 `buildPickingMirror()`；GPU/同步/流送三条路径都传空 picking 数组 | sculpt / character controller / 编辑器 streamed terrain 自检 picking=OK |
+| TD-22 | 浮动原点只在运行时生效，`EngineConfig::save()` 直接写局部坐标 | 存档写绝对坐标（局部 + `worldOrigin`），`loadConfig()` 落 Transform 时再减去当前原点；顺带把 `saveToFile()` 打开失败的 `errno`/`strerror` 带进错误串 | 飞行 + rebase 后退出，`config/engine.json` 不再出现 ±chunk 整数倍偏移 |
 ## 2. 未关闭（按"何时必须处理"排序）
 
 | # | 内容 | 影响 | 触发条件 |
@@ -48,17 +50,15 @@ updated: 2026-11-02
 | 7 | `LightingPass` 兼任"导入交换链" | 职责不对称 | 清理窗口期 |
 | 8 | 地形 LOD 全部预生成并常驻显存；B-04 只把单 chunk 顶点/索引组装迁到 GPU（流送 chunk 均为 1×1，仍走 GPU mesh；仅单实体 chunkGrid>1 回退 CPU builder） | 大世界显存仍随层级线性增长；GPU mesh 尚未覆盖多 chunk/流送合批 | 大世界/多 chunk GPU 合批时 |
 | 9 | 流送 chunk 各持独立 Model；GPU selection 已按 entity 输出 indirect count，B-07 笔刷可局部重建单个 chunk，但选择/撤销仍以 manager 为单位 | chunk 数量增加后 model bind/上传开销上升；chunk 编辑撤销粒度不足 | 多 chunk 编辑/撤销需求时 |
-| 10 | GPU mesh 路径为兼容既有 picking API 仍保留全分辨率 CPU positions/indices mirror | 单 chunk 额外 CPU 内存约与 HeightField 同量级；mountain/chunk 多时累计 | 做 GPU/HeightField 统一 picking 时 |
-| 11 | 地形雕刻只改运行期 HeightField/Model，不写场景 JSON；CharacterControllerComponent 已序列化但 Play 快照不保存雕刻 | 保存重载/Play 停止会丢失雕刻成果；编辑器无法持久化地形修改 | 后续/地形编辑持久化需求 |
-| 12 | 地形材质最多 4 个 Set2 set，但渲染按实体顺序遇到变化即重绑，未按材质集排序/合批 | 交替材质会增加 descriptor switch，材质集切换次数不设上限 | 多材质 chunk profiling 时 |
-| 13 | 合并缓冲的源数据要 CPU 侧完整顶点/索引副本（`Model::cpuVertices/cpuIndices`），Sponza 约 11MB；地形模型不留 | CPU 内存随可批模型总量线性增长 | 资产规模上去、或改走 GPU 回读重建时 |
-| 14 | 外部实例与 ECS 实体共用 `(模型, 子网格)` 分组，同一子网格上不同材质的外部实例会归到同一组、只用第一条记录的材质槽 | 粒子/体素若同一网格多材质会串色 | 粒子系统接入前 |
-| 15 | GPU 端只有 SSE 剔除，没有 LOD 选级（模型本身没有 LOD 链） | 顶点量上来后只能整组剔除，不能按距离换级 | F4 资产管线产出 LOD 之后 |
-| 16 | 粒子/体素只有 `ExternalInstance` 数据入口，还没有生产方 | 引擎侧已能画，但没有系统往里喂数据 | F3 体素 / F6 特效系统落地时 |
-| 17 | arena 每个 chunk 一份整块拷贝，槽位固定 2048 顶点 / 12288 索引 | 超出槽位大小或临时峰值时整帧回退到逐 chunk 路径；chunk 重建会重拷一次 | chunk 尺寸或 LOD 数量变大时（可改成按实际需求分配的 bump allocator） |
-| 18 | 流送半径上限 12 之后每帧成本随 chunk 数线性上升（radius 2/4/8/12 = 190/164/117/68 FPS） | 世界再大就会卡在 CPU：每个 chunk 每帧都要更新 Transform / 空间索引 / 地形 GPU record / 实例表行 | 需要把 chunk 的静态部分缓存成「一次写入、只改 LOD」或把可见性判断整体搬到 GPU |
-| 18 | 浮动原点只在运行时生效，序列化仍以原点 0 为基准 | 存档重开会回到原点附近，绝对位置丢失 | 做世界存档 / 无缝大世界时 |
-| 19 | 地形噪声锚点是 `float` 绝对值，1e6 量级量化步长约 0.06 | 极远处地形细节变粗（相邻 chunk 同网格，不会裂缝） | 噪声改 double 或分块重锚定时 |
+| 10 | 地形雕刻只改运行期 HeightField/Model，不写场景 JSON；CharacterControllerComponent 已序列化但 Play 快照不保存雕刻 | 保存重载/Play 停止会丢失雕刻成果；编辑器无法持久化地形修改 | 后续/地形编辑持久化需求 |
+| 11 | 地形材质最多 4 个 Set2 set，但渲染按实体顺序遇到变化即重绑，未按材质集排序/合批 | 交替材质会增加 descriptor switch，材质集切换次数不设上限 | 多材质 chunk profiling 时 |
+| 12 | 合并缓冲的源数据要 CPU 侧完整顶点/索引副本（`Model::cpuVertices/cpuIndices`），Sponza 约 11MB；地形模型不留 | CPU 内存随可批模型总量线性增长 | 资产规模上去、或改走 GPU 回读重建时 |
+| 13 | 外部实例与 ECS 实体共用 `(模型, 子网格)` 分组，同一子网格上不同材质的外部实例会归到同一组、只用第一条记录的材质槽 | 粒子/体素若同一网格多材质会串色 | 粒子系统接入前 |
+| 14 | GPU 端只有 SSE 剔除，没有 LOD 选级（模型本身没有 LOD 链） | 顶点量上来后只能整组剔除，不能按距离换级 | F4 资产管线产出 LOD 之后 |
+| 15 | 粒子/体素只有 `ExternalInstance` 数据入口，还没有生产方 | 引擎侧已能画，但没有系统往里喂数据 | F3 体素 / F6 特效系统落地时 |
+| 16 | arena 每个 chunk 一份整块拷贝，槽位固定 2048 顶点 / 12288 索引 | 超出槽位大小或临时峰值时整帧回退到逐 chunk 路径；chunk 重建会重拷一次 | chunk 尺寸或 LOD 数量变大时（可改成按实际需求分配的 bump allocator） |
+| 17 | 流送半径上限 12 之后每帧成本随 chunk 数线性上升（radius 2/4/8/12 = 190/164/117/68 FPS） | 世界再大就会卡在 CPU：每个 chunk 每帧都要更新 Transform / 空间索引 / 地形 GPU record / 实例表行 | 需要把 chunk 的静态部分缓存成「一次写入、只改 LOD」或把可见性判断整体搬到 GPU |
+| 18 | 地形噪声锚点是 `float` 绝对值，1e6 量级量化步长约 0.06 | 极远处地形细节变粗（相邻 chunk 同网格，不会裂缝） | 噪声改 double 或分块重锚定时 |
 
 ## 3. 明确"不打算做"的
 

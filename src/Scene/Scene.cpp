@@ -1692,8 +1692,10 @@ bool Scene::buildTerrainModelFromHeightField(
                     gpuMesh.indexBuffer, gpuMesh.indexAllocation,
                     gpuMesh.indexCount,
                     std::move(gpuMesh.subMeshes),
-                    std::move(gpuMesh.pickingPositions),
-                    std::move(gpuMesh.pickingIndices),
+                    // F2-e: terrain picking uses the height field, so the CPU
+                    // vertex mirror is never retained (saves ~38 KB per chunk at 33x33).
+                    std::vector<glm::vec3>{},
+                    std::vector<uint32_t>{},
                     gpuMesh.boundsMin, gpuMesh.boundsMax,
                     gpuMesh.uvMin, gpuMesh.uvMax, gpuMesh.uvValid);
             }
@@ -2904,6 +2906,105 @@ bool Scene::sampleTerrainHeightWorld(entt::entity entity, float worldX, float wo
     return std::isfinite(outHeight);
 }
 
+// F2-e: terrain picking no longer depends on a CPU copy of the mesh. The
+// height field is the authoritative surface, so march the ray against it in
+// the chunk's local frame and refine the crossing with a few bisections.
+static bool raycastHeightField(const terrain::HeightField& field,
+                               const glm::mat4& worldMatrix,
+                               const glm::vec3& rayOrigin,
+                               const glm::vec3& direction,
+                               float maxDistance,
+                               glm::vec3& outHitPoint, float& outDistance)
+{
+    if (field.width < 2u || field.height < 2u || field.sizeX <= 0.0f ||
+        field.sizeZ <= 0.0f)
+        return false;
+
+    const glm::mat4 inverseWorld = glm::inverse(worldMatrix);
+    const glm::vec3 localOrigin = glm::vec3(inverseWorld * glm::vec4(rayOrigin, 1.0f));
+    const glm::vec3 localDirRaw = glm::vec3(inverseWorld * glm::vec4(direction, 0.0f));
+    const float dirScale = glm::length(localDirRaw);
+    if (!std::isfinite(dirScale) || dirScale < 1.0e-8f)
+        return false;
+    const glm::vec3 localDir = localDirRaw / dirScale;
+    const float localMax = maxDistance * dirScale;
+
+    const float halfX = field.sizeX * 0.5f;
+    const float halfZ = field.sizeZ * 0.5f;
+    float sEnter = 0.0f;
+    float sExit = localMax;
+    const float axes[2][3] = {
+        { localOrigin.x, localDir.x, halfX },
+        { localOrigin.z, localDir.z, halfZ },
+    };
+    for (const auto& axis : axes)
+    {
+        if (std::abs(axis[1]) < 1.0e-8f)
+        {
+            if (axis[0] < -axis[2] || axis[0] > axis[2])
+                return false;
+            continue;
+        }
+        float t0 = (-axis[2] - axis[0]) / axis[1];
+        float t1 = (axis[2] - axis[0]) / axis[1];
+        if (t0 > t1)
+            std::swap(t0, t1);
+        sEnter = std::max(sEnter, t0);
+        sExit = std::min(sExit, t1);
+        if (sEnter > sExit)
+            return false;
+    }
+
+    const float cellX = field.sizeX / static_cast<float>(field.width - 1u);
+    const float cellZ = field.sizeZ / static_cast<float>(field.height - 1u);
+    const float step = std::max(0.25f, std::min(cellX, cellZ));
+
+    auto sampleDiff = [&field](const glm::vec3& local)
+    {
+        return local.y - field.worldHeightAt(local.x, local.z);
+    };
+
+    float previousS = sEnter;
+    float previousDiff = sampleDiff(localOrigin + localDir * previousS);
+    float hitS = -1.0f;
+    float s = sEnter;
+    while (s < sExit)
+    {
+        const float nextS = std::min(s + step, sExit);
+        const float diff = sampleDiff(localOrigin + localDir * nextS);
+        if (previousDiff > 0.0f && diff <= 0.0f)
+        {
+            float lo = previousS;
+            float hi = nextS;
+            for (int i = 0; i < 16; ++i)
+            {
+                const float mid = 0.5f * (lo + hi);
+                if (sampleDiff(localOrigin + localDir * mid) > 0.0f)
+                    lo = mid;
+                else
+                    hi = mid;
+            }
+            hitS = hi;
+            break;
+        }
+        previousS = nextS;
+        previousDiff = diff;
+        s = nextS;
+    }
+    if (hitS < 0.0f)
+        return false;
+
+    const glm::vec3 localHit = localOrigin + localDir * hitS;
+    const glm::vec3 worldHit = glm::vec3(worldMatrix * glm::vec4(localHit, 1.0f));
+    const float distance = glm::distance(rayOrigin, worldHit);
+    if (!std::isfinite(distance) || distance <= 0.0f)
+        return false;
+
+    outHitPoint = worldHit;
+    outDistance = distance;
+    return true;
+}
+
 bool Scene::raycastTerrain(entt::entity entity, const glm::vec3& rayOrigin,
                            const glm::vec3& rayDirection, glm::vec3& outHitPoint,
                            float& outDistance) const
@@ -2914,27 +3015,24 @@ bool Scene::raycastTerrain(entt::entity entity, const glm::vec3& rayOrigin,
         return false;
 
     const TerrainComponent* terrain = registry.try_get<TerrainComponent>(entity);
-    const MeshComponent* meshComponent = registry.try_get<MeshComponent>(entity);
     const WorldTransformComponent* worldTransform =
         registry.try_get<WorldTransformComponent>(entity);
-    if (!terrain || !terrain->generated || !meshComponent || !meshComponent->model ||
-        !worldTransform || !worldTransform->valid)
+    if (!terrain || !terrain->generated || !worldTransform || !worldTransform->valid)
         return false;
 
     const float directionLength = glm::length(rayDirection);
-    if (!std::isfinite(directionLength) || directionLength < 1e-8f)
+    if (!std::isfinite(directionLength) || directionLength < 1.0e-8f)
         return false;
     const glm::vec3 direction = rayDirection / directionLength;
 
-    float distance = 0.0f;
-    if (!meshComponent->model->intersectRay(worldTransform->matrix,
-                                            rayOrigin, direction, distance))
-        return false;
+    // The height field is the authoritative surface. Terrain meshes no longer
+    // keep a CPU vertex mirror, so there is nothing to fall back to.
+    if (terrain->cpuHeightField &&
+        raycastHeightField(*terrain->cpuHeightField, worldTransform->matrix,
+                           rayOrigin, direction, 5000.0f, outHitPoint, outDistance))
+        return true;
 
-    outDistance = distance;
-    outHitPoint = rayOrigin + direction * distance;
-    return std::isfinite(outDistance) && std::isfinite(outHitPoint.x) &&
-           std::isfinite(outHitPoint.y) && std::isfinite(outHitPoint.z);
+    return false;
 }
 
 bool Scene::raycastTerrainWorld(const glm::vec3& rayOrigin,
@@ -3423,8 +3521,10 @@ void Scene::processTerrainGeneration()
                     task->gpuMesh.indexBuffer, task->gpuMesh.indexAllocation,
                     task->gpuMesh.indexCount,
                     std::move(task->gpuMesh.subMeshes),
-                    std::move(task->gpuMesh.pickingPositions),
-                    std::move(task->gpuMesh.pickingIndices),
+                    // F2-e: streamed chunks keep only the height field, not a CPU
+                    // copy of the mesh; picking goes through raycastHeightField.
+                    std::vector<glm::vec3>{},
+                    std::vector<uint32_t>{},
                     task->gpuMesh.boundsMin, task->gpuMesh.boundsMax,
                     task->gpuMesh.uvMin, task->gpuMesh.uvMax,
                     task->gpuMesh.uvValid);

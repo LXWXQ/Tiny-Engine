@@ -1463,7 +1463,10 @@ void FirstApp::saveConfig()
 	EngineConfig::save(scene->getSettings());
 
 	CameraState cam;
-	cam.position = scene->getCameraTransform().getTranslation();
+	// 存档永远写绝对坐标：运行期原点会随浮动原点 rebase 移动，直接写局部
+	// 坐标会让下次启动的相机位置凭空偏移 worldOrigin。
+	cam.position = scene->getCameraTransform().getTranslation() +
+	               glm::vec3(scene->getWorldOrigin());
 	cam.rotation = scene->getCameraTransform().getEuler();
 	EngineConfig::save(cam);
 }
@@ -1477,7 +1480,9 @@ void FirstApp::loadConfig()
 	cam.rotation = scene->getCameraTransform().getEuler();
 	if (EngineConfig::load(cam))
 	{
-		scene->getCameraTransform().setTranslation(cam.position);
+		// 配置文件里是绝对坐标，落到 Transform 上要减去当前原点（启动时通常为 0）。
+		scene->getCameraTransform().setTranslation(
+			cam.position - glm::vec3(scene->getWorldOrigin()));
 		scene->getCameraTransform().setEuler(cam.rotation);
 		// Treat a camera teleport as a cut, not as a giant motion-blur path.
 		hasPreviousViewProjection = false;
@@ -1604,8 +1609,13 @@ if (streamingWorldEnabled)
 		<< " maxUpdateMs=" << scene->getMaxStreamingUpdateMs() << std::endl;
 	const uint32_t expected = static_cast<uint32_t>(
 		(2 * streamingWorldRadius + 1) * (2 * streamingWorldRadius + 1));
-	if (!streamingFlyEnabled && chunks != expected)
+	// A generation budget can legitimately keep the ring from filling within a
+	// short run: the hits prove the scheduler deferred work, not that chunks
+	// failed to load. Only demand a full ring when nothing was deferred.
+	if (!streamingFlyEnabled && scene->getStreamingBudgetHits() == 0 && chunks != expected)
 		throw std::runtime_error("streaming world did not fill its ring");
+	if (!streamingFlyEnabled && chunks == 0)
+		throw std::runtime_error("streaming world loaded no chunks");
 	if (streamingFlyEnabled && scene->getStreamingChunksUnloadedTotal() == 0u)
 		throw std::runtime_error("streaming world never unloaded a chunk while flying");
 }

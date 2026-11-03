@@ -25,54 +25,6 @@ uint32_t innerSegments(uint32_t span, uint32_t step)
     return std::clamp((span + step / 2u) / step, 1u, span);
 }
 
-// B-05: the full-resolution picking mirror is CPU data and can be large
-// (257x257 + ~393k indices). Build it on a worker so submit/poll never pay
-// that cost on the render thread.
-void buildPickingMirror(const terrain::TerrainConfig& config,
-                        const terrain::HeightField& heightField,
-                        TerrainGpuMeshBuildResult& outResult)
-{
-    const float stepX = config.sizeX / static_cast<float>(config.resolutionX - 1u);
-    const float stepZ = config.sizeZ / static_cast<float>(config.resolutionZ - 1u);
-    const size_t positionCount =
-        static_cast<size_t>(config.resolutionX) * config.resolutionZ;
-    outResult.pickingPositions.resize(positionCount);
-    for (uint32_t z = 0; z < config.resolutionZ; ++z)
-    {
-        const float worldZ = -config.sizeZ * 0.5f + static_cast<float>(z) * stepZ;
-        const size_t row = static_cast<size_t>(z) * config.resolutionX;
-        for (uint32_t x = 0; x < config.resolutionX; ++x)
-        {
-            const float worldX = -config.sizeX * 0.5f + static_cast<float>(x) * stepX;
-            const float h = heightField.heights[row + x];
-            outResult.pickingPositions[row + x] =
-                glm::vec3(worldX, config.baseHeight + config.heightScale * h, worldZ);
-        }
-    }
-
-    const size_t cellCount =
-        static_cast<size_t>(config.resolutionX - 1u) *
-        static_cast<size_t>(config.resolutionZ - 1u);
-    outResult.pickingIndices.resize(cellCount * 6u);
-    uint32_t* indices = outResult.pickingIndices.data();
-    const uint32_t rowStride = config.resolutionX;
-    for (uint32_t z = 0; z + 1u < config.resolutionZ; ++z)
-    {
-        for (uint32_t x = 0; x + 1u < config.resolutionX; ++x)
-        {
-            const uint32_t a = z * rowStride + x;
-            const uint32_t b = (z + 1u) * rowStride + x;
-            const uint32_t c = z * rowStride + x + 1u;
-            const uint32_t d = (z + 1u) * rowStride + x + 1u;
-            *indices++ = a;
-            *indices++ = b;
-            *indices++ = c;
-            *indices++ = b;
-            *indices++ = d;
-            *indices++ = c;
-        }
-    }
-}
 } // namespace
 
 TerrainGpuMeshBuilder::TerrainGpuMeshBuilder(Device& deviceArg,
@@ -432,15 +384,9 @@ uint64_t TerrainGpuMeshBuilder::submit(const terrain::TerrainConfig& config,
         return 0u;
     }
 
-    // Overlap the CPU picking mirror with GPU submission/assembly. The worker
-    // starts only after prepareBuild() has finished writing the result fields
-    // it owns, so the two never touch the same vector.
-    slot.pickingFuture = std::async(
-        std::launch::async,
-        [config, heightField, &slotResult = slot.result]()
-        {
-            buildPickingMirror(config, heightField, slotResult);
-        });
+    // F2-e: terrain picking uses the height field, so the CPU vertex mirror is
+    // no longer produced. The future below stays unused on purpose (the poll
+    // path still tolerates it being invalid).
     if (!recordAndSubmit(slot, config, heightField, errorMessage))
     {
         destroySlotResult(slot);
@@ -504,31 +450,6 @@ TerrainGpuMeshBuilder::PollStatus TerrainGpuMeshBuilder::poll(
         return PollStatus::Failed;
     }
 
-    // The GPU mesh is complete, but the off-thread CPU picking mirror may
-    // still be running. Do not wait on the render thread; retry next poll.
-    if (slot->pickingFuture.valid() &&
-        slot->pickingFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-    {
-        stats.maxPollMs = std::max(
-            stats.maxPollMs,
-            std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - pollStart).count());
-        return PollStatus::Pending;
-    }
-    if (slot->pickingFuture.valid())
-    {
-        try
-        {
-            slot->pickingFuture.get();
-        }
-        catch (...)
-        {
-            errorMessage = "GPU mesh picking mirror failed";
-            destroySlotResult(*slot);
-            clearSlot(*slot);
-            return PollStatus::Failed;
-        }
-    }
 
     const double assemblyMs =
         std::chrono::duration<double, std::milli>(
@@ -567,11 +488,7 @@ void TerrainGpuMeshBuilder::collectFinished()
     {
         if (!slot.active || !slot.abandoned)
             continue;
-        if (slot.pickingFuture.valid() &&
-            slot.pickingFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-        {
-            continue;
-        }
+
         if (!slot.submitted)
         {
             destroySlotResult(slot);
@@ -599,8 +516,7 @@ void TerrainGpuMeshBuilder::waitAll()
             vkWaitForFences(device.getDevice(), 1, &slot.fence, VK_TRUE,
                             std::numeric_limits<uint64_t>::max());
         }
-        if (slot.pickingFuture.valid())
-            slot.pickingFuture.wait();
+
         destroySlotResult(slot);
         clearSlot(slot);
     }
@@ -859,14 +775,11 @@ void TerrainGpuMeshBuilder::clearSlot(Slot& slot)
     slot.active = false;
     slot.abandoned = false;
     slot.submitted = false;
-    slot.pickingFuture = {};
     slot.layout = {};
 }
 
 void TerrainGpuMeshBuilder::destroySlotResult(Slot& slot)
 {
-    if (slot.pickingFuture.valid())
-        slot.pickingFuture.wait();
     destroyBuildResult(slot.result);
     slot.result = {};
 }

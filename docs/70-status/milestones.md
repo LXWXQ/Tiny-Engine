@@ -39,7 +39,7 @@ updated: 2026-11-02
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 37 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 38 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -584,3 +584,9 @@ updated: 2026-11-02
 **实现**：`kMaxTerrainStreamingRadius` 8 → 12（625 块）、`kMaxTerrainStreamingLoadsPerFrame` 8 → 16；`kTerrainGpuMaxEntities` 64 → 384、`kTerrainGpuCommandsPerEntity` 32 → 16、`kTerrainIndirectCapacity` 4096 → 12288；`TerrainMeshArena` 96 → 384 槽、单槽 2048 顶点 / 12288 索引（约 136 KB，合计约 51 MB）；新增 `TerrainStreamingComponent::maxUpdateMs`（默认 2 ms）与 `--streaming-budget`。
 **可观测**：`[Terrain] GPU selection ready | entities=384 records=6144 commandsPerEntity=16`、`[Terrain] mesh arena ready | slots=384 vertexMB=33 indexMB=18`、`[Streaming] chunks=<n> ... budgetHits=<n>`；`--streaming-budget 0.2` 时 budgetHits 明显非零。
 **回归**：新增 `f2d-streaming-radius`（半径 8 → chunks=289）与 `f2d-streaming-budget`，全套 **37 项**；半径 2/4/8/12 = 190/164/117/68 FPS（625 块瓶颈在每 chunk 的 CPU 簿记）；半径 8 飞行 600 帧 `chunks=323 loaded=599 unloaded=276`、13 次 rebase、0/0。
+## F2-e：地形拾取改走高度场（不再保留每 chunk 的 CPU 顶点副本）
+**问题**：每个地形 chunk 都额外保留一份全分辨率 `pickingPositions/pickingIndices`（33x33 约 38 KB、257x257 约 1.3 MB），只为编辑器 raycast 服务；这与「真正无限世界」的每 chunk 固定开销直接冲突。
+**实现**：`Scene::raycastTerrain()` 不再要求 `MeshComponent`，改为沿射线在 chunk 局部空间做 XZ slab 裁剪、按 `min(cellX, cellZ)`（下限 0.25）步进采样 `HeightField::worldHeightAt()`，符号翻转后二分 16 次求交点；GPU mesh / 同步生成 / 流送三条路径都向 `Model::createFromGpuMesh()` 传空 picking 数组；`TerrainGpuMeshBuilder` 删除 `buildPickingMirror()` 与 `pickingFuture`（含 `poll/collectFinished/waitAll` 里的等待分支）；编辑器流送 chunk 拾取自检改调 `scene.raycastTerrain()`。
+**可观测**：`[Editor] streamed terrain PASS | ... picking=OK`；`[Terrain] sculpt PASS`、`character controller PASS | grounded=1 maxGroundError=0` 不变。
+**回归**：新增 `f2e-terrain-picking`（跑 `TinyEditor.exe --selftest 5 --empty-scene`，`Validate.ps1` 增加 `Exe = "editor"` 支持与编辑器可执行发现），全套 **38 项**；批量 vs `--no-terrain-batch` 截图仍 `max 0`；半径 8 飞行 240 帧 4 次 rebase、`chunks=322 loaded=400 unloaded=78`、0/0；`--streaming-budget 0.2` 下环未填满属预算生效，自检改为「有预算命中时不强制满环」。
+**顺带**：`SceneSerializer::saveToFile()` 打开失败时带上 `errno` 与 `strerror` 文本；编辑器 streaming 自检在 TEMP 写入被拒（本机 errno 13）时回退到仓库内 `.tiny-streaming-selftest/`（已 gitignore）；`EngineConfig` 存档改存绝对坐标（局部 + `worldOrigin`），关闭 TD-22，飞行 + rebase 后不再把 ±chunk 整数倍偏移写回 `config/engine.json`。
