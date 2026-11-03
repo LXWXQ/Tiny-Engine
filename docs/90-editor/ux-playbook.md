@@ -168,13 +168,16 @@ attrib +R Resources\Scenes
 
 人工项：不按 `?`，仅用菜单完成"复制一个对象并聚焦到它"。
 
-### B5
+### B5（已实现，2026-11-03）
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\DocCheck.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\Validate.ps1 -Id b5-language-console
 ```
 
-人工项：截图三张（工具栏、状态栏、错误提示），同一概念不出现第二种叫法。
+- 判据：`[Editor] status bar selfTest PASS`（`formatCount()` 的 k/M 边界 + `currentLogClock()` 形状）。
+- 人工项：截图三张（工具栏、状态栏、Console），同一概念不出现第二种叫法；
+  用 [ux-rules](ux-rules.md) U7 的语言分层表逐项对照（命令中文 / 区域名英文 / 行业参数英文 / 日志中文）。
+- 已知坑：状态栏统计必须读 `Scene::getDisplayTelemetry()`，读 `getTelemetry()` 会永远是 0。
 
 ## 7. 禁区
 

@@ -3,7 +3,7 @@ id: editor/milestones
 title: 编辑器里程碑（E1 起）
 type: status
 scope: 空
-size: ~80 行
+size: ~110 行
 read-when: 想知道编辑器做过哪些轮次与每轮的验证基线
 updated: 2026-11-03
 ---
@@ -135,3 +135,22 @@ updated: 2026-11-03
 - 清掉 `config/imgui.ini` 里一条 `[Window][Render] ... Collapsed=1` 的旧记录（它会让渲染设置面板
   每次启动都是一条细线）。
 - 回归：`b4-shortcuts`（`[Editor] shortcut sheet selfTest PASS` + `conflicts=0`）。
+
+## B5：语言统一 + Console 时间/计数/过滤/复制 + 状态栏三段
+
+- UX-07 语言分层：命令与动作、日志与提示用中文；区域名（面板标题）与行业参数（FPS、draw counts、
+  Base Color、Bloom、SSAO）保留英文，因为面板标题同时是 `EditorPanel::name()`、`imgui.ini` 的键、
+  `config/editor.json` 的键。规则写进 `ux-rules` 的 U7，附词汇表（gizmo / unsaved / selection）。
+- UX-11 Console：`LogEntry` 增加 `time`（`EditorState::pushLog` 用 `currentLogClock()` 填 `HH:MM:SS`），
+  每行时间列 + 正文两段；顶部 Info/Warn/Error 三个复选框带计数；「仅错误」「全部」两个视图；
+  「复制」导出当前可见行（与显示共用 `levelVisible()` 判据）；`自动滚动` / `清空` 中文化。
+- UX-15 状态栏三段：左 = 选中 / 手柄 / 吸附 / 最近错误；中 = `绘制 N · 三角形 270.5k`
+  （`formatCount()` 做 k/M 缩写，tooltip 给精确值）；右 = `FPS · ms · 撤销 N`。帧率从工具栏右侧
+  移到状态栏，工具栏只留「保存状态 · 播放状态」。
+- 关键坑：状态栏统计必须读 `Scene::getDisplayTelemetry()`。`beginFrameTelemetry()` 每帧开头把上一帧
+  的完整统计搬进 `displayTelemetry` 再清 `currentTelemetry`；编辑器先画 UI 再录制渲染，读
+  `getTelemetry()` 永远是 0（首版就是这样，截图里显示 `绘制 0 · 三角形 0`）。
+- UX-18 帮助菜单：打开控制台并跳到最近错误 / 复制诊断信息（`copyDiagnostics()`）/ 关于 Tiny Editor。
+- 自检：`[Editor] status bar selfTest PASS | counts k/M + log clock HH:MM:SS`
+  （`formatCount(42)="42"`、`(270459)="270.5k"`、`(2704590)="2.7M"`，`currentLogClock()` 长度 8）。
+- 回归：`b5-language-console`（`[Editor] status bar selfTest PASS`）。

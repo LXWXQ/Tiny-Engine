@@ -520,6 +520,7 @@ void EditorLayer::drawUI()
     }
 
     drawShortcutSheet();
+    drawAboutWindow();
 
     // 未保存确认放在所有面板之后：它要盖在最上层，且本帧的改动要先算进 dirty。
     drawUnsavedPrompt();
@@ -538,14 +539,14 @@ void EditorLayer::drawMenuBar()
 {
     ImGuiIO& io = ImGui::GetIO();
 
-    if (ImGui::BeginMenu("File"))
+    if (ImGui::BeginMenu("文件"))
     {
         const bool writable = state.documentWritable();
-        if (ImGui::MenuItem("New Scene", "Ctrl+N", false, writable))
+        if (ImGui::MenuItem("新建场景", "Ctrl+N", false, writable))
             requestDocumentAction(EditorState::PendingDocumentAction::New);
-        if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, writable))
+        if (ImGui::MenuItem("打开场景...", "Ctrl+O", false, writable))
             requestDocumentAction(EditorState::PendingDocumentAction::Open);
-        if (ImGui::BeginMenu("Open Recent", writable && !state.recentScenes.empty()))
+        if (ImGui::BeginMenu("最近打开", writable && !state.recentScenes.empty()))
         {
             for (const std::string& recent : state.recentScenes)
             {
@@ -558,89 +559,89 @@ void EditorLayer::drawMenuBar()
             ImGui::EndMenu();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Save", "Ctrl+S", false, writable)) saveScene();
-        if (ImGui::MenuItem("Save As...", nullptr, false, writable)) saveSceneAs();
+        if (ImGui::MenuItem("保存", "Ctrl+S", false, writable)) saveScene();
+        if (ImGui::MenuItem("另存为...", nullptr, false, writable)) saveSceneAs();
         ImGui::Separator();
-        if (ImGui::MenuItem("Reload Config") && state.services.reloadConfig)
+        if (ImGui::MenuItem("重新加载配置") && state.services.reloadConfig)
             state.services.reloadConfig();
-        if (ImGui::MenuItem("Save Config") && state.services.saveConfig)
+        if (ImGui::MenuItem("保存配置") && state.services.saveConfig)
             state.services.saveConfig();
         ImGui::Separator();
-        if (ImGui::MenuItem("Exit"))
+        if (ImGui::MenuItem("退出"))
             requestDocumentAction(EditorState::PendingDocumentAction::Exit);
         ImGui::EndMenu();
     }
 
-    if (ImGui::BeginMenu("Edit"))
+    if (ImGui::BeginMenu("编辑"))
     {
-        if (ImGui::MenuItem(state.commands.canUndo() ? "Undo" : "Undo (nothing)", "Ctrl+Z",
+        if (ImGui::MenuItem(state.commands.canUndo() ? "撤销" : "撤销（没有可撤销的操作）", "Ctrl+Z",
                             false, state.commands.canUndo()))
         {
             state.commands.undo();
             state.markDirty();
         }
-        if (ImGui::MenuItem(state.commands.canRedo() ? "Redo" : "Redo (nothing)", "Ctrl+Y",
+        if (ImGui::MenuItem(state.commands.canRedo() ? "重做" : "重做（没有可重做的操作）", "Ctrl+Y",
                             false, state.commands.canRedo()))
         {
             state.commands.redo();
             state.markDirty();
         }
         ImGui::Separator();
-        ImGui::TextDisabled("History: %d undo / %d redo",
+        ImGui::TextDisabled("历史：%d 步可撤销 / %d 步可重做",
                             static_cast<int>(state.commands.undoCount()),
                             static_cast<int>(state.commands.redoCount()));
         ImGui::Separator();
-        if (ImGui::MenuItem("Move (W)", nullptr, state.gizmo.mode == GizmoMode::Translate))
+        if (ImGui::MenuItem("移动 (W)", nullptr, state.gizmo.mode == GizmoMode::Translate))
             state.gizmo.mode = GizmoMode::Translate;
-        if (ImGui::MenuItem("Rotate (E)", nullptr, state.gizmo.mode == GizmoMode::Rotate))
+        if (ImGui::MenuItem("旋转 (E)", nullptr, state.gizmo.mode == GizmoMode::Rotate))
             state.gizmo.mode = GizmoMode::Rotate;
-        if (ImGui::MenuItem("Scale (R)", nullptr, state.gizmo.mode == GizmoMode::Scale))
+        if (ImGui::MenuItem("缩放 (R)", nullptr, state.gizmo.mode == GizmoMode::Scale))
             state.gizmo.mode = GizmoMode::Scale;
         ImGui::Separator();
         // UX-06：这四个以前只活在快捷键里，菜单里补上门面。
         const bool hasSelection = !state.selection.entities.empty();
-        if (ImGui::MenuItem("Duplicate Selected", "Ctrl+D", false, hasSelection))
+        if (ImGui::MenuItem("复制选中", "Ctrl+D", false, hasSelection))
             duplicateSelection(state);
-        if (ImGui::MenuItem("Delete Selected", "Del", false, hasSelection))
+        if (ImGui::MenuItem("删除选中", "Del", false, hasSelection))
             deleteSelection(state);
-        if (ImGui::MenuItem("Focus Selection", "F", false, hasSelection))
+        if (ImGui::MenuItem("聚焦选中", "F", false, hasSelection))
             focusSelection(state);
-        if (ImGui::MenuItem("Select All", "Ctrl+A", false, state.services.registry != nullptr))
+        if (ImGui::MenuItem("全选", "Ctrl+A", false, state.services.registry != nullptr))
             selectAllEntities(state);
         ImGui::EndMenu();
     }
 
-    if (ImGui::BeginMenu("Create"))
+    if (ImGui::BeginMenu("创建"))
     {
-        if (ImGui::MenuItem("Terrain"))
+        if (ImGui::MenuItem("地形"))
             createTerrainFromUi();
-        if (ImGui::MenuItem("Character"))
+        if (ImGui::MenuItem("角色"))
             createCharacterFromUi();
         ImGui::EndMenu();
     }
 
-    if (ImGui::BeginMenu("Play"))
+    if (ImGui::BeginMenu("播放"))
     {
         const bool editing = (state.playState == PlayState::Editing);
         const bool playing = (state.playState == PlayState::Playing);
         const bool paused = (state.playState == PlayState::Paused);
 
-        if (ImGui::MenuItem("Play", "F5", false, editing))
+        if (ImGui::MenuItem("播放", "F5", false, editing))
             enterPlay();
-        if (ImGui::MenuItem("Pause", "F6", false, playing))
+        if (ImGui::MenuItem("暂停", "F6", false, playing))
             pausePlay();
-        if (ImGui::MenuItem("Resume", "F6", false, paused))
+        if (ImGui::MenuItem("继续", "F6", false, paused))
             resumePlay();
-        if (ImGui::MenuItem("Stop", "F7", false, !editing))
+        if (ImGui::MenuItem("停止", "F7", false, !editing))
             stopPlay();
         ImGui::Separator();
-        ImGui::TextDisabled("State: %s",
-                            editing ? "Editing" : (playing ? "Playing" : "Paused"));
+        ImGui::TextDisabled("状态：%s",
+                            editing ? "编辑中" : (playing ? "播放中" : "已暂停"));
         ImGui::EndMenu();
 
     }
 
-    if (ImGui::BeginMenu("View"))
+    if (ImGui::BeginMenu("视图"))
     {
         if (auto* panel = findPanel("Viewport"))
             ImGui::MenuItem("Viewport", nullptr, &panel->visible);
@@ -655,16 +656,22 @@ void EditorLayer::drawMenuBar()
         if (auto* panel = findPanel("History"))
             ImGui::MenuItem("History", nullptr, &panel->visible);
         if (auto* panel = findPanel("Render"))
-            ImGui::MenuItem("Render Settings", nullptr, &panel->visible);
+            ImGui::MenuItem("渲染设置", nullptr, &panel->visible);
         ImGui::Separator();
-        if (ImGui::MenuItem("Reset Layout"))
+        if (ImGui::MenuItem("重置布局"))
             layoutNeedsReset = true;
         ImGui::EndMenu();
     }
 
-    if (ImGui::BeginMenu("Help"))
+    if (ImGui::BeginMenu("帮助"))
     {
-        ImGui::MenuItem("Keyboard Shortcuts", "?", &showShortcutSheet);
+        ImGui::MenuItem("键盘快捷键", "?", &showShortcutSheet);
+        if (ImGui::MenuItem("打开控制台并跳到最近错误", nullptr, false, !state.lastErrorSummary.empty()))
+            openConsoleAtLastError();
+        if (ImGui::MenuItem("复制诊断信息"))
+            copyDiagnostics();
+        if (ImGui::MenuItem("关于 Tiny Editor"))
+            showAboutWindow = true;
         ImGui::Separator();
         ImGui::TextDisabled("Tiny Editor");
         ImGui::TextDisabled("Tiny Engine (Vulkan)");
@@ -776,6 +783,17 @@ bool barToggle(const char* label, bool active, const char* tooltip)
     return pressed;
 }
 
+// UX-15：状态栏里的数量用 k/M 缩写（270.5k、2.7M），精确值放 tooltip。
+void formatCount(char* out, size_t size, unsigned int value)
+{
+    if (value >= 1000000u)
+        std::snprintf(out, size, "%.1fM", static_cast<double>(value) / 1000000.0);
+    else if (value >= 10000u)
+        std::snprintf(out, size, "%.1fk", static_cast<double>(value) / 1000.0);
+    else
+        std::snprintf(out, size, "%u", value);
+}
+
 const char* gizmoModeLabel(GizmoMode mode)
 {
     return (mode == GizmoMode::Translate) ? "移动"
@@ -799,9 +817,9 @@ void EditorLayer::drawToolbar()
         const bool editing = state.playState == PlayState::Editing;
         const bool playing = state.playState == PlayState::Playing;
 
-        // 按钮上的字刻意用英文：缺中文字形时那种字体会退化成 ?，
-        // 而工具栏是"不读说明也点得对"的东西，不能赌字体加载成功。
-        if (ImGui::Button(editing ? "Play" : (playing ? "Pause" : "Resume")))
+        // UX-07：命令层统一中文，面板标题保留英文区域名（它同时是 imgui.ini
+        // 与偏好文件里的键）。E4-c 起会加载系统 CJK 字体，缺字形只在没装中文字体的机器上退化。
+        if (ImGui::Button(editing ? "播放" : (playing ? "暂停" : "继续")))
         {
             if (editing)
                 enterPlay();
@@ -815,7 +833,7 @@ void EditorLayer::drawToolbar()
         ImGui::SameLine();
 
         ImGui::BeginDisabled(editing);
-        if (ImGui::Button("Stop"))
+        if (ImGui::Button("停止"))
             stopPlay();
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
@@ -825,15 +843,15 @@ void EditorLayer::drawToolbar()
         ImGui::SameLine();
 
         // ---- 手柄模式 ----
-        if (barToggle("Move", state.gizmo.mode == GizmoMode::Translate, "W：移动手柄"))
+        if (barToggle("移动", state.gizmo.mode == GizmoMode::Translate, "W：移动手柄"))
             state.gizmo.mode = GizmoMode::Translate;
-        if (barToggle("Rotate", state.gizmo.mode == GizmoMode::Rotate, "E：旋转手柄"))
+        if (barToggle("旋转", state.gizmo.mode == GizmoMode::Rotate, "E：旋转手柄"))
             state.gizmo.mode = GizmoMode::Rotate;
-        if (barToggle("Scale", state.gizmo.mode == GizmoMode::Scale, "R：缩放手柄"))
+        if (barToggle("缩放", state.gizmo.mode == GizmoMode::Scale, "R：缩放手柄"))
             state.gizmo.mode = GizmoMode::Scale;
 
         // ---- 吸附 ----
-        ImGui::Checkbox("Snap", &state.gizmo.snapEnabled);
+        ImGui::Checkbox("吸附", &state.gizmo.snapEnabled);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("平移 %.2f / 旋转 %.0f 度 / 缩放 %.2f；按住 Shift 可临时吸附",
                               state.gizmo.snapTranslate, state.gizmo.snapRotateDegrees,
@@ -845,13 +863,13 @@ void EditorLayer::drawToolbar()
         // ---- 渲染设置（浮动工具窗的开关） ----
         if (auto* renderPanel = findPanel("Render"))
         {
-            if (barToggle("Render", renderPanel->visible, "渲染设置：曝光 / Bloom / SSAO / 方向光"))
+            if (barToggle("渲染", renderPanel->visible, "渲染设置：曝光 / Bloom / SSAO / 方向光"))
                 renderPanel->visible = !renderPanel->visible;
         }
 
         // ---- 聚焦 / 撤销 ----
         ImGui::BeginDisabled(state.selection.size() == 0);
-        if (ImGui::Button("Focus"))
+        if (ImGui::Button("聚焦"))
             focusSelection(state);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
@@ -859,7 +877,7 @@ void EditorLayer::drawToolbar()
         ImGui::SameLine();
 
         ImGui::BeginDisabled(!state.commands.canUndo());
-        if (ImGui::Button("Undo"))
+        if (ImGui::Button("撤销"))
         {
             state.commands.undo();
             state.markDirty();
@@ -869,7 +887,7 @@ void EditorLayer::drawToolbar()
             ImGui::SetTooltip("Ctrl+Z");
         ImGui::SameLine();
         ImGui::BeginDisabled(!state.commands.canRedo());
-        if (ImGui::Button("Redo"))
+        if (ImGui::Button("重做"))
         {
             state.commands.redo();
             state.markDirty();
@@ -898,11 +916,10 @@ void EditorLayer::drawToolbar()
                 ImGui::SetTooltip("打开 Console 并跳到最近一次错误");
         }
 
-        const char* playLabel = editing ? "Editing" : (playing ? "Playing" : "Paused");
+        const char* playLabel = editing ? "编辑中" : (playing ? "播放中" : "已暂停");
         char right[192];
-        std::snprintf(right, sizeof right, "%s | %s | %.0f FPS",
-                      state.documentDirty ? "* unsaved" : "saved", playLabel,
-                      static_cast<double>(ImGui::GetIO().Framerate));
+        std::snprintf(right, sizeof right, "%s · %s",
+                      state.documentDirty ? "* 未保存" : "已保存", playLabel);
         const float textWidth = ImGui::CalcTextSize(right).x;
         const float targetX = ImGui::GetWindowWidth() - textWidth - 10.0f;
         if (targetX > ImGui::GetCursorPosX())
@@ -1030,13 +1047,18 @@ void EditorLayer::drawStatusBar()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 3.0f));
     if (ImGui::Begin("##statusbar", nullptr, kBarFlags))
     {
+        // UX-15：状态栏分三段，各管一件事 ——
+        //   左：选中 / 手柄 / 吸附 / 最近错误（"我现在在编辑什么"）
+        //   中：场景统计（"屏幕上画了多少东西"）
+        //   右：帧率 / 帧耗时 / 撤销深度（"跑得快不快"）
+        // 以前五组数字挤在右边一行，扫读时要一字一字读；分三段后眼睛有落点。
         const size_t selected = state.selection.size();
         if (selected == 0)
             ImGui::TextDisabled("没有选中对象");
         else
             ImGui::Text("%zu 个对象选中", selected);
         ImGui::SameLine();
-        ImGui::TextDisabled("| %s | 吸附 %s", gizmoModeLabel(state.gizmo.mode),
+        ImGui::TextDisabled("· %s · 吸附 %s", gizmoModeLabel(state.gizmo.mode),
                             state.gizmo.snapEnabled ? "开" : "关（按住 Shift 临时开）");
 
         // B3 / UX-03、UX-12：错误摘要常驻在状态栏 —— Console 关着也看得见。
@@ -1044,7 +1066,7 @@ void EditorLayer::drawStatusBar()
         if (!state.lastErrorSummary.empty())
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("|");
+            ImGui::TextDisabled("·");
             ImGui::SameLine();
             const float alpha = state.lastErrorAge < 30.0f ? 1.0f : 0.55f;
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, alpha));
@@ -1055,32 +1077,48 @@ void EditorLayer::drawStatusBar()
             }
             ImGui::PopStyleColor();
             ImGui::SameLine();
-            char summary[96];
-            std::snprintf(summary, sizeof summary, "%s", state.lastErrorSummary.c_str());
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.6f, alpha));
-            ImGui::TextUnformatted(summary);
+            ImGui::TextUnformatted(state.lastErrorSummary.c_str());
             ImGui::PopStyleColor();
         }
 
-        // 帧数据放这里而不是只塞进 Statistics 面板：调场景时眼睛一直在视口，
-        // 侧栏是要"转头去看"的，状态栏是余光就能扫到的。
         const ImGuiIO& io = ImGui::GetIO();
         unsigned int draws = 0;
         unsigned int tris = 0;
         if (state.services.scene != nullptr)
         {
-            const RenderTelemetry& telemetry = state.services.scene->getTelemetry();
+            // beginFrameTelemetry() 每帧开头把上一帧的完整统计搬进 displayTelemetry，
+            // 这里必须读它：读 currentTelemetry 的话，UI 先于渲染录制，永远是 0。
+            const RenderTelemetry& telemetry = state.services.scene->getDisplayTelemetry();
             draws = telemetry.drawCalls;
             tris = telemetry.triangles;
         }
-        char right[192];
-        std::snprintf(right, sizeof right, "%.0f FPS (%.2f ms) | %u draws | %u tris | undo %d",
+
+        // ---- 中区：场景统计。数字用 k/M 缩写，精确值挂在 tooltip 上 ----
+        char triText[32];
+        formatCount(triText, sizeof triText, tris);
+        char center[128];
+        std::snprintf(center, sizeof center, "绘制 %u · 三角形 %s", draws, triText);
+
+        const float centerWidth = ImGui::CalcTextSize(center).x;
+        const float centerX = viewport->WorkSize.x * 0.45f;
+        if (centerX > ImGui::GetCursorPosX() + 8.0f)
+        {
+            ImGui::SameLine(centerX);
+            ImGui::TextUnformatted(center);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("draw calls %u · triangles %u", draws, tris);
+        }
+
+        // ---- 右区：帧率 / 帧耗时 / 撤销深度 ----
+        char right[128];
+        std::snprintf(right, sizeof right, "%.0f FPS · %.2f ms · 撤销 %d",
                       static_cast<double>(io.Framerate),
                       (io.Framerate > 0.0f) ? (1000.0f / io.Framerate) : 0.0f,
-                      draws, tris, static_cast<int>(state.commands.undoCount()));
+                      static_cast<int>(state.commands.undoCount()));
         const float textWidth = ImGui::CalcTextSize(right).x;
         const float targetX = ImGui::GetWindowWidth() - textWidth - 10.0f;
-        if (targetX > ImGui::GetCursorPosX())
+        if (targetX > ImGui::GetCursorPosX() + 8.0f)
             ImGui::SameLine(targetX);
         ImGui::TextDisabled("%s", right);
     }
@@ -1088,6 +1126,63 @@ void EditorLayer::drawStatusBar()
     ImGui::PopStyleVar();
 }
 
+// UX-18：诊断入口 —— 出错后用户至少要有一条「把现场带走」的路。
+// 文本走剪贴板而不是文件：贴进 issue / 聊天窗口是最常见的下一步。
+void EditorLayer::copyDiagnostics()
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    unsigned int draws = 0;
+    unsigned int tris = 0;
+    unsigned int verts = 0;
+    if (state.services.scene != nullptr)
+    {
+        const RenderTelemetry& telemetry = state.services.scene->getDisplayTelemetry();
+        draws = telemetry.drawCalls;
+        tris = telemetry.triangles;
+        verts = telemetry.vertices;
+    }
+
+    char buffer[768];
+    std::snprintf(buffer, sizeof buffer,
+                  "Tiny Editor 诊断%s%s" "\n"
+                  "场景：%s\n"
+                  "FPS：%.1f（%.2f ms）\n"
+                  "draw calls：%u，triangles：%u，vertices：%u\n"
+                  "撤销深度：%d（可重做 %d）\n"
+                  "最近错误：%s",
+                  state.documentPath.empty() ? "" : "：",
+                  state.documentPath.empty() ? "（未命名场景）" : state.documentPath.c_str(),
+                  state.services.scene != nullptr ? "已加载" : "不可用",
+                  static_cast<double>(io.Framerate),
+                  (io.Framerate > 0.0f) ? (1000.0f / io.Framerate) : 0.0f,
+                  draws, tris, verts,
+                  static_cast<int>(state.commands.undoCount()),
+                  static_cast<int>(state.commands.redoCount()),
+                  state.lastErrorSummary.empty() ? "无" : state.lastErrorSummary.c_str());
+    ImGui::SetClipboardText(buffer);
+    state.notifySuccess("诊断信息已复制到剪贴板");
+}
+
+// UX-18：关于窗顺带把「语言策略」写进去 —— 这是用户第一次见到项目时最常问的那件事。
+void EditorLayer::drawAboutWindow()
+{
+    if (!showAboutWindow)
+        return;
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
+    if (!ImGui::Begin("关于 Tiny Editor", &showAboutWindow, ImGuiWindowFlags_NoSavedSettings))
+    {
+        ImGui::End();
+        return;
+    }
+    ImGui::TextUnformatted("Tiny Engine —— Vulkan 渲染的轻量场景编辑器");
+    ImGui::Separator();
+    ImGui::TextDisabled("界面用词：命令与提示中文，面板名与行业参数保留英文。");
+    ImGui::TextDisabled("快捷键：Shift+/ 打开速查表。");
+    ImGui::TextDisabled("渲染设置：工具栏「渲染」按钮。");
+    if (ImGui::Button("复制诊断信息"))
+        copyDiagnostics();
+    ImGui::End();
+}
 void EditorLayer::drawPanels()
 {
     // 关键约束：ImGui::SetNextWindowPos/Size 是**单槽位**的 ——
@@ -1742,6 +1837,31 @@ bool EditorLayer::selfTest()
             return false;
         }
         std::cout << "[Editor] notices selfTest PASS | toast decay + error summary + unread badge" << std::endl;
+    }
+
+    // ---- 0ac) B5：状态栏数量缩写 + 日志时间戳（纯逻辑） ----
+    {
+        char small[16];
+        char kilo[16];
+        char mega[16];
+        formatCount(small, sizeof small, 42u);
+        formatCount(kilo, sizeof kilo, 270459u);
+        formatCount(mega, sizeof mega, 2704590u);
+        if (std::strcmp(small, "42") != 0 || std::strcmp(kilo, "270.5k") != 0 ||
+            std::strcmp(mega, "2.7M") != 0)
+        {
+            std::cerr << "[Editor] status bar selfTest FAIL: count formatting " << small << " / "
+                      << kilo << " / " << mega << std::endl;
+            return false;
+        }
+        const std::string clock = currentLogClock();
+        if (clock.size() != 8 || clock[2] != ':' || clock[5] != ':')
+        {
+            std::cerr << "[Editor] status bar selfTest FAIL: log clock " << clock << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] status bar selfTest PASS | counts k/M + log clock " << clock
+                  << std::endl;
     }
 
     // ---- 0b) E4-b：偏好文件往返（纯逻辑，不碰磁盘） ----

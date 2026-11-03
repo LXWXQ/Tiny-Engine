@@ -107,6 +107,10 @@ private:
     // ---- E4-c：快捷键速查（Help 菜单 / ? 键） ----
     void drawShortcutSheet();
     bool showShortcutSheet = false;
+    // B5 / UX-18：诊断入口 —— 复制现场 + 关于窗。
+    void copyDiagnostics();
+    void drawAboutWindow();
+    bool showAboutWindow = false;
 
     // ---- E4-b：偏好持久化（面板可见性 / Gizmo 模式 / 最近场景） ----
     void applyPreferences();

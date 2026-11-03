@@ -60,6 +60,7 @@ struct LogEntry
 {
     enum class Level { Info, Warning, Error };
     Level level = Level::Info;
+    std::string time;      // B5：本地时间 HH:MM:SS，写进 Console 第一列
     std::string text;
 };
 

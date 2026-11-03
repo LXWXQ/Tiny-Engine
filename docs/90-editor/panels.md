@@ -4,7 +4,7 @@ title: 面板与布局
 type: system
 scope: 现有面板、布局实现方式、以及没有 docking 时的注意事项
 read-when: 写新面板、改布局、或面板位置错乱
-size: ~150 行
+size: ~200 行
 updated: 2026-11-03
 ---
 
@@ -248,6 +248,43 @@ const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBar
 
 `ssaoKernelSize` 由 `RenderSettingsPanel::clampKernelSize()` 夹到 4..64 的偶数：滑杆允许拖到任意
 整数，但采样循环拿 0 或奇数会出问题。自检：`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
+
+## 语言分层（B5 / UX-07）
+
+界面用词按「读它做什么」分四层，规则写在 [ux-rules](ux-rules.md) 的 U7：
+
+| 层级 | 语言 | 例子 |
+|---|---|---|
+| 命令与动作 | 中文 | `播放` / `停止` / `撤销` / `复制选中` |
+| 区域名 | 英文 | 面板标题 `Hierarchy` / `Inspector` / `Console` / `Assets` / `History` / `Viewport` / `Render` |
+| 行业参数名 | 英文 | `FPS` / `draw calls` / `Base Color` / `Metallic` / `Bloom` / `SSAO` |
+| 日志与提示 | 中文 | Console、Toast、状态栏文案 |
+
+区域名保留英文不是偷懒：它同时是 `EditorPanel::name()`、`config/imgui.ini` 的键、`config/editor.json` 里偏好 map 的键。翻译面板标题会同时拆掉这三处的一致性。
+
+## Console：时间列、计数、过滤与复制（B5 / UX-11）
+
+`src/Editor/panels/ConsolePanel.cpp`：
+
+- 每行第一列是 `HH:MM:SS`（`LogEntry::time`，由 `EditorState::pushLog` 里的 `currentLogClock()` 填）。`sameLine(76.0f)` 之后才是正文，所以视线扫的是时间轴。
+- 顶部三个复选框 `Info` / `Warn` / `Error` 后面各跟一个计数 `(N)`，一眼能看出有多少条被过滤掉了。
+- 「仅错误」= Info/Warn 关、Error 开（排查时最常用）；「全部」= 三个都开。
+- 「复制」把**当前可见的**行拼成 `时间 正文` 写入剪贴板 —— 与显示共用同一个 `levelVisible()` 判据，绝不出现「看到的和复制的不一样」。
+- `清空` 与 `自动滚动` 沿用原语义；清空时同时清「最近错误」摘要与未读计数。
+
+## 状态栏三段（B5 / UX-15）
+
+`EditorLayer::drawStatusBar()`：
+
+| 段 | 内容 | 为什么 |
+|---|---|---|
+| 左 | `N 个对象选中` · 手柄模式 · 吸附 · 最近错误摘要 | 「我现在在编辑什么」；错误常驻是 B3 的承诺 |
+| 中 | `绘制 N · 三角形 270.5k` | 「屏幕上画了多少东西」；数字用 `formatCount()` 缩写（`270.5k` / `2.7M`），精确值挂在 tooltip |
+| 右 | `167 FPS · 5.98 ms · 撤销 0` | 「跑得快不快」；帧率以前挤在工具栏右侧，和「文档是否保存」抢位置 |
+
+中段和右段都用 `SameLine(targetX)` 定位，并且只有 `targetX > GetCursorPosX() + 8` 时才画 —— 左段很长（错误摘要）时宁可少一段，也不重叠。
+
+统计读 `Scene::getDisplayTelemetry()` 而不是 `getTelemetry()`：前者是 `beginFrameTelemetry()` 在每帧开头搬过来的上一帧完整值，后者是本帧正在累加的草稿 —— 编辑器先画 UI 再录制渲染，读草稿永远是 0。
 
 ## 硬约束
 

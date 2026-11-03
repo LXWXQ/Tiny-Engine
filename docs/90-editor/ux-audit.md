@@ -106,10 +106,10 @@ updated: 2026-11-03
 
 | 编号 | 现象 | 证据 | 判据 | 状态 |
 |---|---|---|---|---|
-| UX-07 | 同一屏三种语言层级：按钮英文、tooltip 中文、状态栏中文；概念词不统一 | `EditorLayer.cpp` 工具栏 714 行起；状态栏 818 行起 | U7 | open |
+| UX-07 | ~~同一屏三种语言层级：按钮英文、tooltip 中文、状态栏中文；概念词不统一~~ | `EditorLayer.cpp` 工具栏 714 行起；状态栏 818 行起 | U7 | **fixed**（2026-11-03）：语言分层写进 ux-rules 的 U7（命令与提示中文、区域名与行业参数英文），词汇表收敛 gizmo / unsaved / selection；菜单、工具栏、状态栏同一套用词 |
 | UX-08 | 地形生成同步阻塞，无进度、不禁用按钮 | `createTerrainFromUi()` 完成后才记录 `lastGenerationMs` | U2、U6 | open |
 | UX-10 | 成功动作没有回执：创建成功、保存成功都只在 Console 留一行 | 同 UX-03 的 `pushLog(Info)` 调用 | U3 | **fixed**（2026-11-03）：`notifySuccess()` 给 2 秒 Toast（保存/打开/新建/创建地形与角色/删除/停止播放），并顺手清掉「最近错误」 |
-| UX-11 | Console 无时间戳、无等级计数、无复制、无"仅看错误"快捷开关 | `ConsolePanel.cpp` 全文（约 70 行） | U6 | open |
+| UX-11 | ~~Console 无时间戳、无等级计数、无复制、无"仅看错误"快捷开关~~ | `ConsolePanel.cpp` 全文（约 70 行） | U6 | **fixed**（2026-11-03）：每行 HH:MM:SS 时间列（`LogEntry::time` + `currentLogClock()`）；Info/Warn/Error 各带计数；「仅错误」「全部」两个视图；「复制」导出当前可见行，与显示共用 `levelVisible()` 判据 |
 | UX-12 | 错误发生但 Console 关着时，界面上没有任何标记 | 无错误计数徽标；`state.log` 无未读概念 | U6 | **fixed**（2026-11-03）：`unreadErrors` + 工具栏红色「错误 N」徽标；本帧新产生的错误不算已读（`errorRaisedThisFrame`），Console 真正显示过之后才清零 |
 | UX-13 | ~~快捷键不可自定义，没有冲突检测，速查表与实际处理是两份代码~~ | `kShortcutEntries` 现在同时驱动 `handleShortcuts()` 与速查表（key/ctrl/shift/action）；键位文本由 `shortcutKeys()` 现算 | U1 | **fixed**（2026-11-03）：单一数据源；自检扫空项与键位冲突（`entries=18 conflicts=0`）；用户自定义键位另算一项 |
 | UX-14 | ~~面板位置被 `ImGuiCond_Always` 钉死，用户拖不动~~ | `drawPanels()` 现在对所有面板都用 `layoutNeedsReset ? Always : FirstUseEver` | U6 | **fixed**（2026-11-03）：Viewport 也能拖动/缩放，位置记进 `config/imgui.ini`；`View -> Reset Layout` 重新铺一遍 |
@@ -147,10 +147,10 @@ updated: 2026-11-03
 
 | 编号 | 现象 | 证据 | 判据 | 状态 |
 |---|---|---|---|---|
-| UX-15 | 状态栏右侧把 FPS、毫秒、draws、tris、undo 五组数字挤在一行，扫读成本高 | `drawStatusBar()` 的 `snprintf(right, ...)` | U6 | open |
+| UX-15 | ~~状态栏右侧把 FPS、毫秒、draws、tris、undo 五组数字挤在一行，扫读成本高~~ | `drawStatusBar()` 的 `snprintf(right, ...)` | U6 | **fixed**（2026-11-03）：状态栏分左/中/右三段 —— 左段编辑上下文、中段场景统计（绘制 / 三角形，tooltip 给精确值，数字用 `formatCount()` 缩写）、右段帧率 / 帧耗时 / 撤销深度；统计读 `getDisplayTelemetry()`（上一帧完整值，读 `getTelemetry()` 会永远是 0） |
 | UX-16 | Assets 扫描不到模型目录时只写 `cerr`，面板空白无解释 | `AssetBrowserPanel.cpp:69` | U3、U5 | **fixed**（2026-11-03）：面板内显示原因 + 目录路径 + 下一步（跑 SetupDependencies.ps1 / 手动放模型），另有「没有模型」与「目录缺失」两种文案 |
 | UX-17 | 打开失败后没有"重试/换路径"入口，只能重新走 File > Open | `openScene` 失败分支 | U4 | **fixed**（2026-11-03）：失败时记录 `failedOpenPath/Error` 并弹「无法打开场景」模态框，三个按钮 = 重试 / 选择其它文件 / 关闭；弹窗在帧内按需打开，避免启动路径在帧外调 `OpenPopup` |
-| UX-18 | 菜单栏没有"最近失败"或诊断入口，出错后无处可去 | `drawMenuBar()` 只有 File/Edit/Create/Play/View/Help | U4 | open |
+| UX-18 | ~~菜单栏没有"最近失败"或诊断入口，出错后无处可去~~ | `drawMenuBar()` 只有 File/Edit/Create/Play/View/Help | U4 | **fixed**（2026-11-03）：`帮助` 菜单三项 —— 打开控制台并跳到最近错误 / 复制诊断信息（`copyDiagnostics()` 拼场景、FPS、draw calls、撤销深度、最近错误进剪贴板）/ 关于 Tiny Editor |
 | UX-09 | 多选时 Inspector 仍是两行英文播报"Multi-entity editing is not supported yet; use the Hierarchy panel to pick one entity."，且与中文界面混排 | `InspectorPanel.cpp:113-114` | U5、U7 | **fixed**（2026-11-03）：改成中文两行「已选中 N 个对象，Inspector 一次只编辑一个。／在 Hierarchy 里点单个对象查看属性；批量删除/复制用上面的按钮。」 |
 
 ## 6. 已经满足的，不要重做

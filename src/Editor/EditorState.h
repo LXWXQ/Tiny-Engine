@@ -19,12 +19,28 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <ctime>
 #include <deque>
 #include <string>
 #include <vector>
 
 namespace editor
 {
+
+// B5：Console 的时间列。墙上时间比"第几帧"好核对 —— 用户看到错误时会去看时钟。
+inline std::string currentLogClock()
+{
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#if defined(_MSC_VER)
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char buffer[16] = {};
+    std::strftime(buffer, sizeof(buffer), "%H:%M:%S", &local);
+    return std::string(buffer);
+}
 
 struct EditorState
 {
@@ -48,7 +64,7 @@ struct EditorState
 
     void pushLog(LogEntry::Level level, const std::string& text)
     {
-        log.push_back(LogEntry{ level, text });
+        log.push_back(LogEntry{ level, currentLogClock(), text });
         while (log.size() > kMaxLogEntries)
             log.pop_front();
         scrollLogToBottom = true;
