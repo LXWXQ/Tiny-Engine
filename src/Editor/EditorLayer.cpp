@@ -8,6 +8,7 @@
 #include "Editor/panels/ViewportPanel.h"
 #include "Editor/panels/AssetBrowserPanel.h"
 #include "Editor/panels/HistoryPanel.h"
+#include "Editor/panels/RenderSettingsPanel.h"
 
 #include "Scene/Scene.h"
 #include "Scene/Components.h"
@@ -74,6 +75,8 @@ void EditorLayer::createDefaultPanels()
     registerPanel<ConsolePanel>();
     // E4-d：撤销历史。放在右栏下半部分，和 Inspector 一起构成"属性 + 历史"。
     registerPanel<HistoryPanel>();
+    // E5-b：渲染设置。浮动工具窗（不参与固定布局），默认可见。
+    registerPanel<RenderSettingsPanel>();
 
 }
 
@@ -578,6 +581,8 @@ void EditorLayer::drawMenuBar()
             ImGui::MenuItem("Console", nullptr, &panel->visible);
         if (auto* panel = findPanel("History"))
             ImGui::MenuItem("History", nullptr, &panel->visible);
+        if (auto* panel = findPanel("Render"))
+            ImGui::MenuItem("Render Settings", nullptr, &panel->visible);
         ImGui::Separator();
         if (ImGui::MenuItem("Reset Layout"))
             layoutNeedsReset = true;
@@ -763,6 +768,13 @@ void EditorLayer::drawToolbar()
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
+
+        // ---- 渲染设置（浮动工具窗的开关） ----
+        if (auto* renderPanel = findPanel("Render"))
+        {
+            if (barToggle("Render", renderPanel->visible, "渲染设置：曝光 / Bloom / SSAO / 方向光"))
+                renderPanel->visible = !renderPanel->visible;
+        }
 
         // ---- 聚焦 / 撤销 ----
         ImGui::BeginDisabled(state.selection.size() == 0);
@@ -1436,6 +1448,10 @@ bool EditorLayer::selfTest()
 
     // ---- 0) Gizmo 数学：投影/反投影往返、射线-轴最近点、射线-平面求交 ----
     if (!Gizmo::selfTest())
+        return false;
+
+    // ---- 0a) E5-b：渲染设置面板的输入夹取（纯函数） ----
+    if (!RenderSettingsPanel::selfTest())
         return false;
 
     // ---- 0b) E4-b：偏好文件往返（纯逻辑，不碰磁盘） ----

@@ -85,3 +85,13 @@ updated: 2026-11-03
   `Gizmo::snapValue()` + `snapEnabled/snapTranslate/snapRotateDegrees/snapScale`，Shift 临时吸附。
 - 可观测：`[Gizmo] snap selfTest PASS | steps 0.5 / 15 deg / 0.1`。
 - 验证：编辑器自检 0/0；截图确认工具栏/状态栏/面板不重叠；回归 50 项（新增 `e5-toolbar-snap`）。
+
+## E5-b：渲染设置面板（EngineSettings 实时可调）
+
+- 问题：`EngineSettings` 里 exposure / bloom / SSAO / motion blur / 方向光早已可调，但编辑器完全没暴露；
+  改一次要动 `config/engine.json` 再重启，调光等于盲调。
+- 实现：`RenderSettingsPanel`（浮动工具窗，工具栏 `Render` 按钮 + View 菜单），直接写
+  `scene->getSettings()`，下一帧生效；Revert 回会话基线、Save 写回 engine.json；
+  `clampKernelSize()` 把 SSAO 核夹到 4..64 偶数。
+- 可观测：`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
+- 验证：编辑器自检 0/0；截图确认面板可读、按钮在顶部不用滚动；回归 51 项（新增 `e5-render-settings`）。

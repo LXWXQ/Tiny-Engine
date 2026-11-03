@@ -218,6 +218,37 @@ const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBar
 2. 菜单栏右侧原来也写了一遍「保存状态 / 播放状态 / undo 深度」，和工具栏、状态栏三处重复。
    E5-a 起菜单栏只显示文档名（脏时加 `*` 和 `(unsaved)`），状态只在一处出现。
 
+## 渲染设置面板（E5-b）
+
+`RenderSettingsPanel`（窗口名 `Render`）是一个**浮动工具窗**：不在 `drawPanels()` 的固定矩形里，
+位置和大小只在自己 `draw()` 里用 `ImGuiCond_FirstUseEver` 给一次，之后由用户拖动、记在
+`imgui.ini`。理由：它不参与工作区划分，压着视口反而方便看改动效果（调曝光要盯着画面）。
+入口有两个：工具栏的 `Render` 按钮、`View -> Render Settings`。
+
+它直接改 `state.services.settings` 指向的 `EngineSettings` 实例 ——
+这正是 `Application` 每帧塞进 `FrameInfo` 的 `scene->getSettings()`（`src/Core/Application.cpp:2107` 起），
+所以**改完下一帧就生效**，不需要重新加载配置。
+
+| 分组 | 字段 |
+|---|---|
+| 曝光 / 分辨率 | `exposure`、`renderScale` |
+| Bloom | `bloomEnabled`、`bloomThreshold`、`bloomKnee`、`bloomIntensity` |
+| SSAO | `ssaoEnabled`、`ssaoRadius`、`ssaoBias`、`ssaoKernelSize` |
+| 运动模糊 | `motionBlurEnabled`、`motionBlurStrength`、`motionBlurMaxRadius` |
+| 方向光 | `directionalLightDir`（写回前归一化）、`directionalLightColor` 的 rgb 与 w（强度） |
+| 提交路径（调试） | `gpuSceneEnabled`、`gpuMergedBuffers`、`hizEnabled`、`terrainBatchEnabled`、`gpuSceneMinInstances`、`gpuSceneMinScreenPixels` |
+
+两个刻意设计：
+
+- **不进撤销栈、不让文档变脏**。这些值是引擎默认预设而不是场景内容；它们和 Play 状态一样
+  属于"运行期/环境"而不是"文档"，混进撤销栈会让 Ctrl+Z 变成不可预期的东西。
+- **Revert 回到"本次启动时"**，不是回代码里的编译期默认值 —— 用户试坏一排滑杆时想回的是
+  刚才那套配置（来自 `config/engine.json`），不是作者的出厂值。要永久保留则按
+  `Save to engine.json`（走 `EngineServices::saveConfig`）。
+
+`ssaoKernelSize` 由 `RenderSettingsPanel::clampKernelSize()` 夹到 4..64 的偶数：滑杆允许拖到任意
+整数，但采样循环拿 0 或奇数会出问题。自检：`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
+
 ## 硬约束
 
 - ImGui 可见文字优先用 ASCII：内置字体只有 ASCII；E4-c 起 `ImGuiSystem` 会尝试加载系统 CJK 字体

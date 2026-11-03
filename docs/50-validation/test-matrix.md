@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **48 项引擎用例 + 2 项工具自测 = 50 项**；
+`tools/Validate.ps1` 默认跑 **49 项引擎用例 + 2 项工具自测 = 51 项**；
 加 `-EnableProfiling` 时多一项（37 + 2 = 39）。
 
 ## 1. 每项的判据（统一）
@@ -71,9 +71,10 @@ updated: 2026-11-03
 | 43 | `e4-shortcut-sheet` | 快捷键速查表数据完整性 | `TinyEditor.exe --selftest 5 --empty-scene` | `shortcut sheet selfTest PASS` | 表项非空、键不重复；弹窗与 Help 菜单共用同一张表 |
 | 44 | `e4-history-jump` | 撤销历史跳转 | `TinyEditor.exe --selftest 5 --empty-scene` | `history jump selfTest PASS` | `jumpTo` 逐步 undo/redo（不整段搬运），越界 clamp 到总深度 |
 | 45 | `e5-toolbar-snap` | 工具栏/状态栏与 Gizmo 吸附 | `TinyEditor.exe --selftest 5 --empty-scene` | `snap selfTest PASS`、`[Editor] selfTest PASS` | `snapValue` 按最近刻度取整（step=0 恒等）；工具栏/状态栏固定矩形，面板整体下移 |
-| 46 | `f2i-update-profile` | `--selftest 240 --streaming-world 8 --update-profile` | `[Update] avg us |`、`[Validation] errors=0 warnings=0` | `Scene::update()` 五段分别计时（genPoll / streaming / world / spatial / visibility），每 60 帧打印一次；关闭时零开销 |
-| 47 | `p2-device-fault` | `--device-fault-test` | `[DeviceFault] selfTest PASS` | `VK_EXT_device_fault` 能力就绪 |
-| 48 | `terrain-render` | `--selftest 20 --empty-scene --terrain-test` | `[Terrain] selfTest PASS`、`[Terrain] LOD stitching PASS`、`[Terrain] GPU mesh assembly selfTest PASS`、`[Terrain] GPU selection selfTest PASS`、`[Terrain] GPU selection transition PASS`、`[Terrain] demo entity created`、`chunks=4`、`lods=3`、`submeshes=12`、`[Terrain] async generation PASS`、`[Terrain] build task retirement PASS`、`[Terrain] async GPU upload PASS`、`[Terrain] spatial region query PASS | chunks=9 regions=5x5`、`[Terrain] sculpt PASS | chunks=9 rebuilt=1`、`[Terrain] character controller PASS | grounded=1`、`[Terrain] character serialization PASS | captured=1`、`[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`、`streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9` | CPU 算法/16 张源纹理缓冲 + height/roughness packing + JobSystem 异步构建 + chunk/LOD 子网格/AABB/裙边 + 稳定帧 indirect 合批 + GPU 高度场 + GPU compute 单 chunk 顶点/索引组装 + device-local VBO/IBO Model 接管 + 独立 chunk 流送 smoke + 8 槽异步高度场 + 4 槽异步 GPU mesh submit/poll + 257² 单 chunk 非阻塞重建基线 + CPU 构建中销毁实体的任务退役（retiring 队列） + XZ region 查询/组件私有字段/统一销毁 + 区域限定运行期雕刻 + kinematic 角色控制器/贴地/跳跃/序列化 + 4 个 Set2 材质集/按需外部 16 PNG/程序化回退/`materialSetIndex` 序列化/按材质批次重绑 + chunk→manager picking/删除撤销 + 全 LOD 邻接缝合（skirts=off） + GPU selection parity/过渡（4-int state slot） + CPU 高度/射线碰撞 + 地形 G-Buffer / 12-sampler Set2 四层 PBR 材质 / Surface Style / SSAO 策略 |
+| 46 | `e5-render-settings` | 渲染设置面板（EngineSettings 实时可调） | `TinyEditor.exe --selftest 5 --empty-scene` | `render settings selfTest PASS`、`[Editor] selfTest PASS` | SSAO 核夹到 4..64 偶数；面板写的是 `scene->getSettings()` 本体（下一帧生效）、Revert 回会话基线 |
+| 47 | `f2i-update-profile` | `--selftest 240 --streaming-world 8 --update-profile` | `[Update] avg us |`、`[Validation] errors=0 warnings=0` | `Scene::update()` 五段分别计时（genPoll / streaming / world / spatial / visibility），每 60 帧打印一次；关闭时零开销 |
+| 48 | `p2-device-fault` | `--device-fault-test` | `[DeviceFault] selfTest PASS` | `VK_EXT_device_fault` 能力就绪 |
+| 49 | `terrain-render` | `--selftest 20 --empty-scene --terrain-test` | `[Terrain] selfTest PASS`、`[Terrain] LOD stitching PASS`、`[Terrain] GPU mesh assembly selfTest PASS`、`[Terrain] GPU selection selfTest PASS`、`[Terrain] GPU selection transition PASS`、`[Terrain] demo entity created`、`chunks=4`、`lods=3`、`submeshes=12`、`[Terrain] async generation PASS`、`[Terrain] build task retirement PASS`、`[Terrain] async GPU upload PASS`、`[Terrain] spatial region query PASS | chunks=9 regions=5x5`、`[Terrain] sculpt PASS | chunks=9 rebuilt=1`、`[Terrain] character controller PASS | grounded=1`、`[Terrain] character serialization PASS | captured=1`、`[Terrain] material sets PASS | resident=4 max=4 external=1 fallback=3 serialized=1`、`streaming chunk test PASS | chunks=9 independentModels=9 gpuMesh=9` | CPU 算法/16 张源纹理缓冲 + height/roughness packing + JobSystem 异步构建 + chunk/LOD 子网格/AABB/裙边 + 稳定帧 indirect 合批 + GPU 高度场 + GPU compute 单 chunk 顶点/索引组装 + device-local VBO/IBO Model 接管 + 独立 chunk 流送 smoke + 8 槽异步高度场 + 4 槽异步 GPU mesh submit/poll + 257² 单 chunk 非阻塞重建基线 + CPU 构建中销毁实体的任务退役（retiring 队列） + XZ region 查询/组件私有字段/统一销毁 + 区域限定运行期雕刻 + kinematic 角色控制器/贴地/跳跃/序列化 + 4 个 Set2 材质集/按需外部 16 PNG/程序化回退/`materialSetIndex` 序列化/按材质批次重绑 + chunk→manager picking/删除撤销 + 全 LOD 邻接缝合（skirts=off） + GPU selection parity/过渡（4-int state slot） + CPU 高度/射线碰撞 + 地形 G-Buffer / 12-sampler Set2 四层 PBR 材质 / Surface Style / SSAO 策略 |
 
 ## 3. 工具自测
 

@@ -255,6 +255,8 @@ $tests = @(
        MustContain = @("history jump selfTest PASS") },
     @{ Name = "e5-toolbar-snap"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("snap selfTest PASS", "[Editor] selfTest PASS") },
+    @{ Name = "e5-render-settings"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("render settings selfTest PASS") },
     @{ Name = "f2i-update-profile"; Args = @("--selftest", "240", "--streaming-world", "8", "--update-profile");
        MustContain = @("[Update] avg us |", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
