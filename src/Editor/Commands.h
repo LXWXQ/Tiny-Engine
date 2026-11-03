@@ -269,6 +269,55 @@ private:
     RenderTagComponent newTag;
 };
 
+// E1：把多条命令当成一条（多选删除/多选复制）。
+//
+// 为什么需要：撤销栈的粒度必须等于"用户的一次操作"。批量删除 5 个实体如果
+// 压 5 条命令，用户就要按 5 次 Ctrl+Z 才回到操作前。
+class CompositeCommand : public Command
+{
+public:
+    CompositeCommand(std::string name, std::vector<std::unique_ptr<Command>> children);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return commandName.c_str(); }
+
+private:
+    std::string commandName;
+    std::vector<std::unique_ptr<Command>> children;
+};
+
+// E1：复制一个实体（含子树）。
+//
+// 只复制"数据型"组件：名字（追加 " Copy"）、局部变换、网格、材质、渲染标记、
+// 角色控制器、局部包围盒。地形/流送/相机不复制（复制地形等于复制一整块高度场，
+// 复制相机会让场景出现两个相机）。
+//
+// 撤销 = 销毁这次新建的副本；重做会重新建一遍（新 ID，和 DeleteEntityCommand 的
+// 恢复语义一致）。
+class DuplicateEntityCommand : public Command
+{
+public:
+    DuplicateEntityCommand(entt::registry& registry, Scene* scene, entt::entity entity);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Duplicate Entity"; }
+
+    // apply() 之后可查：副本的根实体（撤销后失效）。
+    entt::entity duplicatedRoot() const { return createdRoot; }
+
+    // 静默检查：地形/流送 chunk 这类实体不允许复制。
+    static bool canDuplicate(entt::registry& registry, entt::entity entity);
+
+private:
+    entt::registry* registry;
+    Scene* scene;
+    entt::entity source;
+    entt::entity createdRoot = entt::null;
+    std::vector<entt::entity> createdEntities;
+};
+
 // UI helper shared by the Create menu and the Hierarchy button. Returns the
 // created entity (or entt::null on failure) after executing the command.
 entt::entity createTerrainThroughCommand(entt::registry& registry,

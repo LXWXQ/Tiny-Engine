@@ -53,6 +53,69 @@ void InspectorPanel::draw(EditorState& state)
     }
 
     entt::registry& registry = *state.services.registry;
+
+    // E1：多选时只给摘要与批量操作，单实体编辑器留到后续版本。
+    if (state.selection.size() > 1)
+    {
+        ImGui::Text("%d entities selected", static_cast<int>(state.selection.size()));
+        ImGui::Separator();
+
+        if (ImGui::Button("Duplicate"))
+        {
+            std::vector<std::unique_ptr<Command>> children;
+            std::vector<DuplicateEntityCommand*> raw;
+            for (entt::entity selected : state.selection.entities)
+            {
+                if (!registry.valid(selected) ||
+                    !DuplicateEntityCommand::canDuplicate(registry, selected))
+                    continue;
+                children.push_back(std::make_unique<DuplicateEntityCommand>(
+                    registry, state.services.scene, selected));
+                raw.push_back(static_cast<DuplicateEntityCommand*>(children.back().get()));
+            }
+            if (!children.empty())
+            {
+                state.commands.execute(std::make_unique<CompositeCommand>(
+                    "Duplicate Entities", std::move(children)));
+                state.selection.clear();
+                for (DuplicateEntityCommand* command : raw)
+                {
+                    if (command->duplicatedRoot() != entt::null)
+                        state.selection.add(command->duplicatedRoot());
+                }
+                state.markDirty();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Delete"))
+        {
+            std::vector<std::unique_ptr<Command>> children;
+            const entt::entity cameraEntity = state.services.scene->getCameraEntity();
+            for (entt::entity selected : state.selection.entities)
+            {
+                if (!registry.valid(selected) || selected == cameraEntity)
+                    continue;
+                if (registry.any_of<TerrainChunkComponent>(selected) ||
+                    registry.any_of<TerrainStreamingComponent>(selected))
+                    continue;
+                children.push_back(std::make_unique<DeleteEntityCommand>(
+                    registry, selected, state.services.scene));
+            }
+            if (!children.empty())
+            {
+                state.selection.clear();
+                state.commands.execute(std::make_unique<CompositeCommand>(
+                    "Delete Entities", std::move(children)));
+                state.markDirty();
+            }
+        }
+
+        ImGui::TextDisabled("Multi-entity editing is not supported yet;");
+        ImGui::TextDisabled("use the Hierarchy panel to pick one entity.");
+        ImGui::End();
+        return;
+    }
+
     const entt::entity entity = state.selection.primary();
 
     if (entity == entt::null || !registry.valid(entity))

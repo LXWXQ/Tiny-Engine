@@ -5,6 +5,8 @@
 #include "Scene/Scene.h"
 
 #include <imgui.h>
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 
 namespace editor
@@ -31,6 +33,41 @@ bool isDescendantOf(entt::registry& registry, entt::entity entity, entt::entity 
         current = h ? h->parent : entt::null;
     }
     return false;
+}
+
+// E1：大小写不敏感子串匹配。
+bool matchesFilter(const std::string& text, const std::string& filter)
+{
+    if (filter.empty())
+        return true;
+    std::string haystack = text;
+    std::string needle = filter;
+    std::transform(haystack.begin(), haystack.end(), haystack.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(needle.begin(), needle.end(), needle.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return haystack.find(needle) != std::string::npos;
+}
+
+// 按"根 + 深度优先子节点"的顺序展平，供 Shift 区间选择使用。
+void collectOrder(entt::registry& registry, entt::entity entity,
+                  std::vector<entt::entity>& out)
+{
+    if (!registry.valid(entity) || registry.any_of<TerrainChunkComponent>(entity))
+        return;
+    out.push_back(entity);
+    const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+    if (hierarchy == nullptr)
+        return;
+    const std::vector<entt::entity> children = hierarchy->children;
+    for (entt::entity child : children)
+        collectOrder(registry, child, out);
+}
+
+int indexOf(const std::vector<entt::entity>& order, entt::entity entity)
+{
+    const auto it = std::find(order.begin(), order.end(), entity);
+    return it == order.end() ? -1 : static_cast<int>(it - order.begin());
 }
 } // namespace
 
@@ -70,6 +107,9 @@ void HierarchyPanel::draw(EditorState& state)
     ImGui::SameLine();
     ImGui::TextDisabled("(%d entities)", static_cast<int>(registry.view<TransformComponent>().size() - registry.view<TerrainChunkComponent>().size()));
 
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##search", "Search...", filterBuffer, IM_ARRAYSIZE(filterBuffer));
+
     ImGui::Separator();
 
     // 从根开始递归。用 roots 列表而不是遍历全部实体，
@@ -86,8 +126,54 @@ void HierarchyPanel::draw(EditorState& state)
             roots.push_back(entity);
     }
 
-    for (entt::entity entity : roots)
-        drawEntityNode(state, entity);
+    const std::string filter(filterBuffer);
+    visibleOrder.clear();
+    if (filter.empty())
+    {
+        for (entt::entity entity : roots)
+            collectOrder(registry, entity, visibleOrder);
+        for (entt::entity entity : roots)
+            drawEntityNode(state, entity);
+    }
+    else
+    {
+        // 过滤时拍平成一行一个匹配项：树结构在"只看命名"的场景下反而更难读。
+        for (entt::entity entity : registry.view<TransformComponent>())
+        {
+            if (registry.any_of<TerrainChunkComponent>(entity) || !registry.valid(entity))
+                continue;
+            if (!matchesFilter(displayName(registry, entity), filter))
+                continue;
+            visibleOrder.push_back(entity);
+
+            const bool selected = state.selection.contains(entity);
+            ImGui::PushID(static_cast<int>(static_cast<uint32_t>(entity)));
+            if (ImGui::Selectable(displayName(registry, entity).c_str(), selected))
+            {
+                ImGuiIO& io = ImGui::GetIO();
+                if (io.KeyShift && selectionAnchor >= 0)
+                {
+                    const int clicked = indexOf(visibleOrder, entity);
+                    const int first = std::min(selectionAnchor, clicked);
+                    const int last = std::max(selectionAnchor, clicked);
+                    state.selection.clear();
+                    for (int i = first; i <= last; ++i)
+                        state.selection.add(visibleOrder[static_cast<size_t>(i)]);
+                }
+                else if (io.KeyCtrl)
+                {
+                    state.selection.toggle(entity);
+                }
+                else
+                {
+                    state.selection.select(entity);
+                    selectionAnchor = indexOf(visibleOrder, entity);
+                }
+            }
+            drawContextMenu(state, entity);
+            ImGui::PopID();
+        }
+    }
 
     // 点空白处取消选中
     if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
@@ -120,9 +206,29 @@ void HierarchyPanel::drawEntityNode(EditorState& state, entt::entity entity)
     const std::string label = displayName(registry, entity);
     const bool opened = ImGui::TreeNodeEx(label.c_str(), flags);
 
-    // ---- 选中 ----
+    // ---- 选中（E1：Ctrl 切换、Shift 连续区间）----
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-        state.selection.select(entity);
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        const int clickedIndex = indexOf(visibleOrder, entity);
+        if (io.KeyShift && selectionAnchor >= 0 && clickedIndex >= 0)
+        {
+            const int first = std::min(selectionAnchor, clickedIndex);
+            const int last = std::max(selectionAnchor, clickedIndex);
+            state.selection.clear();
+            for (int i = first; i <= last; ++i)
+                state.selection.add(visibleOrder[static_cast<size_t>(i)]);
+        }
+        else if (io.KeyCtrl)
+        {
+            state.selection.toggle(entity);
+        }
+        else
+        {
+            state.selection.select(entity);
+            selectionAnchor = clickedIndex;
+        }
+    }
 
     // ---- 拖拽重挂 ----
     if (ImGui::BeginDragDropSource())
@@ -166,12 +272,52 @@ void HierarchyPanel::drawContextMenu(EditorState& state, entt::entity entity)
     if (!ImGui::BeginPopupContextItem("entity_context"))
         return;
 
-    if (ImGui::MenuItem("Delete"))
+    const bool inSelection = state.selection.contains(entity);
+    const bool deleteWholeSelection = inSelection && state.selection.size() > 1;
+    if (ImGui::MenuItem(deleteWholeSelection ? "Delete Selected" : "Delete"))
     {
-        state.selection.clear();
-        state.commands.execute(std::make_unique<DeleteEntityCommand>(
-            *state.services.registry, entity, state.services.scene));
-        state.markDirty();
+        if (deleteWholeSelection)
+        {
+            std::vector<std::unique_ptr<Command>> children;
+            const entt::entity cameraEntity = state.services.scene->getCameraEntity();
+            for (entt::entity selected : state.selection.entities)
+            {
+                if (selected == cameraEntity || !state.services.registry->valid(selected))
+                    continue;
+                if (state.services.registry->any_of<TerrainChunkComponent>(selected) ||
+                    state.services.registry->any_of<TerrainStreamingComponent>(selected))
+                    continue;
+                children.push_back(std::make_unique<DeleteEntityCommand>(
+                    *state.services.registry, selected, state.services.scene));
+            }
+            if (!children.empty())
+            {
+                state.selection.clear();
+                state.commands.execute(std::make_unique<CompositeCommand>(
+                    "Delete Entities", std::move(children)));
+                state.markDirty();
+            }
+        }
+        else
+        {
+            state.selection.clear();
+            state.commands.execute(std::make_unique<DeleteEntityCommand>(
+                *state.services.registry, entity, state.services.scene));
+            state.markDirty();
+        }
+    }
+    if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+    {
+        if (DuplicateEntityCommand::canDuplicate(*state.services.registry, entity))
+        {
+            auto command = std::make_unique<DuplicateEntityCommand>(
+                *state.services.registry, state.services.scene, entity);
+            DuplicateEntityCommand* raw = command.get();
+            state.commands.execute(std::move(command));
+            if (raw->duplicatedRoot() != entt::null)
+                state.selection.select(raw->duplicatedRoot());
+            state.markDirty();
+        }
     }
     if (ImGui::MenuItem("Unparent"))
     {

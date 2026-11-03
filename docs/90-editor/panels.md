@@ -40,6 +40,21 @@ CPU 网格交给 JobSystem，旧网格继续渲染。生成期间再次点击 Ge
 "Parameters changed, press Generate."。`Surface Detail`、`UV Tiling`、
 `Surface Style` 与 `LOD Distance` 立即生效，不强制重建。
 
+## 多选与搜索（E1）
+
+`Selection` 保留 `std::vector<entt::entity>`，新增 `add/remove/toggle/size`：
+
+- **Hierarchy**：Ctrl 点击切换单个、Shift 点击按"本帧展平顺序"选区间、空白处清空；顶部 `Search...`
+  过滤框在非空时把树拍平成匹配列表（大小写不敏感子串）。右键菜单在多选时变成 `Delete Selected` /
+  `Duplicate`。
+- **Viewport**：Ctrl 点击 `toggle`，普通点击替换，点空白清空（按住 Ctrl 时不清）。
+- **Inspector**：选中数 > 1 时只显示 `N entities selected` + `Duplicate` / `Delete` 按钮与提示，
+  不再逐组件编辑（多对象编辑留到后续版本）。
+- **快捷键**：`Delete` 批量删除、`Ctrl+D` 复制、`Ctrl+A` 全选（跳过地形 chunk 与相机）、`F` 聚焦
+  （沿当前视线把相机退到包围球刚好占视野的位置）。
+
+地形 chunk / 流送管理器实体不参与这些批量操作：它们由流送系统回收，删掉会让地图出现空洞。
+
 ## 布局：为什么是手写的
 
 本项目的 ImGui 是 **1.92.6 非 docking 分支**（没有 `DockSpace`）。

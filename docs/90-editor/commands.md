@@ -48,6 +48,25 @@ bool SetTransformCommand::mergeWith(const Command& previous) const
 
 合并时**不再压新命令**，只让上一条重新 `apply()` 一次（它存的是最新目标值）。
 
+## 批量操作：CompositeCommand 与 DuplicateEntityCommand
+
+多选之后，一次用户操作必须是撤销栈里的一步。`CompositeCommand` 把多条子命令打包：
+`apply()` 顺序执行，`revert()` **反序**执行（先建的后撤，父子/依赖关系才不会断）。
+
+```cpp
+std::vector<std::unique_ptr<Command>> children;
+children.push_back(std::make_unique<DeleteEntityCommand>(registry, a, scene));
+children.push_back(std::make_unique<DeleteEntityCommand>(registry, b, scene));
+stack.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(children)));
+```
+
+`DuplicateEntityCommand` 复制一个实体及其子树：只拷"数据型"组件（`NameComponent` 追加
+`" Copy"`、`Transform`、`Mesh`、`Material`、`RenderTag`、`Bounds`、`CharacterController`），
+地形 / 流送 chunk / 相机拒绝复制（`canDuplicate()`）。撤销 = 销毁这次新建的副本，重做会重建一遍
+（新 ID，和 `DeleteEntityCommand` 的恢复语义一致）。
+
+批量删除前先 `selectionRoots()` 过滤：父节点被同时选中时跳过子节点，否则同一棵子树会被删两次。
+
 ## 删除实体的撤销（最容易写错的地方）
 
 EnTT 销毁后重建会拿到**新 ID**，所以撤销不能指望 ID 不变。构造时必须存下：

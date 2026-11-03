@@ -613,6 +613,142 @@ glm::vec3 terrainSpawnPosition(const Scene& scene,
     };
 }
 
+// ---------------------------------------------------------------------------
+// E1：CompositeCommand
+// ---------------------------------------------------------------------------
+CompositeCommand::CompositeCommand(std::string name,
+                                   std::vector<std::unique_ptr<Command>> childrenArg)
+    : commandName(std::move(name)), children(std::move(childrenArg))
+{
+}
+
+void CompositeCommand::apply()
+{
+    for (std::unique_ptr<Command>& child : children)
+        child->apply();
+}
+
+void CompositeCommand::revert()
+{
+    // 反序撤销：先建的后撤，保证父子/依赖关系成立。
+    for (auto it = children.rbegin(); it != children.rend(); ++it)
+        (*it)->revert();
+}
+
+// ---------------------------------------------------------------------------
+// E1：DuplicateEntityCommand
+// ---------------------------------------------------------------------------
+namespace
+{
+void copyDataComponents(entt::registry& from, entt::entity src,
+                        entt::registry& registry, entt::entity dst)
+{
+    if (const auto* name = from.try_get<NameComponent>(src))
+        registry.emplace<NameComponent>(dst, NameComponent{ name->name + " Copy" });
+    if (const auto* transform = from.try_get<TransformComponent>(src))
+        registry.emplace<TransformComponent>(dst, *transform);
+    if (const auto* mesh = from.try_get<MeshComponent>(src))
+        registry.emplace<MeshComponent>(dst, *mesh);
+    if (const auto* material = from.try_get<MaterialComponent>(src))
+        registry.emplace<MaterialComponent>(dst, *material);
+    if (const auto* tag = from.try_get<RenderTagComponent>(src))
+        registry.emplace<RenderTagComponent>(dst, *tag);
+    if (const auto* bounds = from.try_get<BoundsComponent>(src))
+        registry.emplace<BoundsComponent>(dst, *bounds);
+    if (const auto* controller = from.try_get<CharacterControllerComponent>(src))
+        registry.emplace<CharacterControllerComponent>(dst, *controller);
+}
+} // namespace
+
+bool DuplicateEntityCommand::canDuplicate(entt::registry& registry, entt::entity entity)
+{
+    if (entity == entt::null || !registry.valid(entity))
+        return false;
+    if (registry.any_of<TerrainComponent>(entity) ||
+        registry.any_of<TerrainChunkComponent>(entity) ||
+        registry.any_of<TerrainStreamingComponent>(entity) ||
+        registry.any_of<CameraComponent>(entity))
+        return false;
+    return true;
+}
+
+DuplicateEntityCommand::DuplicateEntityCommand(entt::registry& registryArg, Scene* sceneArg,
+                                               entt::entity entity)
+    : registry(&registryArg), scene(sceneArg), source(entity)
+{
+}
+
+void DuplicateEntityCommand::apply()
+{
+    if (!registry->valid(source) || !canDuplicate(*registry, source))
+        return;
+
+    createdEntities.clear();
+    createdRoot = entt::null;
+
+    struct Pending
+    {
+        entt::entity src = entt::null;
+        entt::entity dst = entt::null;
+    };
+    std::vector<Pending> pending;
+    pending.push_back(Pending{ source, entt::null });
+
+    for (size_t i = 0; i < pending.size(); ++i)
+    {
+        const entt::entity src = pending[i].src;
+        if (!registry->valid(src))
+            continue;
+
+        const entt::entity dst = (scene != nullptr) ? scene->createEntity() : registry->create();
+        copyDataComponents(*registry, src, *registry, dst);
+
+        if (pending[i].dst != entt::null)
+        {
+            if (scene != nullptr)
+                scene->setParent(dst, pending[i].dst);
+            else
+                registry->get_or_emplace<HierarchyComponent>(dst).parent = pending[i].dst;
+            registry->get_or_emplace<HierarchyComponent>(pending[i].dst).children.push_back(dst);
+        }
+        else
+        {
+            createdRoot = dst;
+        }
+        createdEntities.push_back(dst);
+
+        if (const auto* hierarchy = registry->try_get<HierarchyComponent>(src))
+        {
+            for (entt::entity child : hierarchy->children)
+                pending.push_back(Pending{ child, dst });
+        }
+    }
+
+    if (createdRoot != entt::null)
+    {
+        if (scene != nullptr)
+            scene->refreshTransformsAndVisibility();
+        else
+            (void)0;
+    }
+}
+
+void DuplicateEntityCommand::revert()
+{
+    for (auto it = createdEntities.rbegin(); it != createdEntities.rend(); ++it)
+    {
+        const entt::entity entity = *it;
+        if (!registry->valid(entity))
+            continue;
+        if (scene != nullptr)
+            scene->destroyEntity(entity);
+        else
+            registry->destroy(entity);
+    }
+    createdEntities.clear();
+    createdRoot = entt::null;
+}
+
 entt::entity createTerrainThroughCommand(entt::registry& registry,
                                          Scene& scene,
                                          CommandStack& commands,

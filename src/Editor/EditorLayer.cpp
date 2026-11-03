@@ -80,6 +80,153 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
     updatePlayState(dt);
 }
 
+namespace
+{
+// E1：多选批量操作。地形 chunk / 流送管理器不参与批量删除与复制：
+// 前者由流送系统回收，后者是整块高度场的宿主。
+bool isBatchExcluded(entt::registry& registry, entt::entity entity)
+{
+    return registry.any_of<TerrainChunkComponent>(entity) ||
+           registry.any_of<TerrainStreamingComponent>(entity);
+}
+
+// 只保留"父节点没有被同时选中"的根，否则同一棵子树会被删两次。
+std::vector<entt::entity> selectionRoots(EditorState& state)
+{
+    entt::registry& registry = *state.services.registry;
+    const std::vector<entt::entity>& selected = state.selection.entities;
+    std::vector<entt::entity> roots;
+    for (entt::entity entity : selected)
+    {
+        if (!registry.valid(entity) || isBatchExcluded(registry, entity))
+            continue;
+
+        bool coveredByAncestor = false;
+        const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+        while (hierarchy != nullptr && hierarchy->parent != entt::null)
+        {
+            const entt::entity parent = hierarchy->parent;
+            if (std::find(selected.begin(), selected.end(), parent) != selected.end())
+            {
+                coveredByAncestor = true;
+                break;
+            }
+            hierarchy = registry.try_get<HierarchyComponent>(parent);
+        }
+        if (!coveredByAncestor)
+            roots.push_back(entity);
+    }
+    return roots;
+}
+
+void deleteSelection(EditorState& state)
+{
+    const std::vector<entt::entity> roots = selectionRoots(state);
+    if (roots.empty())
+        return;
+
+    const entt::entity cameraEntity = state.services.scene->getCameraEntity();
+    std::vector<std::unique_ptr<Command>> children;
+    for (entt::entity entity : roots)
+    {
+        if (entity == cameraEntity)
+            continue;
+        children.push_back(std::make_unique<DeleteEntityCommand>(
+            *state.services.registry, entity, state.services.scene));
+    }
+    if (children.empty())
+        return;
+
+    state.selection.clear();
+    state.commands.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(children)));
+    state.markDirty();
+}
+
+void duplicateSelection(EditorState& state)
+{
+    const std::vector<entt::entity> roots = selectionRoots(state);
+    if (roots.empty())
+        return;
+
+    std::vector<std::unique_ptr<Command>> children;
+    std::vector<DuplicateEntityCommand*> raw;
+    for (entt::entity entity : roots)
+    {
+        if (!DuplicateEntityCommand::canDuplicate(*state.services.registry, entity))
+            continue;
+        children.push_back(std::make_unique<DuplicateEntityCommand>(
+            *state.services.registry, state.services.scene, entity));
+        raw.push_back(static_cast<DuplicateEntityCommand*>(children.back().get()));
+    }
+    if (children.empty())
+        return;
+
+    const bool single = children.size() == 1;
+    if (single)
+    {
+        DuplicateEntityCommand* command = raw.front();
+        state.commands.execute(std::move(children.front()));
+        state.selection.select(command->duplicatedRoot());
+    }
+    else
+    {
+        state.commands.execute(std::make_unique<CompositeCommand>("Duplicate Entities", std::move(children)));
+        state.selection.clear();
+        for (DuplicateEntityCommand* command : raw)
+        {
+            if (command->duplicatedRoot() != entt::null)
+                state.selection.add(command->duplicatedRoot());
+        }
+    }
+    state.markDirty();
+}
+
+// F：把相机沿当前视线退到"选中集包围球刚好占满视野"的位置，方向不变。
+void focusSelection(EditorState& state)
+{
+    entt::registry& registry = *state.services.registry;
+    const std::vector<entt::entity>& selected = state.selection.entities;
+
+    bool hasBounds = false;
+    glm::vec3 boundsMin{ 0.0f };
+    glm::vec3 boundsMax{ 0.0f };
+    for (entt::entity entity : selected)
+    {
+        if (!registry.valid(entity))
+            continue;
+        if (const auto* bounds = registry.try_get<WorldBoundsComponent>(entity);
+            bounds != nullptr && bounds->world.valid)
+        {
+            boundsMin = hasBounds ? glm::min(boundsMin, bounds->world.min) : bounds->world.min;
+            boundsMax = hasBounds ? glm::max(boundsMax, bounds->world.max) : bounds->world.max;
+            hasBounds = true;
+        }
+        else if (const auto* world = registry.try_get<WorldTransformComponent>(entity))
+        {
+            const glm::vec3 point = world->worldPosition;
+            boundsMin = hasBounds ? glm::min(boundsMin, point) : point;
+            boundsMax = hasBounds ? glm::max(boundsMax, point) : point;
+            hasBounds = true;
+        }
+    }
+    if (!hasBounds)
+        return;
+
+    const glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
+    const float radius = glm::max(glm::length(boundsMax - boundsMin) * 0.5f, 1.0f);
+    const float distance = radius * 3.0f + 2.0f;
+
+    TransformComponent& camera = state.services.scene->getCameraTransform();
+    const glm::vec3 euler = camera.getEuler();
+    const float cosPitch = std::cos(euler.x);
+    const glm::vec3 forward{ std::sin(euler.y) * cosPitch, -std::sin(euler.x), std::cos(euler.y) * cosPitch };
+
+    camera.setTranslation(center - forward * distance);
+    state.transformRefreshPending = true;
+    state.pushLog(LogEntry::Level::Info, "[Editor] focused selection | radius=" + std::to_string(radius));
+}
+} // namespace
+
 void EditorLayer::handleShortcuts()
 {
     ImGuiIO& io = ImGui::GetIO();
@@ -139,18 +286,32 @@ void EditorLayer::handleShortcuts()
     }
     else if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
     {
-        const entt::entity selected = state.selection.primary();
-        if (selected != entt::null && state.services.registry->valid(selected))
+        // E1：删除整个选中集合（父节点被选中时子节点自动跳过，避免重复删除）。
+        deleteSelection(state);
+    }
+    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false))
+    {
+        duplicateSelection(state);
+    }
+    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false))
+    {
+        // 只选"有名字、不是流送 chunk"的实体，避免 Ctrl+A 把地形块全部选中。
+        entt::registry& registry = *state.services.registry;
+        const entt::entity cameraEntity = state.services.scene->getCameraEntity();
+        state.selection.clear();
+        for (auto [entity, name] : registry.view<NameComponent>().each())
         {
-            const entt::entity cameraEntity = state.services.scene->getCameraEntity();
-            if (selected != cameraEntity)      // 相机实体不允许删
-            {
-                state.selection.clear();
-                state.commands.execute(std::make_unique<DeleteEntityCommand>(
-                    *state.services.registry, selected, state.services.scene));
-                state.markDirty();
-            }
+            (void)name;
+            if (entity == cameraEntity || isBatchExcluded(registry, entity))
+                continue;
+            state.selection.add(entity);
         }
+        state.pushLog(LogEntry::Level::Info,
+                      "[Editor] selected " + std::to_string(state.selection.size()) + " entities");
+    }
+    else if (ImGui::IsKeyPressed(ImGuiKey_F, false))
+    {
+        focusSelection(state);
     }
 }
 
@@ -776,6 +937,108 @@ bool EditorLayer::selfTest()
             std::cerr << "[Editor] selfTest FAIL: children list not restored\n";
             return false;
         }
+    }
+
+    // ---- 2b) E1：批量删除 + 复制（子树） ----
+    {
+        const entt::entity root = registry.create();
+        registry.emplace<TransformComponent>(root);
+        registry.emplace<HierarchyComponent>(root);
+        registry.emplace<NameComponent>(root, NameComponent{ "BatchRoot" });
+
+        const entt::entity child = registry.create();
+        registry.emplace<TransformComponent>(child);
+        registry.emplace<HierarchyComponent>(child);
+        registry.emplace<NameComponent>(child, NameComponent{ "BatchChild" });
+        registry.get<HierarchyComponent>(child).parent = root;
+        registry.get<HierarchyComponent>(root).children.push_back(child);
+
+        const entt::entity peer = registry.create();
+        registry.emplace<TransformComponent>(peer);
+        registry.emplace<NameComponent>(peer, NameComponent{ "BatchPeer" });
+
+        CommandStack stack;
+        {
+            std::vector<std::unique_ptr<Command>> childrenCommands;
+            childrenCommands.push_back(std::make_unique<DeleteEntityCommand>(registry, root));
+            childrenCommands.push_back(std::make_unique<DeleteEntityCommand>(registry, peer));
+            stack.execute(std::make_unique<CompositeCommand>(
+                "Delete Entities", std::move(childrenCommands)));
+        }
+
+        if (registry.valid(root) || registry.valid(child) || registry.valid(peer))
+        {
+            std::cerr << "[Editor] selfTest FAIL: composite delete left entities alive (batch)\n";
+            return false;
+        }
+        if (stack.undoCount() != 1)
+        {
+            std::cerr << "[Editor] selfTest FAIL: composite delete pushed "
+                      << stack.undoCount() << " commands (batch)\n";
+            return false;
+        }
+
+        stack.undo();
+
+        entt::entity restoredRoot = entt::null;
+        entt::entity restoredPeer = entt::null;
+        for (entt::entity e : registry.view<NameComponent>())
+        {
+            const std::string& name = registry.get<NameComponent>(e).name;
+            if (name == "BatchRoot") restoredRoot = e;
+            if (name == "BatchPeer") restoredPeer = e;
+        }
+        if (restoredRoot == entt::null || restoredPeer == entt::null)
+        {
+            std::cerr << "[Editor] selfTest FAIL: composite undo did not restore entities\n";
+            return false;
+        }
+
+        auto duplicate = std::make_unique<DuplicateEntityCommand>(registry, nullptr, restoredRoot);
+        DuplicateEntityCommand* raw = duplicate.get();
+        stack.execute(std::move(duplicate));
+
+        const entt::entity copyRoot = raw->duplicatedRoot();
+        if (copyRoot == entt::null || !registry.valid(copyRoot))
+        {
+            std::cerr << "[Editor] selfTest FAIL: duplicate did not create a root\n";
+            return false;
+        }
+        const auto* copyName = registry.try_get<NameComponent>(copyRoot);
+        if (copyName == nullptr || copyName->name != "BatchRoot Copy")
+        {
+            std::cerr << "[Editor] selfTest FAIL: duplicate name not renamed\n";
+            return false;
+        }
+        entt::entity copyChild = entt::null;
+        for (entt::entity e : registry.view<NameComponent>())
+            if (registry.get<NameComponent>(e).name == "BatchChild Copy") copyChild = e;
+        if (copyChild == entt::null)
+        {
+            std::cerr << "[Editor] selfTest FAIL: duplicate did not copy the subtree\n";
+            return false;
+        }
+        const auto* copyHierarchy = registry.try_get<HierarchyComponent>(copyChild);
+        if (copyHierarchy == nullptr || copyHierarchy->parent != copyRoot)
+        {
+            std::cerr << "[Editor] selfTest FAIL: duplicate parent link wrong\n";
+            return false;
+        }
+
+        stack.undo();
+        if (registry.valid(copyRoot) || registry.valid(copyChild))
+        {
+            std::cerr << "[Editor] selfTest FAIL: duplicate undo left copies alive\n";
+            return false;
+        }
+
+        for (entt::entity e : registry.view<NameComponent>())
+        {
+            const std::string& name = registry.get<NameComponent>(e).name;
+            if (name == "BatchRoot" || name == "BatchChild" || name == "BatchPeer")
+                registry.destroy(e);
+        }
+        stack.clear();
     }
 
     // ---- 3) 场景描述 <-> JSON 往返 ----

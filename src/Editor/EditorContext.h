@@ -23,6 +23,7 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <imgui.h>          // ImTextureID（离屏视口的句柄类型）
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <vector>
@@ -85,6 +86,26 @@ struct Selection
             if (e == entity) return true;
         return false;
     }
+
+    // E1：多选。层级面板的 Ctrl 点击、视口 Ctrl 点击都走这里。
+    void add(entt::entity entity)
+    {
+        if (entity != entt::null && !contains(entity))
+            entities.push_back(entity);
+    }
+
+    void remove(entt::entity entity)
+    {
+        entities.erase(std::remove(entities.begin(), entities.end(), entity), entities.end());
+    }
+
+    void toggle(entt::entity entity)
+    {
+        if (contains(entity)) remove(entity);
+        else add(entity);
+    }
+
+    size_t size() const { return entities.size(); }
 };
 
 // 引擎侧能力的抽象。所有字段都在 Application 构造时填好，编辑器只管调用。

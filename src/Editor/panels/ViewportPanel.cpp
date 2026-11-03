@@ -293,8 +293,21 @@ void ViewportPanel::draw(EditorState& state)
             ? entt::null
             : state.services.scene->resolveTerrainChunkOwner(picked);
 
-        // 点到空白处 = 取消选中（与主流编辑器一致）
-        state.selection.select(hit);
+        // E1：Ctrl 点击把实体加入/移出选中集合；点空白仍然清空（Ctrl 时不清）。
+        ImGuiIO& clickIo = ImGui::GetIO();
+        if (hit == entt::null)
+        {
+            if (!clickIo.KeyCtrl)
+                state.selection.clear();
+        }
+        else if (clickIo.KeyCtrl)
+        {
+            state.selection.toggle(hit);
+        }
+        else
+        {
+            state.selection.select(hit);
+        }
 
         if (hit != entt::null)
         {

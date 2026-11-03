@@ -237,6 +237,8 @@ $tests = @(
        MustContain = @("[Terrain] mesh arena ready | vertexMB=", "arenaAllocs=", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2h-large-radius"; Args = @("--selftest", "400", "--streaming-world", "16");
        MustContain = @("mesh arena resized | radius=16", "[Streaming] chunks=1089", "[Validation] errors=0 warnings=0") },
+    @{ Name = "e1-batch-commands"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("batch delete/duplicate", "[Editor] selfTest PASS") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") }
 )

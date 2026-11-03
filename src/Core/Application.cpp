@@ -1522,7 +1522,7 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// 放在场景自检之后：它只依赖 entt 与 JSON，不需要 Vulkan 设备。
 	if (!editor::EditorLayer::selfTest())
 		throw std::runtime_error("editor selfTest failed");
-	std::cout << "[Editor] selfTest PASS | commands + delete-undo + serialization round trip\n";
+	std::cout << "[Editor] selfTest PASS | commands + delete-undo + batch delete/duplicate + serialization round trip\n";
 
 	const EngineSettings& s = scene->getSettings();
 	std::cout << "[SelfTest] 开始，共 " << frames << " 帧，bloom=" << (s.bloomEnabled ? 1 : 0)
