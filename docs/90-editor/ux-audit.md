@@ -68,6 +68,7 @@ updated: 2026-11-03
 | 影响 | Console 关掉后错误彻底消失；用户只会重复点同一个按钮 |
 | 判据 | U3 结果反馈、U4 失败可行动 |
 | 修法指向 | 状态栏常驻错误摘要 + 3 秒 Toast；Toast 可点击展开 Console 并定位到该行 |
+| 状态 | **fixed**（2026-11-03）：`EditorState::notify` 统一出口 —— 错误同时进 Toast（5 秒，可点「查看」）、状态栏常驻红色摘要（30 秒后变淡）、工具栏「错误 N」徽标（Console 关着时也有入口）；三者都调 `openConsoleAtLastError()` 打开 Console 并滚到该行高亮。回归 `b3-notices` |
 
 ### UX-04 初始化失败时，双击启动的用户什么也看不到
 
@@ -106,9 +107,9 @@ updated: 2026-11-03
 |---|---|---|---|---|
 | UX-07 | 同一屏三种语言层级：按钮英文、tooltip 中文、状态栏中文；概念词不统一 | `EditorLayer.cpp` 工具栏 714 行起；状态栏 818 行起 | U7 | open |
 | UX-08 | 地形生成同步阻塞，无进度、不禁用按钮 | `createTerrainFromUi()` 完成后才记录 `lastGenerationMs` | U2、U6 | open |
-| UX-10 | 成功动作没有回执：创建成功、保存成功都只在 Console 留一行 | 同 UX-03 的 `pushLog(Info)` 调用 | U3 | open |
+| UX-10 | 成功动作没有回执：创建成功、保存成功都只在 Console 留一行 | 同 UX-03 的 `pushLog(Info)` 调用 | U3 | **fixed**（2026-11-03）：`notifySuccess()` 给 2 秒 Toast（保存/打开/新建/创建地形与角色/删除/停止播放），并顺手清掉「最近错误」 |
 | UX-11 | Console 无时间戳、无等级计数、无复制、无"仅看错误"快捷开关 | `ConsolePanel.cpp` 全文（约 70 行） | U6 | open |
-| UX-12 | 错误发生但 Console 关着时，界面上没有任何标记 | 无错误计数徽标；`state.log` 无未读概念 | U6 | open |
+| UX-12 | 错误发生但 Console 关着时，界面上没有任何标记 | 无错误计数徽标；`state.log` 无未读概念 | U6 | **fixed**（2026-11-03）：`unreadErrors` + 工具栏红色「错误 N」徽标；本帧新产生的错误不算已读（`errorRaisedThisFrame`），Console 真正显示过之后才清零 |
 | UX-13 | 快捷键不可自定义，没有冲突检测，速查表与实际处理是两份代码 | `handleShortcuts()` 是 else-if 链；`kShortcutEntries` 是另一份表 | U1 | open |
 | UX-14 | 面板位置被 `ImGuiCond_Always` 钉死，用户拖不动；只有 Reset Layout | `drawPanels()` 对 Viewport 用 `ImGuiCond_Always` | U6 | open |
 | UX-19 | 窗口固定 1920x1080 创建，不读显示器工作区；字体固定 16px，无 DPI 缩放；面板宽度硬编码 | `src/Core/FrameInfo.h:11-12`、`src/Core/Application.cpp:980`、`src/Core/ImGuiSystem.cpp:60`、`drawPanels()` | U10 | 窗口：fixed；字体缩放：open |
@@ -147,7 +148,7 @@ updated: 2026-11-03
 |---|---|---|---|---|
 | UX-15 | 状态栏右侧把 FPS、毫秒、draws、tris、undo 五组数字挤在一行，扫读成本高 | `drawStatusBar()` 的 `snprintf(right, ...)` | U6 | open |
 | UX-16 | Assets 扫描不到模型目录时只写 `cerr`，面板空白无解释 | `AssetBrowserPanel.cpp:69` | U3、U5 | **fixed**（2026-11-03）：面板内显示原因 + 目录路径 + 下一步（跑 SetupDependencies.ps1 / 手动放模型），另有「没有模型」与「目录缺失」两种文案 |
-| UX-17 | 打开失败后没有"重试/换路径"入口，只能重新走 File > Open | `openScene` 失败分支 | U4 | open |
+| UX-17 | 打开失败后没有"重试/换路径"入口，只能重新走 File > Open | `openScene` 失败分支 | U4 | **fixed**（2026-11-03）：失败时记录 `failedOpenPath/Error` 并弹「无法打开场景」模态框，三个按钮 = 重试 / 选择其它文件 / 关闭；弹窗在帧内按需打开，避免启动路径在帧外调 `OpenPopup` |
 | UX-18 | 菜单栏没有"最近失败"或诊断入口，出错后无处可去 | `drawMenuBar()` 只有 File/Edit/Create/Play/View/Help | U4 | open |
 | UX-09 | 多选时 Inspector 仍是两行英文播报"Multi-entity editing is not supported yet; use the Hierarchy panel to pick one entity."，且与中文界面混排 | `InspectorPanel.cpp:113-114` | U5、U7 | **fixed**（2026-11-03）：改成中文两行「已选中 N 个对象，Inspector 一次只编辑一个。／在 Hierarchy 里点单个对象查看属性；批量删除/复制用上面的按钮。」 |
 

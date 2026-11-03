@@ -17,6 +17,8 @@
 #include "Scene/SceneDescription.h"
 #include "Terrain/TerrainBrush.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <deque>
 #include <string>
 #include <vector>
@@ -50,6 +52,79 @@ struct EditorState
         while (log.size() > kMaxLogEntries)
             log.pop_front();
         scrollLogToBottom = true;
+    }
+
+    // ---- B3：通知（Toast / 最近错误 / 未读错误）----
+    //
+    // 规则：Console 可以被 View 菜单关掉，所以「错误只写进 Console」等于没写。
+    // 所有 Error / Warning 都同时进 Toast（短暂）与状态栏摘要（常驻到下一次成功），
+    // 并在 Console 关闭时累计未读数，让工具栏上有个能点的标记。
+    //
+    // Info 也会进 Toast —— 但只给 2 秒，作用是「做了有回应」（UX-10）。
+    struct EditorNotice
+    {
+        std::string text;
+        LogEntry::Level level = LogEntry::Level::Info;
+        float remaining = 0.0f;   // 秒；<= 0 表示不显示
+    };
+
+    EditorNotice toast;
+    std::string lastErrorSummary;
+    float lastErrorAge = 0.0f;      // 秒；越老颜色越淡
+    size_t lastErrorLogIndex = 0;   // 指向 log 里的下标，Console 用它高亮
+    uint32_t unreadErrors = 0;
+    bool focusConsoleRequest = false;
+    // 本帧刚产生的错误不能算「已读」：Console 画出来不代表用户看到了新加的那一行。
+    // 每帧开头 tickNotices() 清掉，notify(Error) 置位。
+    bool errorRaisedThisFrame = false;
+
+    void notify(LogEntry::Level level, const std::string& text)
+    {
+        pushLog(level, text);
+        toast.text = text;
+        toast.level = level;
+        toast.remaining = (level == LogEntry::Level::Info) ? 2.0f : 5.0f;
+        if (level == LogEntry::Level::Error)
+        {
+            lastErrorSummary = text;
+            lastErrorAge = 0.0f;
+            lastErrorLogIndex = log.size() - 1;
+            ++unreadErrors;
+            errorRaisedThisFrame = true;
+        }
+    }
+
+    // 成功动作顺手清掉「最近错误」——否则修好之后红色摘要还挂着，等于永远报错。
+    void notifySuccess(const std::string& text)
+    {
+        pushLog(LogEntry::Level::Info, text);
+        toast.text = text;
+        toast.level = LogEntry::Level::Info;
+        toast.remaining = 2.0f;
+        lastErrorSummary.clear();
+        lastErrorAge = 0.0f;
+        lastErrorLogIndex = 0;
+    }
+
+    void tickNotices(float deltaSeconds)
+    {
+        errorRaisedThisFrame = false;
+        const float dt = deltaSeconds > 0.0f ? deltaSeconds : 0.0f;
+        toast.remaining = toast.remaining > dt ? toast.remaining - dt : 0.0f;
+        lastErrorAge += dt;
+    }
+
+    void markErrorsRead() { unreadErrors = 0; }
+    void dismissToast() { toast.remaining = 0.0f; }
+
+    // UX-17：打开失败后要能「重试」或「换一个文件」，而不是让用户再走一遍 File > Open。
+    std::string failedOpenPath;
+    std::string failedOpenError;
+    bool hasFailedOpen() const { return !failedOpenPath.empty(); }
+    void clearFailedOpen()
+    {
+        failedOpenPath.clear();
+        failedOpenError.clear();
     }
 
     // ---- 场景文档 ----

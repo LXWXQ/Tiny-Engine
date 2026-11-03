@@ -273,3 +273,26 @@ const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBar
 否则空场景永远不空。判据本身有回归（`[Editor] empty state selfTest PASS`）。
 
 两个按钮都走命令栈（`createTerrainThroughCommand` / `CreateEntityCommand`），所以 Ctrl+Z 能撤销。
+
+## 通知与错误可见（B3）
+
+Console 可以被 View 菜单关掉，所以「错误只写进 Console」等于没写。B3 的统一出口是
+`EditorState::notify(level, text)`：
+
+| 通道 | 生存期 | 用途 |
+|---|---|---|
+| Toast | Info 2 秒 / 警告与错误 5 秒 | 做了有回应；错误带「查看」按钮 |
+| 状态栏摘要 | 常驻，直到下一次成功动作 | 余光可见；点「错误」跳 Console |
+| 工具栏徽标 | 常驻到 Console 被看到 | Console 关着时的唯一入口 |
+
+三处的点击都走 `EditorLayer::openConsoleAtLastError()`：打开 Console、置 `focusConsoleRequest`、
+滚到 `lastErrorLogIndex` 并用白字高亮那一行。
+
+已读语义有一个刻意的例外：**本帧刚产生的错误不算已读**（`errorRaisedThisFrame`）。
+否则 Console 恰好开着时，徽标会在同一帧里出现又消失，用户看到一个闪一下的红色按钮。
+
+### 打开失败的重试（UX-17）
+
+`openScene()` 失败时写 `state.failedOpenPath / failedOpenError`，`drawOpenFailurePrompt()`
+每帧检查并弹「无法打开场景」模态框：重试 / 选择其它文件 / 关闭。
+不要在 `openScene()` 里直接 `ImGui::OpenPopup` —— 它可能由启动参数在 ImGui 帧之外调用。

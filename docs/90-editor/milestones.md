@@ -113,3 +113,11 @@ updated: 2026-11-03
 - **UX-09**：Inspector 多选提示从英文播报改成中文两行，并指向批量按钮。
 - **UX-16**：Assets 面板区分「模型目录不存在」与「目录里没有模型」，都给出路径与下一步。
 - 回归：`b2-empty-state`（`TinyEditor.exe --selftest 5 --empty-scene`，标记 `[Editor] empty state selfTest PASS`）。
+
+## B3：通知与失败出路（UX-03 / UX-10 / UX-12 / UX-17）
+
+- 统一出口 `EditorState::notify / notifySuccess / tickNotices`：Toast（2/5 秒）+ 状态栏常驻摘要 + 未读错误计数。
+- 工具栏红色「错误 N」徽标，点击打开 Console 并滚到最近错误行（白字高亮）；状态栏摘要同样可点。
+- `openScene()` 失败不再只写日志：弹「无法打开场景」模态框，提供重试 / 选择其它文件 / 关闭。
+- 已读语义：本帧新产生的错误不计已读，避免徽标闪烁。
+- 回归：`b3-notices`（`[Editor] notices selfTest PASS | toast decay + error summary + unread badge`）。

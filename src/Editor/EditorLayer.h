@@ -84,6 +84,11 @@ private:
     // 都是固定矩形、不记忆位置 —— 它们是"框架"而不是可拖动面板。
     void drawToolbar();
     void drawStatusBar();
+    // B3：做了有回应。Toast 是短暂的回执/报错，状态栏是常驻摘要，
+    // 两者都能一键跳到 Console 的那一行。
+    void drawToast();
+    void drawOpenFailurePrompt();
+    bool openConsoleAtLastError();
     void drawPanels();
 
     // 首帧强制套用默认布局。之后用户拖动过的位置由 imgui.ini 决定。

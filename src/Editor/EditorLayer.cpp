@@ -164,8 +164,10 @@ void deleteSelection(EditorState& state)
         return;
 
     state.selection.clear();
+    const size_t count = children.size();
     state.commands.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(children)));
     state.markDirty();
+    state.notifySuccess("已删除 " + std::to_string(count) + " 个对象（Ctrl+Z 可撤销）");
 }
 
 void duplicateSelection(EditorState& state)
@@ -440,6 +442,10 @@ void EditorLayer::drawUI()
         ImGui::EndMainMenuBar();
     }
 
+    // B3：Toast 的倒计时与「最近错误」的年龄都按帧推进，
+    // 放在 UI 构建的最前面，保证同一帧里做的动作立刻可见。
+    state.tickNotices(ImGui::GetIO().DeltaTime);
+
     drawToolbar();
 
     drawPanels();
@@ -450,6 +456,18 @@ void EditorLayer::drawUI()
         layoutNeedsReset = false;
 
     drawStatusBar();
+
+    drawToast();
+    drawOpenFailurePrompt();
+
+    // Console 已经画出来 = 用户能看到这些错误了；清掉未读与高亮请求，
+    // 否则徽标会一直挂着，而高亮会把滚动位置钉死在那一行。
+    if (EditorPanel* console = findPanel("Console"); console != nullptr && console->visible)
+    {
+        if (!state.errorRaisedThisFrame)
+            state.markErrorsRead();
+        state.focusConsoleRequest = false;
+    }
 
     drawShortcutSheet();
 
@@ -632,14 +650,14 @@ entt::entity EditorLayer::createCharacterFromUi()
     const entt::entity entity = raw->currentEntity();
     if (entity == entt::null || !state.services.registry->valid(entity))
     {
-        state.pushLog(LogEntry::Level::Error, "[Editor] create character failed");
+        state.notify(LogEntry::Level::Error, "创建角色失败：请查看 Console");
         return entt::null;
     }
 
     state.selection.select(entity);
     state.transformRefreshPending = true;
     state.markDirty();
-    state.pushLog(LogEntry::Level::Info, "[Editor] created Character (kinematic controller)");
+    state.notifySuccess("已创建角色（运动学控制器）");
     return entity;
 }
 
@@ -655,7 +673,7 @@ entt::entity EditorLayer::createTerrainFromUi()
 
     if (entity == entt::null)
     {
-        state.pushLog(LogEntry::Level::Error, "[Editor] create terrain failed");
+        state.notify(LogEntry::Level::Error, "创建地形失败：请查看 Console");
         return entt::null;
     }
 
@@ -669,7 +687,7 @@ entt::entity EditorLayer::createTerrainFromUi()
                       terrain->config.resolutionX, terrain->config.resolutionZ,
                       terrain->vertexCount, terrain->indexCount,
                       terrain->lastGenerationMs);
-        state.pushLog(LogEntry::Level::Info, buffer);
+        state.notifySuccess(buffer);
     }
     return entity;
 }
@@ -807,6 +825,25 @@ void EditorLayer::drawToolbar()
             ImGui::SetTooltip("Ctrl+Y");
         ImGui::SameLine();
 
+        // B3 / UX-12：Console 关着时，错误必须有可见入口。徽标常驻工具栏右侧。
+        if (state.unreadErrors > 0)
+        {
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.15f, 0.15f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.9f, 0.25f, 0.25f, 1.0f));
+            char badge[48];
+            std::snprintf(badge, sizeof badge, "错误 %u", static_cast<unsigned>(state.unreadErrors));
+            if (ImGui::Button(badge))
+            {
+                openConsoleAtLastError();
+                state.markErrorsRead();
+            }
+            ImGui::PopStyleColor(3);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("打开 Console 并跳到最近一次错误");
+        }
+
         const char* playLabel = editing ? "Editing" : (playing ? "Playing" : "Paused");
         char right[192];
         std::snprintf(right, sizeof right, "%s | %s | %.0f FPS",
@@ -823,6 +860,110 @@ void EditorLayer::drawToolbar()
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
+}
+
+// B3：把「第几行错了」变成一次点击就能到达的地方。
+// 三个入口（Toast、状态栏摘要、工具栏徽标）都走这里，保证行为一致。
+bool EditorLayer::openConsoleAtLastError()
+{
+    EditorPanel* console = findPanel("Console");
+    if (console == nullptr)
+        return false;
+    console->visible = true;
+    state.focusConsoleRequest = true;
+    state.scrollLogToBottom = true;
+    return true;
+}
+
+void EditorLayer::drawToast()
+{
+    if (state.toast.remaining <= 0.0f || state.toast.text.empty())
+        return;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float maxWidth = viewport->WorkSize.x * 0.5f;
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+               viewport->WorkPos.y + viewport->WorkSize.y - kStatusBarHeight - 12.0f),
+        ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+
+    bool clicked = false;
+    if (ImGui::Begin("##toast", nullptr, flags))
+    {
+        const bool isError = state.toast.level == LogEntry::Level::Error;
+        const bool isWarning = state.toast.level == LogEntry::Level::Warning;
+        const ImVec4 color = isError ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f)
+            : (isWarning ? ImVec4(1.0f, 0.85f, 0.35f, 1.0f)
+                         : ImVec4(0.75f, 0.9f, 1.0f, 1.0f));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + maxWidth);
+        ImGui::TextColored(color, "%s", state.toast.text.c_str());
+        ImGui::PopTextWrapPos();
+        if (isError || isWarning)
+        {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("查看"))
+            {
+                clicked = true;
+                state.markErrorsRead();
+                openConsoleAtLastError();
+            }
+        }
+    }
+    ImGui::End();
+
+    // 关闭按钮固定用 ImGui 的 NoInputs 之外的方式处理太绕，这里让「查看」就够了：
+    // 不点它，Toast 也会在 5 秒后自己消失。
+    (void)clicked;
+}
+
+// UX-17：打开失败不是终点。给「重试」和「换一个文件」两条出路，
+// 而不是要求用户再走一遍 File > Open。
+void EditorLayer::drawOpenFailurePrompt()
+{
+    if (!state.hasFailedOpen())
+        return;
+
+    if (!ImGui::IsPopupOpen("无法打开场景"))
+        ImGui::OpenPopup("无法打开场景");
+
+    if (ImGui::BeginPopupModal("无法打开场景", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("%s", state.failedOpenPath.c_str());
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(520.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "%s", state.failedOpenError.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        ImGui::TextDisabled("文件可能被占用、路径变了，或者不是有效场景文件。");
+        ImGui::Separator();
+
+        const std::string retryPath = state.failedOpenPath;
+        if (ImGui::Button("重试"))
+        {
+            state.clearFailedOpen();
+            ImGui::CloseCurrentPopup();
+            openScene(retryPath);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("选择其它文件"))
+        {
+            state.clearFailedOpen();
+            ImGui::CloseCurrentPopup();
+            openSceneDialog();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("关闭"))
+        {
+            state.clearFailedOpen();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void EditorLayer::drawStatusBar()
@@ -843,6 +984,29 @@ void EditorLayer::drawStatusBar()
         ImGui::SameLine();
         ImGui::TextDisabled("| %s | 吸附 %s", gizmoModeLabel(state.gizmo.mode),
                             state.gizmo.snapEnabled ? "开" : "关（按住 Shift 临时开）");
+
+        // B3 / UX-03、UX-12：错误摘要常驻在状态栏 —— Console 关着也看得见。
+        // 30 秒后不算「最近」，颜色变淡但文字保留，直到下一次成功动作把它清掉。
+        if (!state.lastErrorSummary.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
+            const float alpha = state.lastErrorAge < 30.0f ? 1.0f : 0.55f;
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, alpha));
+            if (ImGui::SmallButton("错误"))
+            {
+                openConsoleAtLastError();
+                state.markErrorsRead();
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            char summary[96];
+            std::snprintf(summary, sizeof summary, "%s", state.lastErrorSummary.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.6f, alpha));
+            ImGui::TextUnformatted(summary);
+            ImGui::PopStyleColor();
+        }
 
         // 帧数据放这里而不是只塞进 Statistics 面板：调场景时眼睛一直在视口，
         // 侧栏是要"转头去看"的，状态栏是余光就能扫到的。
@@ -973,7 +1137,7 @@ bool EditorLayer::newScene()
 {
     if (!state.documentWritable())
     {
-        state.pushLog(LogEntry::Level::Warning, "[Editor] new scene blocked: 播放中不重置场景（按 F7 停止）");
+        state.notify(LogEntry::Level::Warning, "播放中不能新建场景：先按 F7 停止");
         return false;
     }
 
@@ -985,7 +1149,7 @@ bool EditorLayer::newScene()
     state.commands.clear();
     state.documentPath.clear();
     state.documentDirty = false;
-    state.pushLog(LogEntry::Level::Info, "[Editor] new scene");
+    state.notifySuccess("新建空场景");
     return true;
 }
 
@@ -994,7 +1158,7 @@ bool EditorLayer::saveScene()
     // 播放期间场景是运行期状态，写盘会把玩家跑出来的位姿存进文档。
     if (!state.documentWritable())
     {
-        state.pushLog(LogEntry::Level::Warning, "[Editor] save blocked: 播放中不写入文档（按 F7 停止后保存）");
+        state.notify(LogEntry::Level::Warning, "播放中不写入文档：先按 F7 停止再保存");
         return false;
     }
 
@@ -1008,12 +1172,12 @@ bool EditorLayer::saveScene()
     std::string error;
     if (!SceneSerializer::saveToFile(description, state.documentPath, error))
     {
-        state.pushLog(LogEntry::Level::Error, "[Editor] save failed: " + error);
+        state.notify(LogEntry::Level::Error, "保存失败：" + error);
         return false;
     }
 
     state.documentDirty = false;
-    state.pushLog(LogEntry::Level::Info, "[Editor] saved: " + state.documentPath);
+    state.notifySuccess("已保存 " + state.documentPath);
     return true;
 }
 
@@ -1051,9 +1215,15 @@ bool EditorLayer::openScene(const std::string& path)
     std::string error;
     if (!loadSceneFromPath(path, error))
     {
-        state.pushLog(LogEntry::Level::Error, "[Editor] open failed: " + error);
+        // B3：错误要同时进 Toast / 状态栏 / Console，并且留下重试入口（UX-17）。
+        state.notify(LogEntry::Level::Error, "打开失败：" + error);
+        state.failedOpenPath = path;
+        state.failedOpenError = error;
+        // 不在这里 OpenPopup：openScene 可能由启动参数在 ImGui 帧之外调用，
+        // OpenPopup 必须在帧内。真正的弹窗由 drawOpenFailurePrompt 每帧检查。
         return false;
     }
+    state.notifySuccess("已打开 " + path);
     return true;
 }
 
@@ -1120,7 +1290,7 @@ void EditorLayer::enterPlay()
     state.hasPlaySnapshot = true;
     state.playState = PlayState::Playing;
     state.commands.clear();          // 运行期的操作不该能撤销回编辑态
-    state.pushLog(LogEntry::Level::Info, "[Editor] play");
+    state.notify(LogEntry::Level::Info, "开始播放（F7 停止并恢复）");
 }
 
 void EditorLayer::pausePlay()
@@ -1156,7 +1326,7 @@ void EditorLayer::stopPlay()
     state.playState = PlayState::Editing;
     state.selection.clear();
     state.commands.clear();
-    state.pushLog(LogEntry::Level::Info, "[Editor] stopped, scene restored");
+    state.notifySuccess("已停止播放，场景已恢复");
 }
 
 // ---------------------------------------------------------------------------
@@ -1479,6 +1649,44 @@ bool EditorLayer::selfTest()
             return false;
         }
         std::cout << "[Editor] empty state selfTest PASS | skybox+empty ignored, real mesh counts" << std::endl;
+    }
+
+    // ---- 0ab) B3：通知状态机（Toast / 最近错误 / 未读计数 / 打开失败重试） ----
+    {
+        EditorState probe;
+        probe.notify(LogEntry::Level::Error, "boom");
+        const bool raised = probe.toast.remaining > 0.0f && probe.unreadErrors == 1 &&
+            probe.lastErrorSummary == "boom" && probe.lastErrorLogIndex == 0;
+
+        probe.tickNotices(1.0f);
+        const bool ticking = probe.toast.remaining > 0.0f && probe.lastErrorAge > 0.9f;
+
+        probe.tickNotices(10.0f);
+        const bool expired = probe.toast.remaining == 0.0f;
+
+        probe.notify(LogEntry::Level::Error, "boom 2");
+        const bool counted = probe.unreadErrors == 2;
+        probe.notifySuccess("ok");
+        const bool cleared = probe.lastErrorSummary.empty() && probe.toast.remaining > 0.0f;
+        const bool stillUnread = probe.unreadErrors == 2;
+
+        probe.failedOpenPath = "missing.scene.json";
+        probe.failedOpenError = "file not found";
+        const bool failedOpen = probe.hasFailedOpen();
+        probe.clearFailedOpen();
+        const bool failedCleared = !probe.hasFailedOpen();
+
+        if (!raised || !ticking || !expired || !counted || !cleared || !stillUnread ||
+            !failedOpen || !failedCleared)
+        {
+            std::cerr << "[Editor] notices selfTest FAIL | raised=" << raised
+                << " ticking=" << ticking << " expired=" << expired
+                << " counted=" << counted << " cleared=" << cleared
+                << " stillUnread=" << stillUnread
+                << " failedOpen=" << failedOpen << " failedCleared=" << failedCleared << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] notices selfTest PASS | toast decay + error summary + unread badge" << std::endl;
     }
 
     // ---- 0b) E4-b：偏好文件往返（纯逻辑，不碰磁盘） ----
