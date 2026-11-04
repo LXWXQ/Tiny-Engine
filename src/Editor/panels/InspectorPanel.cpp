@@ -26,9 +26,8 @@ void drawVoxelBrushControls(EditorState& state)
     if (!ImGui::CollapsingHeader("Voxel Brush"))
         return;
 
-    ImGui::Checkbox("Enable (Alt+LMB)", &state.voxelBrushEnabled);
-    ImGui::SameLine();
-    ImGui::TextDisabled("dig / Alt+Shift+LMB place");
+    // E8：体素操作不再是"笔刷开关"，而是运行模式的默认鼠标语义。
+    ImGui::TextDisabled("运行模式：左键挖、右键放（F8 切换）");
 
     if (state.voxelWorld == entt::null)
     {
@@ -42,7 +41,7 @@ void drawVoxelBrushControls(EditorState& state)
         names[i] = voxel::blockName(static_cast<uint8_t>(i));
     if (ImGui::Combo("Block", &block, names, static_cast<int>(voxel::kBlockCount)))
         state.voxelBrushBlock = block;
-    ImGui::TextDisabled("Alt+LMB digs, Alt+Shift+LMB places on the hit face. Ctrl+LMB stays selection.");
+    ImGui::TextDisabled("Runtime mode: LMB digs, RMB places on the hit face. Edit mode: LMB only selects.");
 }
 
 void drawTerrainBrushControls(EditorState& state)
@@ -50,9 +49,9 @@ void drawTerrainBrushControls(EditorState& state)
     if (!ImGui::CollapsingHeader("Sculpt Brush"))
         return;
 
-    ImGui::Checkbox("Enable (Alt+LMB)", &state.terrainBrushEnabled);
+    ImGui::Checkbox("Enable", &state.terrainBrushEnabled);
     ImGui::SameLine();
-    ImGui::TextDisabled("viewport");
+    ImGui::TextDisabled("runtime mode, LMB");
 
     int mode = static_cast<int>(state.terrainBrush.mode);
     const char* modes[] = {

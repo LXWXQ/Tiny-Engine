@@ -269,7 +269,7 @@ $tests = @(
     @{ Name = "b3-notices"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] notices selfTest PASS") },
     @{ Name = "b6-console-search"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
-       MustContain = @("[Editor] console filter selfTest PASS", "[Editor] terrain create request selfTest PASS", "entries=19 conflicts=0") },
+       MustContain = @("[Editor] console filter selfTest PASS", "[Editor] terrain create request selfTest PASS", "entries=20 conflicts=0") },
     @{ Name = "b5-language-console"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] status bar selfTest PASS") },
     @{ Name = "b4-shortcuts"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
@@ -279,6 +279,8 @@ $tests = @(
     @{ Name = "f6-shadows"; Exe = "engine"; Args = @("--selftest", "20"); MustContain = @("[Shadow] selfTest PASS", "[Shadow] first frame | cascades=3") },
     @{ Name = "f3-voxel"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
        MustContain = @("[Voxel] selfTest PASS", "[Voxel] scene selfTest PASS") },
+  @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("[Editor] editor mode selfTest PASS", "entries=20 conflicts=0") },
     @{ Name = "e6-asset-and-textures"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] asset drop selfTest PASS", "[Editor] texture library selfTest PASS") },
     @{ Name = "b2-empty-state"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

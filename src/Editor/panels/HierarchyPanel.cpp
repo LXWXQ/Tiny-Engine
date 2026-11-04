@@ -157,6 +157,7 @@ void HierarchyPanel::draw(EditorState& state)
             const bool selected = state.selection.contains(entity);
             ImGui::PushID(static_cast<int>(static_cast<uint32_t>(entity)));
             if (ImGui::Selectable(displayName(registry, entity).c_str(), selected))
+            if (state.allowsSelection())
             {
                 ImGuiIO& io = ImGui::GetIO();
                 if (io.KeyShift && selectionAnchor >= 0)
@@ -215,7 +216,8 @@ void HierarchyPanel::drawEntityNode(EditorState& state, entt::entity entity)
     const bool opened = ImGui::TreeNodeEx(label.c_str(), flags);
 
     // ---- 选中（E1：Ctrl 切换、Shift 连续区间）----
-    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+    // E8：运行模式下层级面板只负责导航/展开，不能改变选中。
+    if (state.allowsSelection() && ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
     {
         ImGuiIO& io = ImGui::GetIO();
         const int clickedIndex = indexOf(visibleOrder, entity);

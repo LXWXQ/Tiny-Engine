@@ -139,6 +139,7 @@ private:
     bool openSceneDialog();
     bool loadSceneFromPath(const std::string& path, std::string& errorMessage, bool recordRecent = true);
 
+    void setEditorMode(EditorState::EditorMode mode);
     void enterPlay();
     void pausePlay();
     void resumePlay();

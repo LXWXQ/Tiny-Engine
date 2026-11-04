@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **61 项引擎用例 + 2 项工具自测 = 63 项**；
+`tools/Validate.ps1` 默认跑 **62 项引擎用例 + 2 项工具自测 = 64 项**；
 加 `-EnableProfiling` 时多一项（37 + 2 = 39）。
 
 ## 1. 每项的判据（统一）
@@ -85,11 +85,12 @@ updated: 2026-11-03
 | 54 | `b3-notices` | 通知状态机：Toast 衰减、错误摘要、未读徽标、打开失败重试状态 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] notices selfTest PASS` | 本帧新错误不算已读；`notifySuccess` 清摘要；`failedOpenPath` 可清空 |
 | 55 | `b4-shortcuts` | 快捷键单一数据源：条目数、键位标签、键位冲突检测 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] shortcut sheet selfTest PASS`、`conflicts=0` | `kShortcutEntries` 同时驱动速查表与分发；`Ctrl+Z` 与 `Ctrl+Shift+Z` 是两条精确匹配的条目 |
 | 56 | `b5-language-console` | 状态栏数量缩写 + Console 时间戳：`formatCount()` 的 k/M 边界与 `HH:MM:SS` 形状 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] status bar selfTest PASS` | 语言分层（B5/UX-07）、Console 时间列与计数（UX-11）、状态栏三段（UX-15）、诊断入口（UX-18） |
-| 57 | `b6-console-search` | Console 关键字搜索（`matchesSearch` 的大小写/空串/中文）+ 地形创建两阶段请求 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] console filter selfTest PASS`、`[Editor] terrain create request selfTest PASS`、`entries=19 conflicts=0` | UX-11 续（Console 搜索）、UX-08（两阶段提示） |
+| 57 | `b6-console-search` | Console 关键字搜索（`matchesSearch` 的大小写/空串/中文）+ 地形创建两阶段请求 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] console filter selfTest PASS`、`[Editor] terrain create request selfTest PASS`、`entries=20 conflicts=0` | UX-11 续（Console 搜索）、UX-08（两阶段提示） |
 | 58 | `e6-asset-and-textures` | 资产拖拽落点判据（命中地形 / 相机前方 8m）+ 贴图库扩展名过滤 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] asset drop selfTest PASS`、`[Editor] texture library selfTest PASS` | E6（资产拖拽 / 材质贴图选择） |
 | 59 | `async-terrain-create` | 异步创建地形的三段状态：当帧实体存在且 generating、当帧无 MeshComponent、wait 后几何就绪（并把同步 105.9 ms / 异步提交 0.28 ms 打进日志） | `TinyEditor.exe --selftest 5 --empty-scene` | `[Scene] async terrain create selfTest PASS` | TD-24（真异步地形生成） |
 | 60 | `f6-shadows` | 级联阴影：三级联矩阵自检（split 递增、末级被 90 夹住、8 角点落在光空间裁剪体内、远处球被剔除）+ 首帧确实注册了 Shadow pass | `TinyEngine.exe --selftest 20` | `[Shadow] selfTest PASS`、`[Shadow] first frame \| cascades=3` | 手写正交投影（`glm::ortho` 在 ZERO_TO_ONE+右手空间下深度落在 [0,1] 之外）；AABB 8 角点剔除；默认场景阴影偏淡是光照配比所致（方向光约占 5% 亮度） |
 | 61 | `f3-voxel` | 方块体素：面剔除 6/10/6、边界连续、DDA 命中与挖深/放回、地面高度、角色站上方块、面放置 | `TinyEngine.exe --selftest 20 --voxel-world 1` | `[Voxel] selfTest PASS`、`[Voxel] scene selfTest PASS` | 顶点材质必须给白贴图否则走棋盘格；旧 Model 换指针前要 `retireModel`；边界格要连带重建邻块 |
+| 62 | `e8-editor-mode` | 编辑 / 运行模式：编辑模式允许选中、运行模式禁止选中（坐标系/层级/视口三处守卫），快捷键表里有模式切换 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] editor mode selfTest PASS`、`entries=20 conflicts=0` | 运行模式进入时清空选中；`Ctrl+左键` 永远是多选（笔刷改到运行模式下的裸左键） |
 
 ## 3. 工具自测
 

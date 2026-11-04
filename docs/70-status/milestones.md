@@ -594,7 +594,7 @@ updated: 2026-11-02
 
 ## F3：方块体素世界（挖掘 / 建造 / 站立）
 **问题**：引擎没有任何体素代码；roadmap 的 F3 原写 marching cubes / surface nets，但「挖矿盖房」要的是整齐方块，等值面挖出来是圆滑洞。
-**实现**：`src/Voxel/`（`BlockId` + `BlockInfo` 调色板、`Chunk` 32³、`buildMesh` 面剔除 + 顶点色×面明暗，复用 `terrain::TerrainMeshData` 上传路径）；`Scene::createVoxelWorld / setVoxelBlock / raycastVoxelWorld`（chunk AABB 粗筛 + Amanatides-Woo DDA）/ `sampleVoxelGroundHeight`；边界格连带重建邻块，旧 Model 走 `retireModel` 延迟释放；材质用 `getDefaultWhiteTexture()` 避免棋盘格；`--voxel-world [r]`；编辑器 Voxel Brush（Ctrl 挖 / Ctrl+Shift 放）+ `VoxelEditCommand` 撤销；`queryGroundAtWorld` 叠加体素分支，角色能站在方块上。
+**实现**：`src/Voxel/`（`BlockId` + `BlockInfo` 调色板、`Chunk` 32³、`buildMesh` 面剔除 + 顶点色×面明暗，复用 `terrain::TerrainMeshData` 上传路径）；`Scene::createVoxelWorld / setVoxelBlock / raycastVoxelWorld`（chunk AABB 粗筛 + Amanatides-Woo DDA）/ `sampleVoxelGroundHeight`；边界格连带重建邻块，旧 Model 走 `retireModel` 延迟释放；材质用 `getDefaultWhiteTexture()` 避免棋盘格；`--voxel-world [r]`；编辑器运行模式（左键挖 / 右键放）+ `VoxelEditCommand` 撤销；`queryGroundAtWorld` 叠加体素分支，角色能站在方块上。
 **可观测**：`[Voxel] selfTest PASS | face culling 6/10/6, boundary continuous, solid=12090`、`[Voxel] scene selfTest PASS | chunks=9 hit=(16,10,16) dugDeeper=1 restored=1 groundY=11 characterLanded=1 placedOnFace=1`；`--voxel-world 1` 截图方块地形顶面草皮、侧面土层/石层、无缝。
 **已知限制**：体素世界不进存档（`buildFromDescription()` 会清掉）；无贪心合并 / LOD / AO / 贴图集；网格在主线程同步生成；透明方块没有逐面排序。
 **回归**：新增 `f3-voxel`；全套 **63 项**。

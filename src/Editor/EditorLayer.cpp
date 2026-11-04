@@ -345,6 +345,7 @@ enum class ShortcutAction
     ToggleShortcutSheet,
     CloseShortcutSheet,
     FocusConsoleSearch,
+    ToggleMode,
 };
 
 struct ShortcutEntry
@@ -378,6 +379,7 @@ const ShortcutEntry kShortcutEntries[] =
     { "视图", ImGuiKey_Slash, false, true, ShortcutAction::ToggleShortcutSheet, "打开 / 关闭本速查表（Shift+/ 就是 ?）" },
     { "视图", ImGuiKey_Escape, false, false, ShortcutAction::CloseShortcutSheet, "关闭速查表" },
     { "视图", ImGuiKey_F, true, false, ShortcutAction::FocusConsoleSearch, "跳到 Console 的日志搜索框" },
+    { "模式", ImGuiKey_F8, false, false, ShortcutAction::ToggleMode, "编辑 / 运行模式切换（运行模式：左键挖、右键放）" },
 };
 
 constexpr size_t kShortcutEntryCount = sizeof(kShortcutEntries) / sizeof(kShortcutEntries[0]);
@@ -482,6 +484,10 @@ void EditorLayer::handleShortcuts()
             if (showShortcutSheet)
                 showShortcutSheet = false;
             break;
+        case ShortcutAction::ToggleMode:
+            setEditorMode(state.isRuntime() ? EditorState::EditorMode::Edit
+                                             : EditorState::EditorMode::Runtime);
+            return;
         case ShortcutAction::FocusConsoleSearch:
             if (EditorPanel* console = findPanel("Console"); console != nullptr)
             {
@@ -944,6 +950,14 @@ void EditorLayer::drawToolbar()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 4.0f));
     if (ImGui::Begin("##toolbar", nullptr, kBarFlags))
     {
+        // ---- 编辑 / 运行模式（E8）----
+        // 这是"输入归属"的开关，不是播放开关：编辑模式改数据，运行模式操作世界。
+        barToggle("编辑", state.mode == EditorState::EditorMode::Edit,
+                  "编辑模式：左键选中、手柄拖拽、面板改参数");
+        barToggle("运行", state.isRuntime(),
+                  "运行模式：物体不可选中；左键挖方块 / 地形笔刷，右键放方块");
+        ImGui::TextDisabled("|");
+
         // ---- 播放 ----
         const bool editing = state.playState == PlayState::Editing;
         const bool playing = state.playState == PlayState::Playing;
@@ -1196,14 +1210,29 @@ void EditorLayer::drawStatusBar()
         //   中：场景统计（"屏幕上画了多少东西"）
         //   右：帧率 / 帧耗时 / 撤销深度（"跑得快不快"）
         // 以前五组数字挤在右边一行，扫读时要一字一字读；分三段后眼睛有落点。
-        const size_t selected = state.selection.size();
-        if (selected == 0)
-            ImGui::TextDisabled("没有选中对象");
+        // E8：模式是状态栏第一个词 —— 用户随时该知道"我现在点左键会发生什么"。
+        if (state.isRuntime())
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.35f, 1.0f), "运行");
         else
-            ImGui::Text("%zu 个对象选中", selected);
+            ImGui::TextDisabled("编辑");
         ImGui::SameLine();
-        ImGui::TextDisabled("· %s · 吸附 %s", gizmoModeLabel(state.gizmo.mode),
-                            state.gizmo.snapEnabled ? "开" : "关（按住 Shift 临时开）");
+        ImGui::TextDisabled("·");
+        ImGui::SameLine();
+        if (state.isRuntime())
+        {
+            ImGui::TextDisabled("左键挖方块 / 右键放方块（F8 回编辑）");
+        }
+        else
+        {
+            const size_t selected = state.selection.size();
+            if (selected == 0)
+                ImGui::TextDisabled("没有选中对象");
+            else
+                ImGui::Text("%zu 个对象选中", selected);
+            ImGui::SameLine();
+            ImGui::TextDisabled("· %s · 吸附 %s", gizmoModeLabel(state.gizmo.mode),
+                                state.gizmo.snapEnabled ? "开" : "关（按住 Shift 临时开）");
+        }
 
         // B3 / UX-03、UX-12：错误摘要常驻在状态栏 —— Console 关着也看得见。
         // 30 秒后不算「最近」，颜色变淡但文字保留，直到下一次成功动作把它清掉。
@@ -1574,6 +1603,23 @@ bool EditorLayer::loadSceneFromPath(const std::string& path, std::string& errorM
 // 为什么"暂停"不恢复快照：暂停的语义是"停一下"，用户期望再点 Play 能接着跑。
 // 如果暂停就恢复快照，那暂停期间看到的东西和回来之后不一样，很难理解。
 // ---------------------------------------------------------------------------
+void EditorLayer::setEditorMode(EditorState::EditorMode mode)
+{
+    if (state.mode == mode)
+        return;
+    state.mode = mode;
+    if (mode == EditorState::EditorMode::Runtime)
+    {
+        // 运行模式不改数据也不改选中：把选中清掉，Inspector 自然变成空态。
+        state.selection.clear();
+        state.notify(LogEntry::Level::Info, "运行模式：左键挖方块 / 地形笔刷，右键放方块（F8 回编辑模式）");
+    }
+    else
+    {
+        state.notify(LogEntry::Level::Info, "编辑模式：左键选中、手柄拖拽、面板改参数");
+    }
+}
+
 void EditorLayer::enterPlay()
 {
     if (!state.services.scene || state.playState != PlayState::Editing)
@@ -2094,6 +2140,31 @@ bool EditorLayer::selfTest()
         }
         std::cout << "[Editor] shortcut sheet selfTest PASS | entries=" << kShortcutEntryCount
                   << " conflicts=0" << std::endl;
+    }
+
+    // ---- 0e) E8：编辑 / 运行模式是输入归属开关 ----
+    {
+        EditorState probe;
+        if (!probe.allowsSelection() || probe.isRuntime())
+        {
+            std::cerr << "[Editor] editor mode selfTest FAIL: edit mode must allow selection" << std::endl;
+            return false;
+        }
+        probe.mode = EditorState::EditorMode::Runtime;
+        if (probe.allowsSelection() || !probe.isRuntime())
+        {
+            std::cerr << "[Editor] editor mode selfTest FAIL: runtime mode must block selection" << std::endl;
+            return false;
+        }
+        bool hasToggle = false;
+        for (size_t i = 0; i < kShortcutEntryCount; ++i)
+            hasToggle = hasToggle || kShortcutEntries[i].action == ShortcutAction::ToggleMode;
+        if (!hasToggle)
+        {
+            std::cerr << "[Editor] editor mode selfTest FAIL: no shortcut for mode toggle" << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] editor mode selfTest PASS | runtime blocks selection, edit allows" << std::endl;
     }
 
     // ---- 0d) E4-d：历史跳转。jumpTo 必须一步步 apply/revert，不能整段搬运 ----

@@ -159,6 +159,20 @@ for (panel : panels) {
 首帧用 `ImGuiCond_Always` 强推默认布局，之后用 `FirstUseEver` 尊重用户拖动。
 `View -> Reset Layout` 可以强制重排。
 
+## 编辑 / 运行模式（E8）
+
+状态栏第一个词就是当前模式。工具栏左侧「编辑 / 运行」，快捷键 `F8`：
+
+| 模式 | 左键 | 右键 | 选中 | 手柄 | 面板 |
+|---|---|---|---|---|---|
+| 编辑 | 选中（`Ctrl` 切换多选、`Shift` 区间） | 无 | 允许 | 可用 | 可改参数 |
+| 运行 | 挖方块 / 地形笔刷 | 在命中面放方块 | 禁止（进入时清空） | 不显示 | 只读 |
+
+- 这是**输入归属**开关，和 `PlayState`（F5 播放）是两件事：播放管场景快照回滚，运行模式只管鼠标键盘落到谁身上；
+- 进入运行模式会 `selection.clear()`，所以 Inspector 自然变成空态，不需要额外禁用控件；
+- 层级面板、视口点选、快捷键全选/复制/删除都看 `state.allowsSelection()`，运行模式下不会改动选中；
+- 自检打印 `[Editor] editor mode selfTest PASS | runtime blocks selection, edit allows`。
+
 ## 撤销历史（E4-d）
 
 右栏上 65% 是 Inspector，下 35% 是 `History`：把 `CommandStack` 的每一层摊开成一行，
@@ -446,7 +460,7 @@ struct ShortcutEntry
 - 速查表的键位列由 `shortcutKeys(entry)` 现算（`Ctrl+` / `Shift+` + `ImGui::GetKeyName`），
   不另存字符串 —— 以前速查表写「Ctrl+D」、代码里判断 `ImGuiKey_D`，两边漂移过。
 - `EditorLayer::selfTest()` 扫描这张表：条目数 ≥ 12、分组与描述非空、键位标签非空、
-  (key, ctrl, shift) 三元组不重复，打印 `[Editor] shortcut sheet selfTest PASS | entries=19 conflicts=0`。
+  (key, ctrl, shift) 三元组不重复，打印 `[Editor] shortcut sheet selfTest PASS | entries=20 conflicts=0`。
 - `?` 就是 `Shift+/`：表里存的是 `ImGuiKey_Slash + shift`，所以显示成 `Shift+Slash`，
   描述里补一句「（Shift+/ 就是 ?）」。
 

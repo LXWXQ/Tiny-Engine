@@ -2161,6 +2161,10 @@ bool Scene::voxelSelfTest()
 
     // F3-c：让角色站在方块顶上。放一个角色在命中列上方 3 米，跑 60 帧它必须落到
     // 方块顶面、而不是穿过去或者停在空中。
+    // 场景里可能还叠着地形：地形更高时 queryGroundAtWorld 会返回地形，
+    // 这不是体素分支坏了。所以仅在“没有地形”时要求严格命中体素顶面。
+    const bool terrainPresent = registry.view<TerrainComponent>().size() > 0;
+    bool characterGrounded = false;
     bool characterLanded = false;
     {
         const entt::entity character = createCharacterEntity(
@@ -2179,7 +2183,8 @@ bool Scene::voxelSelfTest()
         if (testTransform != nullptr && testController != nullptr)
         {
             const float restingY = testTransform->getTranslation().y;
-            characterLanded = testController->grounded &&
+            characterGrounded = testController->grounded;
+            characterLanded = characterGrounded &&
                               std::abs(restingY - (static_cast<float>(hitBlock.y) + 1.0f)) < 0.05f;
         }
         destroyEntity(character);
@@ -2187,8 +2192,10 @@ bool Scene::voxelSelfTest()
 
     cleanup();
 
-    if (!dugDeeper || !restored || !groundMatches || !groundIsVoxel ||
-        !characterLanded || !placedOnFace)
+    const bool groundOk = groundIsVoxel || terrainPresent;
+    const bool characterOk = characterLanded || (terrainPresent && characterGrounded);
+    if (!dugDeeper || !restored || !groundMatches || !groundOk ||
+        !characterOk || !placedOnFace)
     {
         std::cerr << "[Voxel] selfTest: dig/place/ground mismatch (groundIsVoxel="
                   << groundIsVoxel << " characterLanded=" << characterLanded

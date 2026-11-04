@@ -164,7 +164,7 @@ attrib +R Resources\Scenes
 ./build/Debug/TinyEditor.exe --selftest 5 --empty-scene | Select-String "shortcut sheet selfTest"
 ```
 
-已实现（B4）：`kShortcutEntries` 同时驱动 `handleShortcuts()` 与速查表，自检打印 `entries=19 conflicts=0`；Edit 菜单补齐 Duplicate/Delete/Focus/Select All（UX-06）；所有面板（含视口）改用 `FirstUseEver`，可拖动并用 `View -> Reset Layout` 复位（UX-14）。
+已实现（B4）：`kShortcutEntries` 同时驱动 `handleShortcuts()` 与速查表，自检打印 `entries=20 conflicts=0`；Edit 菜单补齐 Duplicate/Delete/Focus/Select All（UX-06）；所有面板（含视口）改用 `FirstUseEver`，可拖动并用 `View -> Reset Layout` 复位（UX-14）。
 
 已实现（B6）：Console 关键字搜索（`matchesSearch`，`Ctrl+F`）、地形创建两阶段提示
 （`advanceTerrainCreateRequest`，先画忙碌帧再 build）、字体与布局 DPI 缩放（`computeUiScale`）。

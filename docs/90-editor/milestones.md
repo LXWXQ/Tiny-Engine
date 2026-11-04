@@ -129,7 +129,7 @@ updated: 2026-11-03
 - `kShortcutEntries` 从"给文档看的表"变成唯一数据源：`key` / `ctrl` / `shift` / `ShortcutAction`，
   `handleShortcuts()` 遍历分发（修饰键精确匹配，一帧只做一个动作），速查表键位列由
   `shortcutKeys()` 现算（UX-13）。
-- 自检扫空项、键位标签、三元组冲突，打印 `[Editor] shortcut sheet selfTest PASS | entries=19 conflicts=0`。
+- 自检扫空项、键位标签、三元组冲突，打印 `[Editor] shortcut sheet selfTest PASS | entries=20 conflicts=0`。
 - `drawPanels()` 里 Viewport 不再用 `ImGuiCond_Always`，所有面板统一
   `layoutNeedsReset ? Always : FirstUseEver`：用户可拖动/缩放，`View -> Reset Layout` 复位（UX-14）。
 - 清掉 `config/imgui.ini` 里一条 `[Window][Render] ... Collapsed=1` 的旧记录（它会让渲染设置面板
@@ -196,3 +196,14 @@ updated: 2026-11-03
 - 自检：`[Scene] async terrain create selfTest PASS | sync=105.94 ms, async submit=0.28 ms, vertices=96524`
   （同时断言「实体当帧存在且 generating」「当帧没有 MeshComponent」「wait 之后几何就绪」）。
 - 回归：`async-terrain-create`。
+
+## E8：编辑 / 运行模式分离
+
+**问题**：`Ctrl+左键` 既被多选又被体素/地形笔刷占用，用户按习惯去选中却挖了方块。
+
+**实现**：`EditorState::EditorMode { Edit, Runtime }` + `allowsSelection()/isRuntime()`；工具栏「编辑 / 运行」+ `F8`；进入运行模式清空选中；
+视口手柄与点选按模式门控，运行模式裸左键 = 挖 / 地形笔刷、裸右键 = 放方块；层级面板与快捷键的选中动作都看 `allowsSelection()`；状态栏显示当前模式。
+
+**可观测**：`[Editor] editor mode selfTest PASS | runtime blocks selection, edit allows`；快捷键表 19 → 20 条。
+
+**回归**：`e8-editor-mode`（编辑器自检 + `entries=20 conflicts=0`）。

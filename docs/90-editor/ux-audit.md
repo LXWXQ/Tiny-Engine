@@ -111,7 +111,7 @@ updated: 2026-11-03
 | UX-10 | 成功动作没有回执：创建成功、保存成功都只在 Console 留一行 | 同 UX-03 的 `pushLog(Info)` 调用 | U3 | **fixed**（2026-11-03）：`notifySuccess()` 给 2 秒 Toast（保存/打开/新建/创建地形与角色/删除/停止播放），并顺手清掉「最近错误」 |
 | UX-11 | ~~Console 无时间戳、无等级计数、无复制、无"仅看错误"快捷开关~~ | `ConsolePanel.cpp` 全文（约 70 行） | U6 | **fixed**（2026-11-03）：每行 HH:MM:SS 时间列（`LogEntry::time` + `currentLogClock()`）；Info/Warn/Error 各带计数；「仅错误」「全部」两个视图；「复制」导出当前可见行，与显示共用 `levelVisible()` 判据 |
 | UX-12 | 错误发生但 Console 关着时，界面上没有任何标记 | 无错误计数徽标；`state.log` 无未读概念 | U6 | **fixed**（2026-11-03）：`unreadErrors` + 工具栏红色「错误 N」徽标；本帧新产生的错误不算已读（`errorRaisedThisFrame`），Console 真正显示过之后才清零 |
-| UX-13 | ~~快捷键不可自定义，没有冲突检测，速查表与实际处理是两份代码~~ | `kShortcutEntries` 现在同时驱动 `handleShortcuts()` 与速查表（key/ctrl/shift/action）；键位文本由 `shortcutKeys()` 现算 | U1 | **fixed**（2026-11-03）：单一数据源；自检扫空项与键位冲突（`entries=19 conflicts=0`）；用户自定义键位另算一项 |
+| UX-13 | ~~快捷键不可自定义，没有冲突检测，速查表与实际处理是两份代码~~ | `kShortcutEntries` 现在同时驱动 `handleShortcuts()` 与速查表（key/ctrl/shift/action）；键位文本由 `shortcutKeys()` 现算 | U1 | **fixed**（2026-11-03）：单一数据源；自检扫空项与键位冲突（`entries=20 conflicts=0`）；用户自定义键位另算一项 |
 | UX-14 | ~~面板位置被 `ImGuiCond_Always` 钉死，用户拖不动~~ | `drawPanels()` 现在对所有面板都用 `layoutNeedsReset ? Always : FirstUseEver` | U6 | **fixed**（2026-11-03）：Viewport 也能拖动/缩放，位置记进 `config/imgui.ini`；`View -> Reset Layout` 重新铺一遍 |
 | ~~UX-19~~ | 窗口固定 1920x1080 创建，不读显示器工作区；字体固定 16px，无 DPI 缩放；面板宽度硬编码 | `src/Core/FrameInfo.h:11-12`、`src/Core/Application.cpp:980`、`src/Core/ImGuiSystem.cpp:60`、`drawPanels()` | U10 | 窗口：fixed；字体缩放：open **fixed**（2026-11-03）：`computeUiScale` + `ScaleAllSizes` + 字号 16×scale，编辑器布局常量同因子放大；自检 `[Window] ui scale selfTest PASS` |
 

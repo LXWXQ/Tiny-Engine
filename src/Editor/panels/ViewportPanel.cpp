@@ -324,20 +324,23 @@ void ViewportPanel::draw(EditorState& state)
     // 2) 所以包围盒必须在 interact() 之后读，否则拖拽时框会落后物体一帧
     //    （这正是"球和包围盒分离"的根因）；
     // 3) 手柄最后画，压在框上面才看得清。
-    const bool gizmoConsumed = state.gizmo.interact(state, gizmoView);
+    // E8：运行模式下不显示、也不响应手柄 —— 物体在这一模式下不可编辑。
+    const bool runtime = state.isRuntime();
+    const bool gizmoConsumed = !runtime && state.gizmo.interact(state, gizmoView);
 
     // 包围盒不再用 ImGui 画：ImGui 的 draw list 是纯 2D 叠加，没有深度概念，
     // 框会穿透墙体永远画在最前面。现在改由 EditorOverlayPass 作为真正的 3D 线段绘制，
     // 深度测试复用 G-Buffer 的深度图（见 docs/90-editor/gizmo.md）。
 
-    state.gizmo.draw(gizmoView);
+    if (!runtime)
+        state.gizmo.draw(gizmoView);
 
     // ---- B-07 地形雕刻 ----
-    // Alt+左键把当前笔刷作用到射线命中的地形上。普通左键仍然用于选中，
-    // 避免"只想选地形却改了高度"。
+    // E8：运行模式下左键就是"用工具"，不需要任何修饰键。
+    // 编辑模式下左键只做选中，避免"只想选地形却改了高度"。
     bool terrainBrushConsumed = false;
-    if (!gizmoConsumed && imageHovered && state.terrainBrushEnabled &&
-        ImGui::GetIO().KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+    if (!gizmoConsumed && imageHovered && runtime && state.terrainBrushEnabled &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         state.services.scene != nullptr)
     {
         glm::vec3 rayOrigin, rayDir;
@@ -382,12 +385,16 @@ void ViewportPanel::draw(EditorState& state)
     }
 
     // ---- F3 体素笔刷 ----
-    // Alt+左键挖掉射线命中的方块；Alt+Shift+左键在命中面外侧放一块。
+    // E8：运行模式 —— 左键挖掉命中方块，右键在命中面外侧放一块，不需要修饰键。
     // 一次点击 = 一条 VoxelEditCommand，所以撤销能逐块还原。
     bool voxelBrushConsumed = false;
-    if (!gizmoConsumed && !terrainBrushConsumed && !voxelBrushConsumed && imageHovered &&
-        state.voxelBrushEnabled && state.voxelWorld != entt::null &&
-        ImGui::GetIO().KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+    const bool voxelLeftClick = runtime && imageHovered &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    const bool voxelRightClick = runtime && imageHovered &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    if (!gizmoConsumed && imageHovered && runtime &&
+        state.voxelWorld != entt::null &&
+        (voxelLeftClick || voxelRightClick) &&
         state.services.scene != nullptr)
     {
         glm::vec3 rayOrigin, rayDir;
@@ -401,7 +408,7 @@ void ViewportPanel::draw(EditorState& state)
                 rayOrigin, rayDir, 160.0f, hitBlock, hitNormal, hitDistance,
                 nullptr, state.voxelWorld))
         {
-            const bool placing = ImGui::GetIO().KeyShift;
+            const bool placing = voxelRightClick;
             glm::ivec3 target = hitBlock;
             uint8_t block = 0;
             if (placing)
@@ -437,7 +444,7 @@ void ViewportPanel::draw(EditorState& state)
     }
     // ---- 点选 ----
     // 只有"手柄没吃掉这次点击"时才做拾取，否则拖拽手柄会顺手改掉选中。
-    if (!gizmoConsumed && !terrainBrushConsumed && !voxelBrushConsumed && imageHovered &&
+    if (!runtime && !gizmoConsumed && !terrainBrushConsumed && !voxelBrushConsumed && imageHovered &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         state.services.registry != nullptr && state.services.scene != nullptr)
     {

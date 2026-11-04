@@ -168,6 +168,16 @@ struct EditorState
     enum class PendingDocumentAction { None, New, Open, Exit };
     PendingDocumentAction pendingDocumentAction = PendingDocumentAction::None;
 
+    // ---- 编辑 / 运行模式 ----
+    // 编辑模式：视口左键只做选中、手柄可拖、面板可改数据。
+    // 运行模式：物体不可选中（进入时清空选中），鼠标左键交给当前工具
+    // （体素挖 / 地形笔刷），右键放方块 —— 就是"像游戏一样操作世界"。
+    // 与 PlayState 是两件事：PlayState 管场景快照回滚，这里只管输入归属。
+    enum class EditorMode { Edit, Runtime };
+    EditorMode mode = EditorMode::Edit;
+    bool allowsSelection() const { return mode == EditorMode::Edit; }
+    bool isRuntime() const { return mode == EditorMode::Runtime; }
+
     // ---- 播放状态机 ----
     PlayState playState = PlayState::Editing;
 
