@@ -69,6 +69,10 @@ bool terrainTest = false;
 // --streaming-world [radius]：启动即创建流送地形世界（相机周围按块加载）。
 // 与 --terrain-test 的区别：那个是固定的单块地形，这个是一圈独立 chunk。
 bool streamingWorld = false;
+// --voxel-world [radius]：启动即建一个 32^3 方块体素世界（F3）。
+// radius 是 chunk 环半径，1 = 3x3 = 9 块。
+bool voxelWorld = false;
+int32_t voxelRadius = 1;
 int32_t streamingRadius = 3;
 // --streaming-fly [speed]：自检/无人值守时让相机沿圆周自动飞行，
 // 用来验证 chunk 的加载与卸载（不飞就只会在原地加载一圈）。

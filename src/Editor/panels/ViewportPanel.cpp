@@ -5,6 +5,7 @@
 
 #include "Scene/Components.h"
 #include "Scene/Scene.h"
+#include "Voxel/VoxelTypes.h"
 
 #include <imgui.h>
 #include <glm/glm.hpp>
@@ -380,6 +381,60 @@ void ViewportPanel::draw(EditorState& state)
         terrainBrushConsumed = true;
     }
 
+    // ---- F3 体素笔刷 ----
+    // Ctrl+左键挖掉射线命中的方块；Ctrl+Shift+左键在命中面外侧放一块。
+    // 一次点击 = 一条 VoxelEditCommand，所以撤销能逐块还原。
+    bool voxelBrushConsumed = false;
+    if (!gizmoConsumed && !terrainBrushConsumed && !voxelBrushConsumed && imageHovered &&
+        state.voxelBrushEnabled && state.voxelWorld != entt::null &&
+        ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        state.services.scene != nullptr)
+    {
+        glm::vec3 rayOrigin, rayDir;
+        screenToRay(ImGui::GetIO().MousePos, rectMin, rectMax,
+                    gizmoView.view, gizmoView.projection, rayOrigin, rayDir);
+
+        glm::ivec3 hitBlock(0);
+        glm::ivec3 hitNormal(0);
+        float hitDistance = 0.0f;
+        if (state.services.scene->raycastVoxelWorld(
+                rayOrigin, rayDir, 160.0f, hitBlock, hitNormal, hitDistance,
+                nullptr, state.voxelWorld))
+        {
+            const bool placing = ImGui::GetIO().KeyShift;
+            glm::ivec3 target = hitBlock;
+            uint8_t block = 0;
+            if (placing)
+            {
+                target += hitNormal;
+                const int32_t blockId = std::clamp(state.voxelBrushBlock,
+                                                   0, static_cast<int>(voxel::kBlockCount) - 1);
+                block = static_cast<uint8_t>(blockId);
+            }
+
+            const uint8_t before = state.services.scene->getVoxelBlock(
+                state.voxelWorld, target.x, target.y, target.z);
+            if (before != block)
+            {
+                state.commands.execute(std::make_unique<VoxelEditCommand>(
+                    *state.services.scene, state.voxelWorld,
+                    target.x, target.y, target.z, before, block));
+                char buffer[192];
+                std::snprintf(buffer, sizeof(buffer),
+                              placing ? "[Voxel] placed %s at (%d, %d, %d)"
+                                      : "[Voxel] dug at (%d, %d, %d)",
+                              placing ? voxel::blockName(block) : "",
+                              target.x, target.y, target.z);
+                state.pushLog(LogEntry::Level::Info, buffer);
+                state.transformRefreshPending = true;
+            }
+        }
+        else
+        {
+            state.pushLog(LogEntry::Level::Warning, "[Voxel] ray missed the voxel world");
+        }
+        voxelBrushConsumed = true;
+    }
     // ---- 点选 ----
     // 只有"手柄没吃掉这次点击"时才做拾取，否则拖拽手柄会顺手改掉选中。
     if (!gizmoConsumed && !terrainBrushConsumed && imageHovered &&

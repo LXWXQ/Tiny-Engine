@@ -4,7 +4,7 @@
 重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
 
 - 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> Bloom -> Present(ACES+gamma+ImGui)`
-- 一条命令完成：依赖准备 -> 全新 configure/build -> 62 项回归
+- 一条命令完成：依赖准备 -> 全新 configure/build -> 63 项回归
 - 验收基线：**退出码 0** + **stderr 0 字节** + `[Validation] errors=0 warnings=0`
 
 > 本文件是仓库根目录**唯一**的文档。所有细节在 [`docs/`](docs/README.md) 下，按类型分层。
@@ -72,9 +72,10 @@ cmake --build build --config Debug
 | **离屏视口** | 3D 渲染到纹理后作为 ImGui 图片嵌入面板；相机纵横比按视口算 | [viewport](docs/90-editor/viewport.md) |
 | **程序化地形** | 257² 默认精度；单实体/独立 chunk 流送；chunk 区域索引查询；4 层 albedo/normal、height/roughness 打包纹理、最多 4 个 Set2 材质集（按需外部 16 PNG/程序化回退、materialSetIndex 序列化、按批次重绑）、Surface Style、height/slope 混合、Set2 材质；chunk/LOD 子网格、逐块剔除、滞回选层、抖动 cross-fade、可选裙边回退、稳定帧 indirect 合批、GPU compute 高度场、拓扑级 LOD 缝合、GPU selection/indirect count；单 chunk GPU 顶点/索引组装 + device-local Model 接管 + 4 槽异步 GPU mesh submit/poll + worker picking mirror，多 chunk CPU fallback；CPU 高度采样/射线查询、kinematic 角色控制器（贴地/重力/跳跃/step/slope）、区域限定运行期雕刻（Ctrl+LMB；不写 JSON）+ GPU/JobSystem 异步 Generate + 可撤销重建 + 场景存读 | [terrain](docs/30-systems/terrain.md) |
 | **级联阴影** | 3 级 CSM（每级 2048²，2D 数组 3 层）、纹素吸附、AABB 8 角点剔除、3x3 PCF、法线偏移 + 斜率 bias；`--no-shadows` 关掉。**默认场景阴影偏淡**：IBL 占主导，方向光只占约 5% 亮度（室内/压低环境光后非常明显） | [shadow](docs/20-pipeline/shadow.md) |
+| **方块体素** | 32³ chunk、面剔除 + 顶点色、Amanatides-Woo DDA 拾取、挖/放（Ctrl 挖 / Ctrl+Shift 放）与逐格撤销、`queryGroundAtWorld` 叠加体素分支让角色站上方块；`--voxel-world [r]` 启动世界 | [voxel](docs/30-systems/voxel.md) |
 | 调试剖析基础设施 | `--build-info` / `--gpu-timing` / `--screenshot` / 验证层增强 / RenderDoc / Tracy | [debug](docs/60-debug-profiling/README.md) |
 
-**已知边界**：无 SSR / 自动曝光 / 点光源阴影 / 动画 / 音频；跨队列资源走 `CONCURRENT` sharing；
+**已知边界**：无 SSR / 自动曝光 / 点光源阴影 / 动画 / 音频；体素世界不进存档、无 LOD/AO/贴图集；跨队列资源走 `CONCURRENT` sharing；
 glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`docs/70-status/known-limits.md`](docs/70-status/known-limits.md)。
 
 ---
@@ -121,7 +122,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/20-pipeline/`](docs/20-pipeline/README.md) | Pass 顺序、G-Buffer/中间目标、IBL、Shader 清单 | 改 `src/Render/` 或 `shaders/` |
 | [`docs/30-systems/`](docs/30-systems/README.md) | ECS/场景、JobSystem、配置、ImGui | 改 `src/Scene/`、`src/Core/` 对应模块 |
 | [`docs/40-build/`](docs/40-build/README.md) | 依赖版本、构建运行、排障 | 构建失败 / 换机器 |
-| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、62 项回归矩阵、验收标准 | 加测试 / 定位回归 |
+| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、63 项回归矩阵、验收标准 | 加测试 / 定位回归 |
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
 | [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
@@ -154,7 +155,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 
 | 项 | 值 |
 |---|---|
-| 回归 | `tools/Validate.ps1`：**62 项全 PASS**，stderr 全 0 字节 |
+| 回归 | `tools/Validate.ps1`：**63 项全 PASS**，stderr 全 0 字节 |
 | 启动排错 | 双击启动失败看可执行文件旁的 `startup-error.log`；窗口尺寸按显示器工作区 92% 收敛 |
 | 快捷键 | 只有一份 `kShortcutEntries`：速查表、`handleShortcuts()` 分发都读它；自检扫键位冲突（`entries=19 conflicts=0`，B4） |
 | 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |

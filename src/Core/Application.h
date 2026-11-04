@@ -203,6 +203,8 @@ private:
 	float streamingFlyRadius = 220.0f;
 	double streamingFlyTravel = 0.0;
 	entt::entity streamingWorldEntity = entt::null;
+	// F3：体素世界管理器实体（--voxel-world）。
+	entt::entity voxelWorldEntity = entt::null;
 	bool resizeTestEnabled = false;
 	bool materialStressEnabled = false;
 	uint32_t materialStressPendingSlot = kInvalidMaterialSlot;

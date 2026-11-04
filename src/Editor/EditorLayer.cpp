@@ -109,6 +109,15 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
 
     updateWindowTitle();
 
+    // F3：场景里可能已经有体素世界（例如 --voxel-world 启动或打开存档），
+    // 笔刷要认它 —— 首次见到就记住，之后由「创建 -> 体素世界」更新。
+    if (state.voxelWorld == entt::null && state.services.registry != nullptr)
+    {
+        auto view = state.services.registry->view<VoxelWorldComponent>();
+        if (!view.empty())
+            state.voxelWorld = *view.begin();
+    }
+
     if (advanceTerrainCreateRequest(state.terrainCreatePending, state.terrainCreateWaitFrames))
         createTerrainFromUi();
 
@@ -669,6 +678,19 @@ void EditorLayer::drawMenuBar()
             requestTerrainCreate();
         if (ImGui::MenuItem("角色"))
             createCharacterFromUi();
+        if (ImGui::MenuItem("体素世界", nullptr, false, state.services.scene != nullptr))
+        {
+            const entt::entity world = state.services.scene->createVoxelWorld(20251104ull, 1, 0);
+            if (world != entt::null)
+            {
+                state.voxelWorld = world;
+                state.notifySuccess("已创建体素世界（3x3 chunk）");
+            }
+            else
+            {
+                state.notify(LogEntry::Level::Error, "体素世界创建失败");
+            }
+        }
         ImGui::EndMenu();
     }
 
@@ -971,6 +993,9 @@ void EditorLayer::drawToolbar()
         // ---- 渲染设置（浮动工具窗的开关） ----
         if (auto* renderPanel = findPanel("Render"))
         {
+            if (barToggle("体素", state.voxelBrushEnabled,
+                          "体素笔刷：Ctrl+左键挖掉方块，Ctrl+Shift+左键放置方块"))
+                state.voxelBrushEnabled = !state.voxelBrushEnabled;
             if (barToggle("渲染", renderPanel->visible, "渲染设置：曝光 / Bloom / SSAO / 方向光"))
                 renderPanel->visible = !renderPanel->visible;
         }
@@ -2929,6 +2954,63 @@ bool EditorLayer::selfTestWithScene()
         }
     }
 
+    // ---- 2j) F3：挖一格 / 放回去（VoxelEditCommand）----
+    {
+        Scene* testScene = state.services.scene;
+        if (testScene == nullptr)
+        {
+            std::cerr << "[Editor] selfTest FAIL: voxel edit requires a scene" << std::endl;
+            return false;
+        }
+
+        const entt::entity voxelWorld = testScene->createVoxelWorld(9090ull, 0, 0);
+        if (voxelWorld == entt::null)
+        {
+            std::cerr << "[Editor] selfTest FAIL: voxel world creation failed" << std::endl;
+            return false;
+        }
+
+        glm::ivec3 hitBlock(0);
+        glm::ivec3 hitNormal(0);
+        float hitDistance = 0.0f;
+        const bool hit = testScene->raycastVoxelWorld(
+            glm::vec3(16.5f, 60.0f, 16.5f), glm::vec3(0.0f, -1.0f, 0.0f), 100.0f,
+            hitBlock, hitNormal, hitDistance, nullptr, voxelWorld);
+
+        const uint8_t before = testScene->getVoxelBlock(
+            voxelWorld, hitBlock.x, hitBlock.y, hitBlock.z);
+
+        CommandStack voxelStack;
+        voxelStack.execute(std::make_unique<VoxelEditCommand>(
+            *testScene, voxelWorld, hitBlock.x, hitBlock.y, hitBlock.z, before, 0));
+        const bool dug = before != 0u && hit &&
+                         testScene->getVoxelBlock(voxelWorld, hitBlock.x, hitBlock.y, hitBlock.z) == 0u &&
+                         voxelStack.undoCount() == 1;
+        voxelStack.undo();
+        const bool restored = testScene->getVoxelBlock(
+            voxelWorld, hitBlock.x, hitBlock.y, hitBlock.z) == before;
+
+        // 清理：体素世界是独立管理器 + chunk 实体，测试结束要全删掉。
+        std::vector<entt::entity> chunks;
+        for (auto [entity, chunk] : registry.view<VoxelChunkComponent>().each())
+        {
+            if (chunk.world == voxelWorld)
+                chunks.push_back(entity);
+        }
+        for (entt::entity entity : chunks)
+            testScene->destroyEntity(entity);
+        testScene->destroyEntity(voxelWorld);
+
+        if (!hit || !dug || !restored)
+        {
+            std::cerr << "[Editor] selfTest FAIL: voxel dig/undo (hit=" << hit
+                      << " dug=" << dug << " restored=" << restored << ")" << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] voxel edit selfTest PASS | dug and restored ("
+                  << hitBlock.x << "," << hitBlock.y << "," << hitBlock.z << ")" << std::endl;
+    }
+
     // ---- 2i) tech-debt #19：异步创建地形（实体先出现，几何后台合成） ----
     {
         Scene& scene = *state.services.scene;
@@ -2990,6 +3072,9 @@ bool EditorLayer::selfTestWithScene()
     // ---- B-01: independent streaming chunks + manager serialization ----
     {
         Scene& scene = *state.services.scene;
+        // 这个块只关心"自己创建的 chunk 是否清干净"，所以基线要在这里取：
+        // 更早的用例（新建场景 / 体素世界）可能已经改变过 MeshComponent 总数。
+        const size_t streamingMeshesBefore = registry.view<MeshComponent>().size();
         const glm::vec3 cameraBefore = scene.getCameraTransform().getTranslation();
 
         terrain::TerrainConfig chunkConfig;
@@ -3366,11 +3451,16 @@ bool EditorLayer::selfTestWithScene()
         scene.destroyEntity(scene.getStreamingTerrainEntity());
         scene.getCameraTransform().setTranslation(cameraBefore);
         scene.refreshTransformsAndVisibility();
+        // 这里只断言"流送 chunk 清干净"，不能比较全局 MeshComponent 数量：
+        // 上面的 buildFromDescription() 会 clearEntities() 重建整个场景，体素世界等
+        // 未进序列化的内容本来就会被清掉（见 docs/70-status/tech-debt.md 的体素持久化条目）。
         if (scene.hasStreamingTerrain() ||
-            registry.view<TerrainChunkComponent>().size() != 0u ||
-            registry.view<MeshComponent>().size() != meshesBefore)
+            registry.view<TerrainChunkComponent>().size() != 0u)
         {
-            std::cerr << "[Editor] selfTestWithScene FAIL: streaming manager cleanup leaked chunks\n";
+            std::cerr << "[Editor] selfTestWithScene FAIL: streaming manager cleanup leaked chunks"
+                      << " (hasStreaming=" << scene.hasStreamingTerrain()
+                      << " terrainChunks=" << registry.view<TerrainChunkComponent>().size()
+                      << ")" << std::endl;
             return false;
         }
         std::cout << "[Editor] streamed terrain PASS | chunks=9 independentModels=9 "

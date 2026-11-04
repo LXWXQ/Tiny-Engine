@@ -214,6 +214,13 @@ struct EditorState
     bool terrainBrushEnabled = false;
     terrain::TerrainBrushSettings terrainBrush;
 
+    // ---- F3 体素笔刷 ----
+    // 视口中 Ctrl+左键挖掉命中方块、Ctrl+Shift+左键在命中面外放一块。
+    // voxelWorld 为 null 时这些操作无目标。
+    bool voxelBrushEnabled = false;
+    int voxelBrushBlock = 1;   // voxel::BlockId 的整数值
+    entt::entity voxelWorld = entt::null;
+
     // 本帧对应的 frame-in-flight 槽位。视口纹理按槽位各一张，
     // ViewportPanel 需要用它挑出正确的那张。
     uint32_t frameSlot = 0;

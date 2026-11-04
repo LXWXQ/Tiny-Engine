@@ -100,11 +100,15 @@ Graphics: vkCmdDrawIndexedIndirect
 
 ## F3：体素系统
 
-**目标**：固定大小体素 chunk（如 32^3）、marching cubes / surface nets 网格生成、
-chunk LOD + 邻接缝合、放置/删除方块并局部重建、与地形混合的碰撞数据。
+**状态**：已完成 F3-a/b/c（[voxel](../30-systems/voxel.md)）—— 32³ 方块 chunk、面剔除网格、
+Amanatides-Woo DDA 拾取、挖/放 + 逐格撤销、`queryGroundAtWorld` 叠加体素分支（角色能站上方块）、
+`--voxel-world [r]` 与编辑器 Voxel Brush。
 
-**依赖**：F1 的剔除/indirect；JobSystem 并行 meshing；动态编辑需要先解决
-**材质槽位回收的生产路径**（见 [tech-debt](../70-status/tech-debt.md) #3）。
+**与原计划的差异**：改用块状立方体而不是 marching cubes / surface nets —— 挖掘建造要的是
+离散方块（挖掉一格是整齐的坑），等值面会得到圆滑洞；LOD 与邻接缝合也不再需要（相邻 chunk
+用同一套噪声按世界列算高度，边界天然连续）。
+
+**剩余**：体素世界持久化（进场景 JSON）、贪心面合并、并行 meshing、透明方块排序、贴图集。
 
 ---
 

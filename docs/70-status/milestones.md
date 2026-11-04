@@ -63,17 +63,10 @@ updated: 2026-11-02
 > D-8～D-24 的逐轮细节已归档到 [milestones-archive](milestones-archive.md)；
 > 本页保留 D-21 起的近期里程碑与当前实测基线。
 ## D-25：阶段 7 第三轮（chunked submeshes + 逐块剔除）
-- **配置**：`TerrainConfig` 新增 `chunkGridX/chunkGridZ`，默认 2×2，
-  校验 `[1,4]`；属于几何参数，修改后需要 Generate。地形 JSON version 升到 4。
-- **网格**：`TerrainMeshBuilder` 仍使用一份共享顶点缓冲，但索引按 chunk
-  连续重排；每个 `TerrainSubMesh` 记录 `firstIndex/indexCount`、chunk 坐标和
-  局部 AABB。边界顶点共享，所以同 LOD chunk 没有裂缝。
-- **渲染**：`SubMesh` 新增可选局部 bounds；`GeometrySystem` 通过
-  `SubMeshCuller` 对每个 chunk 做世界 AABB -> frustum 测试，不可见 chunk
-  直接跳过 draw。`RenderTelemetry` 增加 `subMeshesCulled`，内置 Stats 显示
-  `Chunks culled`。
-- **测试**：
-  - `TerrainSelfTest` 覆盖非法 chunk grid、chunk 数、索引区间连续覆盖与
+- **配置**：`TerrainConfig` 新增 `chunkGridX/chunkGridZ`，默认 2×2，校验 `[1,4]`；属于几何参数，修改后需要 Generate。地形 JSON version 升到 4。
+- **网格**：`TerrainMeshBuilder` 仍使用一份共享顶点缓冲，但索引按 chunk连续重排；每个 `TerrainSubMesh` 记录 `firstIndex/indexCount`、chunk 坐标和局部 AABB。边界顶点共享，所以同 LOD chunk 没有裂缝。
+- **渲染**：`SubMesh` 新增可选局部 bounds；`GeometrySystem` 通过`SubMeshCuller` 对每个 chunk 做世界 AABB -> frustum 测试，不可见 chunk直接跳过 draw。`RenderTelemetry` 增加 `subMeshesCulled`，内置 Stats 显示`Chunks culled`。
+- **测试**：- `TerrainSelfTest` 覆盖非法 chunk grid、chunk 数、索引区间连续覆盖与
     AABB 有效性；
   - `Scene::selfTest` 覆盖 SubMeshCuller 可见/不可见用例；
   - 编辑器 roundTrip 覆盖 `chunkGridX=3 / chunkGridZ=2`，并检查默认地形
@@ -598,3 +591,10 @@ updated: 2026-11-02
 **关键坑**：`glm::ortho` 在右手视空间 + `GLM_FORCE_DEPTH_ZERO_TO_ONE` 下把场景压到负深度，阴影图全空 —— 改手写正交矩阵（`z_ndc = (-z_view - r)/(2r)`）；单点包围球剔除会把整栋 Sponza 剔掉，改 8 角点 AABB。
 **已知限制**：默认场景阴影偏淡（IBL 占主导，方向光只占约 5% 亮度；此前 README 的已知边界是「无阴影」）；室内机位 on/off 差异 `mean 15.6 / gt5 1,020,849`。
 **回归**：新增 `f6-shadows`，全套 **62 项**。
+
+## F3：方块体素世界（挖掘 / 建造 / 站立）
+**问题**：引擎没有任何体素代码；roadmap 的 F3 原写 marching cubes / surface nets，但「挖矿盖房」要的是整齐方块，等值面挖出来是圆滑洞。
+**实现**：`src/Voxel/`（`BlockId` + `BlockInfo` 调色板、`Chunk` 32³、`buildMesh` 面剔除 + 顶点色×面明暗，复用 `terrain::TerrainMeshData` 上传路径）；`Scene::createVoxelWorld / setVoxelBlock / raycastVoxelWorld`（chunk AABB 粗筛 + Amanatides-Woo DDA）/ `sampleVoxelGroundHeight`；边界格连带重建邻块，旧 Model 走 `retireModel` 延迟释放；材质用 `getDefaultWhiteTexture()` 避免棋盘格；`--voxel-world [r]`；编辑器 Voxel Brush（Ctrl 挖 / Ctrl+Shift 放）+ `VoxelEditCommand` 撤销；`queryGroundAtWorld` 叠加体素分支，角色能站在方块上。
+**可观测**：`[Voxel] selfTest PASS | face culling 6/10/6, boundary continuous, solid=12090`、`[Voxel] scene selfTest PASS | chunks=9 hit=(16,10,16) dugDeeper=1 restored=1 groundY=11 characterLanded=1 placedOnFace=1`；`--voxel-world 1` 截图方块地形顶面草皮、侧面土层/石层、无缝。
+**已知限制**：体素世界不进存档（`buildFromDescription()` 会清掉）；无贪心合并 / LOD / AO / 贴图集；网格在主线程同步生成；透明方块没有逐面排序。
+**回归**：新增 `f3-voxel`；全套 **63 项**。

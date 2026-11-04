@@ -33,6 +33,7 @@ updated: 2026-11-02
 | `--no-bloom` | 关闭 Bloom（自检与普通运行均可） |
 | `--no-ssao` | 关闭 SSAO |
 | `--no-shadows` | 关闭方向光级联阴影（排查 / 对比用；默认开，强度见 `lighting.shadows.strength`） |
+| `--voxel-world [r]` | 启动时生成方块体素世界（32³ chunk，半径 r = 1..8，默认 1），相机自动摆到上方 |
 | `--gpu-scene` | 忽略实例阈值，强制走 GPU 驱动提交（配合 `gpuSceneMinInstances` 默认 256） |
 | `--no-gpu-scene` | 关闭 GPU 驱动提交，完全回退 CPU 逐子网格路径 |
 | `--no-merged-buffers` | 整条 GPU 批退回 CPU 逐子网格路径（跨模型 single draw 依赖合并缓冲） |

@@ -805,6 +805,31 @@ void SetTerrainConfigCommand::absorb(const Command& newer)
 }
 
 // ---------------------------------------------------------------------------
+VoxelEditCommand::VoxelEditCommand(Scene& sceneRef, entt::entity worldEntity,
+                                   int32_t blockX, int32_t blockY, int32_t blockZ,
+                                   uint8_t beforeId, uint8_t afterId)
+    : scene(&sceneRef)
+    , world(worldEntity)
+    , x(blockX)
+    , y(blockY)
+    , z(blockZ)
+    , before(beforeId)
+    , after(afterId)
+{
+}
+
+void VoxelEditCommand::apply()
+{
+    if (scene && world != entt::null)
+        scene->setVoxelBlock(world, x, y, z, after);
+}
+
+void VoxelEditCommand::revert()
+{
+    if (scene && world != entt::null)
+        scene->setVoxelBlock(world, x, y, z, before);
+}
+
 RegenerateTerrainCommand::RegenerateTerrainCommand(entt::registry& registry, Scene& scene,
                                                    entt::entity entity,
                                                    const TerrainComponent& oldTerrain,

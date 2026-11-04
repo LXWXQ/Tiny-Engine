@@ -6,6 +6,7 @@
 #include "Scene/SpatialIndex.h"
 #include "Terrain/TerrainConfig.h"
 #include "Terrain/TerrainHeightField.h"
+#include "Voxel/VoxelChunk.h"
 
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -269,6 +270,30 @@ struct TerrainChunkComponent
     // F2-h：int64，流送半径再大也不会溢出（键是坐标对，不再打包成 int64）。
     int64_t chunkX = 0;
     int64_t chunkZ = 0;
+};
+
+// F3：体素 chunk。一个实体 = 一个 32^3 方块 chunk，网格与地形共用
+// terrain::TerrainMeshData -> Model 的上传路径，但走普通网格渲染分支
+// （顶点色 x 材质），不吃地形的高度分层材质。
+struct VoxelChunkComponent
+{
+    entt::entity world = entt::null;
+    int32_t chunkX = 0;
+    int32_t chunkZ = 0;
+    int32_t baseY = 0;
+    std::shared_ptr<voxel::Chunk> chunk;
+    uint64_t revision = 0;
+    uint32_t faceCount = 0;
+};
+
+// F3：体素世界管理器。chunk 实体由它按半径惰性创建，坐标是 chunk 网格坐标。
+struct VoxelWorldComponent
+{
+    uint64_t seed = 1337ull;
+    int32_t radiusChunks = 2;
+    int32_t baseY = 0;
+    float blockScale = 1.0f;
+    bool enabled = true;
 };
 
 // B-07: lightweight kinematic character. The entity transform is the feet

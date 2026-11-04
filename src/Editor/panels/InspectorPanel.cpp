@@ -12,6 +12,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <random>
+#include "Voxel/VoxelTypes.h"
+
 #include <string>
 
 namespace editor
@@ -19,6 +21,30 @@ namespace editor
 
 namespace
 {
+void drawVoxelBrushControls(EditorState& state)
+{
+    if (!ImGui::CollapsingHeader("Voxel Brush"))
+        return;
+
+    ImGui::Checkbox("Enable (Ctrl+LMB)", &state.voxelBrushEnabled);
+    ImGui::SameLine();
+    ImGui::TextDisabled("dig / Ctrl+Shift+LMB place");
+
+    if (state.voxelWorld == entt::null)
+    {
+        ImGui::TextDisabled("还没有体素世界 —— 用「创建 -> 体素世界」或 --voxel-world 启动。");
+        return;
+    }
+
+    int block = std::clamp(state.voxelBrushBlock, 0, static_cast<int>(voxel::kBlockCount) - 1);
+    const char* names[voxel::kBlockCount] = {};
+    for (uint32_t i = 0; i < voxel::kBlockCount; ++i)
+        names[i] = voxel::blockName(static_cast<uint8_t>(i));
+    if (ImGui::Combo("Block", &block, names, static_cast<int>(voxel::kBlockCount)))
+        state.voxelBrushBlock = block;
+    ImGui::TextDisabled("Ctrl+LMB digs, Ctrl+Shift+LMB places on the hit face.");
+}
+
 void drawTerrainBrushControls(EditorState& state)
 {
     if (!ImGui::CollapsingHeader("Sculpt Brush"))
@@ -439,6 +465,7 @@ void InspectorPanel::drawTerrain(EditorState& state, entt::entity entity)
     }
 
     drawTerrainBrushControls(state);
+    drawVoxelBrushControls(state);
 }
 
 void InspectorPanel::drawStreamingTerrain(EditorState& state, entt::entity entity)

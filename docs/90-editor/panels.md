@@ -5,7 +5,7 @@ type: system
 scope: 现有面板、布局实现方式、以及没有 docking 时的注意事项
 read-when: 写新面板、改布局、或面板位置错乱
 size: ~200 行
-updated: 2026-11-03
+updated: 2026-11-04
 ---
 
 # 面板与布局
@@ -321,6 +321,16 @@ Console 顶部在「全部」按钮右侧有搜索框（占位文本 `搜索日�
 中段和右段都用 `SameLine(targetX)` 定位，并且只有 `targetX > GetCursorPosX() + 8` 时才画 —— 左段很长（错误摘要）时宁可少一段，也不重叠。
 
 统计读 `Scene::getDisplayTelemetry()` 而不是 `getTelemetry()`：前者是 `beginFrameTelemetry()` 在每帧开头搬过来的上一帧完整值，后者是本帧正在累加的草稿 —— 编辑器先画 UI 再录制渲染，读草稿永远是 0。
+
+## 体素笔刷（F3）
+
+- 入口：工具栏「体素」开关，或 Inspector 的 `Voxel Brush` 段（`Enable (Ctrl+LMB)` + `Block` 下拉）。
+- 操作：`Ctrl + 左键` 挖掉命中方块，`Ctrl + Shift + 左键` 在命中面的外侧放当前方块；
+  射线用 `Scene::raycastVoxelWorld()`（DDA），笔刷与地形笔刷互斥（`voxelBrushConsumed`）。
+- 每次改动一条 `VoxelEditCommand(before, after)`：`Ctrl+Z` 逐格撤销，重做重新挖/放。
+- 没有体素世界时面板提示「创建 -> 体素世界」；`--voxel-world [r]` 启动的世界会在
+  `EditorLayer::beginFrame()` 里被自动认领（打开存档同理）。
+- 边界格（chunk 内 local 0/31）会连带重建相邻 chunk，笔刷不会在接缝处留下缺面。
 
 ## 硬约束
 

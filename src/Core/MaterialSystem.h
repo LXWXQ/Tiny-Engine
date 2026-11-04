@@ -18,6 +18,8 @@ public:
 	// srgb = false：数据贴图（normal / metallic-roughness / AO），必须保持 UNORM。
 	std::shared_ptr<Texture> loadTexture(const std::string& filepath, Device& device, VkCommandPool commandPool, bool srgb = false);
 	std::shared_ptr<Texture> getTexture(const std::string& filepath) const;
+	// F3：体素网格用顶点色，材质需要一张白贴图占位（否则走棋盘格 fallback）。
+	std::shared_ptr<Texture> getDefaultWhiteTexture() const { return defaultWhiteTex; }
 
 private:
 	std::unordered_map<std::string, std::shared_ptr<Material>> materials;

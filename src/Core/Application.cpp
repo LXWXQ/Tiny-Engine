@@ -27,6 +27,7 @@
 #include "Render/EditorOverlayPass.h"
 #include "Render/SSAOPass.h"
 #include "Render/ShadowPass.h"
+#include "Voxel/VoxelChunk.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
 #include "Render/SubresourceProbePass.h"
@@ -896,6 +897,23 @@ streamingConfig.skirtsEnabled = false;
 			<< " chunk=32 resolution=33 maxLoadsPerFrame=4" << std::endl;
 	}
 
+	// F3：体素世界（把 --voxel-world 变成一块能走进去挖的方块地形）。
+	if (options.voxelWorld)
+	{
+		const int32_t radius = std::clamp(options.voxelRadius, 1, 8);
+		voxelWorldEntity = scene->createVoxelWorld(20251104ull, radius, 0);
+		if (voxelWorldEntity == entt::null)
+			throw std::runtime_error("--voxel-world creation failed");
+		// 相机放到世界中心上方、低头俯视，第一眼就能看到方块地形。
+		TransformComponent& cameraTransform = scene->getCameraTransform();
+		cameraTransform.setTranslation(glm::vec3(16.0f, 46.0f, 16.0f + radius * 32.0f + 70.0f));
+		cameraTransform.setEuler(glm::vec3(0.42f, glm::radians(180.0f), 0.0f));
+		cameraTransform.setScale(glm::vec3(1.0f));
+		scene->markTransformDirty(scene->getCameraEntity());
+		std::cout << "[Voxel] world ready | radius=" << radius
+			<< " chunks=" << (2 * radius + 1) * (2 * radius + 1) << std::endl;
+	}
+
 	currentTime = std::chrono::high_resolution_clock::now();
 	lastPerfLog = currentTime;
 
@@ -1606,6 +1624,12 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// F6：级联阴影的数学自检（split 递增、角点落在裁剪体内、远处被剔除）。
 	if (!ShadowPass::selfTest())
 		throw std::runtime_error("ShadowPass selfTest failed");
+
+	// F3：体素世界（建 3x3 chunk、射线打地、挖一格、放回、地面高度）。
+	if (!voxel::selfTest())
+		throw std::runtime_error("Voxel mesh selfTest failed");
+	if (!scene->voxelSelfTest())
+		throw std::runtime_error("Voxel scene selfTest failed");
 
 	// UX-19：窗口尺寸要按工作区收敛 —— 1366x768 的笔记本上 1920x1080 会把
 	// 状态栏和右下角面板推到屏幕外；150% 缩放下工作区只有 1280x720 更严重。

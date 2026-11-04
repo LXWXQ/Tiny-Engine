@@ -1714,6 +1714,554 @@ entt::entity Scene::createMeshEntity(const std::string& absolutePath, const std:
     return entity;
 }
 
+entt::entity Scene::createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_t baseY)
+{
+    if (!device || !descriptorManager)
+        return entt::null;
+
+    radiusChunks = std::clamp(radiusChunks, 1, 8);
+
+    const entt::entity world = createTransformEntity(registry);
+    markTransformDirty(world);
+    registry.emplace<NameComponent>(world, NameComponent{ "Voxel World" });
+    VoxelWorldComponent& worldComp = registry.emplace<VoxelWorldComponent>(world);
+    worldComp.seed = seed;
+    worldComp.radiusChunks = radiusChunks;
+    worldComp.baseY = baseY;
+
+    std::shared_ptr<Material> material = materialSystem.getOrCreateMaterial("voxel");
+    material->albedoMap = materialSystem.getDefaultWhiteTexture();
+    material->metallicFactor = 0.0f;
+    material->roughnessFactor = 0.9f;
+
+    uint32_t created = 0;
+    for (int32_t chunkZ = -radiusChunks; chunkZ <= radiusChunks; ++chunkZ)
+    {
+        for (int32_t chunkX = -radiusChunks; chunkX <= radiusChunks; ++chunkX)
+        {
+            auto chunk = std::make_shared<voxel::Chunk>();
+            chunk->generate(seed, chunkX, chunkZ, baseY);
+
+            terrain::TerrainMeshData mesh;
+            voxel::MeshStats stats;
+            if (!voxel::buildMesh(*chunk, mesh, &stats) || mesh.vertices.empty())
+                continue;
+
+            std::shared_ptr<Model> model;
+            try
+            {
+                Model::Builder builder;
+                builder.vertices.reserve(mesh.vertices.size());
+                for (const terrain::TerrainVertex& vertex : mesh.vertices)
+                    builder.vertices.push_back(Vertex{ vertex.position, vertex.color, vertex.normal, vertex.uv });
+                builder.indices = mesh.indices;
+                builder.subMeshes.reserve(mesh.subMeshes.size());
+                for (const terrain::TerrainSubMesh& source : mesh.subMeshes)
+                {
+                    SubMesh subMesh;
+                    subMesh.firstIndex = source.firstIndex;
+                    subMesh.indexCount = source.indexCount;
+                    subMesh.hasBounds = true;
+                    subMesh.boundsMin = source.boundsMin;
+                    subMesh.boundsMax = source.boundsMax;
+                    builder.subMeshes.push_back(subMesh);
+                }
+                model = std::make_shared<Model>(*device, commandPool, builder);
+            }
+            catch (const std::exception& ex)
+            {
+                std::cerr << "[Voxel] chunk mesh upload failed: " << ex.what() << std::endl;
+                continue;
+            }
+            if (!model)
+                continue;
+
+            const entt::entity entity = createTransformEntity(registry);
+            markTransformDirty(entity);
+            registry.get<TransformComponent>(entity).setTranslation(glm::vec3(
+                static_cast<float>(chunkX * voxel::Chunk::kSize), static_cast<float>(baseY),
+                static_cast<float>(chunkZ * voxel::Chunk::kSize)));
+            registry.emplace<NameComponent>(entity, NameComponent{
+                "Voxel Chunk " + std::to_string(chunkX) + "," + std::to_string(chunkZ) });
+            registry.emplace<MeshComponent>(entity, MeshComponent{ model });
+            registry.emplace<RenderTagComponent>(entity);
+
+            MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(entity);
+            materialComp.material = material;
+            materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*material);
+
+            VoxelChunkComponent& chunkComp = registry.emplace<VoxelChunkComponent>(entity);
+            chunkComp.world = world;
+            chunkComp.chunkX = chunkX;
+            chunkComp.chunkZ = chunkZ;
+            chunkComp.baseY = baseY;
+            chunkComp.chunk = std::move(chunk);
+            chunkComp.revision = 1;
+            chunkComp.faceCount = stats.faces;
+
+            setModelBounds(registry, entity, model, &dirtySpatialEntities);
+            attachDirtyTracking(entity);
+            ++created;
+        }
+    }
+
+    updateWorldTransforms();
+    refreshSpatialIndex();
+    refreshTransformsAndVisibility();
+    std::cout << "[Voxel] world created | seed=" << seed << " radius=" << radiusChunks
+              << " chunks=" << created << " baseY=" << baseY << std::endl;
+    return world;
+}
+
+entt::entity Scene::findVoxelChunk(entt::entity world, int32_t chunkX, int32_t chunkZ) const
+{
+    for (auto [entity, chunk] : registry.view<VoxelChunkComponent>().each())
+    {
+        if (chunk.world == world && chunk.chunkX == chunkX && chunk.chunkZ == chunkZ)
+            return entity;
+    }
+    return entt::null;
+}
+
+uint8_t Scene::getVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z) const
+{
+    const int32_t chunkX = static_cast<int32_t>(x >> voxel::Chunk::kSizeShift);
+    const int32_t chunkZ = static_cast<int32_t>(z >> voxel::Chunk::kSizeShift);
+    const entt::entity chunkEntity = findVoxelChunk(world, chunkX, chunkZ);
+    if (chunkEntity == entt::null)
+        return static_cast<uint8_t>(voxel::BlockId::Air);
+    const VoxelChunkComponent& chunkComp = registry.get<VoxelChunkComponent>(chunkEntity);
+    if (!chunkComp.chunk)
+        return static_cast<uint8_t>(voxel::BlockId::Air);
+    return chunkComp.chunk->get(x & voxel::Chunk::kSizeMask, y, z & voxel::Chunk::kSizeMask);
+}
+
+bool Scene::setVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z, uint8_t blockId)
+{
+    const int32_t chunkX = static_cast<int32_t>(x >> voxel::Chunk::kSizeShift);
+    const int32_t chunkZ = static_cast<int32_t>(z >> voxel::Chunk::kSizeShift);
+    const entt::entity chunkEntity = findVoxelChunk(world, chunkX, chunkZ);
+    if (chunkEntity == entt::null)
+        return false;
+
+    VoxelChunkComponent& chunkComp = registry.get<VoxelChunkComponent>(chunkEntity);
+    if (!chunkComp.chunk)
+        return false;
+
+    const int32_t localX = x & voxel::Chunk::kSizeMask;
+    const int32_t localZ = z & voxel::Chunk::kSizeMask;
+    if (chunkComp.chunk->get(localX, y, localZ) == blockId)
+        return false;
+    chunkComp.chunk->set(localX, y, localZ, blockId);
+
+    rebuildVoxelChunk(chunkEntity);
+
+    // 边界格会改变邻块朝外的面（被挡住 vs 露出），必须一起重建。
+    const int32_t maxLocal = voxel::Chunk::kSize - 1;
+    const int32_t offsetX = (localX == 0) ? -1 : ((localX == maxLocal) ? 1 : 0);
+    const int32_t offsetZ = (localZ == 0) ? -1 : ((localZ == maxLocal) ? 1 : 0);
+    if (offsetX != 0)
+    {
+        const entt::entity other = findVoxelChunk(world, chunkX + offsetX, chunkZ);
+        if (other != entt::null)
+            rebuildVoxelChunk(other);
+    }
+    if (offsetZ != 0)
+    {
+        const entt::entity other = findVoxelChunk(world, chunkX, chunkZ + offsetZ);
+        if (other != entt::null)
+            rebuildVoxelChunk(other);
+    }
+    if (offsetX != 0 && offsetZ != 0)
+    {
+        const entt::entity other = findVoxelChunk(world, chunkX + offsetX, chunkZ + offsetZ);
+        if (other != entt::null)
+            rebuildVoxelChunk(other);
+    }
+    return true;
+}
+
+bool Scene::sampleVoxelGroundHeight(int32_t x, int32_t z, int32_t& outY,
+                                    entt::entity* outChunk,
+                                    entt::entity worldFilter) const
+{
+    for (auto [chunkEntity, chunkComp] : registry.view<VoxelChunkComponent>().each())
+    {
+        if (!chunkComp.chunk)
+            continue;
+        if (worldFilter != entt::null && chunkComp.world != worldFilter)
+            continue;
+        if (static_cast<int32_t>(x >> voxel::Chunk::kSizeShift) != chunkComp.chunkX)
+            continue;
+        if (static_cast<int32_t>(z >> voxel::Chunk::kSizeShift) != chunkComp.chunkZ)
+            continue;
+
+        const int32_t localX = x & voxel::Chunk::kSizeMask;
+        const int32_t localZ = z & voxel::Chunk::kSizeMask;
+        for (int32_t y = voxel::Chunk::kSize - 1; y >= 0; --y)
+        {
+            if (voxel::isSolid(chunkComp.chunk->get(localX, y, localZ)))
+            {
+                outY = chunkComp.baseY + y + 1;
+                if (outChunk)
+                    *outChunk = chunkEntity;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool Scene::raycastVoxelWorld(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
+                              float maxDistance, glm::ivec3& outBlock,
+                              glm::ivec3& outNormal, float& outDistance,
+                              entt::entity* outChunk,
+                              entt::entity worldFilter) const
+{
+    outDistance = maxDistance;
+    bool hit = false;
+
+    glm::vec3 direction = rayDirection;
+    const float directionLength = glm::length(direction);
+    if (directionLength < 1e-6f)
+        return false;
+    direction /= directionLength;
+
+    // 逐 chunk 先做 AABB 粗筛，再在命中的 chunk 内做 Amanatides-Woo DDA。
+    // chunk 数量只有几十，线性遍历足够。
+    for (auto [chunkEntity, chunkComp] : registry.view<VoxelChunkComponent>().each())
+    {
+        if (!chunkComp.chunk)
+            continue;
+        if (worldFilter != entt::null && chunkComp.world != worldFilter)
+            continue;
+
+        const float size = static_cast<float>(voxel::Chunk::kSize);
+        const glm::vec3 chunkMin(static_cast<float>(chunkComp.chunkX) * size,
+                                 static_cast<float>(chunkComp.baseY),
+                                 static_cast<float>(chunkComp.chunkZ) * size);
+        const glm::vec3 chunkMax = chunkMin + glm::vec3(size);
+
+        float entry = 0.0f;
+        float exitDistance = maxDistance;
+        bool intersects = true;
+        for (int axis = 0; axis < 3 && intersects; ++axis)
+        {
+            const float origin = rayOrigin[axis];
+            const float dir = direction[axis];
+            if (std::abs(dir) < 1e-8f)
+            {
+                if (origin < chunkMin[axis] || origin > chunkMax[axis])
+                    intersects = false;
+                continue;
+            }
+            float near = (chunkMin[axis] - origin) / dir;
+            float far = (chunkMax[axis] - origin) / dir;
+            if (near > far)
+                std::swap(near, far);
+            entry = std::max(entry, near);
+            exitDistance = std::min(exitDistance, far);
+            if (entry > exitDistance)
+                intersects = false;
+        }
+        if (!intersects)
+            continue;
+
+        // 起点抬进 chunk 内部一点，避免浮点恰好落在边界格。
+        float t = std::max(entry, 0.0f) + 1e-4f;
+        const glm::vec3 position = rayOrigin + direction * t;
+        glm::ivec3 cell(static_cast<int32_t>(std::floor(position.x)),
+                        static_cast<int32_t>(std::floor(position.y)),
+                        static_cast<int32_t>(std::floor(position.z)));
+        glm::ivec3 step(0);
+        glm::vec3 next(0.0f);
+        glm::vec3 delta(0.0f);
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const float dir = direction[axis];
+            if (std::abs(dir) < 1e-8f)
+            {
+                step[axis] = 0;
+                next[axis] = std::numeric_limits<float>::max();
+                delta[axis] = std::numeric_limits<float>::max();
+                continue;
+            }
+            step[axis] = (dir > 0.0f) ? 1 : -1;
+            const float boundary = static_cast<float>(cell[axis] + (dir > 0.0f ? 1 : 0));
+            next[axis] = (boundary - position[axis]) / dir;
+            delta[axis] = std::abs(1.0f / dir);
+        }
+
+        const glm::ivec3 chunkCellMin(chunkComp.chunkX * voxel::Chunk::kSize,
+                                      chunkComp.baseY,
+                                      chunkComp.chunkZ * voxel::Chunk::kSize);
+        const glm::ivec3 chunkCellMax = chunkCellMin + glm::ivec3(voxel::Chunk::kSize);
+
+        while (true)
+        {
+            if (cell.x < chunkCellMin.x || cell.x >= chunkCellMax.x ||
+                cell.z < chunkCellMin.z || cell.z >= chunkCellMax.z ||
+                cell.y < chunkCellMin.y || cell.y >= chunkCellMax.y)
+                break;
+
+            const uint8_t block = chunkComp.chunk->get(cell.x - chunkCellMin.x,
+                                                       cell.y - chunkCellMin.y,
+                                                       cell.z - chunkCellMin.z);
+            if (voxel::isSolid(block))
+            {
+                if (t < outDistance)
+                {
+                    outDistance = t;
+                    outBlock = cell;
+                    outNormal = -step;
+                    if (outChunk)
+                        *outChunk = chunkEntity;
+                    hit = true;
+                }
+                break;
+            }
+
+            const int axis = (next.x < next.y) ? ((next.x < next.z) ? 0 : 2)
+                                               : ((next.y < next.z) ? 1 : 2);
+            t = next[axis];
+            if (t > exitDistance || t > maxDistance)
+                break;
+            cell[axis] += step[axis];
+            next[axis] += delta[axis];
+        }
+    }
+
+    return hit;
+}
+
+bool Scene::voxelSelfTest()
+{
+    if (!device || !descriptorManager)
+        return false;
+
+    const entt::entity world = createVoxelWorld(4242ull, 1, 0);
+    if (world == entt::null)
+    {
+        std::cerr << "[Voxel] selfTest: createVoxelWorld failed" << std::endl;
+        return false;
+    }
+
+    uint32_t chunkCount = 0;
+    for (auto [entity, chunk] : registry.view<VoxelChunkComponent>().each())
+    {
+        if (chunk.world == world)
+            ++chunkCount;
+    }
+
+    const auto cleanup = [this, world]()
+    {
+        std::vector<entt::entity> toDestroy;
+        for (auto [entity, chunk] : registry.view<VoxelChunkComponent>().each())
+        {
+            if (chunk.world == world)
+                toDestroy.push_back(entity);
+        }
+        for (entt::entity entity : toDestroy)
+            destroyEntity(entity);
+        destroyEntity(world);
+    };
+
+    if (chunkCount != 9)
+    {
+        std::cerr << "[Voxel] selfTest: expected 9 chunks, got " << chunkCount << std::endl;
+        cleanup();
+        return false;
+    }
+
+    // 从高空垂直向下打：必须先命中草皮方块，法线朝上。
+    glm::ivec3 hitBlock(0);
+    glm::ivec3 hitNormal(0);
+    float hitDistance = 0.0f;
+    const glm::vec3 rayOrigin(16.5f, 60.0f, 16.5f);
+    const bool hitGround = raycastVoxelWorld(rayOrigin, glm::vec3(0.0f, -1.0f, 0.0f),
+                                             100.0f, hitBlock, hitNormal, hitDistance,
+                                             nullptr, world);
+    if (!hitGround || hitNormal != glm::ivec3(0, 1, 0))
+    {
+        std::cerr << "[Voxel] selfTest: raycast did not hit ground from above" << std::endl;
+        cleanup();
+        return false;
+    }
+
+    const uint8_t original = getVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z);
+    if (!voxel::isSolid(original))
+    {
+        std::cerr << "[Voxel] selfTest: hit block is not solid" << std::endl;
+        cleanup();
+        return false;
+    }
+
+    // 挖掉这块之后同一射线必须打到更低的方块（深度必须变大）。
+    if (!setVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z,
+                       static_cast<uint8_t>(voxel::BlockId::Air)))
+    {
+        std::cerr << "[Voxel] selfTest: setVoxelBlock(Air) failed" << std::endl;
+        cleanup();
+        return false;
+    }
+    glm::ivec3 dugBlock(0);
+    glm::ivec3 dugNormal(0);
+    float dugDistance = 0.0f;
+    const bool hitAfterDig = raycastVoxelWorld(rayOrigin, glm::vec3(0.0f, -1.0f, 0.0f),
+                                               100.0f, dugBlock, dugNormal, dugDistance,
+                                               nullptr, world);
+    const bool dugDeeper = hitAfterDig &&
+                           (dugBlock.y < hitBlock.y) &&
+                           (dugDistance > hitDistance);
+
+    // 放回去（模拟"建造"），同一位置必须恢复成原来的方块。
+    if (!setVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z, original))
+    {
+        std::cerr << "[Voxel] selfTest: setVoxelBlock(restore) failed" << std::endl;
+        cleanup();
+        return false;
+    }
+    const bool restored = getVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z) == original;
+
+    // 地面高度查询必须与射线命中的方块一致。
+    int32_t groundY = 0;
+    const bool sampled = sampleVoxelGroundHeight(hitBlock.x, hitBlock.z, groundY,
+                                                 nullptr, world);
+    const bool groundMatches = sampled && groundY == hitBlock.y + 1;
+
+    // F3-b：在命中面上"盖一格"，同一列的地面高度必须随之抬升。
+    bool placedOnFace = false;
+    {
+        const int32_t placeY = hitBlock.y + hitNormal.y;
+        const uint8_t stone = static_cast<uint8_t>(voxel::BlockId::Stone);
+        if (getVoxelBlock(world, hitBlock.x, placeY, hitBlock.z) ==
+                static_cast<uint8_t>(voxel::BlockId::Air) &&
+            setVoxelBlock(world, hitBlock.x, placeY, hitBlock.z, stone))
+        {
+            int32_t placedGroundY = 0;
+            placedOnFace = sampleVoxelGroundHeight(hitBlock.x, hitBlock.z, placedGroundY,
+                                                   nullptr, world) &&
+                           placedGroundY == placeY + 1;
+            // 收拾干净，后面的断言还按原来的高度算。
+            setVoxelBlock(world, hitBlock.x, placeY, hitBlock.z,
+                          static_cast<uint8_t>(voxel::BlockId::Air));
+        }
+    }
+
+    // F3-c：地面查询（角色控制器用的那条路径）也必须看见体素方块。
+    float worldHeight = 0.0f;
+    entt::entity groundEntity = entt::null;
+    const bool groundQuery = queryGroundAtWorld(static_cast<float>(hitBlock.x) + 0.5f,
+                                                static_cast<float>(hitBlock.z) + 0.5f,
+                                                worldHeight, groundEntity, nullptr);
+    const bool groundIsVoxel = groundQuery &&
+                               groundEntity != entt::null &&
+                               registry.all_of<VoxelChunkComponent>(groundEntity) &&
+                               std::abs(worldHeight - static_cast<float>(hitBlock.y + 1)) < 0.01f;
+
+    // F3-c：让角色站在方块顶上。放一个角色在命中列上方 3 米，跑 60 帧它必须落到
+    // 方块顶面、而不是穿过去或者停在空中。
+    bool characterLanded = false;
+    {
+        const entt::entity character = createCharacterEntity(
+            "Voxel Test Character",
+            glm::vec3(static_cast<float>(hitBlock.x) + 0.5f,
+                      static_cast<float>(hitBlock.y) + 3.5f,
+                      static_cast<float>(hitBlock.z) + 0.5f));
+        for (int frame = 0; frame < 60; ++frame)
+        {
+            CharacterMoveResult moveResult;
+            updateCharacterController(character, glm::vec3(0.0f), false, 1.0f / 60.0f,
+                                      moveResult);
+        }
+        const auto* testTransform = registry.try_get<TransformComponent>(character);
+        const auto* testController = registry.try_get<CharacterControllerComponent>(character);
+        if (testTransform != nullptr && testController != nullptr)
+        {
+            const float restingY = testTransform->getTranslation().y;
+            characterLanded = testController->grounded &&
+                              std::abs(restingY - (static_cast<float>(hitBlock.y) + 1.0f)) < 0.05f;
+        }
+        destroyEntity(character);
+    }
+
+    cleanup();
+
+    if (!dugDeeper || !restored || !groundMatches || !groundIsVoxel ||
+        !characterLanded || !placedOnFace)
+    {
+        std::cerr << "[Voxel] selfTest: dig/place/ground mismatch (groundIsVoxel="
+                  << groundIsVoxel << " characterLanded=" << characterLanded
+                  << " placedOnFace=" << placedOnFace << ")" << std::endl;
+        return false;
+    }
+
+    std::cout << "[Voxel] scene selfTest PASS | chunks=" << chunkCount
+              << " hit=(" << hitBlock.x << "," << hitBlock.y << "," << hitBlock.z << ")"
+              << " dugDeeper=" << (dugDeeper ? 1 : 0)
+              << " restored=" << (restored ? 1 : 0)
+              << " groundY=" << groundY
+              << " characterLanded=" << (characterLanded ? 1 : 0)
+              << " placedOnFace=" << (placedOnFace ? 1 : 0) << std::endl;
+    return true;
+}
+
+bool Scene::rebuildVoxelChunk(entt::entity chunkEntity)
+{
+    if (!device)
+        return false;
+
+    VoxelChunkComponent* chunkComp = registry.try_get<VoxelChunkComponent>(chunkEntity);
+    MeshComponent* meshComp = registry.try_get<MeshComponent>(chunkEntity);
+    if (chunkComp == nullptr || meshComp == nullptr || !chunkComp->chunk)
+        return false;
+
+    terrain::TerrainMeshData mesh;
+    voxel::MeshStats stats;
+    if (!voxel::buildMesh(*chunkComp->chunk, mesh, &stats))
+        return false;
+
+    std::shared_ptr<Model> model;
+    if (!mesh.vertices.empty())
+    {
+        try
+        {
+            Model::Builder builder;
+            builder.vertices.reserve(mesh.vertices.size());
+            for (const terrain::TerrainVertex& vertex : mesh.vertices)
+                builder.vertices.push_back(Vertex{ vertex.position, vertex.color, vertex.normal, vertex.uv });
+            builder.indices = mesh.indices;
+            builder.subMeshes.reserve(mesh.subMeshes.size());
+            for (const terrain::TerrainSubMesh& source : mesh.subMeshes)
+            {
+                SubMesh subMesh;
+                subMesh.firstIndex = source.firstIndex;
+                subMesh.indexCount = source.indexCount;
+                subMesh.hasBounds = true;
+                subMesh.boundsMin = source.boundsMin;
+                subMesh.boundsMax = source.boundsMax;
+                builder.subMeshes.push_back(subMesh);
+            }
+            model = std::make_shared<Model>(*device, commandPool, builder);
+        }
+        catch (const std::exception& ex)
+        {
+            std::cerr << "[Voxel] chunk rebuild failed: " << ex.what() << std::endl;
+            return false;
+        }
+    }
+
+    if (meshComp->model)
+        retireModel(meshComp->model);
+    meshComp->model = model;
+    chunkComp->faceCount = stats.faces;
+    ++chunkComp->revision;
+    if (model)
+        setModelBounds(registry, chunkEntity, model, &dirtySpatialEntities);
+    refreshTransformsAndVisibility();
+    return true;
+}
+
 bool Scene::buildTerrainModelFromHeightField(
     const terrain::TerrainConfig& config,
     const std::shared_ptr<terrain::HeightField>& heightField,
@@ -2696,6 +3244,25 @@ bool Scene::queryGroundAtWorld(float worldX, float worldZ, float& outHeight,
             found = true;
             outHeight = worldPoint.y;
             outEntity = entity;
+        }
+    }
+
+    // F3：体素方块也是地面。方块网格与世界上轴对齐，所以直接把 XZ 落到整数格，
+    // 取该列最高实心方块的上表面；比地形高就赢。
+    {
+        const int32_t blockX = static_cast<int32_t>(std::floor(worldX));
+        const int32_t blockZ = static_cast<int32_t>(std::floor(worldZ));
+        int32_t voxelTop = 0;
+        entt::entity voxelChunk = entt::null;
+        if (sampleVoxelGroundHeight(blockX, blockZ, voxelTop, &voxelChunk))
+        {
+            const float voxelHeight = static_cast<float>(voxelTop);
+            if (!found || voxelHeight > outHeight)
+            {
+                found = true;
+                outHeight = voxelHeight;
+                outEntity = voxelChunk;
+            }
         }
     }
 

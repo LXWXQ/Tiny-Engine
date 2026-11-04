@@ -139,6 +139,26 @@ public:
 
     entt::entity createMeshEntity(const std::string& absolutePath, const std::string& name);
 
+    // ---- Voxel world (F3) ----
+    // 一个管理器实体 + 每块一个 32^3 chunk 实体。方块坐标是世界整数格，
+    // 第 (x,y,z) 格占 [x,x+1] x [y,y+1] x [z,z+1]。
+    entt::entity createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_t baseY);
+    // 改一格并重建受影响的 chunk（跨边界时两/四块都重建）。返回是否真的改了。
+    bool setVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z, uint8_t blockId);
+    uint8_t getVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z) const;
+    // DDA 体素射线：返回命中格坐标与命中面法线（用于"放在哪一面"）。
+    bool raycastVoxelWorld(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
+                           float maxDistance, glm::ivec3& outBlock,
+                           glm::ivec3& outNormal, float& outDistance,
+                           entt::entity* outChunk = nullptr,
+                           entt::entity worldFilter = entt::null) const;
+    // 体素地面高度（该 XZ 列最高实心方块的上表面），没有则返回 false。
+    bool sampleVoxelGroundHeight(int32_t x, int32_t z, int32_t& outY,
+                                 entt::entity* outChunk = nullptr,
+                                 entt::entity worldFilter = entt::null) const;
+    // 纯逻辑 + 真实场景的自检：建 3x3 chunk、射线打地、挖一格、放回去。
+    bool voxelSelfTest();
+
 
 
     // ---- Terrain (F2 / D-18) ----
@@ -340,6 +360,9 @@ private:
     void reportUpdateProfile(double genPollUs, double streamingUs, double worldUs,
                              double spatialUs, double visibilityUs);
     void updateTerrainStreaming();
+    // F3：重建一个体素 chunk 的网格与 Model。编辑一格时只重建它自己和边界邻居。
+    bool rebuildVoxelChunk(entt::entity chunkEntity);
+    entt::entity findVoxelChunk(entt::entity world, int32_t chunkX, int32_t chunkZ) const;
     void discardPendingTerrainCallbacks();
     void cancelPendingTerrainGenerations();
     struct RetiredModel

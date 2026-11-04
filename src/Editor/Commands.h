@@ -358,6 +358,32 @@ private:
     terrain::TerrainConfig newConfig;
 };
 
+// F3：体素编辑（挖 / 放一格）。一次点击 = 一条命令，撤销时把方块放回去。
+// 只记录世界坐标与前后方块 ID，重放走 Scene::setVoxelBlock，chunk 重建由它负责。
+class VoxelEditCommand : public Command
+{
+public:
+    VoxelEditCommand(Scene& scene, entt::entity world,
+                     int32_t x, int32_t y, int32_t z,
+                     uint8_t before, uint8_t after);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override
+    {
+        return after == 0u ? "Dig Voxel" : "Place Voxel";
+    }
+
+private:
+    Scene* scene;
+    entt::entity world;
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t z = 0;
+    uint8_t before = 0;
+    uint8_t after = 0;
+};
+
 // Swaps two already-generated terrain states. The old/new MeshComponents hold
 // shared_ptr<Model>, so undo history keeps the previous GPU buffers alive.
 class RegenerateTerrainCommand : public Command
