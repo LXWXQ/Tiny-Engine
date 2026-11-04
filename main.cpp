@@ -94,7 +94,7 @@ const UsageLine kUsageLines[] = {
     { "渲染", "--no-terrain-batch", "关掉地形合批（逐 chunk 绘制）" },
     { "地形", "--terrain-test", "启动时创建持久地形，用于地形回归" },
     { "地形", "--streaming-world [r]", "流送世界，半径 r（1..24，默认 3）" },
-    { "地形", "--voxel-world [r]", "体素世界（32x32x32 方块 chunk），半径 r（1..8，默认 1）" },
+    { "地形", "--voxel-world [r]", "体素世界（32x32x32 方块 chunk），半径 r（1..12，默认 1）" },
     { "地形", "--streaming-fly [speed]", "沿 +X 直线飞行，用于流送/卸载回归" },
     { "地形", "--streaming-fly-radius <r>", "绕圆飞行半径（0 = 直线）" },
     { "地形", "--streaming-budget <ms>", "每帧地形生成预算（毫秒）" },

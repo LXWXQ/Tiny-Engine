@@ -278,7 +278,7 @@ $tests = @(
        MustContain = @("[Scene] async terrain create selfTest PASS") },
     @{ Name = "f6-shadows"; Exe = "engine"; Args = @("--selftest", "20"); MustContain = @("[Shadow] selfTest PASS", "[Shadow] first frame | cascades=3") },
     @{ Name = "f3-voxel"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
-       MustContain = @("[Voxel] selfTest PASS", "[Voxel] scene selfTest PASS") },
+       MustContain = @("[Voxel] selfTest PASS", "[Voxel] scene selfTest PASS", "async submitMs=") },
   @{ Name = "f3-voxel-persist"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("capture + json round trip", "[Editor] voxel edit selfTest PASS") },
   @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

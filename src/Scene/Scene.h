@@ -7,6 +7,7 @@
 #include "Scene/SpatialIndex.h"
 #include "Core/MaterialSystem.h"
 #include "Core/DescriptorManager.h"
+#include "Core/JobSystem.h"
 #include "Core/FrameInfo.h"
 #include "RHI/Device.h"
 #include "RHI/Texture.h"
@@ -142,6 +143,9 @@ public:
     // ---- Voxel world (F3) ----
     // 一个管理器实体 + 每块一个 32^3 chunk 实体。方块坐标是世界整数格，
     // 第 (x,y,z) 格占 [x,x+1] x [y,y+1] x [z,z+1]。
+    // F3-g：半径上限（异步构建下可到 12，即 625 块）。
+    static constexpr int32_t kMaxVoxelRadius = 12;
+
     entt::entity createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_t baseY);
     // 改一格并重建受影响的 chunk（跨边界时两/四块都重建）。返回是否真的改了。
     bool setVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z, uint8_t blockId);
@@ -156,6 +160,9 @@ public:
     bool sampleVoxelGroundHeight(int32_t x, int32_t z, int32_t& outY,
                                  entt::entity* outChunk = nullptr,
                                  entt::entity worldFilter = entt::null) const;
+
+    // F3-g：等所有体素 chunk 的异步构建完成（诊断/自检/反序列化用）。
+    void waitForVoxelBuilds();
     // 纯逻辑 + 真实场景的自检：建 3x3 chunk、射线打地、挖一格、放回去。
     bool voxelSelfTest();
 
@@ -362,7 +369,24 @@ private:
                              double spatialUs, double visibilityUs);
     void updateTerrainStreaming();
     // F3：重建一个体素 chunk 的网格与 Model。编辑一格时只重建它自己和边界邻居。
+    bool applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshData& mesh,
+        const voxel::MeshStats& stats, const std::shared_ptr<Material>& material);
     bool rebuildVoxelChunk(entt::entity chunkEntity);
+
+    // F3-g：异步构建中的体素 chunk（生成 + 网格化在 JobSystem 里完成）。
+    struct PendingVoxelChunk
+    {
+        entt::entity entity = entt::null;
+        std::shared_ptr<voxel::Chunk> chunk;
+        int32_t chunkX = 0;
+        int32_t chunkZ = 0;
+        int32_t baseY = 0;
+        std::shared_ptr<terrain::TerrainMeshData> mesh;
+        voxel::MeshStats stats;
+        JobSystem::JobHandle handle;
+    };
+    void processVoxelChunkBuilds();
+    std::vector<std::shared_ptr<PendingVoxelChunk>> pendingVoxelBuilds;
     entt::entity findVoxelChunk(entt::entity world, int32_t chunkX, int32_t chunkZ) const;
     void discardPendingTerrainCallbacks();
     void cancelPendingTerrainGenerations();

@@ -900,7 +900,7 @@ streamingConfig.skirtsEnabled = false;
 	// F3：体素世界（把 --voxel-world 变成一块能走进去挖的方块地形）。
 	if (options.voxelWorld)
 	{
-		const int32_t radius = std::clamp(options.voxelRadius, 1, 8);
+		const int32_t radius = std::clamp(options.voxelRadius, 1, Scene::kMaxVoxelRadius);
 		voxelWorldEntity = scene->createVoxelWorld(20251104ull, radius, 0);
 		if (voxelWorldEntity == entt::null)
 			throw std::runtime_error("--voxel-world creation failed");

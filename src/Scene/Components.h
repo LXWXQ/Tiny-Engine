@@ -294,6 +294,10 @@ struct VoxelWorldComponent
     int32_t baseY = 0;
     float blockScale = 1.0f;
     bool enabled = true;
+    // F3-g：异步构建状态。chunk 实体先落地（只有 VoxelChunkComponent），
+    // 后台作业生成 + 网格化，主线程每帧取回并补 MeshComponent。
+    bool building = false;
+    int32_t pendingChunks = 0;
 };
 
 // B-07: lightweight kinematic character. The entity transform is the feet

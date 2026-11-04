@@ -812,6 +812,7 @@ void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCa
     }
 
     refreshStreamingTerrain();
+    processVoxelChunkBuilds();
 
     updateWorldTransforms();
     refreshSpatialIndex();
@@ -1720,6 +1721,7 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
     {
         const entt::entity worldEntity = createVoxelWorld(
             worldDesc.seed, worldDesc.radiusChunks, worldDesc.baseY);
+        waitForVoxelBuilds();
         if (worldEntity == entt::null)
         {
             errorMessage = "voxel world rebuild failed";
@@ -1782,105 +1784,202 @@ entt::entity Scene::createMeshEntity(const std::string& absolutePath, const std:
     return entity;
 }
 
+bool Scene::applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshData& mesh,
+	const voxel::MeshStats& stats, const std::shared_ptr<Material>& material)
+{
+	if (entity == entt::null || !registry.valid(entity) || mesh.vertices.empty())
+		return false;
+
+	std::shared_ptr<Model> model;
+	try
+	{
+		Model::Builder builder;
+		builder.vertices.reserve(mesh.vertices.size());
+		for (const terrain::TerrainVertex& vertex : mesh.vertices)
+			builder.vertices.push_back(Vertex{ vertex.position, vertex.color, vertex.normal, vertex.uv });
+		builder.indices = mesh.indices;
+		builder.subMeshes.reserve(mesh.subMeshes.size());
+		for (const terrain::TerrainSubMesh& source : mesh.subMeshes)
+		{
+			SubMesh subMesh;
+			subMesh.firstIndex = source.firstIndex;
+			subMesh.indexCount = source.indexCount;
+			subMesh.hasBounds = true;
+			subMesh.boundsMin = source.boundsMin;
+			subMesh.boundsMax = source.boundsMax;
+			builder.subMeshes.push_back(subMesh);
+		}
+		model = std::make_shared<Model>(*device, commandPool, builder);
+	}
+	catch (const std::exception& ex)
+	{
+		std::cerr << "[Voxel] chunk mesh upload failed: " << ex.what() << std::endl;
+		return false;
+	}
+	if (!model)
+		return false;
+
+	registry.emplace_or_replace<MeshComponent>(entity, MeshComponent{ model });
+	MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(entity);
+	materialComp.material = material;
+	materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*material);
+	if (auto* chunkComp = registry.try_get<VoxelChunkComponent>(entity))
+	{
+		chunkComp->revision += 1;
+		chunkComp->faceCount = stats.faces;
+	}
+	std::unordered_set<entt::entity> dirtySpatialEntities;
+	setModelBounds(registry, entity, model, &dirtySpatialEntities);
+	attachDirtyTracking(entity);
+	return true;
+}
+
 entt::entity Scene::createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_t baseY)
 {
-    if (!device || !descriptorManager)
-        return entt::null;
+	radiusChunks = std::clamp(radiusChunks, 1, kMaxVoxelRadius);
 
-    radiusChunks = std::clamp(radiusChunks, 1, 8);
+	const entt::entity world = createTransformEntity(registry);
+	markTransformDirty(world);
+	registry.emplace<NameComponent>(world, NameComponent{ "Voxel World" });
+	VoxelWorldComponent& worldComp = registry.emplace<VoxelWorldComponent>(world);
+	worldComp.seed = seed;
+	worldComp.radiusChunks = radiusChunks;
+	worldComp.baseY = baseY;
 
-    const entt::entity world = createTransformEntity(registry);
-    markTransformDirty(world);
-    registry.emplace<NameComponent>(world, NameComponent{ "Voxel World" });
-    VoxelWorldComponent& worldComp = registry.emplace<VoxelWorldComponent>(world);
-    worldComp.seed = seed;
-    worldComp.radiusChunks = radiusChunks;
-    worldComp.baseY = baseY;
+	std::shared_ptr<Material> material = materialSystem.getOrCreateMaterial("voxel");
+	material->albedoMap = materialSystem.getVoxelAtlasTexture();
+	material->metallicFactor = 0.0f;
+	material->roughnessFactor = 0.9f;
+	material->shaderFlags = 1.0f;
 
-    std::shared_ptr<Material> material = materialSystem.getOrCreateMaterial("voxel");
-    material->albedoMap = materialSystem.getVoxelAtlasTexture();
-    material->shaderFlags = 1.0f;
-    material->metallicFactor = 0.0f;
-    material->roughnessFactor = 0.9f;
+	const bool asyncBuild = jobSystem != nullptr;
+	worldComp.building = asyncBuild;
+	worldComp.pendingChunks = 0;
 
-    uint32_t created = 0;
-    for (int32_t chunkZ = -radiusChunks; chunkZ <= radiusChunks; ++chunkZ)
-    {
-        for (int32_t chunkX = -radiusChunks; chunkX <= radiusChunks; ++chunkX)
-        {
-            auto chunk = std::make_shared<voxel::Chunk>();
-            chunk->generate(seed, chunkX, chunkZ, baseY);
+	const auto submitStart = std::chrono::steady_clock::now();
+	int32_t created = 0;
+	for (int32_t chunkZ = -radiusChunks; chunkZ <= radiusChunks; ++chunkZ)
+	{
+		for (int32_t chunkX = -radiusChunks; chunkX <= radiusChunks; ++chunkX)
+		{
+			const entt::entity entity = createTransformEntity(registry);
+			markTransformDirty(entity);
+			registry.get<TransformComponent>(entity).setTranslation(glm::vec3(
+				static_cast<float>(chunkX * voxel::Chunk::kSize), static_cast<float>(baseY),
+				static_cast<float>(chunkZ * voxel::Chunk::kSize)));
+			registry.emplace<NameComponent>(entity, NameComponent{
+				"Voxel Chunk " + std::to_string(chunkX) + "," + std::to_string(chunkZ) });
+			registry.emplace<RenderTagComponent>(entity);
 
-            terrain::TerrainMeshData mesh;
-            voxel::MeshStats stats;
-            if (!voxel::buildMesh(*chunk, mesh, &stats) || mesh.vertices.empty())
-                continue;
+			std::shared_ptr<voxel::Chunk> chunk = std::make_shared<voxel::Chunk>();
+			VoxelChunkComponent& chunkComp = registry.emplace<VoxelChunkComponent>(entity);
+			chunkComp.world = world;
+			chunkComp.chunkX = chunkX;
+			chunkComp.chunkZ = chunkZ;
+			chunkComp.baseY = baseY;
+			chunkComp.chunk = chunk;
+			chunkComp.revision = 0;
+			chunkComp.faceCount = 0;
 
-            std::shared_ptr<Model> model;
-            try
-            {
-                Model::Builder builder;
-                builder.vertices.reserve(mesh.vertices.size());
-                for (const terrain::TerrainVertex& vertex : mesh.vertices)
-                    builder.vertices.push_back(Vertex{ vertex.position, vertex.color, vertex.normal, vertex.uv });
-                builder.indices = mesh.indices;
-                builder.subMeshes.reserve(mesh.subMeshes.size());
-                for (const terrain::TerrainSubMesh& source : mesh.subMeshes)
-                {
-                    SubMesh subMesh;
-                    subMesh.firstIndex = source.firstIndex;
-                    subMesh.indexCount = source.indexCount;
-                    subMesh.hasBounds = true;
-                    subMesh.boundsMin = source.boundsMin;
-                    subMesh.boundsMax = source.boundsMax;
-                    builder.subMeshes.push_back(subMesh);
-                }
-                model = std::make_shared<Model>(*device, commandPool, builder);
-            }
-            catch (const std::exception& ex)
-            {
-                std::cerr << "[Voxel] chunk mesh upload failed: " << ex.what() << std::endl;
-                continue;
-            }
-            if (!model)
-                continue;
+			if (asyncBuild)
+			{
+				auto pending = std::make_shared<PendingVoxelChunk>();
+				pending->entity = entity;
+				pending->chunk = chunk;
+				pending->chunkX = chunkX;
+				pending->chunkZ = chunkZ;
+				pending->baseY = baseY;
+				pending->mesh = std::make_shared<terrain::TerrainMeshData>();
+				PendingVoxelChunk* raw = pending.get();
+				pending->handle = jobSystem->submit([raw, seed]()
+				{
+					raw->chunk->generate(seed, raw->chunkX, raw->chunkZ, raw->baseY);
+					voxel::buildMesh(*raw->chunk, *raw->mesh, &raw->stats);
+				});
+				pendingVoxelBuilds.push_back(std::move(pending));
+				worldComp.pendingChunks += 1;
+			}
+			else
+			{
+				chunk->generate(seed, chunkX, chunkZ, baseY);
+				terrain::TerrainMeshData mesh;
+				voxel::MeshStats stats;
+				if (voxel::buildMesh(*chunk, mesh, &stats))
+					applyVoxelChunkMesh(entity, mesh, stats, material);
+			}
+			++created;
+		}
+	}
 
-            const entt::entity entity = createTransformEntity(registry);
-            markTransformDirty(entity);
-            registry.get<TransformComponent>(entity).setTranslation(glm::vec3(
-                static_cast<float>(chunkX * voxel::Chunk::kSize), static_cast<float>(baseY),
-                static_cast<float>(chunkZ * voxel::Chunk::kSize)));
-            registry.emplace<NameComponent>(entity, NameComponent{
-                "Voxel Chunk " + std::to_string(chunkX) + "," + std::to_string(chunkZ) });
-            registry.emplace<MeshComponent>(entity, MeshComponent{ model });
-            registry.emplace<RenderTagComponent>(entity);
-
-            MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(entity);
-            materialComp.material = material;
-            materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*material);
-
-            VoxelChunkComponent& chunkComp = registry.emplace<VoxelChunkComponent>(entity);
-            chunkComp.world = world;
-            chunkComp.chunkX = chunkX;
-            chunkComp.chunkZ = chunkZ;
-            chunkComp.baseY = baseY;
-            chunkComp.chunk = std::move(chunk);
-            chunkComp.revision = 1;
-            chunkComp.faceCount = stats.faces;
-
-            setModelBounds(registry, entity, model, &dirtySpatialEntities);
-            attachDirtyTracking(entity);
-            ++created;
-        }
-    }
-
-    updateWorldTransforms();
-    refreshSpatialIndex();
-    refreshTransformsAndVisibility();
-    std::cout << "[Voxel] world created | seed=" << seed << " radius=" << radiusChunks
-              << " chunks=" << created << " baseY=" << baseY << std::endl;
-    return world;
+	updateWorldTransforms();
+	refreshSpatialIndex();
+	refreshTransformsAndVisibility();
+	const double submitMs = std::chrono::duration<double, std::milli>(
+		std::chrono::steady_clock::now() - submitStart).count();
+	std::cout << "[Voxel] world created | seed=" << seed << " radius=" << radiusChunks
+		<< " chunks=" << created << " baseY=" << baseY
+		<< (asyncBuild ? " async" : " sync") << " submitMs=" << submitMs << std::endl;
+	return world;
 }
+
+void Scene::processVoxelChunkBuilds()
+{
+	if (pendingVoxelBuilds.empty())
+		return;
+
+	constexpr size_t kMaxUploadsPerFrame = 4;
+	std::shared_ptr<Material> material = materialSystem.getOrCreateMaterial("voxel");
+	size_t uploads = 0;
+	bool finishedAny = false;
+
+	for (auto it = pendingVoxelBuilds.begin(); it != pendingVoxelBuilds.end();)
+	{
+		const std::shared_ptr<PendingVoxelChunk>& pending = *it;
+		if (!pending->handle.isComplete())
+		{
+			++it;
+			continue;
+		}
+		pending->handle.wait();
+		if (pending->entity != entt::null && registry.valid(pending->entity))
+		{
+			applyVoxelChunkMesh(pending->entity, *pending->mesh, pending->stats, material);
+			if (auto* chunkComp = registry.try_get<VoxelChunkComponent>(pending->entity))
+			{
+				if (auto* worldComp = registry.try_get<VoxelWorldComponent>(chunkComp->world))
+				{
+					if (worldComp->pendingChunks > 0)
+						worldComp->pendingChunks -= 1;
+					if (worldComp->pendingChunks == 0)
+					{
+						worldComp->building = false;
+						finishedAny = true;
+					}
+				}
+			}
+		}
+		it = pendingVoxelBuilds.erase(it);
+		if (++uploads >= kMaxUploadsPerFrame)
+			break;
+	}
+
+	if (finishedAny || uploads > 0)
+	{
+		refreshSpatialIndex();
+		refreshTransformsAndVisibility();
+	}
+}
+
+void Scene::waitForVoxelBuilds()
+{
+	while (!pendingVoxelBuilds.empty())
+	{
+		processVoxelChunkBuilds();
+		if (!pendingVoxelBuilds.empty())
+			std::this_thread::yield();
+	}
+}
+
 
 entt::entity Scene::findVoxelChunk(entt::entity world, int32_t chunkX, int32_t chunkZ) const
 {
@@ -2132,6 +2231,7 @@ bool Scene::voxelSelfTest()
         return false;
 
     const entt::entity world = createVoxelWorld(4242ull, 1, 0);
+    waitForVoxelBuilds();
     if (world == entt::null)
     {
         std::cerr << "[Voxel] selfTest: createVoxelWorld failed" << std::endl;
@@ -2145,6 +2245,18 @@ bool Scene::voxelSelfTest()
             ++chunkCount;
     }
 
+    // F3-g 异步构建：作业全部回收后，每个 chunk 都该挂上 MeshComponent，
+    // 世界组件也要退出 building 状态，否则就是"占位实体永远不落地"。
+    size_t meshedChunks = 0;
+    for (auto [entity, chunk] : registry.view<VoxelChunkComponent>().each())
+    {
+        if (chunk.world == world && registry.all_of<MeshComponent>(entity))
+            ++meshedChunks;
+    }
+    bool buildingDone = false;
+    if (const auto* worldComp = registry.try_get<VoxelWorldComponent>(world))
+        buildingDone = !worldComp->building && worldComp->pendingChunks == 0;
+
     const auto cleanup = [this, world]()
     {
         std::vector<entt::entity> toDestroy;
@@ -2157,6 +2269,14 @@ bool Scene::voxelSelfTest()
             destroyEntity(entity);
         destroyEntity(world);
     };
+
+    if (meshedChunks != chunkCount || !buildingDone)
+    {
+        std::cerr << "[Voxel] selfTest: async build incomplete (meshed=" << meshedChunks
+                  << " expected=" << chunkCount << " buildingDone=" << buildingDone << ")" << std::endl;
+        cleanup();
+        return false;
+    }
 
     if (chunkCount != 9)
     {

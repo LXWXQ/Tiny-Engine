@@ -3136,6 +3136,7 @@ bool EditorLayer::selfTestWithScene()
         }
 
         const entt::entity voxelWorld = testScene->createVoxelWorld(9090ull, 0, 0);
+        testScene->waitForVoxelBuilds();
         if (voxelWorld == entt::null)
         {
             std::cerr << "[Editor] selfTest FAIL: voxel world creation failed" << std::endl;

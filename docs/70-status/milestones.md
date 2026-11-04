@@ -624,3 +624,18 @@ updated: 2026-11-02
 **可观测**：`[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, boundary continuous, solid=12090`（新增 UV 区间断言）；`--voxel-world 1` 画面出现草皮/土层/石层/砖墙纹理，triangles 仍 275641。
 
 **回归**：`f3-voxel`。
+
+## F3-g：体素异步生成（半径 8 → 12）
+
+**问题**：`createVoxelWorld()` 在主线程逐块 `generate + buildMesh`，半径 8（289 块）起就明显卡顿，
+半径上限也被 8 卡住。
+
+**实现**：管理器和每块占位实体（只有 `VoxelChunkComponent`）先落地；生成与网格化交给 `JobSystem::submit`，
+`Scene::update()` 每帧 `processVoxelChunkBuilds()` 回收、最多上传 4 块（`Model` 只在主线程建）；
+`VoxelWorldComponent::building / pendingChunks` 记录进度，`Scene::waitForVoxelBuilds()` 供自检与存档重建同步。
+半径上限改为 `Scene::kMaxVoxelRadius = 12`，`--voxel-world [r]` 同步。
+
+**可观测**：`[Voxel] world created | seed=20251104 radius=12 chunks=625 baseY=0 async submitMs=70.7`（Debug）；
+自检新增「作业全部回收后每块都挂 `MeshComponent`、`building` 归零」断言。
+
+**回归**：`f3-voxel`（MustContain 增加 `async submitMs=`）。

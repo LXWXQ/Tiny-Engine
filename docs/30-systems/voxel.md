@@ -79,7 +79,19 @@ updated: 2026-11-04
 一个 32³ chunk 有 32768 格，全量存盘会爆；实际改动通常只有几百格，所以存差分。
 自检：`persistCapture/persistRestore`（挖一格只产生一条 Air 记录，放回后清零）与编辑器侧的 `SceneSerializer::roundTrip`。
 
-## 7. 已知限制
+## 7. 异步构建（F3-g）
+
+- `Scene::createVoxelWorld()` 只做「管理器 + 每块占位实体」：chunk 实体带 `VoxelChunkComponent`，
+  但**先不挂 `MeshComponent`**，所以不会阻塞主循环；耗时就在建实体（半径 12 / 625 块约几十毫秒）。
+- 真正的工作（`Chunk::generate` + `voxel::buildMesh`）交给 `JobSystem::submit`，结果留在
+  `PendingVoxelChunk` 里；`Scene::update()` 每帧调用 `processVoxelChunkBuilds()` 回收，**每帧最多上传 4 块**
+  （建 `Model` 必须在主线程：Vulkan 上传不是线程安全的）。
+- `VoxelWorldComponent::building / pendingChunks` 记录进度：全部回收后 `building = false`；
+  `Scene::waitForVoxelBuilds()` 供自检 / 存档重建同步等待。
+- 半径上限从 8 提到 **12**（`Scene::kMaxVoxelRadius`），`--voxel-world [r]` 同步；日志
+  `[Voxel] world created | seed= radius= chunks= baseY= async submitMs=`。
+
+## 8. 已知限制
 
 - **体素世界不进存档**：`captureDescription()` / `buildFromDescription()` 只处理地形与普通实体，
   重建场景（打开新场景、流送序列化自检）会把体素世界清掉（见 tech-debt）。
@@ -88,7 +100,7 @@ updated: 2026-11-04
 - 没有 LOD；AO 是逐顶点环境光遮蔽（不是烘焙贴图）。
 - 水/透明方块只做了 `opaque = false`（玻璃、树叶），排序仍是按实体，没有逐面透明排序。
 
-## 8. 自检
+## 9. 自检
 
 | 打印 | 覆盖 |
 |---|---|
