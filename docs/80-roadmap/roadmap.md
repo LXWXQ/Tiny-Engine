@@ -108,7 +108,9 @@ Amanatides-Woo DDA 拾取、挖/放 + 逐格撤销、`queryGroundAtWorld` 叠加
 离散方块（挖掉一格是整齐的坑），等值面会得到圆滑洞；LOD 与邻接缝合也不再需要（相邻 chunk
 用同一套噪声按世界列算高度，边界天然连续）。
 
-**剩余**：透明方块排序、多个 worker 并行 meshing（异步管线 + 半径 12 见 F3-g；贪心面合并 + 逐顶点 AO 见 F3-e；程序化贴图集见 F3-f）
+**剩余**（见 [backlog](../70-status/backlog.md#归档时的剩余队列2026-11-04)）：透明方块排序（V-01）、网格化每帧预算与取消（V-02）、体素 LOD（V-03）、体素几何走 arena 合批（V-04）、分页无限世界（V-05）。已完成：贪心合并 + 逐顶点 AO（F3-e）、程序化贴图集（F3-f）、异步构建 + 半径 12（F3-g）
+
+**进度（2026-11-04）**：F3-a~F3-g 全部落地 —— 32³ 方块 chunk、面剔除 + 贪心合并 + 逐顶点 AO、程序化 sRGB 图集（顶点 UV 编码图块 id）、Amanatides-Woo DDA 拾取、挖/放 + 逐格撤销、体素持久化（seed + 差分）、`queryGroundAtWorld` 体素分支、运行模式接管角色（WASD/空格/中键/左右键）、异步构建（每帧最多上传 4 块，Release 半径 12 提交 7.9 ms）。
 
 ---
 
@@ -145,7 +147,7 @@ Transform/Bounds 字段已私有并通过 setter 自动通知 Scene；streaming 
 
 | 功能 | 说明 | 依赖 |
 |---|---|---|
-| 阴影 | CSM / 局部阴影，接入 deferred lighting | GPU scene buffer |
+| 阴影（已完成，见 [shadow](../20-pipeline/shadow.md)） | 3 级 CSM 2048² + 3×3 PCF，CPU 逐实体提交，方向光专用 | GPU scene buffer |
 | SSR | 屏幕空间反射，读 HDR + depth | HDR 管线已就绪 |
 | 自动曝光 | compute 直方图 + 曝光纹理 | compute/graphics 跨队列（已有基础） |
 | Compute Bloom | Bloom 金字塔迁移到 compute | TD-06 / TD-07 已完成 |
