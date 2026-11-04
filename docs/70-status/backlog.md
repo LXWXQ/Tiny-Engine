@@ -265,6 +265,8 @@ updated: 2026-11-02
 | E-P1 | 未开始 | 启动失败的原生 MessageBox（UX-04 仍缺） | — | 双击启动失败时用户能看到可读提示 |
 
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
+>
+> 同日修复示例体素世界全黑：异步 chunk 落地后未登记 `dirtySpatialEntities`，建不出 `WorldBoundsComponent` 被全部剔除；`clearEntities()/cleanup()` 同时补上 pending 作业取消标记，加载示例等待网格落地。详见 [milestones](milestones.md#示例体素世界黑屏修复--运行模式-wasd-方向修正2026-11-04)。
 
 ## 更新方式
 

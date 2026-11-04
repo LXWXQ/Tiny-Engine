@@ -1577,6 +1577,10 @@ bool EditorLayer::loadExample(const std::string& id)
         }
         state.voxelWorld = world;
 
+        // 首轮体素网格是异步生成的：先等全部落地再摆玻璃/相机，否则
+        // placeVoxelGlassDemo() 写入的玻璃会被仍在跑的旧作业用旧网格覆盖。
+        scene->waitForVoxelBuilds();
+
         if (id == "voxel-glass")
         {
             const int32_t blocks = scene->placeVoxelGlassDemo(world);
@@ -1593,7 +1597,7 @@ bool EditorLayer::loadExample(const std::string& id)
         else
         {
             placeCamera(glm::vec3(16.0f, 46.0f, 118.0f), glm::vec3(0.42f, kPi, 0.0f));
-            state.notifySuccess("示例：体素世界（3×3 chunk，中央有玻璃演示）");
+            state.notifySuccess("示例：体素世界（3×3 chunk）");
         }
     }
     else if (id == "terrain")
@@ -1794,13 +1798,15 @@ void EditorLayer::enterRuntimeMode()
     TransformComponent& camera = scene->getCameraTransform();
     state.runtimeSavedCameraPosition = camera.getTranslation();
     state.runtimeSavedCameraEuler = camera.getEuler();
+    // 相机 euler 用的是弧度；runtimeYaw/runtimePitch 必须原样保存，
+    // 不能再按“度”转一次，否则角度会缩小约 57 倍（W/S/A/D 全部反向）。
     state.runtimeYaw = camera.getEuler().y;
-    state.runtimePitch = glm::clamp(camera.getEuler().x, -85.0f, 85.0f);
+    state.runtimePitch = glm::clamp(camera.getEuler().x,
+        -glm::radians(85.0f), glm::radians(85.0f));
 
-    // 出生点放在相机正下方（脚底 = 相机 - 眼高），之后交给重力和地面吸附落地。
-    const float yawRadians = glm::radians(state.runtimeYaw);
+    // 出生点放在相机前方两米（脚底 = 相机 - 眼高），之后交给重力和地面吸附落地。
     glm::vec3 spawn = camera.getTranslation() +
-        glm::vec3(std::sin(yawRadians), 0.0f, std::cos(yawRadians)) * 2.0f;
+        glm::vec3(std::sin(state.runtimeYaw), 0.0f, std::cos(state.runtimeYaw)) * 2.0f;
     spawn.y -= 1.62f;
 
     state.runtimeCharacter = scene->createCharacterEntity("Runtime Player", spawn);
@@ -1855,16 +1861,17 @@ void EditorLayer::updateRuntimeMode(float dt)
     ImGuiIO& io = ImGui::GetIO();
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f))
     {
-        state.runtimeYaw += io.MouseDelta.x * 0.12f;
-        state.runtimePitch = glm::clamp(state.runtimePitch - io.MouseDelta.y * 0.12f, -85.0f, 85.0f);
+        // 与 CameraController 保持同一套符号：dx 向右转，dy 向下看。
+        state.runtimeYaw += io.MouseDelta.x * 0.01f;
+        state.runtimePitch = glm::clamp(state.runtimePitch + io.MouseDelta.y * 0.01f,
+            -glm::radians(85.0f), glm::radians(85.0f));
     }
 
     glm::vec3 move{ 0.0f };
     if (!io.WantTextInput)
     {
-        const float yawRadians = glm::radians(state.runtimeYaw);
-        const glm::vec3 forward{ std::sin(yawRadians), 0.0f, std::cos(yawRadians) };
-        const glm::vec3 right{ std::cos(yawRadians), 0.0f, -std::sin(yawRadians) };
+        const glm::vec3 forward{ std::sin(state.runtimeYaw), 0.0f, std::cos(state.runtimeYaw) };
+        const glm::vec3 right{ std::cos(state.runtimeYaw), 0.0f, -std::sin(state.runtimeYaw) };
         if (ImGui::IsKeyDown(ImGuiKey_W)) move += forward;
         if (ImGui::IsKeyDown(ImGuiKey_S)) move -= forward;
         if (ImGui::IsKeyDown(ImGuiKey_D)) move += right;
@@ -4161,6 +4168,14 @@ bool EditorLayer::selfTestWithScene()
             return false;
         }
 
+        // runtimeYaw/runtimePitch 必须存相机 euler 的原始弧度值；这里多转一次
+        // 弧度→度会把 yaw=π 缩成 0.055，W/S/A/D 全部反向（用户报的方向错）。
+        const glm::vec3 enteredEuler = scene->getCameraTransform().getEuler();
+        const bool yawPreserved = std::abs(state.runtimeYaw - enteredEuler.y) < 1e-5f;
+        const bool pitchPreserved =
+            std::abs(state.runtimePitch - glm::clamp(enteredEuler.x,
+                -glm::radians(85.0f), glm::radians(85.0f))) < 1e-5f;
+
         TransformComponent* feet = registry->try_get<TransformComponent>(state.runtimeCharacter);
         if (feet == nullptr)
         {
@@ -4175,10 +4190,12 @@ bool EditorLayer::selfTestWithScene()
         setEditorMode(EditorState::EditorMode::Edit);
         const bool restored = state.runtimeCharacter == entt::null &&
             glm::length(scene->getCameraTransform().getTranslation() - savedPosition) < 1e-4f;
-        if (!follows || !restored)
+        if (!follows || !restored || !yawPreserved || !pitchPreserved)
         {
             std::cerr << "[Editor] runtime character selfTest FAIL: follows=" << follows
-                      << " restored=" << restored << std::endl;
+                      << " restored=" << restored
+                      << " yawPreserved=" << yawPreserved
+                      << " pitchPreserved=" << pitchPreserved << std::endl;
             return false;
         }
         std::cout << "[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose"
@@ -4236,6 +4253,40 @@ bool EditorLayer::selfTestWithScene()
             return false;
         }
         std::cout << "[Editor] example presets selfTest PASS | glass faces=" << glassFaces << std::endl;
+
+        // 再加载一次 voxel-world：用户报的“打开示例全黑”就是这条路径。
+        // 9 个 chunk 必须同时有 MeshComponent 和 WorldBoundsComponent，
+        // 后者缺失时 updateVisibility() 会把它们全部剔除（draw calls=0）。
+        newScene(false);
+        if (!loadExample("voxel-world"))
+        {
+            std::cerr << "[Editor] example presets selfTest FAIL: voxel-world loadExample returned false"
+                      << std::endl;
+            return false;
+        }
+        scene->waitForVoxelBuilds();
+        size_t worldMeshes = 0;
+        size_t worldBounds = 0;
+        for (auto [entity, chunk] : registry->view<VoxelChunkComponent>().each())
+        {
+            (void)chunk;
+            if (registry->all_of<MeshComponent>(entity))
+                ++worldMeshes;
+            if (registry->all_of<WorldBoundsComponent>(entity))
+                ++worldBounds;
+        }
+        const glm::vec3 worldCamera = scene->getCameraTransform().getTranslation();
+        const bool worldCameraPlaced =
+            glm::length(worldCamera - glm::vec3(16.0f, 46.0f, 118.0f)) < 0.01f;
+        if (worldMeshes != 9 || worldBounds != 9 || !worldCameraPlaced)
+        {
+            std::cerr << "[Editor] example presets selfTest FAIL: voxel-world meshes=" << worldMeshes
+                      << " bounds=" << worldBounds
+                      << " cameraPlaced=" << worldCameraPlaced << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] example presets selfTest PASS | voxel-world meshes=" << worldMeshes
+                  << " bounds=" << worldBounds << std::endl;
 
         // 清掉示例，避免后面的截图/测试带着一个 3x3 体素世界。
         newScene(false);

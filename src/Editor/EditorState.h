@@ -239,8 +239,8 @@ struct EditorState
     entt::entity runtimeCharacter = entt::null;
     glm::vec3 runtimeSavedCameraPosition{ 0.0f };
     glm::vec3 runtimeSavedCameraEuler{ 0.0f };
-    float runtimeYaw = 0.0f;     // 度，与相机 euler 一致
-    float runtimePitch = 0.0f;   // 度
+    float runtimeYaw = 0.0f;     // 弧度，与相机 euler 一致
+    float runtimePitch = 0.0f;   // 弧度（正值朝下，与 CameraController 一致）
 
     // 本帧对应的 frame-in-flight 槽位。视口纹理按槽位各一张，
     // ViewportPanel 需要用它挑出正确的那张。

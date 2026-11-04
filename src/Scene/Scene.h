@@ -390,6 +390,8 @@ private:
         // V-01：同一作业里顺带生成玻璃网格，主线程取回时一起落地。
         std::shared_ptr<terrain::TerrainMeshData> glassMesh;
         voxel::GlassStats glassStats;
+        // clearEntities() 只能打标记，不能提前销毁持有裸指针的作业状态。
+        bool cancelled = false;
         JobSystem::JobHandle handle;
     };
     void processVoxelChunkBuilds();

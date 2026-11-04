@@ -997,6 +997,14 @@ void Scene::updateVisibility(const glm::mat4& viewProjection)
 void Scene::cleanup()
 {
     cancelPendingTerrainGenerations();
+
+    // 与 clearEntities() 同理：作业仍持有 PendingVoxelChunk 的裸指针，
+    // 这里只标记取消，由 JobSystem 在销毁时等待作业结束，避免 UAF。
+    for (const std::shared_ptr<PendingVoxelChunk>& pending : pendingVoxelBuilds)
+    {
+        pending->cancelled = true;
+        pending->entity = entt::null;
+    }
     terrainComputeGenerator.reset();
     terrainGpuMeshBuilder.reset();
     terrainMaterial.reset();
@@ -1437,6 +1445,16 @@ scene::SceneDescription Scene::captureDescription() const
 void Scene::clearEntities()
 {
     discardPendingTerrainCallbacks();
+
+    // F3-g：正在构建的体素 job 不能在这里直接 clear —— 作业 lambda 持有
+    // PendingVoxelChunk* 的裸指针，提前销毁 vector 会 UAF。先打取消标记、
+    // 摘掉实体 id，让作业自然结束；processVoxelChunkBuilds() 回收时跳过应用。
+    for (const std::shared_ptr<PendingVoxelChunk>& pending : pendingVoxelBuilds)
+    {
+        pending->cancelled = true;
+        pending->entity = entt::null;
+    }
+
     terrainStreamingEntity = entt::null;
     streamingTerrainChunks.clear();
     pendingStreamingTerrainChunks.clear();
@@ -1850,7 +1868,11 @@ bool Scene::applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshD
 	}
 	if (model)
 	{
-		std::unordered_set<entt::entity> dirtySpatialEntities;
+		// F3-g 异步路径：chunk 实体在 createVoxelWorld() 里已经刷新过一次变换，
+		// 作业完成时它的 transform/bounds 都不再是脏的。这里必须写进 Scene 持久的
+		// dirtySpatialEntities，否则 refreshSpatialIndex() 不会生成 WorldBoundsComponent，
+		// updateVisibility() 会把所有异步上传的 chunk 当成不可见剔除（编辑器打开
+		// 体素示例全黑、draw calls=0 就是这个原因）。
 		setModelBounds(registry, entity, model, &dirtySpatialEntities);
 		attachDirtyTracking(entity);
 	}
@@ -1969,7 +1991,7 @@ void Scene::processVoxelChunkBuilds()
 			continue;
 		}
 		pending->handle.wait();
-		if (pending->entity != entt::null && registry.valid(pending->entity))
+		if (!pending->cancelled && pending->entity != entt::null && registry.valid(pending->entity))
 		{
 			applyVoxelChunkMesh(pending->entity, *pending->mesh, pending->stats,
 				pending->glassMesh, pending->glassStats, material);
@@ -2327,10 +2349,15 @@ bool Scene::voxelSelfTest()
     // F3-g 异步构建：作业全部回收后，每个 chunk 都该挂上 MeshComponent，
     // 世界组件也要退出 building 状态，否则就是"占位实体永远不落地"。
     size_t meshedChunks = 0;
+    size_t boundedChunks = 0;
     for (auto [entity, chunk] : registry.view<VoxelChunkComponent>().each())
     {
-        if (chunk.world == world && registry.all_of<MeshComponent>(entity))
+        if (chunk.world != world)
+            continue;
+        if (registry.all_of<MeshComponent>(entity))
             ++meshedChunks;
+        if (registry.all_of<WorldBoundsComponent>(entity))
+            ++boundedChunks;
     }
     bool buildingDone = false;
     if (const auto* worldComp = registry.try_get<VoxelWorldComponent>(world))
@@ -2349,10 +2376,13 @@ bool Scene::voxelSelfTest()
         destroyEntity(world);
     };
 
-    if (meshedChunks != chunkCount || !buildingDone)
+    if (meshedChunks != chunkCount || boundedChunks != chunkCount || !buildingDone)
     {
+        // bounding 缺失 = updateVisibility() 会把 chunk 全部剔除，画面全黑、
+        // draw calls=0。这个断言专门守住 F3-g 异步上传后的空间索引登记。
         std::cerr << "[Voxel] selfTest: async build incomplete (meshed=" << meshedChunks
-                  << " expected=" << chunkCount << " buildingDone=" << buildingDone << ")" << std::endl;
+                  << " bounded=" << boundedChunks << " expected=" << chunkCount
+                  << " buildingDone=" << buildingDone << ")" << std::endl;
         cleanup();
         return false;
     }

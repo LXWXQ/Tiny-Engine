@@ -100,6 +100,12 @@ updated: 2026-11-04
   （建 `Model` 必须在主线程：Vulkan 上传不是线程安全的）。
 - `VoxelWorldComponent::building / pendingChunks` 记录进度：全部回收后 `building = false`；
   `Scene::waitForVoxelBuilds()` 供自检 / 存档重建同步等待。
+- **空间索引登记**：作业完成时 `applyVoxelChunkMesh()` 必须把实体写进 Scene 的
+  `dirtySpatialEntities`，让 `refreshSpatialIndex()` 建出 `WorldBoundsComponent`；漏掉这一步，
+  `updateVisibility()` 会把所有异步 chunk 当不可见剔除，画面全黑、draw calls=0。
+- **生命周期**：`clearEntities()` / `cleanup()` 不销毁仍在跑的 `PendingVoxelChunk`（作业 lambda
+  持有裸指针），只置 `cancelled` 并把实体 id 清空；`processVoxelChunkBuilds()` 回收时跳过应用，
+  避免实体 id 被新场景复用后写到错误 chunk，或提前析构导致 UAF。
 - 半径上限从 8 提到 **12**（`Scene::kMaxVoxelRadius`），`--voxel-world [r]` 同步；日志
   `[Voxel] world created | seed= radius= chunks= baseY= async submitMs=`。
 

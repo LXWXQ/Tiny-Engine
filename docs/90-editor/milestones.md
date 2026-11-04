@@ -216,8 +216,9 @@ updated: 2026-11-04
 `EditorLayer::enterRuntimeMode()` 在相机前方 2 米生成不可见角色并保存相机位姿，`updateRuntimeMode(dt)`
 用中键拖动改 yaw/pitch、`WASD`+`Space` 驱 `updateCharacterController`，`applyRuntimeCameraPose()`
 把相机放到「脚底 + 1.62 米眼高」；`exitRuntimeMode()` 销毁角色并还原相机。`setEditorMode` 首尾挂钩，
-`beginFrame` 在 `updatePlayState` 之后调用；`queryGroundAtWorld` 是私有接口，出生点改为相机正下方、
-靠重力落地。
+`beginFrame` 在 `updatePlayState` 之后调用；`queryGroundAtWorld` 是私有接口，出生点放在相机前方 2 米、
+靠重力落地。`runtimeYaw / runtimePitch` 与相机 euler 一样存**弧度**，鼠标灵敏度 `0.01 rad/px`、
+pitch 夹在 ±85°，移动基为 `forward=(sin yaw,0,cos yaw)` / `right=(cos yaw,0,-sin yaw)`。
 
 **可观测**：`[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose`。
 
@@ -229,7 +230,7 @@ updated: 2026-11-04
 
 **实现**：`ExampleEntry kEditorExamples[]` 一张表驱动 Help → 示例 子菜单；点击只记 `pendingExampleId` 并复用 `PendingDocumentAction::Example` 走未保存确认，确认后 `loadExample()` 静默新建场景（`newScene(false)`）、按预设建世界并摆相机：体素玻璃复用 V-01 的 `placeVoxelGlassDemo`，体素世界 3×3 chunk，程序化地形直调 `createTerrainFromUi()`，流送地形按 CLI 基线参数围绕相机初始加载。示例不置脏，浏览时切换不会反复弹未保存提示。
 
-**可观测**：`[Editor] example presets selfTest PASS | glass faces=879`。
+**可观测**：`[Editor] example presets selfTest PASS | glass faces=879`、`[Editor] example presets selfTest PASS | voxel-world meshes=9 bounds=9`。
 
-**回归**：`e8-editor-mode` 增加该行断言；全套仍 67 项。
+**回归**：`e8-editor-mode` 增加两行断言（含异步 chunk 的 `WorldBoundsComponent`）；全套仍 67 项。
 

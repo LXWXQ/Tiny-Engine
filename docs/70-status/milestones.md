@@ -4,8 +4,8 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~545 行
-updated: 2026-11-02
+size: ~680 行
+updated: 2026-11-04
 ---
 
 # 里程碑与实测基线
@@ -649,3 +649,23 @@ updated: 2026-11-02
 **可观测**：`[Voxel] glass demo placed | blocks=429`、`[Glass] sorted=879 drawcalls=1`；telemetry draw calls 106（+1）、desc binds 3（+1）；`[Validation] errors=0 warnings=0`；截图 `build/Debug/glass_demo.png`（叠放无黑边，近处玻璃后方地形可见）。
 
 **回归**：新增 `f3-voxel-glass`；全套 **67 项** PASS；验证日志 `build/validation/20261104-162505`。
+
+## 示例体素世界黑屏修复 + 运行模式 WASD 方向修正（2026-11-04）
+
+**问题**：帮助 → 示例 → 体素世界（3×3 chunk）打开后视口全黑，状态栏 `绘制 0 / 三角形 0`，控制台只有 `[SceneGpu] cull stats | groups=9 visible=0 culled=0 instances=0`；运行模式进入后 `W/S/A/D` 的前后左右与视线方向不一致。
+
+**黑屏根因**：`Scene::applyVoxelChunkMesh()` 把 `setModelBounds()` 的脏实体写进函数内局部的 `dirtySpatialEntities`，函数返回即丢弃。异步体素作业只在 `createVoxelWorld()` 末尾那次 `refreshTransformsAndVisibility()` 之后才落地，此时 transform 已不脏；`refreshSpatialIndex()` 没有该实体记录，建不出 `WorldBoundsComponent`，`updateVisibility()` 按“无包围盒”把所有 chunk 剔除。同步路径因为建模发生在刷新之前、transform 仍脏，所以此前自检与 CLI 没暴露。
+
+**WASD 根因**：`runtimeYaw / runtimePitch` 从相机 `getEuler()` 取到的是**弧度**，注释却写成度；进入运行模式与每帧移动又各做了一次 `glm::radians()`，示例相机 `yaw = π` 被缩成约 `0.055 rad`，水平前向由 `(0,0,-1)` 翻成 `(0,0,1)`。鼠标灵敏度 `0.12` 与 `pitch clamp ±85` 也按度写，在弧度下失效。
+
+**实现**：
+- `applyVoxelChunkMesh()` 改登记 Scene 成员 `dirtySpatialEntities`，异步完成后下一帧 `refreshSpatialIndex()` 即可补出 `WorldBoundsComponent`。
+- `PendingVoxelChunk` 增加 `cancelled`；`clearEntities()` / `cleanup()` 只标记取消并清空实体 id，不提前销毁作业状态（job lambda 捕获裸指针），`processVoxelChunkBuilds()` 回收时跳过，避免实体 id 复用与 UAF。
+- 编辑器加载体素示例在 `createVoxelWorld()` 后 `waitForVoxelBuilds()`，再摆玻璃与相机，避免旧作业用编辑前网格覆盖玻璃。
+- 运行模式统一按弧度处理：删除两处 `glm::radians()`，pitch clamp 改为 `±radians(85)`，鼠标灵敏度 `0.01 rad/px`，pitch 改为 `+=`；移动基使用 `forward=(sin yaw,0,cos yaw)` / `right=(cos yaw,0,-sin yaw)`，与 `CameraController` 和视图矩阵一致。
+- 自检补齐：体素自检断言每个 chunk 都有 `WorldBoundsComponent`（`boundedChunks == chunkCount`）；运行角色自检断言进入前后 yaw/pitch 原样保留；示例自检实际加载 `voxel-world` 并断言 9 个 chunk 的 Mesh + Bounds。
+
+**可观测**：`[Editor] runtime character selfTest PASS`、`[Editor] example presets selfTest PASS | voxel-world meshes=9 bounds=9`、`[Voxel] scene selfTest PASS | chunks=9 … bounded=9`；`f3-voxel`、`e8-editor-mode`、`e9-runtime-character` 全 PASS。
+
+**回归**：`tools/Validate.ps1 -Incremental -SkipSetup` **67 项 ALL PASS**、stderr 全 0 字节；日志 `build/validation/20261104-173640`；DocCheck PASS。
+
