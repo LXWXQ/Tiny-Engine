@@ -157,6 +157,7 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
 
     handleShortcuts();
     updatePlayState(dt);
+    updateRuntimeMode(dt);
 }
 
 namespace
@@ -1614,12 +1615,109 @@ void EditorLayer::setEditorMode(EditorState::EditorMode mode)
     {
         // 运行模式不改数据也不改选中：把选中清掉，Inspector 自然变成空态。
         state.selection.clear();
+        enterRuntimeMode();
         state.notify(LogEntry::Level::Info, "运行模式：左键挖方块 / 地形笔刷，右键放方块（F8 回编辑模式）");
     }
     else
     {
+        exitRuntimeMode();
         state.notify(LogEntry::Level::Info, "编辑模式：左键选中、手柄拖拽、面板改参数");
     }
+}
+
+void EditorLayer::enterRuntimeMode()
+{
+    Scene* scene = state.services.scene;
+    entt::registry* registry = state.services.registry;
+    if (scene == nullptr || registry == nullptr || state.runtimeCharacter != entt::null)
+        return;
+
+    TransformComponent& camera = scene->getCameraTransform();
+    state.runtimeSavedCameraPosition = camera.getTranslation();
+    state.runtimeSavedCameraEuler = camera.getEuler();
+    state.runtimeYaw = camera.getEuler().y;
+    state.runtimePitch = glm::clamp(camera.getEuler().x, -85.0f, 85.0f);
+
+    // 出生点放在相机正下方（脚底 = 相机 - 眼高），之后交给重力和地面吸附落地。
+    const float yawRadians = glm::radians(state.runtimeYaw);
+    glm::vec3 spawn = camera.getTranslation() +
+        glm::vec3(std::sin(yawRadians), 0.0f, std::cos(yawRadians)) * 2.0f;
+    spawn.y -= 1.62f;
+
+    state.runtimeCharacter = scene->createCharacterEntity("Runtime Player", spawn);
+    state.notify(LogEntry::Level::Info,
+        "运行模式：WASD 走、空格跳、中键拖动看、左键挖 / 右键放（F8 回编辑）");
+}
+
+void EditorLayer::exitRuntimeMode()
+{
+    Scene* scene = state.services.scene;
+    entt::registry* registry = state.services.registry;
+    if (scene == nullptr || registry == nullptr)
+        return;
+
+    if (state.runtimeCharacter != entt::null && registry->valid(state.runtimeCharacter))
+        scene->destroyEntity(state.runtimeCharacter);
+    state.runtimeCharacter = entt::null;
+
+    TransformComponent& camera = scene->getCameraTransform();
+    camera.setTranslation(state.runtimeSavedCameraPosition);
+    camera.setEuler(state.runtimeSavedCameraEuler);
+    scene->markTransformDirty(scene->getCameraEntity());
+}
+
+void EditorLayer::applyRuntimeCameraPose()
+{
+    Scene* scene = state.services.scene;
+    entt::registry* registry = state.services.registry;
+    if (scene == nullptr || registry == nullptr || state.runtimeCharacter == entt::null ||
+        !registry->valid(state.runtimeCharacter))
+        return;
+
+    const TransformComponent* feet = registry->try_get<TransformComponent>(state.runtimeCharacter);
+    if (feet == nullptr)
+        return;
+
+    TransformComponent& camera = scene->getCameraTransform();
+    camera.setTranslation(feet->getTranslation() + glm::vec3(0.0f, 1.62f, 0.0f));
+    camera.setEuler(glm::vec3(state.runtimePitch, state.runtimeYaw, 0.0f));
+    scene->markTransformDirty(scene->getCameraEntity());
+}
+
+void EditorLayer::updateRuntimeMode(float dt)
+{
+    Scene* scene = state.services.scene;
+    entt::registry* registry = state.services.registry;
+    if (!state.isRuntime() || scene == nullptr || registry == nullptr ||
+        state.runtimeCharacter == entt::null || !registry->valid(state.runtimeCharacter) ||
+        dt <= 0.0f)
+        return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f))
+    {
+        state.runtimeYaw += io.MouseDelta.x * 0.12f;
+        state.runtimePitch = glm::clamp(state.runtimePitch - io.MouseDelta.y * 0.12f, -85.0f, 85.0f);
+    }
+
+    glm::vec3 move{ 0.0f };
+    if (!io.WantTextInput)
+    {
+        const float yawRadians = glm::radians(state.runtimeYaw);
+        const glm::vec3 forward{ std::sin(yawRadians), 0.0f, std::cos(yawRadians) };
+        const glm::vec3 right{ std::cos(yawRadians), 0.0f, -std::sin(yawRadians) };
+        if (ImGui::IsKeyDown(ImGuiKey_W)) move += forward;
+        if (ImGui::IsKeyDown(ImGuiKey_S)) move -= forward;
+        if (ImGui::IsKeyDown(ImGuiKey_D)) move += right;
+        if (ImGui::IsKeyDown(ImGuiKey_A)) move -= right;
+    }
+
+    const bool jump = !io.WantTextInput && ImGui::IsKeyDown(ImGuiKey_Space);
+    CharacterMoveResult result;
+    if (scene->updateCharacterController(state.runtimeCharacter, move, jump, dt, result))
+        state.transformRefreshPending = true;
+
+    applyRuntimeCameraPose();
 }
 
 void EditorLayer::enterPlay()
@@ -3876,6 +3974,48 @@ bool EditorLayer::selfTestWithScene()
 
     // 自检会故意触发"播放中禁止写文档"这类守卫：留下的 Toast 与错误摘要不该跟着进截图，
     // 但 Console 里的日志行保留 —— 它是这条守卫真的被触发过的证据。
+    // ---- 0f) E9：运行模式接管角色 ----
+    {
+        Scene* scene = state.services.scene;
+        entt::registry* registry = state.services.registry;
+        if (scene == nullptr || registry == nullptr)
+        {
+            std::cerr << "[Editor] runtime character selfTest FAIL: no scene bound" << std::endl;
+            return false;
+        }
+
+        const glm::vec3 savedPosition = scene->getCameraTransform().getTranslation();
+        setEditorMode(EditorState::EditorMode::Runtime);
+        if (state.runtimeCharacter == entt::null || !registry->valid(state.runtimeCharacter))
+        {
+            std::cerr << "[Editor] runtime character selfTest FAIL: character not spawned" << std::endl;
+            return false;
+        }
+
+        TransformComponent* feet = registry->try_get<TransformComponent>(state.runtimeCharacter);
+        if (feet == nullptr)
+        {
+            std::cerr << "[Editor] runtime character selfTest FAIL: character has no transform" << std::endl;
+            return false;
+        }
+        feet->setTranslation(glm::vec3(4.0f, 3.0f, 4.0f));
+        applyRuntimeCameraPose();
+        const bool follows =
+            std::abs(scene->getCameraTransform().getTranslation().y - 4.62f) < 0.01f;
+
+        setEditorMode(EditorState::EditorMode::Edit);
+        const bool restored = state.runtimeCharacter == entt::null &&
+            glm::length(scene->getCameraTransform().getTranslation() - savedPosition) < 1e-4f;
+        if (!follows || !restored)
+        {
+            std::cerr << "[Editor] runtime character selfTest FAIL: follows=" << follows
+                      << " restored=" << restored << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose"
+                  << std::endl;
+    }
+
     state.dismissToast();
     state.lastErrorSummary.clear();
 

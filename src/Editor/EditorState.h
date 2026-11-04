@@ -231,6 +231,15 @@ struct EditorState
     int voxelBrushBlock = 1;   // voxel::BlockId 的整数值
     entt::entity voxelWorld = entt::null;
 
+    // ---- E9 运行模式接管角色（第一人称） ----
+    // 进入运行模式时创建一个不可见的角色实体，相机跟着它的脚底 + 眼高走；
+    // 退出时销毁角色并还原进入前的相机位姿。
+    entt::entity runtimeCharacter = entt::null;
+    glm::vec3 runtimeSavedCameraPosition{ 0.0f };
+    glm::vec3 runtimeSavedCameraEuler{ 0.0f };
+    float runtimeYaw = 0.0f;     // 度，与相机 euler 一致
+    float runtimePitch = 0.0f;   // 度
+
     // 本帧对应的 frame-in-flight 槽位。视口纹理按槽位各一张，
     // ViewportPanel 需要用它挑出正确的那张。
     uint32_t frameSlot = 0;

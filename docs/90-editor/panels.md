@@ -173,6 +173,14 @@ for (panel : panels) {
 - 层级面板、视口点选、快捷键全选/复制/删除都看 `state.allowsSelection()`，运行模式下不会改动选中；
 - 自检打印 `[Editor] editor mode selfTest PASS | runtime blocks selection, edit allows`。
 
+运行模式的具体操作（E9）：
+
+- `WASD` 走、`Space` 跳，角色是 `Scene::createCharacterEntity` 建出的不可见胶囊，落地/上台阶由 `updateCharacterController` 负责；
+- 按住鼠标中键拖动看四周（左右改 yaw、上下改 pitch，pitch 夹在 ±85 度）；
+- 视口左键挖方块（或跑地形笔刷）、右键在命中面放方块，笔刷逻辑与编辑模式完全同一份代码；
+- 相机 = 角色脚底 + 1.62 米眼高，`F8` 回编辑模式时销毁角色并把相机还原到进入前的位姿；
+- 自检打印 `[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose`。
+
 ## 撤销历史（E4-d）
 
 右栏上 65% 是 Inspector，下 35% 是 `History`：把 `CommandStack` 的每一层摊开成一行，

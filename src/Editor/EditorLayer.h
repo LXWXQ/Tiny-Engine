@@ -140,6 +140,12 @@ private:
     bool loadSceneFromPath(const std::string& path, std::string& errorMessage, bool recordRecent = true);
 
     void setEditorMode(EditorState::EditorMode mode);
+    // E9：运行模式接管角色（第一人称）。进入时生成一个不可见的角色实体并把
+    // 相机交还给它，退出时销毁角色并把相机恢复到进入前的位姿。
+    void enterRuntimeMode();
+    void exitRuntimeMode();
+    void updateRuntimeMode(float dt);
+    void applyRuntimeCameraPose();
     void enterPlay();
     void pausePlay();
     void resumePlay();

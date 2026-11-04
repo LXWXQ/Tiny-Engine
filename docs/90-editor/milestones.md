@@ -207,3 +207,19 @@ updated: 2026-11-03
 **可观测**：`[Editor] editor mode selfTest PASS | runtime blocks selection, edit allows`；快捷键表 19 → 20 条。
 
 **回归**：`e8-editor-mode`（编辑器自检 + `entries=20 conflicts=0`）。
+
+## E9：运行模式接管角色
+
+**问题**：运行模式只挡住了选中，但相机仍是编辑器相机，WASD 不动，所谓「运行」只是能挖方块。
+
+**实现**：`EditorState` 增加 `runtimeCharacter / runtimeSavedCameraPosition / runtimeYaw / runtimePitch`；
+`EditorLayer::enterRuntimeMode()` 在相机前方 2 米生成不可见角色并保存相机位姿，`updateRuntimeMode(dt)`
+用中键拖动改 yaw/pitch、`WASD`+`Space` 驱 `updateCharacterController`，`applyRuntimeCameraPose()`
+把相机放到「脚底 + 1.62 米眼高」；`exitRuntimeMode()` 销毁角色并还原相机。`setEditorMode` 首尾挂钩，
+`beginFrame` 在 `updatePlayState` 之后调用；`queryGroundAtWorld` 是私有接口，出生点改为相机正下方、
+靠重力落地。
+
+**可观测**：`[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose`。
+
+**回归**：`e9-runtime-character`（编辑/运行切换后相机跟随与还原）。
+
