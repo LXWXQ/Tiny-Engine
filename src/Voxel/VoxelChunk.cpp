@@ -268,7 +268,6 @@ bool buildMesh(const Chunk& chunk,
                     lo[ax.v] = static_cast<float>(vi);
                     hi[ax.v] = static_cast<float>(vi + h);
 
-                    const BlockInfo& info = blockInfo(id);
                     const uint32_t baseVertex = static_cast<uint32_t>(outMesh.vertices.size());
                     for (const glm::vec3& corner : face.corners)
                     {
@@ -283,11 +282,14 @@ bool buildMesh(const Chunk& chunk,
                         pos[ax.v] = (cv == 0) ? vi : (vi + h - 1);
                         const float ao = vertexAo(chunk, pos, ax, cu, cv);
 
-                        vertex.color = glm::vec3(info.r * face.shade * ao,
-                                                 info.g * face.shade * ao,
-                                                 info.b * face.shade * ao);
+                        // F3-f：颜色由图集提供，顶点色只保留面明暗 x AO。
+                        const float shade = face.shade * ao;
+                        vertex.color = glm::vec3(shade, shade, shade);
                         vertex.normal = face.normal;
-                        vertex.uv = glm::vec2(corner.x + corner.z, corner.y);
+                        // 图集寻址：uv.x = tile * 64 + 面内跨度u，uv.y = 面内跨度v。
+                        const float tileBase = static_cast<float>(id > 0 ? id - 1 : 0) * 64.0f;
+                        vertex.uv = glm::vec2(tileBase + corner[ax.u] * static_cast<float>(w),
+                                              corner[ax.v] * static_cast<float>(h));
                         outMesh.vertices.push_back(vertex);
                         boundsMin = glm::min(boundsMin, vertex.position);
                         boundsMax = glm::max(boundsMax, vertex.position);
@@ -340,6 +342,18 @@ bool selfTest()
         std::cerr << "[Voxel] selfTest FAIL: single block faces=" << stats.faces
                   << " vertices=" << stats.vertices << " indices=" << stats.indices << "\n";
         return false;
+    }
+
+    // 2b) F3-f：顶点 uv 编码的是图集图块（Stone = BlockId 3 -> tile 2，基准 128），
+    //     面内跨度落在 [0, 1]，片元据此还原图块坐标。
+    for (const terrain::TerrainVertex& vertex : mesh.vertices)
+    {
+        if (vertex.uv.x < 128.0f || vertex.uv.x > 192.0f || vertex.uv.y < 0.0f || vertex.uv.y > 1.0f)
+        {
+            std::cerr << "[Voxel] selfTest FAIL: atlas uv out of range (" << vertex.uv.x
+                      << ", " << vertex.uv.y << ")" << std::endl;
+            return false;
+        }
     }
 
     // 3) 相邻两块：共享面被剔除，贪心把 2x1 顶面/底面各并成一个 quad -> 6 个面。

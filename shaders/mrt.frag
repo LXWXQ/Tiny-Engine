@@ -480,9 +480,19 @@ void main() {
     // 改画棋盘格，让占位材质一眼可辨。
     // E3: factor 乘到采样结果上（glTF 规范：factor 与贴图相乘）。
     const vec4 baseColorFactor = materialFactors.factors[matId * 2u];
+    // F3-f：体素图集 —— 顶点 uv.x = tile * 64 + 面内跨度，uv.y = 面内跨度；
+    // 材质的 metalRough.z == 1.0 表示要走这层解码。
+    const bool voxelAtlas = materialFactors.factors[matId * 2u + 1u].z > 0.5;
+    vec2 albedoUV = fragUV;
+    if (voxelAtlas)
+    {
+        const float tileId = floor(fragUV.x / 64.0);
+        const vec2 local = fract(vec2(fragUV.x - tileId * 64.0, fragUV.y));
+        albedoUV = (vec2(mod(tileId, 4.0), floor(tileId / 4.0)) + clamp(local, 0.02, 0.98)) * 0.25;
+    }
     vec4 albedoColor = (gMaterial.albedoFallback != 0u)
         ? vec4(checkerboardFallback(fragPosLocal), 1.0)
-        : texture(albedoMaps[nonuniformEXT(matId)], fragUV) * baseColorFactor;
+        : texture(albedoMaps[nonuniformEXT(matId)], albedoUV) * baseColorFactor;
     if (gMaterial.alphaMasked != 0u && albedoColor.a < gMaterial.alphaCutoff)
         discard;
 

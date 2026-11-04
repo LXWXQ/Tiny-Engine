@@ -614,3 +614,13 @@ updated: 2026-11-02
 **可观测**：`[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, boundary continuous, solid=12090`；`--voxel-world 1` 的 triangles 338299 -> 275641（约 -18.5%），draw calls 不变。
 
 **回归**：`f3-voxel`（engine 自检串已更新）。
+
+## F3-f：程序化体素贴图集（方案 A）
+
+**问题**：体素只有一张 16 色的方块色板，放大了看是纯色平面，挖矿/建造缺少材质细节。
+
+**实现**：`MaterialSystem::fillVoxelAtlas()` 启动时程序化生成 256x256 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格 x 64px，九种方块，含噪点/石纹/木纹/砖缝/玻璃边框）；顶点 `uv.x = tile * 64 + 面内跨度 u`、`uv.y = 面内跨度 v`（贪心矩形在图块内平铺），顶点色退化为 `面明暗 x AO` 灰度；`Material::shaderFlags` 写进 `metalRough.z`，`shaders/mrt.frag` 见到 `> 0.5` 就把 `fragUV` 解码成 `atlasUV`（`mod/floor` 定位图块、`clamp(local, 0.02, 0.98)` 防渗色）。
+
+**可观测**：`[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, boundary continuous, solid=12090`（新增 UV 区间断言）；`--voxel-world 1` 画面出现草皮/土层/石层/砖墙纹理，triangles 仍 275641。
+
+**回归**：`f3-voxel`。

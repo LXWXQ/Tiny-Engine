@@ -135,7 +135,7 @@ public:
 	// E3: 写某个材质槽位的 baseColor / metallic / roughness factor。
 	// 越界或缓冲未建时静默返回（自检/无设备路径也会调到这里）。
 	void updateMaterialFactors(uint32_t slot, const glm::vec4& baseColor, float metallic,
-		float roughness);
+		float roughness, float shaderFlags = 0.0f);
 
 	// E6: 材质贴图被替换后刷新该槽位的四个纹理数组项。
 	// 编辑器要能"换贴图并立刻看到效果"，但 writeMaterialSet 是内部细节，

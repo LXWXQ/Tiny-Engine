@@ -20,12 +20,15 @@ public:
 	std::shared_ptr<Texture> getTexture(const std::string& filepath) const;
 	// F3：体素网格用顶点色，材质需要一张白贴图占位（否则走棋盘格 fallback）。
 	std::shared_ptr<Texture> getDefaultWhiteTexture() const { return defaultWhiteTex; }
+	// F3-f：程序化体素图集（4x4 格 x 64px，格内 = BlockId - 1）。
+	std::shared_ptr<Texture> getVoxelAtlasTexture() const { return voxelAtlasTex; }
 
 private:
 	std::unordered_map<std::string, std::shared_ptr<Material>> materials;
 	std::unordered_map<std::string, std::shared_ptr<Texture>> textureCache;
 
 	std::shared_ptr<Texture> defaultWhiteTex;
+	std::shared_ptr<Texture> voxelAtlasTex;
 	std::shared_ptr<Texture> defaultBlackTex;
 	std::shared_ptr<Texture> defaultNormalTex;
 };

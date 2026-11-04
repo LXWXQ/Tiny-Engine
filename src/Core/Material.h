@@ -17,6 +17,8 @@ public:
     uint32_t descriptorSetIndex = kInvalidMaterialSlot;
     // --- PBR 基础属性 ---
     glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+    // F3-f：材质着色标志位（metalRough.z）。1.0 = 体素贴图集 UV 编码。
+    float shaderFlags{0.0f};
     float metallicFactor{1.0f};
     float roughnessFactor{1.0f};
     float alphaCutoff{0.5f}; // 仅在 MASK 模式下生效

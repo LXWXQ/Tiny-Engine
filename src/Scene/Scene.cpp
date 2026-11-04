@@ -1798,7 +1798,8 @@ entt::entity Scene::createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_
     worldComp.baseY = baseY;
 
     std::shared_ptr<Material> material = materialSystem.getOrCreateMaterial("voxel");
-    material->albedoMap = materialSystem.getDefaultWhiteTexture();
+    material->albedoMap = materialSystem.getVoxelAtlasTexture();
+    material->shaderFlags = 1.0f;
     material->metallicFactor = 0.0f;
     material->roughnessFactor = 0.9f;
 

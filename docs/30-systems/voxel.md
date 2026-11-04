@@ -35,7 +35,10 @@ updated: 2026-11-04
 - 六个方向各做一次**贪心合并**：按 32 层切片建 mask（记录该格方块 id，邻格 `opaque` 的格不写），先在平面 u 方向扩展宽度、再在 v 方向扩展高度，同材质的矩形只输出 1 个 quad（4 顶点 6 索引）；
 - 每面 4 顶点 6 索引，顶点色 = 方块色 x 面明暗（+Y 1.00、-Y 0.55、+X 0.82、-X 0.74、+Z 0.68、-Z 0.90）x 顶点 AO；AO 看空气侧两条边与对角（`level = (s1 && s2) ? 0 : 3 - (s1 + s2 + cc)`，系数 `0.55 + 0.15 * level`），矩形四个角各取所在方块的 AO；
 - 顶点布局直接复用 `terrain::TerrainVertex`（44 字节，与 `Vertex` 同布局）→ `terrain::TerrainMeshData` → `Model::Builder` 的上传路径，无需新缓冲格式；
-- 不采样贴图：材质用 `MaterialSystem::getDefaultWhiteTexture()` 作 albedo（**必须给白图**，否则 `albedoFallback` 会画棋盘格），metallic 0 / roughness 0.9，颜色全部来自顶点。
+- **贴图集（F3-f，方案 A）**：`MaterialSystem::fillVoxelAtlas()` 在启动时程序化生成 256x256 的 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格、每格 64px，格内 = `BlockId - 1`），九种方块各有噪点/石纹/木纹/砖缝/玻璃边框；
+- **UV 编码**：顶点 `uv.x = tile * 64 + 面内跨度 u`、`uv.y = 面内跨度 v`，跨度取贪心矩形的宽/高，因此一片大矩形在图块内平铺而不是拉伸；顶点色只保留 `面明暗 x AO` 的灰度；
+- **片元解码**：`materialFactors.factors[matId * 2u + 1u].z > 0.5`（材质 `shaderFlags = 1.0`）时，`tileId = floor(uv.x / 64)`、`local = fract(vec2(uv.x - tileId * 64, uv.y))`、`atlasUV = (vec2(mod(tileId, 4), floor(tileId / 4)) + clamp(local, 0.02, 0.98)) * 0.25`（夹 0.02~0.98 防图块间渗色）；
+- 体素材质因此必须同时设 `albedoMap = getVoxelAtlasTexture()` 与 `shaderFlags = 1.0f`；普通模型仍走 `texture(albedoMaps[matId], fragUV)`。
 
 ## 3. 场景接口
 
@@ -82,7 +85,7 @@ updated: 2026-11-04
   重建场景（打开新场景、流送序列化自检）会把体素世界清掉（见 tech-debt）。
 - chunk 网格生成仍在主线程同步完成（一块 32³ 约 1 ms 量级），没有并行 meshing；
   chunk 网格生成目前在主线程同步完成（一块 32³ 约 1 ms 量级）。
-- 没有 LOD、没有贴图集；颜色只有 16 色调色板，AO 是逐顶点环境光遮蔽（不是烘焙贴图）。
+- 没有 LOD；AO 是逐顶点环境光遮蔽（不是烘焙贴图）。
 - 水/透明方块只做了 `opaque = false`（玻璃、树叶），排序仍是按实体，没有逐面透明排序。
 
 ## 8. 自检

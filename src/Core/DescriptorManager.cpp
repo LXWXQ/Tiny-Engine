@@ -443,14 +443,14 @@ void DescriptorManager::collectMaterialGarbage()
 }
 
 void DescriptorManager::updateMaterialFactors(uint32_t slot, const glm::vec4& baseColor,
-	float metallic, float roughness)
+	float metallic, float roughness, float shaderFlags)
 {
 	if (materialFactorMapped == nullptr || slot >= materialFactorCount)
 		return;
 
 	MaterialFactorRecord* records = static_cast<MaterialFactorRecord*>(materialFactorMapped);
 	records[slot].baseColor = baseColor;
-	records[slot].metalRough = glm::vec4(metallic, roughness, 0.0f, 0.0f);
+	records[slot].metalRough = glm::vec4(metallic, roughness, shaderFlags, 0.0f);
 	vmaFlushAllocation(device->getVmaAllocator(), materialFactorAllocation,
 		static_cast<VkDeviceSize>(slot) * sizeof(MaterialFactorRecord), sizeof(MaterialFactorRecord));
 }
@@ -537,7 +537,7 @@ uint32_t DescriptorManager::allocateMaterialSet(const Material& material)
 
 	// E3: 槽位刚分配（可能是回收复用的槽位），把该材质的 factor 写进去。
 	updateMaterialFactors(slot, material.baseColorFactor, material.metallicFactor,
-		material.roughnessFactor);
+		material.roughnessFactor, material.shaderFlags);
 	return slot;
 }
 
