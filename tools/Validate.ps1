@@ -279,6 +279,8 @@ $tests = @(
     @{ Name = "f6-shadows"; Exe = "engine"; Args = @("--selftest", "20"); MustContain = @("[Shadow] selfTest PASS", "[Shadow] first frame | cascades=3") },
     @{ Name = "f3-voxel"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
        MustContain = @("[Voxel] selfTest PASS", "[Voxel] scene selfTest PASS") },
+  @{ Name = "f3-voxel-persist"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
+       MustContain = @("capture + json round trip", "[Editor] voxel edit selfTest PASS") },
   @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] editor mode selfTest PASS", "entries=20 conflicts=0") },
     @{ Name = "e6-asset-and-textures"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

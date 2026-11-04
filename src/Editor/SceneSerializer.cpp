@@ -1,7 +1,10 @@
 #include "Editor/SceneSerializer.h"
 #include "AssetPaths.h"
 
+#include "Voxel/VoxelTypes.h"
+
 #include <json.hpp>
+#include <algorithm>
 #include <cstring>
 #include <cerrno>
 #include <fstream>
@@ -14,7 +17,9 @@ namespace editor
 
 namespace
 {
-constexpr int kCurrentVersion = 1;
+// v2（2026-11-04）：新增 voxelWorlds（seed + 差分）。旧文件缺这一段时按空处理，
+// 所以读取端不按版本号拒绝，只有写入端跟着升版本。
+constexpr int kCurrentVersion = 2;
 
 std::string toRelative(const std::string& absolutePath)
 {
@@ -200,6 +205,50 @@ scene::SceneDescription fromJson(const json& root)
         description.entities.push_back(std::move(entity));
     }
 
+    // F3：体素世界（可选字段）。任何一格坏数据都跳过，不让整个场景载入失败。
+    if (root.contains("voxelWorlds") && root["voxelWorlds"].is_array())
+    {
+        for (const json& w : root["voxelWorlds"])
+        {
+            if (!w.is_object())
+                continue;
+            scene::VoxelWorldDescription world;
+            world.seed = w.value("seed", world.seed);
+            world.radiusChunks = w.value("radiusChunks", world.radiusChunks);
+            world.baseY = w.value("baseY", world.baseY);
+            if (w.contains("chunks") && w["chunks"].is_array())
+            {
+                for (const json& c : w["chunks"])
+                {
+                    if (!c.is_object())
+                        continue;
+                    scene::VoxelChunkDescription chunk;
+                    chunk.chunkX = c.value("chunkX", 0);
+                    chunk.chunkZ = c.value("chunkZ", 0);
+                    if (c.contains("edits") && c["edits"].is_array())
+                    {
+                        for (const json& e : c["edits"])
+                        {
+                            if (!e.is_array() || e.size() != 4)
+                                continue;
+                            scene::VoxelBlockEdit edit;
+                            edit.x = e[0].get<int32_t>();
+                            edit.y = e[1].get<int32_t>();
+                            edit.z = e[2].get<int32_t>();
+                            const int block = e[3].get<int>();
+                            edit.block = static_cast<uint8_t>(
+                                std::clamp(block, 0, static_cast<int>(voxel::kBlockCount) - 1));
+                            chunk.edits.push_back(edit);
+                        }
+                    }
+                    if (!chunk.edits.empty())
+                        world.chunks.push_back(std::move(chunk));
+                }
+            }
+            description.voxelWorlds.push_back(std::move(world));
+        }
+    }
+
     return description;
 }
 
@@ -276,6 +325,37 @@ json toJson(const scene::SceneDescription& description)
     }
 
     root["entities"] = std::move(entities);
+
+    // F3：体素世界 = seed + 与按 seed 重新生成的差分。
+    // edits 写成 [x, y, z, block] 四元组，比对象数组省一半体积。
+    if (!description.voxelWorlds.empty())
+    {
+        json worlds = json::array();
+        for (const scene::VoxelWorldDescription& world : description.voxelWorlds)
+        {
+            json w;
+            w["seed"] = world.seed;
+            w["radiusChunks"] = world.radiusChunks;
+            w["baseY"] = world.baseY;
+            json chunks = json::array();
+            for (const scene::VoxelChunkDescription& chunk : world.chunks)
+            {
+                if (chunk.edits.empty())
+                    continue;
+                json c;
+                c["chunkX"] = chunk.chunkX;
+                c["chunkZ"] = chunk.chunkZ;
+                json edits = json::array();
+                for (const scene::VoxelBlockEdit& edit : chunk.edits)
+                    edits.push_back(json::array({ edit.x, edit.y, edit.z, edit.block }));
+                c["edits"] = std::move(edits);
+                chunks.push_back(std::move(c));
+            }
+            w["chunks"] = std::move(chunks);
+            worlds.push_back(std::move(w));
+        }
+        root["voxelWorlds"] = std::move(worlds);
+    }
     return root;
 }
 } // namespace

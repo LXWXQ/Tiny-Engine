@@ -27,6 +27,7 @@ updated: 2026-11-04
 | TD-10 | RenderGraph 同步语义缺口 | `LOAD` 补读访问位 + `imageAvailable` 等 `ALL_COMMANDS` |
 | TD-11 | 地形 GPU mesh 同步 submit + fence wait | 4 槽异步 submit/poll + worker picking mirror；257² 主线程 poll 约 1ms |
 | TD-12 | 组件 public 字段可直写 + 生产销毁入口不一致 + 无区域索引 | 字段私有/getter/setPose；XZ region bucket；clearEntities/相机复用走 Scene::destroyEntity |
+| TD-25 | 体素世界不进场景 JSON（`captureDescription()` 只序列化地形与普通实体，`buildFromDescription()` 的 `clearEntities()` 会连 chunk 一起清掉） | 存 `seed/radiusChunks/baseY` + 每 chunk 的改动差分区（`[x,y,z,block]` 四元组），载入时重建后逐格回放；场景版本 2，老文件缺 `voxelWorlds` 按空处理 | 挖一格 `captureDescription()` 恰好一条 Air 记录、放回清零；`SceneSerializer::roundTrip` 逐字段一致 |
 | TD-13 | `RenderGraph::setPassEnabled` 帧间失效（`passes` 每帧重建） | `PassSwitchboard` 记住规则 + 注册时重放 + 前缀匹配 + 未命中诊断 + 纯逻辑自检 |
 | TD-14 | `Pass::writeDepth` 静默把 `depth==0 && stencil==0` 改写成 `{1.0, 0}` | 清屏值由调用方显式给出；删掉隐式改写，GeometryPass 本来就显式传 1.0 |
 | TD-15 | GPU 批每子网格一条间接命令、无全局合并缓冲（原未关闭第 14 条） | 合并顶点/索引缓冲 + 单 range/单 counter + 一次 `vkCmdDrawIndexedIndirectCount`；索引不重写，用 `vertexOffset` 施加 `baseVertex` |
@@ -61,7 +62,6 @@ updated: 2026-11-04
 | 15 | 粒子只有 `ExternalInstance` 数据入口，还没有生产方（体素已用独立实体 + Model 路径落地） | 引擎侧已能画，但没有系统往里喂数据 | F6 特效系统落地时 |
 | 16 | arena 是两块大缓冲（F2-h 起按流送环尺寸算，半径 24 约 171 MB + 82 MB），不能增长；单块超过剩余容量时该 chunk 退回自有 buffer | 显存随半径平方增长，半径 32 就要 ~400 MB | 需要更大世界时改成分页/多块 arena |
 | 17 | 性能结论只有 Release 构建才算数：同一 2401 对象场景 `updateVisibility` 在 Debug 2.08 ms、Release 61 µs（`SpatialIndex::query` 时代差距约 100 倍） | 用 Debug 数字做容量决策会得出完全错误的瓶颈结论（「半径 24 只有 17 FPS」就是这么来的） | 所有性能验收都在 Release 跑（`--update-profile` 分段计时），Debug 只保证功能与验证层 0；文档里的 FPS 一律标注构建类型 |
-| 19 | 体素世界不进场景 JSON：`captureDescription()` 只序列化地形与普通实体，`buildFromDescription()` 的 `clearEntities()` 会把体素世界连同 chunk 一起清掉 | 挖好的房子保存/重载就没了；编辑器流送序列化自检必须跳过全局 mesh 计数断言 | 体素编辑持久化需求时（存 seed + 改动差分最省） |
 | 18 | 地形噪声锚点是 `float` 绝对值，1e6 量级量化步长约 0.06 | 极远处地形细节变粗（相邻 chunk 同网格，不会裂缝） | 噪声改 double 或分块重锚定时 |
 
 ## 3. 明确"不打算做"的

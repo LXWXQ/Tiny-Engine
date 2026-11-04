@@ -598,3 +598,9 @@ updated: 2026-11-02
 **可观测**：`[Voxel] selfTest PASS | face culling 6/10/6, boundary continuous, solid=12090`、`[Voxel] scene selfTest PASS | chunks=9 hit=(16,10,16) dugDeeper=1 restored=1 groundY=11 characterLanded=1 placedOnFace=1`；`--voxel-world 1` 截图方块地形顶面草皮、侧面土层/石层、无缝。
 **已知限制**：体素世界不进存档（`buildFromDescription()` 会清掉）；无贪心合并 / LOD / AO / 贴图集；网格在主线程同步生成；透明方块没有逐面排序。
 **回归**：新增 `f3-voxel`；全套 **63 项**。
+
+## F3-d：体素世界持久化（seed + 差分）
+**问题**：`captureDescription()` 只序列化地形与普通实体，`buildFromDescription()` 的 `clearEntities()` 会把体素世界连 chunk 一起清掉 —— 挖好的房子保存/重载就没了（tech-debt #19）。
+**实现**：`SceneDescription` 增 `voxelWorlds`（seed/radiusChunks/baseY + 每 chunk 的 `edits` 四元组）；`captureDescription` 按 seed 重新生成参考 chunk 逐格比对出差分；`buildFromDescription` 重建世界后逐格 `set`，每块只 `rebuildVoxelChunk` 一次；`SceneSerializer` 版本 2 读写 `root["voxelWorlds"]`，老文件按空处理；编辑器自动认领世界时补 `!registry.valid(...)`。
+**可观测**：`[Voxel] scene selfTest PASS … persistCapture=1 persistRestore=1`、`[Editor] voxel edit selfTest PASS | … capture + json round trip`。
+**回归**：新增 `f3-voxel-persist`；全套 **65 项**。

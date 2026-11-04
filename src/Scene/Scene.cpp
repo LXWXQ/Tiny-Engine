@@ -1290,7 +1290,10 @@ scene::SceneDescription Scene::captureDescription() const
     std::vector<entt::entity> serializableEntities;
     for (entt::entity entity : registry.view<TransformComponent>())
     {
-        if (!registry.any_of<TerrainChunkComponent>(entity))
+        // 体素 chunk 与地形 chunk 一样是运行期派生物，由世界管理器重建，
+        // 不能当普通实体写进场景（否则载入后会多出一堆空实体）。
+        if (!registry.any_of<TerrainChunkComponent>(entity) &&
+            !registry.any_of<VoxelChunkComponent>(entity))
             serializableEntities.push_back(entity);
     }
 
@@ -1387,6 +1390,44 @@ scene::SceneDescription Scene::captureDescription() const
         // 注意：这里用 push_back，顺序必须与我上面 enum 的顺序一致。
         // 因为 idToIndex 也是按同一个 view 顺序建的，所以两边一致。
         description.entities.push_back(std::move(e));
+    }
+
+    // F3：体素世界按 seed + 差分存盘。差分用"按同一 seed 重新生成一份"对比得到，
+    // 不用维护第二套 dirty 记录，也不会漏掉任何改动路径（挖、放、撤销、脚本）。
+    for (entt::entity worldEntity : registry.view<VoxelWorldComponent>())
+    {
+        const VoxelWorldComponent& world = registry.get<VoxelWorldComponent>(worldEntity);
+        scene::VoxelWorldDescription worldDesc;
+        worldDesc.seed = world.seed;
+        worldDesc.radiusChunks = world.radiusChunks;
+        worldDesc.baseY = world.baseY;
+
+        for (auto [chunkEntity, chunkComp] : registry.view<VoxelChunkComponent>().each())
+        {
+            (void)chunkEntity;
+            if (chunkComp.world != worldEntity || !chunkComp.chunk)
+                continue;
+
+            voxel::Chunk reference;
+            reference.generate(world.seed, chunkComp.chunkX, chunkComp.chunkZ, world.baseY);
+
+            scene::VoxelChunkDescription chunkDesc;
+            chunkDesc.chunkX = chunkComp.chunkX;
+            chunkDesc.chunkZ = chunkComp.chunkZ;
+            for (int32_t y = 0; y < voxel::Chunk::kSize; ++y)
+                for (int32_t z = 0; z < voxel::Chunk::kSize; ++z)
+                    for (int32_t x = 0; x < voxel::Chunk::kSize; ++x)
+                    {
+                        const uint8_t current = chunkComp.chunk->get(x, y, z);
+                        if (current != reference.get(x, y, z))
+                            chunkDesc.edits.push_back(scene::VoxelBlockEdit{ x, y, z, current });
+                    }
+
+            if (!chunkDesc.edits.empty())
+                worldDesc.chunks.push_back(std::move(chunkDesc));
+        }
+
+        description.voxelWorlds.push_back(std::move(worldDesc));
     }
 
     return description;
@@ -1672,6 +1713,33 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
     markAllSpatialDirty();
     refreshTransformsAndVisibility();
     updateTerrainStreaming();
+
+    // F3：体素世界 —— 先按 seed 生成（createVoxelWorld 内部生成 + 网格化），
+    // 再把差分逐块写回，每个受影响的 chunk 只重建一次网格。
+    for (const scene::VoxelWorldDescription& worldDesc : description.voxelWorlds)
+    {
+        const entt::entity worldEntity = createVoxelWorld(
+            worldDesc.seed, worldDesc.radiusChunks, worldDesc.baseY);
+        if (worldEntity == entt::null)
+        {
+            errorMessage = "voxel world rebuild failed";
+            clearEntities();
+            return false;
+        }
+
+        for (const scene::VoxelChunkDescription& chunkDesc : worldDesc.chunks)
+        {
+            const entt::entity chunkEntity = findVoxelChunk(worldEntity, chunkDesc.chunkX, chunkDesc.chunkZ);
+            if (chunkEntity == entt::null)
+                continue;
+            auto& chunkComp = registry.get<VoxelChunkComponent>(chunkEntity);
+            if (!chunkComp.chunk)
+                continue;
+            for (const scene::VoxelBlockEdit& edit : chunkDesc.edits)
+                chunkComp.chunk->set(edit.x, edit.y, edit.z, edit.block);
+            rebuildVoxelChunk(chunkEntity);
+        }
+    }
     return true;
 }
 
@@ -2242,12 +2310,62 @@ bool Scene::voxelSelfTest()
         destroyEntity(character);
     }
 
+    // F3 持久化：差分捕获必须精确 —— 挖掉一格恰好产生一条 Air 记录，放回后清零。
+    // 这里只验证 capture（序列化本体在编辑器的 JSON 往返用例里覆盖），
+    // 避免在自检里 buildFromDescription 把宿主场景整个清掉。
+    bool persistCapture = false;
+    bool persistRestore = false;
+    {
+        const int32_t chunkX = voxel::Chunk::toChunkCoord(hitBlock.x);
+        const int32_t chunkZ = voxel::Chunk::toChunkCoord(hitBlock.z);
+        const int32_t localX = voxel::Chunk::toLocal(hitBlock.x);
+        const int32_t localY = voxel::Chunk::toLocal(hitBlock.y);
+        const int32_t localZ = voxel::Chunk::toLocal(hitBlock.z);
+
+        auto scanEdits = [&](const scene::SceneDescription& description, bool& foundAir)
+        {
+            size_t total = 0;
+            foundAir = false;
+            for (const scene::VoxelWorldDescription& worldDesc : description.voxelWorlds)
+            {
+                if (worldDesc.seed != 4242ull)
+                    continue;
+                for (const scene::VoxelChunkDescription& chunkDesc : worldDesc.chunks)
+                {
+                    if (chunkDesc.chunkX != chunkX || chunkDesc.chunkZ != chunkZ)
+                        continue;
+                    for (const scene::VoxelBlockEdit& edit : chunkDesc.edits)
+                    {
+                        ++total;
+                        if (edit.x == localX && edit.y == localY && edit.z == localZ &&
+                            edit.block == static_cast<uint8_t>(voxel::BlockId::Air))
+                            foundAir = true;
+                    }
+                }
+            }
+            return total;
+        };
+
+        if (setVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z,
+                          static_cast<uint8_t>(voxel::BlockId::Air)))
+        {
+            bool foundAir = false;
+            const size_t editsAfterDig = scanEdits(captureDescription(), foundAir);
+            persistCapture = foundAir && editsAfterDig == 1;
+
+            setVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z, original);
+            bool foundRestored = false;
+            const size_t editsAfterRestore = scanEdits(captureDescription(), foundRestored);
+            persistRestore = !foundRestored && editsAfterRestore == 0;
+        }
+    }
+
     cleanup();
 
     const bool groundOk = groundIsVoxel || terrainPresent;
     const bool characterOk = characterLanded || (terrainPresent && characterGrounded);
     if (!dugDeeper || !restored || !groundMatches || !groundOk ||
-        !characterOk || !placedOnFace)
+        !characterOk || !placedOnFace || !persistCapture || !persistRestore)
     {
         std::cerr << "[Voxel] selfTest: dig/place/ground mismatch (groundIsVoxel="
                   << groundIsVoxel << " characterLanded=" << characterLanded
@@ -2261,7 +2379,9 @@ bool Scene::voxelSelfTest()
               << " restored=" << (restored ? 1 : 0)
               << " groundY=" << groundY
               << " characterLanded=" << (characterLanded ? 1 : 0)
-              << " placedOnFace=" << (placedOnFace ? 1 : 0) << std::endl;
+              << " placedOnFace=" << (placedOnFace ? 1 : 0)
+              << " persistCapture=" << (persistCapture ? 1 : 0)
+              << " persistRestore=" << (persistRestore ? 1 : 0) << std::endl;
     return true;
 }
 

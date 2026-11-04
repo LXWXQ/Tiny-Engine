@@ -111,11 +111,13 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
 
     // F3：场景里可能已经有体素世界（例如 --voxel-world 启动或打开存档），
     // 笔刷要认它 —— 首次见到就记住，之后由「创建 -> 体素世界」更新。
-    if (state.voxelWorld == entt::null && state.services.registry != nullptr)
+    // 体素世界会随「停止播放 / 打开场景」被重建，旧实体句柄随即失效，
+    // 所以这里同时检查 null 与 valid，否则笔刷会一直指向一个已销毁的实体。
+    if (state.services.registry != nullptr &&
+        (state.voxelWorld == entt::null || !state.services.registry->valid(state.voxelWorld)))
     {
         auto view = state.services.registry->view<VoxelWorldComponent>();
-        if (!view.empty())
-            state.voxelWorld = *view.begin();
+        state.voxelWorld = view.empty() ? entt::null : *view.begin();
     }
 
     if (advanceTerrainCreateRequest(state.terrainCreatePending, state.terrainCreateWaitFrames))
@@ -3072,9 +3074,61 @@ bool EditorLayer::selfTestWithScene()
         const bool dug = before != 0u && hit &&
                          testScene->getVoxelBlock(voxelWorld, hitBlock.x, hitBlock.y, hitBlock.z) == 0u &&
                          voxelStack.undoCount() == 1;
+        // 持久化（tech-debt #19）：挖掉后 capture 必须正好记下这一格 Air。
+        bool captureOk = false;
+        {
+            const scene::SceneDescription captured = testScene->captureDescription();
+            for (const scene::VoxelWorldDescription& world : captured.voxelWorlds)
+            {
+                if (world.seed != 9090ull)
+                    continue;
+                for (const scene::VoxelChunkDescription& chunk : world.chunks)
+                    for (const scene::VoxelBlockEdit& edit : chunk.edits)
+                        if (edit.x == voxel::Chunk::toLocal(hitBlock.x) &&
+                            edit.y == voxel::Chunk::toLocal(hitBlock.y) &&
+                            edit.z == voxel::Chunk::toLocal(hitBlock.z) &&
+                            edit.block == 0u)
+                            captureOk = true;
+            }
+        }
+
         voxelStack.undo();
         const bool restored = testScene->getVoxelBlock(
             voxelWorld, hitBlock.x, hitBlock.y, hitBlock.z) == before;
+
+        // JSON 往返：手搓一个只含体素差分的描述，序列化再读回必须逐字段一致。
+        scene::SceneDescription voxelOnly;
+        scene::VoxelWorldDescription worldDesc;
+        worldDesc.seed = 9090ull;
+        worldDesc.radiusChunks = 1;
+        worldDesc.baseY = 2;
+        scene::VoxelChunkDescription chunkDesc;
+        chunkDesc.chunkX = -1;
+        chunkDesc.chunkZ = 3;
+        chunkDesc.edits.push_back(scene::VoxelBlockEdit{
+            4, 5, 6, static_cast<uint8_t>(voxel::BlockId::Brick) });
+        worldDesc.chunks.push_back(chunkDesc);
+        voxelOnly.voxelWorlds.push_back(worldDesc);
+
+        scene::SceneDescription roundTripped;
+        std::string roundTripError;
+        bool jsonOk = SceneSerializer::roundTrip(voxelOnly, roundTripped, roundTripError);
+        if (jsonOk)
+        {
+            jsonOk = roundTripped.voxelWorlds.size() == 1 &&
+                     roundTripped.voxelWorlds[0].seed == 9090ull &&
+                     roundTripped.voxelWorlds[0].radiusChunks == 1 &&
+                     roundTripped.voxelWorlds[0].baseY == 2 &&
+                     roundTripped.voxelWorlds[0].chunks.size() == 1 &&
+                     roundTripped.voxelWorlds[0].chunks[0].chunkX == -1 &&
+                     roundTripped.voxelWorlds[0].chunks[0].chunkZ == 3 &&
+                     roundTripped.voxelWorlds[0].chunks[0].edits.size() == 1 &&
+                     roundTripped.voxelWorlds[0].chunks[0].edits[0].x == 4 &&
+                     roundTripped.voxelWorlds[0].chunks[0].edits[0].y == 5 &&
+                     roundTripped.voxelWorlds[0].chunks[0].edits[0].z == 6 &&
+                     roundTripped.voxelWorlds[0].chunks[0].edits[0].block ==
+                         static_cast<uint8_t>(voxel::BlockId::Brick);
+        }
 
         // 清理：体素世界是独立管理器 + chunk 实体，测试结束要全删掉。
         std::vector<entt::entity> chunks;
@@ -3087,15 +3141,17 @@ bool EditorLayer::selfTestWithScene()
             testScene->destroyEntity(entity);
         testScene->destroyEntity(voxelWorld);
 
-        if (!hit || !dug || !restored || !resolvesToWorld)
+        if (!hit || !dug || !restored || !resolvesToWorld || !captureOk || !jsonOk)
         {
             std::cerr << "[Editor] selfTest FAIL: voxel dig/undo (hit=" << hit
                       << " dug=" << dug << " restored=" << restored
-                      << " resolve=" << resolvesToWorld << ")" << std::endl;
+                      << " resolve=" << resolvesToWorld << " capture=" << captureOk
+                      << " json=" << jsonOk << " jsonError=" << roundTripError << ")" << std::endl;
             return false;
         }
         std::cout << "[Editor] voxel edit selfTest PASS | dug and restored ("
-                  << hitBlock.x << "," << hitBlock.y << "," << hitBlock.z << ")" << std::endl;
+                  << hitBlock.x << "," << hitBlock.y << "," << hitBlock.z
+                  << "), capture + json round trip" << std::endl;
     }
 
     // ---- 2i) tech-debt #19：异步创建地形（实体先出现，几何后台合成） ----

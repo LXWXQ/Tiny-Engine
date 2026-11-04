@@ -16,6 +16,7 @@
 
 #include "Terrain/TerrainConfig.h"
 
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
@@ -87,12 +88,41 @@ struct EntityDescription
     MaterialDescription material;
 };
 
+// F3：体素世界只存 seed + 与"按 seed 重新生成"的差分。
+// 一个 32^3 chunk 是 32768 个方块，全量存盘会让场景文件爆掉；
+// 实际游玩的改动通常只有几百格，所以差分是最省且最稳的做法。
+struct VoxelBlockEdit
+{
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t z = 0;
+    uint8_t block = 0;
+};
+
+struct VoxelChunkDescription
+{
+    int32_t chunkX = 0;
+    int32_t chunkZ = 0;
+    std::vector<VoxelBlockEdit> edits;
+};
+
+struct VoxelWorldDescription
+{
+    uint64_t seed = 1337ull;
+    int32_t radiusChunks = 1;
+    int32_t baseY = 0;
+    std::vector<VoxelChunkDescription> chunks;
+};
+
 struct SceneDescription
 {
     // 文件格式版本。加字段时递增，并在读取侧做兼容。
     int version = 1;
 
     std::vector<EntityDescription> entities;
+
+    // F3：体素世界（seed + 差分）。老场景文件没有这一段，读的时候为空。
+    std::vector<VoxelWorldDescription> voxelWorlds;
 };
 
 } // namespace scene

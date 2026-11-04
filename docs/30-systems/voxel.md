@@ -68,7 +68,15 @@ updated: 2026-11-04
   射线起点本来就在方块内部时（贴脸挖）用视线主轴反向兜底，保证仍是相邻格；
 - 自检里有一条斜射断言：`components == 1 && magnitude == 1 && manhattan == 1`。
 
-## 6. 已知限制
+## 6. 持久化：seed + 差分
+
+场景 JSON 只记 `seed / radiusChunks / baseY` 与**被改过的格子**：
+`voxelWorlds: [{ seed, radiusChunks, baseY, chunks: [{ chunkX, chunkZ, edits: [[x, y, z, block], ...] }] }]`。
+载入时先按 seed 重建世界，再逐格应用 edits，每个受影响 chunk 只重建一次网格。
+一个 32³ chunk 有 32768 格，全量存盘会爆；实际改动通常只有几百格，所以存差分。
+自检：`persistCapture/persistRestore`（挖一格只产生一条 Air 记录，放回后清零）与编辑器侧的 `SceneSerializer::roundTrip`。
+
+## 7. 已知限制
 
 - **体素世界不进存档**：`captureDescription()` / `buildFromDescription()` 只处理地形与普通实体，
   重建场景（打开新场景、流送序列化自检）会把体素世界清掉（见 tech-debt）。
@@ -77,7 +85,7 @@ updated: 2026-11-04
 - 没有 LOD、没有 AO、没有贴图集；颜色只有一张 16 色调色板。
 - 水/透明方块只做了 `opaque = false`（玻璃、树叶），排序仍是按实体，没有逐面透明排序。
 
-## 7. 自检
+## 8. 自检
 
 | 打印 | 覆盖 |
 |---|---|
