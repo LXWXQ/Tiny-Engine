@@ -133,7 +133,10 @@ private:
     // B-07: create a kinematic character at the camera's ground position.
     entt::entity createCharacterFromUi();
 
-    bool newScene();
+    bool newScene(bool announce = true);
+    // 帮助 → 示例：一键加载预设场景。pendingExampleId 让未保存确认之后仍记得选的是哪个示例。
+    void requestExample(const char* id);
+    bool loadExample(const std::string& id);
     bool saveScene();
     bool saveSceneAs();
     bool openSceneDialog();

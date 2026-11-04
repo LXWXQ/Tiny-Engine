@@ -165,8 +165,10 @@ struct EditorState
 
     // ---- 未保存修改的确认 ----
     // 非 None 表示有一个文档操作被"脏"挡住，等待用户在模态框里选。
-    enum class PendingDocumentAction { None, New, Open, Exit };
+    enum class PendingDocumentAction { None, New, Open, Exit, Example };
     PendingDocumentAction pendingDocumentAction = PendingDocumentAction::None;
+    // 帮助 → 示例：被未保存确认挡住时要加载哪个预设（空 = 没有待执行示例）。
+    std::string pendingExampleId;
 
     // ---- 编辑 / 运行模式 ----
     // 编辑模式：视口左键只做选中、手柄可拖、面板可改数据。

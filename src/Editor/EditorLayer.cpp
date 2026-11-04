@@ -387,6 +387,32 @@ const ShortcutEntry kShortcutEntries[] =
 
 constexpr size_t kShortcutEntryCount = sizeof(kShortcutEntries) / sizeof(kShortcutEntries[0]);
 
+// 帮助 → 示例：菜单项与加载分支共用这张表，增删示例时不会两边各改一半。
+struct ExampleEntry
+{
+    const char* id;
+    const char* label;
+    bool separatorBefore;
+};
+
+const ExampleEntry kEditorExamples[] =
+{
+    { "voxel-glass", "体素玻璃（V-01）", false },
+    { "voxel-world", "体素世界（3×3 chunk）", false },
+    { "terrain", "程序化地形 257×257", true },
+    { "streaming", "流送地形（围绕相机加载）", false },
+};
+
+bool isKnownExampleId(const std::string& id)
+{
+    for (const ExampleEntry& example : kEditorExamples)
+    {
+        if (id == example.id)
+            return true;
+    }
+    return false;
+}
+
 // 显示用键位文本：唯一来源是 key + 修饰键，速查表与自检都调它。
 std::string shortcutKeys(const ShortcutEntry& entry)
 {
@@ -749,6 +775,21 @@ void EditorLayer::drawMenuBar()
 
     if (ImGui::BeginMenu("帮助"))
     {
+        if (ImGui::BeginMenu("示例"))
+        {
+            const bool canLoad = state.documentWritable() && state.services.scene != nullptr;
+            for (const ExampleEntry& example : kEditorExamples)
+            {
+                if (example.separatorBefore)
+                    ImGui::Separator();
+                if (ImGui::MenuItem(example.label, nullptr, false, canLoad))
+                    requestExample(example.id);
+            }
+            ImGui::Separator();
+            ImGui::TextDisabled("示例会替换当前场景；有未保存修改时先确认");
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
         ImGui::MenuItem("键盘快捷键", "?", &showShortcutSheet);
         if (ImGui::MenuItem("打开控制台并跳到最近错误", nullptr, false, !state.lastErrorSummary.empty()))
             openConsoleAtLastError();
@@ -1459,7 +1500,7 @@ void EditorLayer::endFrame()
 // ---------------------------------------------------------------------------
 // 场景文档操作
 // ---------------------------------------------------------------------------
-bool EditorLayer::newScene()
+bool EditorLayer::newScene(bool announce)
 {
     if (!state.documentWritable())
     {
@@ -1475,7 +1516,125 @@ bool EditorLayer::newScene()
     state.commands.clear();
     state.documentPath.clear();
     state.documentDirty = false;
-    state.notifySuccess("新建空场景");
+    state.pendingExampleId.clear();
+    if (announce)
+        state.notifySuccess("新建空场景");
+    return true;
+}
+
+void EditorLayer::requestExample(const char* id)
+{
+    if (id == nullptr || !isKnownExampleId(id))
+        return;
+    state.pendingExampleId = id;
+    requestDocumentAction(EditorState::PendingDocumentAction::Example);
+}
+
+bool EditorLayer::loadExample(const std::string& id)
+{
+    Scene* scene = state.services.scene;
+    if (scene == nullptr || !isKnownExampleId(id))
+    {
+        state.notify(LogEntry::Level::Error, "示例加载失败：未知示例 " + id);
+        return false;
+    }
+
+    // 运行模式下相机由角色接管、世界可能已被玩家改动；先回编辑模式。
+    // setEditorMode 会把相机恢复到进入运行模式前的位姿，后面的预设再覆盖它。
+    if (state.isRuntime())
+        setEditorMode(EditorState::EditorMode::Edit);
+
+    // 示例等同"打开一份新场景"，复用同一条新建路径；未保存确认已经在
+    // requestDocumentAction 里做过。这里不播报"新建空场景"，
+    // 免得和紧随其后的示例提示叠在一起。
+    if (!newScene(false))
+        return false;
+
+    state.voxelWorld = entt::null;
+    state.pendingTerrainBuild = entt::null;
+    state.terrainCreatePending = false;
+    state.terrainCreateWaitFrames = 0;
+    state.selection.clear();
+    state.commands.clear();
+
+    const auto placeCamera = [scene](const glm::vec3& position, const glm::vec3& euler)
+    {
+        TransformComponent& camera = scene->getCameraTransform();
+        camera.setTranslation(position);
+        camera.setEuler(euler);
+        camera.setScale(glm::vec3(1.0f));
+        scene->markTransformDirty(scene->getCameraEntity());
+    };
+    constexpr float kPi = 3.14159265358979323846f;
+
+    if (id == "voxel-glass" || id == "voxel-world")
+    {
+        const entt::entity world = scene->createVoxelWorld(20251104ull, 1, 0);
+        if (world == entt::null)
+        {
+            state.notify(LogEntry::Level::Error, "示例加载失败：体素世界创建失败");
+            return false;
+        }
+        state.voxelWorld = world;
+
+        if (id == "voxel-glass")
+        {
+            const int32_t blocks = scene->placeVoxelGlassDemo(world);
+            if (blocks <= 0)
+            {
+                state.notify(LogEntry::Level::Error, "示例加载失败：玻璃演示没有写入方块");
+                return false;
+            }
+            placeCamera(glm::vec3(16.0f, 22.0f, 54.0f), glm::vec3(0.20f, kPi, 0.0f));
+            char buffer[160];
+            std::snprintf(buffer, sizeof(buffer), "示例：体素玻璃（%d 个方块，观察透明排序）", blocks);
+            state.notifySuccess(buffer);
+        }
+        else
+        {
+            placeCamera(glm::vec3(16.0f, 46.0f, 118.0f), glm::vec3(0.42f, kPi, 0.0f));
+            state.notifySuccess("示例：体素世界（3×3 chunk，中央有玻璃演示）");
+        }
+    }
+    else if (id == "terrain")
+    {
+        // createTerrainFromUi 用相机前方定位地形中心，所以先把相机摆好；
+        // 这里不用 requestTerrainCreate 的两帧延迟，否则示例会先显示一帧空场景。
+        placeCamera(glm::vec3(0.0f, 42.0f, 90.0f), glm::vec3(0.42f, kPi, 0.0f));
+        if (createTerrainFromUi() == entt::null)
+            return false;
+        state.selection.clear();
+        state.commands.clear();
+    }
+    else if (id == "streaming")
+    {
+        // 流送地形围绕相机做初始加载，相机必须在地形创建之前就位。
+        placeCamera(glm::vec3(0.0f, 18.0f, 56.0f), glm::vec3(0.30f, kPi, 0.0f));
+
+        terrain::TerrainConfig config;
+        config.seed = 9001;
+        config.resolutionX = 33;
+        config.resolutionZ = 33;
+        config.sizeX = 32.0f;
+        config.sizeZ = 32.0f;
+        config.heightScale = 12.0f;
+        config.lodLevelCount = 3;
+        config.skirtsEnabled = false;
+        config.localColorRange = false;
+
+        const entt::entity streaming = scene->createStreamingTerrain(
+            config, 3, 4, "StreamingWorld（示例）");
+        if (streaming == entt::null)
+        {
+            state.notify(LogEntry::Level::Error, "示例加载失败：流送地形创建失败");
+            return false;
+        }
+        state.notifySuccess("示例：流送地形（移动相机时会继续加载周边 chunk）");
+    }
+
+    // 示例本身视为未修改文档：浏览时切换/新建不该反复弹"未保存"。
+    state.documentDirty = false;
+    state.transformRefreshPending = true;
     return true;
 }
 
@@ -1840,6 +1999,13 @@ void EditorLayer::performDocumentAction(EditorState::PendingDocumentAction actio
         if (state.services.requestExit)
             state.services.requestExit();
         break;
+    case EditorState::PendingDocumentAction::Example:
+    {
+        const std::string id = state.pendingExampleId;
+        state.pendingExampleId.clear();
+        loadExample(id);
+        break;
+    }
     case EditorState::PendingDocumentAction::None:
         break;
     }
@@ -1848,6 +2014,7 @@ void EditorLayer::performDocumentAction(EditorState::PendingDocumentAction actio
 void EditorLayer::cancelPendingDocumentAction()
 {
     state.pendingDocumentAction = EditorState::PendingDocumentAction::None;
+    state.pendingExampleId.clear();
     unsavedPromptRequested = false;
 }
 
@@ -1944,6 +2111,7 @@ void EditorLayer::drawUnsavedPrompt()
     if (ImGui::Button("取消", ImVec2(120, 0)))
     {
         state.pendingDocumentAction = EditorState::PendingDocumentAction::None;
+        state.pendingExampleId.clear();
         ImGui::CloseCurrentPopup();
     }
 
@@ -4015,6 +4183,62 @@ bool EditorLayer::selfTestWithScene()
         }
         std::cout << "[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose"
                   << std::endl;
+    }
+
+    // ---- 2h) 帮助 → 示例：预设场景能替换世界并自动取景 ----
+    {
+        Scene* scene = state.services.scene;
+        entt::registry* registry = state.services.registry;
+        if (scene == nullptr || registry == nullptr)
+        {
+            std::cerr << "[Editor] example presets selfTest FAIL: no scene bound" << std::endl;
+            return false;
+        }
+
+        // 先验证菜单路径：脏文档必须只登记意图，取消后连示例 id 一起清掉。
+        state.documentDirty = true;
+        requestExample("voxel-glass");
+        const bool gated = state.pendingDocumentAction == EditorState::PendingDocumentAction::Example &&
+            state.pendingExampleId == "voxel-glass";
+        cancelPendingDocumentAction();
+        const bool cancelled = state.pendingDocumentAction == EditorState::PendingDocumentAction::None &&
+            state.pendingExampleId.empty();
+        state.documentDirty = false;
+        if (!gated || !cancelled)
+        {
+            std::cerr << "[Editor] example presets selfTest FAIL: dirty document gating"
+                      << " gated=" << gated << " cancelled=" << cancelled << std::endl;
+            return false;
+        }
+
+        if (!loadExample("voxel-glass"))
+        {
+            std::cerr << "[Editor] example presets selfTest FAIL: loadExample returned false" << std::endl;
+            return false;
+        }
+        scene->waitForVoxelBuilds();
+
+        uint64_t glassFaces = 0;
+        for (auto [entity, chunk] : registry->view<VoxelChunkComponent>().each())
+        {
+            (void)entity;
+            glassFaces += chunk.glassFaceCount;
+        }
+        const glm::vec3 camera = scene->getCameraTransform().getTranslation();
+        const bool cameraPlaced = glm::length(camera - glm::vec3(16.0f, 22.0f, 54.0f)) < 0.01f;
+        const bool worldPlaced = registry->view<VoxelWorldComponent>().size() == 1;
+        if (glassFaces == 0 || !cameraPlaced || !worldPlaced || state.documentDirty)
+        {
+            std::cerr << "[Editor] example presets selfTest FAIL: glassFaces=" << glassFaces
+                      << " cameraPlaced=" << cameraPlaced
+                      << " worldPlaced=" << worldPlaced
+                      << " dirty=" << state.documentDirty << std::endl;
+            return false;
+        }
+        std::cout << "[Editor] example presets selfTest PASS | glass faces=" << glassFaces << std::endl;
+
+        // 清掉示例，避免后面的截图/测试带着一个 3x3 体素世界。
+        newScene(false);
     }
 
     state.dismissToast();

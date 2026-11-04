@@ -66,7 +66,7 @@ cmake --build build --config Debug
 | CPU JobSystem | worker pool + `submit()`/`parallelFor()` + 异常传播 | [jobsystem](docs/30-systems/jobsystem.md) |
 | 窗口缩放 + 动态分辨率 | swapchain 原地重建；中间目标按 renderScale 缩放 | [synchronization](docs/10-architecture/synchronization.md) |
 | 版本化配置 v2 | 显式 v0->v1->v2 迁移、备份、损坏/未来版本保护 | [config](docs/30-systems/config.md) |
-| **场景编辑器** | Hierarchy / Inspector / Console 面板，菜单栏 + 播放状态机；多选（Ctrl/Shift）、`Ctrl+D` 复制、`Delete` 批量删除、`Ctrl+A` 全选、`F` 聚焦、多选一起拖拽（E2）、层级搜索、材质参数可撤销（E3）、未保存提示与文档标题（E4）、偏好持久化与最近场景（E4-b）、快捷键速查与中文字形（E4-c）、工具栏/状态栏与 Gizmo 吸附（E5-a）、渲染设置面板（E5-b）、空场景三处引导（B2）、错误三处可见 + 打开失败重试（B3）、菜单补齐四项 + 快捷键单一数据源 + 面板可拖动（B4）、界面中文统一 + Console 时间列/过滤/复制/搜索 + 状态栏三段 + 诊断复制（B5/B6）、地形生成两阶段提示与 DPI 缩放（B6）、资产拖拽入视口 + 材质贴图选择 + Inspector 数值行重置（E6）、地形异步生成（E7/TD-24）（`--editor`） | [editor](docs/90-editor/README.md) |
+| **场景编辑器** | Hierarchy / Inspector / Console 面板，菜单栏 + 播放状态机；多选（Ctrl/Shift）、`Ctrl+D` 复制、`Delete` 批量删除、`Ctrl+A` 全选、`F` 聚焦、多选一起拖拽（E2）、层级搜索、材质参数可撤销（E3）、未保存提示与文档标题（E4）、偏好持久化与最近场景（E4-b）、快捷键速查与中文字形（E4-c）、工具栏/状态栏与 Gizmo 吸附（E5-a）、渲染设置面板（E5-b）、空场景三处引导（B2）、错误三处可见 + 打开失败重试（B3）、菜单补齐四项 + 快捷键单一数据源 + 面板可拖动（B4）、界面中文统一 + Console 时间列/过滤/复制/搜索 + 状态栏三段 + 诊断复制（B5/B6）、地形生成两阶段提示与 DPI 缩放（B6）、资产拖拽入视口 + 材质贴图选择 + Inspector 数值行重置（E6）、地形异步生成（E7/TD-24）、帮助 → 示例预设一键加载（E10）（`--editor`） | [editor](docs/90-editor/README.md) |
 | **撤销 / 重做** | 命令栈 + 拖拽合并窗口；删除实体可完整撤销（含子树与父子关系） | [commands](docs/90-editor/commands.md) |
 | **场景存读** | `*.scene.json`；存语义（路径/参数）不存 GPU 句柄 | [serialization](docs/90-editor/serialization.md) |
 | **离屏视口** | 3D 渲染到纹理后作为 ImGui 图片嵌入面板；相机纵横比按视口算 | [viewport](docs/90-editor/viewport.md) |

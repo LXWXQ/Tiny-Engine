@@ -5,7 +5,7 @@ type: status
 scope: 空
 size: ~110 行
 read-when: 想知道编辑器做过哪些轮次与每轮的验证基线
-updated: 2026-11-03
+updated: 2026-11-04
 ---
 
 # 编辑器里程碑
@@ -222,4 +222,14 @@ updated: 2026-11-03
 **可观测**：`[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose`。
 
 **回归**：`e9-runtime-character`（编辑/运行切换后相机跟随与还原）。
+
+## E10：帮助 → 示例（预设场景一键加载）
+
+**问题**：体素世界、玻璃透明、程序化地形、流送地形这些预设只能靠命令行参数启动，编辑器里想逐个看一遍得手动创建并找机位。
+
+**实现**：`ExampleEntry kEditorExamples[]` 一张表驱动 Help → 示例 子菜单；点击只记 `pendingExampleId` 并复用 `PendingDocumentAction::Example` 走未保存确认，确认后 `loadExample()` 静默新建场景（`newScene(false)`）、按预设建世界并摆相机：体素玻璃复用 V-01 的 `placeVoxelGlassDemo`，体素世界 3×3 chunk，程序化地形直调 `createTerrainFromUi()`，流送地形按 CLI 基线参数围绕相机初始加载。示例不置脏，浏览时切换不会反复弹未保存提示。
+
+**可观测**：`[Editor] example presets selfTest PASS | glass faces=879`。
+
+**回归**：`e8-editor-mode` 增加该行断言；全套仍 67 项。
 
