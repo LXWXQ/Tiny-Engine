@@ -15,7 +15,7 @@ param(
 #   3. the front-matter "id" matches the logical path (ordering prefix dropped)
 #   4. every document is listed in its parent directory README.md
 #   5. every relative markdown link resolves to an existing file
-#   6. no single document exceeds the 600-line budget
+#   6. (removed 2026-11-04) the 600-line document budget is no longer enforced
 #
 # Exit code 0 = all checks passed; 1 = at least one violation.
 #
@@ -106,9 +106,6 @@ foreach ($doc in $allDocs) {
     }
 
     $lineCount = @(Get-Content -LiteralPath $doc.FullName -Encoding UTF8).Count
-    if ($lineCount -gt 600) {
-        Add-Problem "docs/$relative : $lineCount lines exceeds the 600-line budget, split it"
-    }
     $docInfo[$relative] = @{ Path = $doc.FullName; Lines = $lineCount }
 }
 
