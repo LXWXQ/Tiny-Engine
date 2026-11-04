@@ -213,7 +213,9 @@ bool buildMesh(const Chunk& chunk,
                     p[ax.u] = ui;
                     p[ax.v] = vi;
                     const uint8_t id = chunk.get(p[0], p[1], p[2]);
-                    if (isAir(id))
+                    // V-01：玻璃不进不透明网格 —— 它由 GlassPass 按面排序后做前向混合。
+                    // 留在这里会先写进 G-Buffer 深度，GlassPass 的同一层玻璃就被自己挡掉。
+                    if (isAir(id) || isGlass(id))
                         continue;
                     int32_t n[3] = { p[0], p[1], p[2] };
                     n[ax.axis] += ax.sign;
@@ -290,6 +292,104 @@ bool buildMesh(const Chunk& chunk,
                         const float tileBase = static_cast<float>(id > 0 ? id - 1 : 0) * 64.0f;
                         vertex.uv = glm::vec2(tileBase + corner[ax.u] * static_cast<float>(w),
                                               corner[ax.v] * static_cast<float>(h));
+                        outMesh.vertices.push_back(vertex);
+                        boundsMin = glm::min(boundsMin, vertex.position);
+                        boundsMax = glm::max(boundsMax, vertex.position);
+                    }
+                    outMesh.indices.push_back(baseVertex + 0u);
+                    outMesh.indices.push_back(baseVertex + 1u);
+                    outMesh.indices.push_back(baseVertex + 2u);
+                    outMesh.indices.push_back(baseVertex + 0u);
+                    outMesh.indices.push_back(baseVertex + 2u);
+                    outMesh.indices.push_back(baseVertex + 3u);
+                    if (outStats)
+                        ++outStats->faces;
+                }
+            }
+        }
+    }
+
+    sub.indexCount = static_cast<uint32_t>(outMesh.indices.size());
+    sub.surfaceIndexCount = sub.indexCount;
+    sub.boundsMin = (boundsMin.x > boundsMax.x) ? glm::vec3(0.0f) : boundsMin;
+    sub.boundsMax = (boundsMin.x > boundsMax.x) ? glm::vec3(0.0f) : boundsMax;
+
+    if (outStats)
+    {
+        outStats->vertices = static_cast<uint32_t>(outMesh.vertices.size());
+        outStats->indices = static_cast<uint32_t>(outMesh.indices.size());
+    }
+    return true;
+}
+
+bool buildGlassMesh(const Chunk& chunk,
+                    terrain::TerrainMeshData& outMesh,
+                    GlassStats* outStats)
+{
+    outMesh.vertices.clear();
+    outMesh.indices.clear();
+    outMesh.subMeshes.clear();
+    if (outStats)
+        *outStats = GlassStats{};
+
+    outMesh.subMeshes.push_back(terrain::TerrainSubMesh{});
+    terrain::TerrainSubMesh& sub = outMesh.subMeshes.back();
+    sub.firstIndex = 0;
+
+    glm::vec3 boundsMin{ 1e30f };
+    glm::vec3 boundsMax{ -1e30f };
+
+    for (int32_t f = 0; f < 6; ++f)
+    {
+        const FaceDef& face = kFaces[f];
+        const FaceAxis& ax = kFaceAxes[f];
+
+        for (int32_t slice = 0; slice < Chunk::kSize; ++slice)
+        {
+            for (int32_t vi = 0; vi < Chunk::kSize; ++vi)
+            {
+                for (int32_t ui = 0; ui < Chunk::kSize; ++ui)
+                {
+                    int32_t p[3] = { 0, 0, 0 };
+                    p[ax.axis] = slice;
+                    p[ax.u] = ui;
+                    p[ax.v] = vi;
+                    const uint8_t id = chunk.get(p[0], p[1], p[2]);
+                    if (!isGlass(id))
+                        continue;
+
+                    int32_t n[3] = { p[0], p[1], p[2] };
+                    n[ax.axis] += ax.sign;
+                    // V-01：只有外面是空气才出面。玻璃-玻璃、玻璃-不透明方块的
+                    // 内侧面画出来也只会互相叠暗，直接跳过。
+                    if (!isAir(chunk.get(n[0], n[1], n[2])))
+                        continue;
+
+                    glm::vec3 lo(0.0f);
+                    glm::vec3 hi(0.0f);
+                    lo[ax.axis] = static_cast<float>(slice);
+                    hi[ax.axis] = static_cast<float>(slice + 1);
+                    lo[ax.u] = static_cast<float>(ui);
+                    hi[ax.u] = static_cast<float>(ui + 1);
+                    lo[ax.v] = static_cast<float>(vi);
+                    hi[ax.v] = static_cast<float>(vi + 1);
+
+                    const uint32_t baseVertex = static_cast<uint32_t>(outMesh.vertices.size());
+                    for (const glm::vec3& corner : face.corners)
+                    {
+                        terrain::TerrainVertex vertex;
+                        vertex.position = glm::mix(lo, hi, corner);
+
+                        const int cu = (corner[ax.u] > 0.5f) ? 1 : 0;
+                        const int cv = (corner[ax.v] > 0.5f) ? 1 : 0;
+                        const float ao = vertexAo(chunk, p, ax, cu, cv);
+
+                        const float shade = face.shade * ao;
+                        vertex.color = glm::vec3(shade, shade, shade);
+                        vertex.normal = face.normal;
+                        // 与 buildMesh 相同的图集编码：uv.x = tile * 64 + 面内跨度 u。
+                        const float tileBase = static_cast<float>(id > 0 ? id - 1 : 0) * 64.0f;
+                        vertex.uv = glm::vec2(tileBase + corner[ax.u], corner[ax.v]);
                         outMesh.vertices.push_back(vertex);
                         boundsMin = glm::min(boundsMin, vertex.position);
                         boundsMax = glm::max(boundsMax, vertex.position);
@@ -435,7 +535,74 @@ bool selfTest()
         return false;
     }
 
-    std::cout << "[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, boundary continuous, solid="
+    // 6) V-01：玻璃单独出网，只朝空气出面（玻璃-玻璃 / 玻璃-实心的内面不画），
+    //    且不贪心 —— 每个面都是一张独立 quad，前向排序才能按面质心前后排列。
+    Chunk glassChunk;
+    terrain::TerrainMeshData glassMesh;
+    GlassStats glassStats;
+    buildGlassMesh(glassChunk, glassMesh, &glassStats);
+    if (glassStats.faces != 0u || !glassMesh.vertices.empty() || !glassMesh.indices.empty())
+    {
+        std::cerr << "[Voxel] selfTest FAIL: empty chunk emitted glass geometry\n";
+        return false;
+    }
+
+    glassChunk.set(5, 5, 5, static_cast<uint8_t>(BlockId::Glass));
+    buildGlassMesh(glassChunk, glassMesh, &glassStats);
+    if (glassStats.faces != 6u || glassStats.vertices != 24u || glassStats.indices != 36u)
+    {
+        std::cerr << "[Voxel] selfTest FAIL: single glass faces=" << glassStats.faces
+                  << " vertices=" << glassStats.vertices << " indices=" << glassStats.indices << "\n";
+        return false;
+    }
+    // 玻璃 = BlockId 9 -> tile 8（基准 512），与 buildMesh 的图集编码一致。
+    for (const terrain::TerrainVertex& vertex : glassMesh.vertices)
+    {
+        if (vertex.uv.x < 512.0f || vertex.uv.x > 513.0f || vertex.uv.y < 0.0f || vertex.uv.y > 1.0f)
+        {
+            std::cerr << "[Voxel] selfTest FAIL: glass atlas uv out of range (" << vertex.uv.x
+                      << ", " << vertex.uv.y << ")" << std::endl;
+            return false;
+        }
+    }
+
+    // 两块相邻玻璃：共享面两侧都不出面 -> 10 个面。
+    glassChunk.set(6, 5, 5, static_cast<uint8_t>(BlockId::Glass));
+    buildGlassMesh(glassChunk, glassMesh, &glassStats);
+    if (glassStats.faces != 10u)
+    {
+        std::cerr << "[Voxel] selfTest FAIL: adjacent glass faces=" << glassStats.faces
+                  << " (expected 10)" << std::endl;
+        return false;
+    }
+
+    // 玻璃贴石头：朝石头的那一面被剔除 -> 5 个面。
+    glassChunk.set(6, 5, 5, static_cast<uint8_t>(BlockId::Stone));
+    buildGlassMesh(glassChunk, glassMesh, &glassStats);
+    if (glassStats.faces != 5u)
+    {
+        std::cerr << "[Voxel] selfTest FAIL: glass against stone faces=" << glassStats.faces
+                  << " (expected 5)" << std::endl;
+        return false;
+    }
+
+    // 2x2 玻璃平板：不做贪心，顶/底各 4 面 + 四周各 2 面 = 16 面。
+    Chunk glassSlab;
+    for (int32_t z = 0; z < 2; ++z)
+    {
+        for (int32_t x = 0; x < 2; ++x)
+            glassSlab.set(x, 0, z, static_cast<uint8_t>(BlockId::Glass));
+    }
+    buildGlassMesh(glassSlab, glassMesh, &glassStats);
+    if (glassStats.faces != 16u || glassStats.vertices != 64u || glassStats.indices != 96u)
+    {
+        std::cerr << "[Voxel] selfTest FAIL: glass slab faces=" << glassStats.faces
+                  << " vertices=" << glassStats.vertices << " indices=" << glassStats.indices
+                  << " (expected 16/64/96)" << std::endl;
+        return false;
+    }
+
+    std::cout << "[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, glass 6/10/5/16, boundary continuous, solid="
               << a.solidCount() << "\n";
     return true;
 }

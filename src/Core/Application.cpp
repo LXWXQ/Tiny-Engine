@@ -26,6 +26,7 @@
 #include "Render/UiCompositePass.h"
 #include "Render/EditorOverlayPass.h"
 #include "Render/SSAOPass.h"
+#include "Render/GlassPass.h"
 #include "Render/ShadowPass.h"
 #include "Voxel/VoxelChunk.h"
 #include "Render/ComputeProbePass.h"
@@ -796,6 +797,11 @@ streamingConfig.skirtsEnabled = false;
 	// PresentPass 负责把 HDR + 辉光变成最终显示值并叠加 ImGui。
 	auto bloomPass = std::make_unique<BloomPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager.get());
+	// V-01：玻璃前向通道。必须在 Lighting 之后（要混到已经算好光照的 HDR 图上）、
+	// Bloom 之前（辉光应当包含玻璃的高光）。
+	auto glassPass = std::make_unique<GlassPass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),
+		descriptorManager.get(), gBuffers[0]->getDepth().format);
 	auto presentPass = std::make_unique<PresentPass>(*vulkanDevice, *vulkanSwapchain, *renderGraph,
 		*renderResources, descriptorManager.get(), descriptorManager->getGlobalSetLayout());
 
@@ -823,6 +829,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(geoPass));
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
+	renderPipeline.addPass(std::move(glassPass));
 	renderPipeline.addPass(std::move(bloomPass));
 	renderPipeline.addPass(std::move(presentPass));
 	// TD-15：带深度测试的包围盒线框，必须在 Present 之后、UiComposite 之前。
@@ -912,6 +919,24 @@ streamingConfig.skirtsEnabled = false;
 		scene->markTransformDirty(scene->getCameraEntity());
 		std::cout << "[Voxel] world ready | radius=" << radius
 			<< " chunks=" << (2 * radius + 1) * (2 * radius + 1) << std::endl;
+	}
+
+	// V-01 目测场景：在体素世界出生点前摆交叉玻璃（需要 --voxel-world）。
+	if (options.voxelGlassDemo)
+	{
+		if (voxelWorldEntity == entt::null)
+			std::cout << "[Voxel] --voxel-glass-demo ignored: needs --voxel-world\n";
+		else
+		{
+			std::cout << "[Voxel] glass demo placed | blocks="
+				<< scene->placeVoxelGlassDemo(voxelWorldEntity) << std::endl;
+			// 近景相机：宽景机位下玻璃只有几十像素，看不出排序/混合对不对。
+			TransformComponent& cameraTransform = scene->getCameraTransform();
+			cameraTransform.setTranslation(glm::vec3(16.0f, 22.0f, 54.0f));
+			cameraTransform.setEuler(glm::vec3(0.20f, glm::radians(180.0f), 0.0f));
+			cameraTransform.setScale(glm::vec3(1.0f));
+			scene->markTransformDirty(scene->getCameraEntity());
+		}
 	}
 
 	currentTime = std::chrono::high_resolution_clock::now();

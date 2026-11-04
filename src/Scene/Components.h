@@ -284,6 +284,10 @@ struct VoxelChunkComponent
     std::shared_ptr<voxel::Chunk> chunk;
     uint64_t revision = 0;
     uint32_t faceCount = 0;
+    // V-01：玻璃不参与 G-Buffer，单独出一份逐面网格；GlassPass 按面质心
+    // 前向排序绘制。没有玻璃时 glassMesh 为空、glassFaceCount 为 0。
+    uint32_t glassFaceCount = 0;
+    std::shared_ptr<terrain::TerrainMeshData> glassMesh;
 };
 
 // F3：体素世界管理器。chunk 实体由它按半径惰性创建，坐标是 chunk 网格坐标。

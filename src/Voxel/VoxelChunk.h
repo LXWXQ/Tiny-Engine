@@ -78,6 +78,24 @@ bool buildMesh(const Chunk& chunk,
                terrain::TerrainMeshData& outMesh,
                MeshStats* outStats = nullptr);
 
+// V-01：玻璃单独成网。
+// 与 buildMesh 的差别只有两条：
+//   1) 只处理 BlockId::Glass，其它方块一概跳过；
+//   2) 只朝“空气”出面 —— 玻璃挨着玻璃时，两侧内面都不生成（透过两层玻璃
+//      不该看到面片叠出来的暗边）；玻璃贴实心方块时也不生成朝实心的面。
+// 不做贪心合并：一片玻璃是一张独立的透明面，合并会把不同位置的四边形
+// 绑在一起，前向排序时无法按面质心排先后。
+struct GlassStats
+{
+    uint32_t faces = 0;
+    uint32_t vertices = 0;
+    uint32_t indices = 0;
+};
+
+bool buildGlassMesh(const Chunk& chunk,
+                    terrain::TerrainMeshData& outMesh,
+                    GlassStats* outStats = nullptr);
+
 // F3 自检：验证面剔除数量、边界连续性、挖掘/放置的局部性。
 bool selfTest();
 

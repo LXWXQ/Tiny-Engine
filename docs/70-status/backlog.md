@@ -250,7 +250,7 @@ updated: 2026-11-02
 
 | ID | 状态 | 任务 | 依赖 | 完成判据 |
 |---|---|---|---|---|
-| V-01 | 未开始 | 体素透明方块排序（玻璃/树叶按面从远到近，或独立透明 pass） | F3 | 透明方块叠放不出现“后面先画”的黑边；截图与手工目测一致 |
+| V-01 | 已完成 | 体素透明方块排序（玻璃拆独立网格 + 前向混合 pass，按面从远到近） | F3 | 透明方块叠放不出现“后面先画”的黑边；截图与手工目测一致 |
 | V-02 | 未开始 | 体素网格化的每帧预算与取消（当前每块一个 job，`processVoxelChunkBuilds()` 每帧最多上传 4 块，但提交阶段没有总预算） | V-04、JobSystem | 半径 12 首帧提交仍有 7.9 ms（Release），要压到 <2 ms；取消后不再上传 |
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
 | V-04 | 未开始 | 体素几何走 `TerrainMeshArena` / 间接合批（当前每 chunk 一份 `Model` + 一次 bind） | F1 合批路径 | 625 块的 draw calls 从数百降到个位数 |
@@ -263,6 +263,8 @@ updated: 2026-11-02
 | F4-02 | 未开始 | 模型 LOD 链（GPU 端 LOD 选级的前置，见 F1 剩余项） | F4-01 | 同一模型可切 2~3 级，切换无跳变 |
 | F1-R1 | 未开始 | 粒子真实接入（`ExternalInstance` 入口已就位，还没有生产方） | F6 | 粒子与 ECS 实例共用分组/合批/剔除 |
 | E-P1 | 未开始 | 启动失败的原生 MessageBox（UX-04 仍缺） | — | 双击启动失败时用户能看到可读提示 |
+
+> V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 
 ## 更新方式
 

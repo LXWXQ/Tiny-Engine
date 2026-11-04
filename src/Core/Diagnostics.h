@@ -73,6 +73,9 @@ bool streamingWorld = false;
 // radius 是 chunk 环半径，1 = 3x3 = 9 块。
 bool voxelWorld = false;
 int32_t voxelRadius = 1;
+// --voxel-glass-demo：在体素世界里摆一组交叉玻璃，用于目测 V-01 的
+// 透明排序与混合（配合 --screenshot 做视觉回归）。
+bool voxelGlassDemo = false;
 int32_t streamingRadius = 3;
 // --streaming-fly [speed]：自检/无人值守时让相机沿圆周自动飞行，
 // 用来验证 chunk 的加载与卸载（不飞就只会在原地加载一圈）。

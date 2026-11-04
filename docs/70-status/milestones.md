@@ -639,3 +639,13 @@ updated: 2026-11-02
 自检新增「作业全部回收后每块都挂 `MeshComponent`、`building` 归零」断言。
 
 **回归**：`f3-voxel`（MustContain 增加 `async submitMs=`）。
+
+## V-01：体素玻璃透明排序（GlassPass）
+
+**问题**：`Glass` / `Leaves` 标成 `opaque = false`，但渲染仍按实体顺序进 G-Buffer 走延迟着色 —— 玻璃叠玻璃时只有最前面（或最后面）的一层可见，交叉墙面出现"后面先画"的暗边。
+
+**实现**：`buildMesh` 遇到玻璃直接跳过；新增 `voxel::buildGlassMesh()` 逐面输出（只有邻格是空气才出面，玻璃-玻璃/玻璃-不透明贴面跳过），`VoxelChunkComponent` 存 `glassMesh/glassFaceCount`。新增 `src/Render/GlassPass`：Lighting 之后、Bloom 之前，只写 `hdrScene`（`LOAD`），深度 `LOAD` 但 `depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，混合 `SRC_ALPHA/ONE_MINUS_SRC_ALPHA`；CPU 每帧按面质心到相机距离平方从远到近排序，索引写入按帧轮转的 host-visible 池，一次 `vkCmdDrawIndexed`。glass-only chunk 只分配材质槽、不需要 `Model`。`--voxel-glass-demo` 摆交叉玻璃墙并把相机拉近。
+
+**可观测**：`[Voxel] glass demo placed | blocks=429`、`[Glass] sorted=879 drawcalls=1`；telemetry draw calls 106（+1）、desc binds 3（+1）；`[Validation] errors=0 warnings=0`；截图 `build/Debug/glass_demo.png`（叠放无黑边，近处玻璃后方地形可见）。
+
+**回归**：新增 `f3-voxel-glass`；全套 **67 项** PASS；验证日志 `build/validation/20261104-162505`。

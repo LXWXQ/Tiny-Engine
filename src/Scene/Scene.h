@@ -150,6 +150,9 @@ public:
     // 改一格并重建受影响的 chunk（跨边界时两/四块都重建）。返回是否真的改了。
     bool setVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z, uint8_t blockId);
     uint8_t getVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z) const;
+    // V-01 目测用：在世界原点附近摆一组十字交叉玻璃 + 一片近景玻璃，
+    // 一次性写入所有格子后只重建受影响的 chunk。返回写入的格子数。
+    int32_t placeVoxelGlassDemo(entt::entity world);
     // DDA 体素射线：返回命中格坐标与命中面法线（用于"放在哪一面"）。
     bool raycastVoxelWorld(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
                            float maxDistance, glm::ivec3& outBlock,
@@ -370,7 +373,8 @@ private:
     void updateTerrainStreaming();
     // F3：重建一个体素 chunk 的网格与 Model。编辑一格时只重建它自己和边界邻居。
     bool applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshData& mesh,
-        const voxel::MeshStats& stats, const std::shared_ptr<Material>& material);
+        const voxel::MeshStats& stats, const std::shared_ptr<terrain::TerrainMeshData>& glassMesh,
+        const voxel::GlassStats& glassStats, const std::shared_ptr<Material>& material);
     bool rebuildVoxelChunk(entt::entity chunkEntity);
 
     // F3-g：异步构建中的体素 chunk（生成 + 网格化在 JobSystem 里完成）。
@@ -383,6 +387,9 @@ private:
         int32_t baseY = 0;
         std::shared_ptr<terrain::TerrainMeshData> mesh;
         voxel::MeshStats stats;
+        // V-01：同一作业里顺带生成玻璃网格，主线程取回时一起落地。
+        std::shared_ptr<terrain::TerrainMeshData> glassMesh;
+        voxel::GlassStats glassStats;
         JobSystem::JobHandle handle;
     };
     void processVoxelChunkBuilds();

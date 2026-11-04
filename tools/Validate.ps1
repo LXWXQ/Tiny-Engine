@@ -279,6 +279,10 @@ $tests = @(
     @{ Name = "f6-shadows"; Exe = "engine"; Args = @("--selftest", "20"); MustContain = @("[Shadow] selfTest PASS", "[Shadow] first frame | cascades=3") },
     @{ Name = "f3-voxel"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
        MustContain = @("[Voxel] selfTest PASS", "[Voxel] scene selfTest PASS", "async submitMs=") },
+    # V-01：玻璃单独走 Lighting 之后的混合 pass。断言 glass 面确实被拆出来、
+    # 排序后被一次 draw 画掉（drawcalls=1），且验证层仍为零消息。
+    @{ Name = "f3-voxel-glass"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1", "--voxel-glass-demo");
+       MustContain = @("[Voxel] glass demo placed | blocks=", "[Glass] sorted=", "drawcalls=1", "[Voxel] selfTest PASS") },
   @{ Name = "f3-voxel-persist"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("capture + json round trip", "[Editor] voxel edit selfTest PASS") },
   @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

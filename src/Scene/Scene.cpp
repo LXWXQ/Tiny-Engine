@@ -1785,52 +1785,75 @@ entt::entity Scene::createMeshEntity(const std::string& absolutePath, const std:
 }
 
 bool Scene::applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshData& mesh,
-	const voxel::MeshStats& stats, const std::shared_ptr<Material>& material)
+	const voxel::MeshStats& stats, const std::shared_ptr<terrain::TerrainMeshData>& glassMesh,
+	const voxel::GlassStats& glassStats, const std::shared_ptr<Material>& material)
 {
-	if (entity == entt::null || !registry.valid(entity) || mesh.vertices.empty())
+	if (entity == entt::null || !registry.valid(entity))
 		return false;
 
+	const bool hasOpaque = !mesh.vertices.empty();
+	const bool hasGlass = glassMesh && !glassMesh->vertices.empty();
+	if (!hasOpaque && !hasGlass)
+		return false;
+
+	// V-01：只有玻璃的 chunk 也是合法状态 —— 不建不透明 Model，只把玻璃网格
+	// 挂在组件上；等 GlassPass 接上后直接消费，不透明管线完全不碰它。
 	std::shared_ptr<Model> model;
-	try
+	if (hasOpaque)
 	{
-		Model::Builder builder;
-		builder.vertices.reserve(mesh.vertices.size());
-		for (const terrain::TerrainVertex& vertex : mesh.vertices)
-			builder.vertices.push_back(Vertex{ vertex.position, vertex.color, vertex.normal, vertex.uv });
-		builder.indices = mesh.indices;
-		builder.subMeshes.reserve(mesh.subMeshes.size());
-		for (const terrain::TerrainSubMesh& source : mesh.subMeshes)
+		try
 		{
-			SubMesh subMesh;
-			subMesh.firstIndex = source.firstIndex;
-			subMesh.indexCount = source.indexCount;
-			subMesh.hasBounds = true;
-			subMesh.boundsMin = source.boundsMin;
-			subMesh.boundsMax = source.boundsMax;
-			builder.subMeshes.push_back(subMesh);
+			Model::Builder builder;
+			builder.vertices.reserve(mesh.vertices.size());
+			for (const terrain::TerrainVertex& vertex : mesh.vertices)
+				builder.vertices.push_back(Vertex{ vertex.position, vertex.color, vertex.normal, vertex.uv });
+			builder.indices = mesh.indices;
+			builder.subMeshes.reserve(mesh.subMeshes.size());
+			for (const terrain::TerrainSubMesh& source : mesh.subMeshes)
+			{
+				SubMesh subMesh;
+				subMesh.firstIndex = source.firstIndex;
+				subMesh.indexCount = source.indexCount;
+				subMesh.hasBounds = true;
+				subMesh.boundsMin = source.boundsMin;
+				subMesh.boundsMax = source.boundsMax;
+				builder.subMeshes.push_back(subMesh);
+			}
+			model = std::make_shared<Model>(*device, commandPool, builder);
 		}
-		model = std::make_shared<Model>(*device, commandPool, builder);
+		catch (const std::exception& ex)
+		{
+			std::cerr << "[Voxel] chunk mesh upload failed: " << ex.what() << std::endl;
+			return false;
+		}
+		if (!model)
+			return false;
 	}
-	catch (const std::exception& ex)
-	{
-		std::cerr << "[Voxel] chunk mesh upload failed: " << ex.what() << std::endl;
-		return false;
-	}
-	if (!model)
-		return false;
 
-	registry.emplace_or_replace<MeshComponent>(entity, MeshComponent{ model });
-	MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(entity);
-	materialComp.material = material;
-	materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*material);
+	if (model)
+		registry.emplace_or_replace<MeshComponent>(entity, MeshComponent{ model });
+	// V-01：玻璃也必须有材质槽 —— GlassPass 从 materialSetIndex 取图集/因子。
+	// 只有玻璃的 chunk 没有 MeshComponent，但材质照旧要分配（否则没有槽位可采样）。
+	if (model || hasGlass)
+	{
+		MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(entity);
+		materialComp.material = material;
+		if (materialComp.materialSetIndex == kInvalidMaterialSlot)
+			materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*material);
+	}
 	if (auto* chunkComp = registry.try_get<VoxelChunkComponent>(entity))
 	{
 		chunkComp->revision += 1;
 		chunkComp->faceCount = stats.faces;
+		chunkComp->glassFaceCount = glassStats.faces;
+		chunkComp->glassMesh = hasGlass ? glassMesh : nullptr;
 	}
-	std::unordered_set<entt::entity> dirtySpatialEntities;
-	setModelBounds(registry, entity, model, &dirtySpatialEntities);
-	attachDirtyTracking(entity);
+	if (model)
+	{
+		std::unordered_set<entt::entity> dirtySpatialEntities;
+		setModelBounds(registry, entity, model, &dirtySpatialEntities);
+		attachDirtyTracking(entity);
+	}
 	return true;
 }
 
@@ -1890,11 +1913,13 @@ entt::entity Scene::createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_
 				pending->chunkZ = chunkZ;
 				pending->baseY = baseY;
 				pending->mesh = std::make_shared<terrain::TerrainMeshData>();
+				pending->glassMesh = std::make_shared<terrain::TerrainMeshData>();
 				PendingVoxelChunk* raw = pending.get();
 				pending->handle = jobSystem->submit([raw, seed]()
 				{
 					raw->chunk->generate(seed, raw->chunkX, raw->chunkZ, raw->baseY);
 					voxel::buildMesh(*raw->chunk, *raw->mesh, &raw->stats);
+					voxel::buildGlassMesh(*raw->chunk, *raw->glassMesh, &raw->glassStats);
 				});
 				pendingVoxelBuilds.push_back(std::move(pending));
 				worldComp.pendingChunks += 1;
@@ -1904,8 +1929,11 @@ entt::entity Scene::createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_
 				chunk->generate(seed, chunkX, chunkZ, baseY);
 				terrain::TerrainMeshData mesh;
 				voxel::MeshStats stats;
-				if (voxel::buildMesh(*chunk, mesh, &stats))
-					applyVoxelChunkMesh(entity, mesh, stats, material);
+				std::shared_ptr<terrain::TerrainMeshData> glassMesh = std::make_shared<terrain::TerrainMeshData>();
+				voxel::GlassStats glassStats;
+				if (voxel::buildMesh(*chunk, mesh, &stats) &&
+					voxel::buildGlassMesh(*chunk, *glassMesh, &glassStats))
+					applyVoxelChunkMesh(entity, mesh, stats, glassMesh, glassStats, material);
 			}
 			++created;
 		}
@@ -1943,7 +1971,8 @@ void Scene::processVoxelChunkBuilds()
 		pending->handle.wait();
 		if (pending->entity != entt::null && registry.valid(pending->entity))
 		{
-			applyVoxelChunkMesh(pending->entity, *pending->mesh, pending->stats, material);
+			applyVoxelChunkMesh(pending->entity, *pending->mesh, pending->stats,
+				pending->glassMesh, pending->glassStats, material);
 			if (auto* chunkComp = registry.try_get<VoxelChunkComponent>(pending->entity))
 			{
 				if (auto* worldComp = registry.try_get<VoxelWorldComponent>(chunkComp->world))
@@ -2002,6 +2031,56 @@ uint8_t Scene::getVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z
     if (!chunkComp.chunk)
         return static_cast<uint8_t>(voxel::BlockId::Air);
     return chunkComp.chunk->get(x & voxel::Chunk::kSizeMask, y, z & voxel::Chunk::kSizeMask);
+}
+
+int32_t Scene::placeVoxelGlassDemo(entt::entity world)
+{
+    if (registry.try_get<VoxelWorldComponent>(world) == nullptr)
+        return 0;
+
+    const uint8_t glass = static_cast<uint8_t>(voxel::BlockId::Glass);
+    const int32_t baseY = 12;
+    std::vector<entt::entity> dirtyChunks;
+    int32_t placed = 0;
+
+    const auto put = [&](int32_t x, int32_t y, int32_t z)
+    {
+        const entt::entity chunkEntity = findVoxelChunk(world,
+            x >> voxel::Chunk::kSizeShift, z >> voxel::Chunk::kSizeShift);
+        if (chunkEntity == entt::null)
+            return;
+        VoxelChunkComponent& chunkComp = registry.get<VoxelChunkComponent>(chunkEntity);
+        if (!chunkComp.chunk)
+            return;
+
+        const int32_t localX = x & voxel::Chunk::kSizeMask;
+        const int32_t localZ = z & voxel::Chunk::kSizeMask;
+        if (chunkComp.chunk->get(localX, y, localZ) == glass)
+            return;
+        chunkComp.chunk->set(localX, y, localZ, glass);
+        ++placed;
+        if (std::find(dirtyChunks.begin(), dirtyChunks.end(), chunkEntity) == dirtyChunks.end())
+            dirtyChunks.push_back(chunkEntity);
+    };
+
+    // 十字交叉的两片玻璃墙：交叉处的玻璃-玻璃共面必须被剔除，
+    // 从近处看不会出现"自己挡自己"的深色接缝。
+    for (int32_t x = 6; x <= 26; ++x)
+        for (int32_t y = baseY; y < baseY + 9; ++y)
+            put(x, y, 16);
+    for (int32_t z = 6; z <= 26; ++z)
+        for (int32_t y = baseY; y < baseY + 9; ++y)
+            put(16, y, z);
+
+    // 更靠近相机的一片独立玻璃：两片玻璃之间的前后顺序靠这里目测。
+    for (int32_t x = 10; x <= 22; ++x)
+        for (int32_t y = baseY + 2; y < baseY + 7; ++y)
+            put(x, y, 26);
+
+    for (entt::entity chunkEntity : dirtyChunks)
+        rebuildVoxelChunk(chunkEntity);
+
+    return placed;
 }
 
 bool Scene::setVoxelBlock(entt::entity world, int32_t x, int32_t y, int32_t z, uint8_t blockId)
@@ -2512,13 +2591,19 @@ bool Scene::rebuildVoxelChunk(entt::entity chunkEntity)
         return false;
 
     VoxelChunkComponent* chunkComp = registry.try_get<VoxelChunkComponent>(chunkEntity);
+    // V-01：glass-only chunk 没有不透明 Model，所以 MeshComponent 是可选的。
     MeshComponent* meshComp = registry.try_get<MeshComponent>(chunkEntity);
-    if (chunkComp == nullptr || meshComp == nullptr || !chunkComp->chunk)
+    if (chunkComp == nullptr || !chunkComp->chunk)
         return false;
 
     terrain::TerrainMeshData mesh;
     voxel::MeshStats stats;
     if (!voxel::buildMesh(*chunkComp->chunk, mesh, &stats))
+        return false;
+
+    std::shared_ptr<terrain::TerrainMeshData> glassMesh = std::make_shared<terrain::TerrainMeshData>();
+    voxel::GlassStats glassStats;
+    if (!voxel::buildGlassMesh(*chunkComp->chunk, *glassMesh, &glassStats))
         return false;
 
     std::shared_ptr<Model> model;
@@ -2551,10 +2636,26 @@ bool Scene::rebuildVoxelChunk(entt::entity chunkEntity)
         }
     }
 
-    if (meshComp->model)
-        retireModel(meshComp->model);
-    meshComp->model = model;
+    if (meshComp)
+    {
+        if (meshComp->model)
+            retireModel(meshComp->model);
+        meshComp->model = model;
+    }
+    else if (model)
+    {
+        // 往全玻璃 chunk 里放了不透明方块：补上 MeshComponent 与 voxel 材质槽。
+        // 玻璃阶段可能已经分配过材质槽，这里不能重复分配（会泄漏旧槽位）。
+        registry.emplace<MeshComponent>(chunkEntity, MeshComponent{ model });
+        MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(chunkEntity);
+        if (!materialComp.material)
+            materialComp.material = materialSystem.getOrCreateMaterial("voxel");
+        if (materialComp.materialSetIndex == kInvalidMaterialSlot)
+            materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*materialComp.material);
+    }
     chunkComp->faceCount = stats.faces;
+    chunkComp->glassFaceCount = glassStats.faces;
+    chunkComp->glassMesh = glassMesh->vertices.empty() ? nullptr : glassMesh;
     ++chunkComp->revision;
     if (model)
         setModelBounds(registry, chunkEntity, model, &dirtySpatialEntities);

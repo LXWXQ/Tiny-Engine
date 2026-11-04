@@ -51,6 +51,9 @@ inline BlockInfo const& blockInfo(uint8_t id)
 inline bool isAir(uint8_t id) { return id == static_cast<uint8_t>(BlockId::Air); }
 inline bool isSolid(uint8_t id) { return blockInfo(id).solid; }
 inline bool isOpaque(uint8_t id) { return blockInfo(id).opaque; }
+// V-01：玻璃是唯一走混合透明的方块。opaque=false 只表示“不遮挡邻面”，
+// 单独判定玻璃才能把它拆到独立的透明网格里前向绘制。
+inline bool isGlass(uint8_t id) { return id == static_cast<uint8_t>(BlockId::Glass); }
 
 const char* blockName(uint8_t id);
 

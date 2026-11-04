@@ -10,8 +10,8 @@ updated: 2026-11-03
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **64 项引擎用例 + 2 项工具自测 = 66 项**；
-加 `-EnableProfiling` 时多一项（37 + 2 = 39）。
+`tools/Validate.ps1` 默认跑 **65 项引擎用例 + 2 项工具自测 = 67 项**；
+加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`。
 
 ## 1. 每项的判据（统一）
 
@@ -92,7 +92,8 @@ updated: 2026-11-03
 | 61 | `f3-voxel` | 方块体素：面剔除 6/10/6、边界连续、DDA 命中与挖深/放回、地面高度、角色站上方块、面放置 | `TinyEngine.exe --selftest 20 --voxel-world 1` | `[Voxel] selfTest PASS`、`[Voxel] scene selfTest PASS` | 顶点材质必须给白贴图否则走棋盘格；旧 Model 换指针前要 `retireModel`；边界格要连带重建邻块 |
 | 62 | `e8-editor-mode` | 编辑 / 运行模式：编辑模式允许选中、运行模式禁止选中（坐标系/层级/视口三处守卫），快捷键表里有模式切换 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] editor mode selfTest PASS`、`entries=20 conflicts=0` | 运行模式进入时清空选中；`Ctrl+左键` 永远是多选（笔刷改到运行模式下的裸左键） |
 | 63 | `e9-runtime-character` | 运行模式接管角色：进入后生成不可见角色、相机跟脚底 + 1.62 米眼高，退出后销毁角色并还原相机 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] runtime character selfTest PASS` | 出生点用相机正下方（`queryGroundAtWorld` 是私有接口，靠重力落地） |
-| 63 | `f3-voxel-persist` | 体素世界持久化：挖掉一格后 `captureDescription()` 记录该格 Air、JSON 往返后 seed/半径/baseY/chunk 坐标/edit 四元组逐字段一致 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] voxel edit selfTest PASS`、`capture + json round trip` | 只存 seed + 差分，不存 32768 格；场景 JSON 版本 2，老文件缺 `voxelWorlds` 按空处理 |
+| 64 | `f3-voxel-persist` | 体素世界持久化：挖掉一格后 `captureDescription()` 记录该格 Air、JSON 往返后 seed/半径/baseY/chunk 坐标/edit 四元组逐字段一致 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] voxel edit selfTest PASS`、`capture + json round trip` | 只存 seed + 差分，不存 32768 格；场景 JSON 版本 2，老文件缺 `voxelWorlds` 按空处理 |
+| 65 | `f3-voxel-glass` | 体素玻璃透明：玻璃拆出独立网格（每面 4 顶点）走 `GlassPass`，按面质心从远到近排序后一次 draw，透明叠放无黑边 | `TinyEngine.exe --selftest 20 --voxel-world 1 --voxel-glass-demo` | `[Voxel] glass demo placed \| blocks=`、`[Glass] sorted=`、`drawcalls=1` | 玻璃不进 G-Buffer；`GlassPass` 深度 LOAD + depthWrite 关；图集无 alpha，只有 Glass 走混合 |
 
 ## 3. 工具自测
 

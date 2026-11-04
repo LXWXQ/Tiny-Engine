@@ -20,9 +20,9 @@ updated: 2026-11-02
 ## 2. 渲染特性缺失
 
 无：SSR、自动曝光、TAA/超分、动画、骨骼、粒子（`ExternalInstance` 入口已就位，无生产方）、后处理抗锯齿、
-点光源阴影（方向光 CSM 已做，只支持单方向光、级联固定 3 级）、体积光、透明排序、通用 GPU LOD/网格组装。
+点光源阴影（方向光 CSM 已做，只支持单方向光、级联固定 3 级）、体积光、通用透明排序（仅体素玻璃有独立 pass）、通用 GPU LOD/网格组装。
 地形单 chunk 子集已接 GPU culling、indirect count 与 GPU 顶点/索引组装；体素走独立 `Model` 路径（无合批、无 LOD）。
-体素世界半径上限 12（`Scene::kMaxVoxelRadius`），透明方块（玻璃/树叶）依赖实体顺序与深度测试，未做逐面排序。
+体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。
 
 ## 3. 架构限制
 
