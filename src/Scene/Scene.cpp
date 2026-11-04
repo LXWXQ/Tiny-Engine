@@ -1945,6 +1945,7 @@ bool Scene::raycastVoxelWorld(const glm::vec3& rayOrigin, const glm::vec3& rayDi
         float entry = 0.0f;
         float exitDistance = maxDistance;
         bool intersects = true;
+        int entryAxis = -1;
         for (int axis = 0; axis < 3 && intersects; ++axis)
         {
             const float origin = rayOrigin[axis];
@@ -1959,7 +1960,11 @@ bool Scene::raycastVoxelWorld(const glm::vec3& rayOrigin, const glm::vec3& rayDi
             float far = (chunkMax[axis] - origin) / dir;
             if (near > far)
                 std::swap(near, far);
-            entry = std::max(entry, near);
+            if (near > entry)
+            {
+                entry = near;
+                entryAxis = axis;
+            }
             exitDistance = std::min(exitDistance, far);
             if (entry > exitDistance)
                 intersects = false;
@@ -1973,6 +1978,12 @@ bool Scene::raycastVoxelWorld(const glm::vec3& rayOrigin, const glm::vec3& rayDi
         glm::ivec3 cell(static_cast<int32_t>(std::floor(position.x)),
                         static_cast<int32_t>(std::floor(position.y)),
                         static_cast<int32_t>(std::floor(position.z)));
+        // 命中格的外法线必须是轴对齐的：放置方块落在“鼠标指向的那一面”外侧。
+        // 早期版本直接写 -step，射线斜着走时会得到 (-1,-1,-1) 这样的对角偏移，
+        // 方块就会出现在鼠标旁边的斜角上。
+        glm::ivec3 faceNormal(0);
+        if (entry > 0.0f && entryAxis >= 0)
+            faceNormal[entryAxis] = (direction[entryAxis] > 0.0f) ? -1 : 1;
         glm::ivec3 step(0);
         glm::vec3 next(0.0f);
         glm::vec3 delta(0.0f);
@@ -2013,7 +2024,17 @@ bool Scene::raycastVoxelWorld(const glm::vec3& rayOrigin, const glm::vec3& rayDi
                 {
                     outDistance = t;
                     outBlock = cell;
-                    outNormal = -step;
+                    glm::ivec3 normal = faceNormal;
+                    if (normal == glm::ivec3(0))
+                    {
+                        // 射线起点已经在方块内部（贴脸挖）：没有"进来的那一面"，
+                        // 用视线主轴反向兜底，保证放置位置仍是相邻格而不是原地。
+                        const glm::vec3 a = glm::abs(direction);
+                        const int axis = (a.x > a.y) ? ((a.x > a.z) ? 0 : 2)
+                                                        : ((a.y > a.z) ? 1 : 2);
+                        normal[axis] = (direction[axis] > 0.0f) ? -1 : 1;
+                    }
+                    outNormal = normal;
                     if (outChunk)
                         *outChunk = chunkEntity;
                     hit = true;
@@ -2028,6 +2049,8 @@ bool Scene::raycastVoxelWorld(const glm::vec3& rayOrigin, const glm::vec3& rayDi
                 break;
             cell[axis] += step[axis];
             next[axis] += delta[axis];
+            faceNormal = glm::ivec3(0);
+            faceNormal[axis] = (step[axis] > 0) ? -1 : 1;
         }
     }
 
@@ -2086,6 +2109,35 @@ bool Scene::voxelSelfTest()
         std::cerr << "[Voxel] selfTest: raycast did not hit ground from above" << std::endl;
         cleanup();
         return false;
+    }
+
+    // 斜射：命中面的外法线必须是轴对齐的（只有一个分量是 ±1）。
+    // 之前直接写 -step，斜着看的时候会得到 (-1,-1,-1)，右键放的方块就会
+    // 落到命中格的对角位置 —— 用户报的"生成位置和鼠标不一致"就是这个。
+    {
+        glm::ivec3 sideBlock(0);
+        glm::ivec3 sideNormal(0);
+        float sideDistance = 0.0f;
+        const glm::vec3 sideOrigin(0.5f, 40.0f, 0.5f);
+        const glm::vec3 sideDir = glm::normalize(glm::vec3(1.0f, -0.65f, 1.0f));
+        const bool sideHit = raycastVoxelWorld(sideOrigin, sideDir, 200.0f, sideBlock,
+                                               sideNormal, sideDistance, nullptr, world);
+        const int components = (sideNormal.x != 0 ? 1 : 0) + (sideNormal.y != 0 ? 1 : 0) +
+                               (sideNormal.z != 0 ? 1 : 0);
+        const int magnitude = std::abs(sideNormal.x) + std::abs(sideNormal.y) +
+                              std::abs(sideNormal.z);
+        const glm::ivec3 placeBlock = sideBlock + sideNormal;
+        const int manhattan = std::abs(placeBlock.x - sideBlock.x) +
+                              std::abs(placeBlock.y - sideBlock.y) +
+                              std::abs(placeBlock.z - sideBlock.z);
+        if (!sideHit || components != 1 || magnitude != 1 || manhattan != 1)
+        {
+            std::cerr << "[Voxel] selfTest: diagonal ray normal must be axis aligned ("
+                      << sideNormal.x << "," << sideNormal.y << "," << sideNormal.z << ")"
+                      << std::endl;
+            cleanup();
+            return false;
+        }
     }
 
     const uint8_t original = getVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z);

@@ -59,7 +59,16 @@ updated: 2026-11-04
 - 每次改动都是一条 `VoxelEditCommand(before, after)`，`Ctrl+Z` 逐格撤销；
 - 没有体素世界时面板提示「创建 -> 体素世界」；启动参数 `--voxel-world [r]` 也会自动被笔刷认领。
 
-## 5. 已知限制
+## 5. 放置位置与命中法线
+
+- `Scene::raycastVoxelWorld` 返回的 `outNormal` 必须是**轴对齐**的（只有一个分量 ±1）：
+  右键放置用的是 `hitBlock + hitNormal`，斜射时如果直接返回 `-step`，会得到
+  `(-1,-1,-1)` 这类对角偏移，方块就落在鼠标旁边的斜角上（用户报的位置不一致）；
+- DDA 每次跨轴都重设 `faceNormal`，进入 chunk 的那一面记在 `entryAxis` 上；
+  射线起点本来就在方块内部时（贴脸挖）用视线主轴反向兜底，保证仍是相邻格；
+- 自检里有一条斜射断言：`components == 1 && magnitude == 1 && manhattan == 1`。
+
+## 6. 已知限制
 
 - **体素世界不进存档**：`captureDescription()` / `buildFromDescription()` 只处理地形与普通实体，
   重建场景（打开新场景、流送序列化自检）会把体素世界清掉（见 tech-debt）。
@@ -68,7 +77,7 @@ updated: 2026-11-04
 - 没有 LOD、没有 AO、没有贴图集；颜色只有一张 16 色调色板。
 - 水/透明方块只做了 `opaque = false`（玻璃、树叶），排序仍是按实体，没有逐面透明排序。
 
-## 6. 自检
+## 7. 自检
 
 | 打印 | 覆盖 |
 |---|---|
