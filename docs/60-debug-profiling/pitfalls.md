@@ -214,6 +214,31 @@ vec3 envColor = textureGrad(environmentMap, envUV, dx, dy).rgb;
 纹理本身用 `REPEAT` 寻址，所以采样值天然连续，线就消失了。
 **注意**：`addressModeU/V = REPEAT` 是前提；改成 `CLAMP_TO_EDGE` 会重新出现接缝。
 
+
+### 23.3 体素图集：fract() 格边界让整张图集变成一条白边
+
+- **现象**：体素地形每个方块边缘出现白色细线，越远越密连成白网格；相机移动时闪烁，
+  远处更明显，Bloom 把白线扩散成绿色散光。普通程序化地形只有轻微锯齿。
+- **原因**：顶点 `uv.x` 用 `tile * 64 + 面内跨度` 编码图块，片元用 `fract()` 取格内 UV。
+  `fract()` 在方块边界从 ≈1 跳回 0，`dFdx/dFdy` 出现整格大小的尖峰，硬件把 mip 直接
+  选到最粗一级（256×256 图集 → 1×1）。而图集 16 格里只有 9 格有内容，其余 7 格是纯白，
+  最粗 mip 平均后就是白色，于是每个边界都出现一圈白线。距离越远 mip 越高、边界像素
+  占比越大，所以“越远越强”。
+- **判据（决定性）**：把 `textureQueryLod(albedoMaps[matId], albedoUV).x` 当颜色输出，
+  格内 LOD 正常，只有方块边界那一列/行跳到最大级；或直接看 256×256 图集预览，
+  确认未使用格子是白色。
+- **修法**：不用隐式导数，改用显式梯度 `textureGrad`：
+  ```glsl
+  vec2 dx = dFdx(fragUV) * 0.25;  // 体素：图集 UV = 格内 UV * 0.25
+  vec2 dy = dFdy(fragUV) * 0.25;
+  albedoUV = (tileOrigin + clamp(local, 0.5/64.0, 1.0 - 0.5/64.0)) * 0.25;
+  vec4 c = textureGrad(albedoMaps[matId], albedoUV, dx, dy);
+  ```
+  同时把未使用格子填成非白（这里填草绿），即使高 mip 跨格混合也不会再出现白边。
+  `clamp` 用半纹素内缩而不是 2%，否则每格边缘会留下一条常量色带。
+- **注意**：这不是 TAA 问题。修补前管线没有 TAA/FXAA/MSAA，但纯时域锯齿不会只沿
+  每个方块边界出现；先修纹理 LOD，再考虑后处理 AA。
+
 ### 23.2 天空上下颠倒 / 与 IBL 光照方向相反
 
 - **现象**：天空又灰又平，云都挤在画面下方，顶部一片雾；但 IBL 照亮的结果却是对的。

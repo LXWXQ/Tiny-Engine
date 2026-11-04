@@ -619,7 +619,7 @@ updated: 2026-11-04
 
 **问题**：体素只有一张 16 色的方块色板，放大了看是纯色平面，挖矿/建造缺少材质细节。
 
-**实现**：`MaterialSystem::fillVoxelAtlas()` 启动时程序化生成 256x256 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格 x 64px，九种方块，含噪点/石纹/木纹/砖缝/玻璃边框）；顶点 `uv.x = tile * 64 + 面内跨度 u`、`uv.y = 面内跨度 v`（贪心矩形在图块内平铺），顶点色退化为 `面明暗 x AO` 灰度；`Material::shaderFlags` 写进 `metalRough.z`，`shaders/mrt.frag` 见到 `> 0.5` 就把 `fragUV` 解码成 `atlasUV`（`mod/floor` 定位图块、`clamp(local, 0.02, 0.98)` 防渗色）。
+**实现**：`MaterialSystem::fillVoxelAtlas()` 启动时程序化生成 256x256 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格 x 64px，九种方块，含噪点/石纹/木纹/砖缝/玻璃边框）；顶点 `uv.x = tile * 64 + 面内跨度 u`、`uv.y = 面内跨度 v`（贪心矩形在图块内平铺），顶点色退化为 `面明暗 x AO` 灰度；`Material::shaderFlags` 写进 `metalRough.z`，`shaders/mrt.frag` 见到 `> 0.5` 就把 `fragUV` 解码成 `atlasUV`（`mod/floor` 定位图块、半纹素内缩防渗色，采样用 `textureGrad` 显式梯度；2026-11-04 修复格边界白线，见下方）。
 
 **可观测**：`[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, boundary continuous, solid=12090`（新增 UV 区间断言）；`--voxel-world 1` 画面出现草皮/土层/石层/砖墙纹理，triangles 仍 275641。
 
@@ -669,3 +669,20 @@ updated: 2026-11-04
 
 **回归**：`tools/Validate.ps1 -Incremental -SkipSetup` **67 项 ALL PASS**、stderr 全 0 字节；日志 `build/validation/20261104-173640`；DocCheck PASS。
 
+
+## 体素图集格边界白线 / 远处闪烁修复（2026-11-04）
+
+**问题**：体素地形每个方块顶面边缘出现白色细线，越远越密并连成白网格；移动视角时纹理闪烁，距离越远越明显，地形上方还有绿色辉光。程序化地形也有轻微闪烁，但轻得多。
+
+**根因**：顶点 UV 用 `uv.x = tile * 64 + 面内跨度` 编码图块，片元用 `fract()` 还原格内 UV。`fract()` 在每个方块边界从 ≈1 跳回 0，`dFdx/dFdy` 在边界处产生整格大小的导数尖峰，硬件据此把 mip 选到最粗一级；而 256×256 图集只有 9/16 格有内容，其余 7 格是纯白，最粗 mip 平均后就是白色，于是每个方块边界出现一圈白线。距离越远，mip 越高、边界像素占比越大，白线越粗且随视角闪烁；Bloom 再把白线扩散成绿色散光。程序化地形不用 `fract()` 解码图集，所以只有普通纹理的轻微锯齿。**不是 TAA 问题**：管线当前没有 TAA/FXAA/MSAA，但纯时域/几何锯齿不会只沿每个方块边界出现。
+
+**实现**：
+- `shaders/mrt.frag` / `shaders/glass.frag`：体素分支用 `textureGrad` + 显式梯度 `dFdx(fragUV) * 0.25 / dFdy(fragUV) * 0.25`，绕开 `fract()` 的导数不连续；普通材质同样用 `textureGrad`（梯度不缩放），与隐式 LOD 等价。
+- `clamp(local, 0.02, 0.98)` 改为半纹素内缩 `0.5 / 64.0`，避免在每格边缘留下 2px 的常量色带。
+- `MaterialSystem::fillVoxelAtlas()`：未使用的 7 格从纯白改为草绿色；即使高 mip 跨格混合，也不会再把整张图集平均成白色。
+
+**可观测**：修复前 `build/voxel_shimmer.png` 全屏白色网格；修复后 `build/voxel_shimmer_halftexel.png` 白网格消失、远处不再散光；近景玻璃 `build/voxel_glass_halftexel.png` 纹理正常，`[Glass] sorted=879 drawcalls=1` 不变。`[Validation] errors=0 warnings=0`。
+
+**回归**：`f3-voxel`、`f3-voxel-glass`；全套 `tools/Validate.ps1 -Incremental -SkipSetup` **ALL PASS**，日志 `build/validation/20261104-181700`。
+
+**残留**：没有 TAA/FXAA/MSAA，远处几何轮廓仍有普通锯齿；若需要进一步消除运动时的边缘闪烁，应单独做后处理 AA 项，不混在本次纹理修复里。

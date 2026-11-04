@@ -43,15 +43,20 @@ void main()
     // 与 mrt.frag 相同的体素图集解码：uv.x 里编码 tile 号（tile * 64 + 面内跨度）。
     const bool voxelAtlas = materialFactors.factors[matId * 2u + 1u].z > 0.5;
     vec2 albedoUV = fragUV;
+    vec2 albedoGradX = dFdx(fragUV);
+    vec2 albedoGradY = dFdy(fragUV);
     if (voxelAtlas)
     {
         const float tileId = floor(fragUV.x / 64.0);
         const vec2 local = fract(vec2(fragUV.x - tileId * 64.0, fragUV.y));
-        albedoUV = (vec2(mod(tileId, 4.0), floor(tileId / 4.0)) + clamp(local, 0.02, 0.98)) * 0.25;
+        albedoUV = (vec2(mod(tileId, 4.0), floor(tileId / 4.0)) + clamp(local, 0.5 / 64.0, 1.0 - 0.5 / 64.0)) * 0.25;
+        // 同 mrt.frag：fract() 的导数在格边界跳变，显式梯度避免误选最粗 mip。
+        albedoGradX *= 0.25;
+        albedoGradY *= 0.25;
     }
 
     vec3 albedo = materialFactors.factors[matId * 2u].rgb *
-                  texture(albedoMaps[nonuniformEXT(matId)], albedoUV).rgb * fragColor;
+                  textureGrad(albedoMaps[nonuniformEXT(matId)], albedoUV, albedoGradX, albedoGradY).rgb * fragColor;
     // 玻璃本身是浅蓝白，再叠一层冷色 tint，避免和透明水晶混在一起看不出材质。
     albedo *= vec3(0.72, 0.88, 0.95);
 

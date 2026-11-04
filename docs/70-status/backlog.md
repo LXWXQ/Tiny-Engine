@@ -267,6 +267,8 @@ updated: 2026-11-02
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
 > 同日修复示例体素世界全黑：异步 chunk 落地后未登记 `dirtySpatialEntities`，建不出 `WorldBoundsComponent` 被全部剔除；`clearEntities()/cleanup()` 同时补上 pending 作业取消标记，加载示例等待网格落地。详见 [milestones](milestones.md#示例体素世界黑屏修复--运行模式-wasd-方向修正2026-11-04)。
+>
+> 同日修复体素图集格边界白线/远处闪烁：`fract()` 在每格边界的导数尖峰把 mip 推到最粗级，平均到图集里 7 个纯白未用格，形成白线；改用 `textureGrad` 显式梯度 + 半纹素内缩 + 未用格填草绿。详见 [milestones](milestones.md#体素图集格边界白线--远处闪烁修复2026-11-04)。
 
 ## 更新方式
 

@@ -20,7 +20,13 @@ namespace
 				const int lx = x % tile;
 				const int ly = y % tile;
 				unsigned char r = 255, g = 255, b = 255;
-				if (id >= 0 && id < 9)
+				if (id >= 9)
+				{
+					// 未使用的格子也填成草色：高 mip / 跨格采样时不会把整张图集平均成白色，
+					// 否则体素方块边界会因为 LOD 尖峰出现白线。
+					r = palette[0][0]; g = palette[0][1]; b = palette[0][2];
+				}
+				else if (id >= 0 && id < 9)
 				{
 					r = palette[id][0]; g = palette[id][1]; b = palette[id][2];
 					const unsigned int n = (static_cast<unsigned int>(x) * 73856093u)
