@@ -1,8 +1,11 @@
 #include "Voxel/VoxelChunk.h"
 
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <iostream>
+
+#include <glm/glm.hpp>
 
 namespace voxel
 {
@@ -80,6 +83,59 @@ const FaceDef kFaces[6] = {
     { 0, 0, -1, { 0, 0, -1 }, { {0,0,0}, {1,0,0}, {1,1,0}, {0,1,0} }, 0.90f },
 };
 
+namespace
+{
+
+// 贪心合并要知道每个面在哪个轴上、平面内两个轴是谁、朝哪一侧。
+struct FaceAxis
+{
+    int axis;
+    int u;
+    int v;
+    int sign;
+};
+
+const FaceAxis kFaceAxes[6] = {
+    { 1, 0, 2, +1 },   // +Y
+    { 1, 0, 2, -1 },   // -Y
+    { 0, 1, 2, +1 },   // +X
+    { 0, 1, 2, -1 },   // -X
+    { 2, 0, 1, +1 },   // +Z
+    { 2, 0, 1, -1 },   // -Z
+};
+
+bool solidAt(const Chunk& chunk, int32_t x, int32_t y, int32_t z)
+{
+    return !isAir(chunk.get(x, y, z));
+}
+
+// 顶点 AO：看这个角在空气侧的两条边与对角，被挡得越多越暗（3 档 + 1 档兜底）。
+float vertexAo(const Chunk& chunk, const int32_t pos[3], const FaceAxis& ax, int cu, int cv)
+{
+    const int du = (cu == 0) ? -1 : 1;
+    const int dv = (cv == 0) ? -1 : 1;
+
+    int32_t base[3] = { pos[0], pos[1], pos[2] };
+    base[ax.axis] += ax.sign;
+
+    int32_t side1[3] = { base[0], base[1], base[2] };
+    side1[ax.u] += du;
+    int32_t side2[3] = { base[0], base[1], base[2] };
+    side2[ax.v] += dv;
+    int32_t corner[3] = { base[0], base[1], base[2] };
+    corner[ax.u] += du;
+    corner[ax.v] += dv;
+
+    const int s1 = solidAt(chunk, side1[0], side1[1], side1[2]) ? 1 : 0;
+    const int s2 = solidAt(chunk, side2[0], side2[1], side2[2]) ? 1 : 0;
+    const int cc = solidAt(chunk, corner[0], corner[1], corner[2]) ? 1 : 0;
+
+    const int level = (s1 && s2) ? 0 : (3 - (s1 + s2 + cc));
+    return 0.55f + 0.15f * static_cast<float>(level);
+}
+
+} // namespace
+
 } // namespace
 
 void Chunk::generate(uint64_t seed, int32_t chunkX, int32_t chunkZ, int32_t baseY)
@@ -137,38 +193,100 @@ bool buildMesh(const Chunk& chunk,
     glm::vec3 boundsMin{ 1e30f };
     glm::vec3 boundsMax{ -1e30f };
 
-    for (int32_t y = 0; y < Chunk::kSize; ++y)
-    {
-        for (int32_t z = 0; z < Chunk::kSize; ++z)
-        {
-            for (int32_t x = 0; x < Chunk::kSize; ++x)
-            {
-                const uint8_t id = chunk.get(x, y, z);
-                if (isAir(id))
-                    continue;
-                const BlockInfo& info = blockInfo(id);
+    std::array<uint8_t, Chunk::kSize * Chunk::kSize> mask{};
 
-                for (const FaceDef& face : kFaces)
+    for (int32_t f = 0; f < 6; ++f)
+    {
+        const FaceDef& face = kFaces[f];
+        const FaceAxis& ax = kFaceAxes[f];
+
+        for (int32_t slice = 0; slice < Chunk::kSize; ++slice)
+        {
+            mask.fill(0u);
+            bool any = false;
+            for (int32_t vi = 0; vi < Chunk::kSize; ++vi)
+            {
+                for (int32_t ui = 0; ui < Chunk::kSize; ++ui)
                 {
-                    const uint8_t neighbour = chunk.get(x + face.dx, y + face.dy, z + face.dz);
-                    // 邻格不透明才挡面；玻璃/树叶不透明=false，所以它们会互相出面。
-                    if (isOpaque(neighbour))
+                    int32_t p[3] = { 0, 0, 0 };
+                    p[ax.axis] = slice;
+                    p[ax.u] = ui;
+                    p[ax.v] = vi;
+                    const uint8_t id = chunk.get(p[0], p[1], p[2]);
+                    if (isAir(id))
+                        continue;
+                    int32_t n[3] = { p[0], p[1], p[2] };
+                    n[ax.axis] += ax.sign;
+                    if (isOpaque(chunk.get(n[0], n[1], n[2])))
+                        continue;
+                    mask[static_cast<size_t>(vi) * Chunk::kSize + ui] = id;
+                    any = true;
+                }
+            }
+            if (!any)
+                continue;
+
+            for (int32_t vi = 0; vi < Chunk::kSize; ++vi)
+            {
+                for (int32_t ui = 0; ui < Chunk::kSize; ++ui)
+                {
+                    const uint8_t id = mask[static_cast<size_t>(vi) * Chunk::kSize + ui];
+                    if (id == 0u)
                         continue;
 
+                    int32_t w = 1;
+                    while (ui + w < Chunk::kSize &&
+                           mask[static_cast<size_t>(vi) * Chunk::kSize + ui + w] == id)
+                        ++w;
+
+                    int32_t h = 1;
+                    bool grow = true;
+                    while (vi + h < Chunk::kSize && grow)
+                    {
+                        for (int32_t k = 0; k < w; ++k)
+                        {
+                            if (mask[static_cast<size_t>(vi + h) * Chunk::kSize + ui + k] != id)
+                            {
+                                grow = false;
+                                break;
+                            }
+                        }
+                        if (grow)
+                            ++h;
+                    }
+
+                    for (int32_t dv = 0; dv < h; ++dv)
+                        for (int32_t du = 0; du < w; ++du)
+                            mask[static_cast<size_t>(vi + dv) * Chunk::kSize + ui + du] = 0u;
+
+                    glm::vec3 lo(0.0f);
+                    glm::vec3 hi(0.0f);
+                    lo[ax.axis] = static_cast<float>(slice);
+                    hi[ax.axis] = static_cast<float>(slice + 1);
+                    lo[ax.u] = static_cast<float>(ui);
+                    hi[ax.u] = static_cast<float>(ui + w);
+                    lo[ax.v] = static_cast<float>(vi);
+                    hi[ax.v] = static_cast<float>(vi + h);
+
+                    const BlockInfo& info = blockInfo(id);
                     const uint32_t baseVertex = static_cast<uint32_t>(outMesh.vertices.size());
-                    const glm::vec3 color{ info.r * face.shade,
-                                           info.g * face.shade,
-                                           info.b * face.shade };
                     for (const glm::vec3& corner : face.corners)
                     {
                         terrain::TerrainVertex vertex;
-                        vertex.position = glm::vec3(static_cast<float>(x),
-                                                    static_cast<float>(y),
-                                                    static_cast<float>(z)) + corner;
-                        vertex.color = color;
+                        vertex.position = glm::mix(lo, hi, corner);
+
+                        const int cu = (corner[ax.u] > 0.5f) ? 1 : 0;
+                        const int cv = (corner[ax.v] > 0.5f) ? 1 : 0;
+                        int32_t pos[3] = { 0, 0, 0 };
+                        pos[ax.axis] = slice;
+                        pos[ax.u] = (cu == 0) ? ui : (ui + w - 1);
+                        pos[ax.v] = (cv == 0) ? vi : (vi + h - 1);
+                        const float ao = vertexAo(chunk, pos, ax, cu, cv);
+
+                        vertex.color = glm::vec3(info.r * face.shade * ao,
+                                                 info.g * face.shade * ao,
+                                                 info.b * face.shade * ao);
                         vertex.normal = face.normal;
-                        // UV 直接映射方块表面前 0..1，供需要贴图时使用；
-                        // 当前体素材质只用顶点色，UV 留给后续图集。
                         vertex.uv = glm::vec2(corner.x + corner.z, corner.y);
                         outMesh.vertices.push_back(vertex);
                         boundsMin = glm::min(boundsMin, vertex.position);
@@ -224,16 +342,30 @@ bool selfTest()
         return false;
     }
 
-    // 3) 相邻两块共享的面被剔除 -> 10 个面。
+    // 3) 相邻两块：共享面被剔除，贪心把 2x1 顶面/底面各并成一个 quad -> 6 个面。
     chunk.set(6, 5, 5, static_cast<uint8_t>(BlockId::Stone));
     buildMesh(chunk, mesh, &stats);
-    if (stats.faces != 10u)
+    if (stats.faces != 6u)
     {
         std::cerr << "[Voxel] selfTest FAIL: adjacent blocks faces=" << stats.faces
-                  << " (expected 10)\n";
+                  << " (expected 6 after greedy merge)" << std::endl;
         return false;
     }
 
+    // 3b) 2x2 平板：六个方向各合并成一个矩形，仍是 6 个面（不合并会是 16 个）。
+    Chunk slab;
+    for (int32_t z = 0; z < 2; ++z)
+    {
+        for (int32_t x = 0; x < 2; ++x)
+            slab.set(x, 0, z, static_cast<uint8_t>(BlockId::Plank));
+    }
+    buildMesh(slab, mesh, &stats);
+    if (stats.faces != 6u)
+    {
+        std::cerr << "[Voxel] selfTest FAIL: greedy slab faces=" << stats.faces
+                  << " (expected 6)" << std::endl;
+        return false;
+    }
     // 4) 挖掉邻块后，原本被遮挡的面重新出现 -> 回到 6 面。
     chunk.set(6, 5, 5, static_cast<uint8_t>(BlockId::Air));
     buildMesh(chunk, mesh, &stats);
@@ -289,7 +421,7 @@ bool selfTest()
         return false;
     }
 
-    std::cout << "[Voxel] selfTest PASS | face culling 6/10/6, boundary continuous, solid="
+    std::cout << "[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, boundary continuous, solid="
               << a.solidCount() << "\n";
     return true;
 }

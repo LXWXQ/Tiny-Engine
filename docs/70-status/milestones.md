@@ -596,7 +596,7 @@ updated: 2026-11-02
 **问题**：引擎没有任何体素代码；roadmap 的 F3 原写 marching cubes / surface nets，但「挖矿盖房」要的是整齐方块，等值面挖出来是圆滑洞。
 **实现**：`src/Voxel/`（`BlockId` + `BlockInfo` 调色板、`Chunk` 32³、`buildMesh` 面剔除 + 顶点色×面明暗，复用 `terrain::TerrainMeshData` 上传路径）；`Scene::createVoxelWorld / setVoxelBlock / raycastVoxelWorld`（chunk AABB 粗筛 + Amanatides-Woo DDA）/ `sampleVoxelGroundHeight`；边界格连带重建邻块，旧 Model 走 `retireModel` 延迟释放；材质用 `getDefaultWhiteTexture()` 避免棋盘格；`--voxel-world [r]`；编辑器运行模式（左键挖 / 右键放）+ `VoxelEditCommand` 撤销；`queryGroundAtWorld` 叠加体素分支，角色能站在方块上。
 **可观测**：`[Voxel] selfTest PASS | face culling 6/10/6, boundary continuous, solid=12090`、`[Voxel] scene selfTest PASS | chunks=9 hit=(16,10,16) dugDeeper=1 restored=1 groundY=11 characterLanded=1 placedOnFace=1`；`--voxel-world 1` 截图方块地形顶面草皮、侧面土层/石层、无缝。
-**已知限制**：体素世界不进存档（`buildFromDescription()` 会清掉）；无贪心合并 / LOD / AO / 贴图集；网格在主线程同步生成；透明方块没有逐面排序。
+**已知限制**：体素世界不进存档（`buildFromDescription()` 会清掉）；无 LOD / 贴图集（贪心合并 + 逐顶点 AO 已在 F3-e 完成）；网格在主线程同步生成；透明方块没有逐面排序。
 **回归**：新增 `f3-voxel`；全套 **63 项**。
 
 ## F3-d：体素世界持久化（seed + 差分）
@@ -604,3 +604,13 @@ updated: 2026-11-02
 **实现**：`SceneDescription` 增 `voxelWorlds`（seed/radiusChunks/baseY + 每 chunk 的 `edits` 四元组）；`captureDescription` 按 seed 重新生成参考 chunk 逐格比对出差分；`buildFromDescription` 重建世界后逐格 `set`，每块只 `rebuildVoxelChunk` 一次；`SceneSerializer` 版本 2 读写 `root["voxelWorlds"]`，老文件按空处理；编辑器自动认领世界时补 `!registry.valid(...)`。
 **可观测**：`[Voxel] scene selfTest PASS … persistCapture=1 persistRestore=1`、`[Editor] voxel edit selfTest PASS | … capture + json round trip`。
 **回归**：新增 `f3-voxel-persist`；全套 **65 项**。
+
+## F3-e：贪心面合并 + 逐顶点 AO
+
+**问题**：逐面输出的方块网格把相邻同色面拆成一堆独立四边形，`--voxel-world 1` 就有 33.8 万三角形；方块之间没有遮蔽感，阶梯处死板。
+
+**实现**：`src/Voxel/VoxelChunk.cpp` 的 `buildMesh` 改为六方向 x 32 层切片的贪心合并（mask 记录方块 id，先扩宽再扩高，同材质矩形输出 1 个 quad）；新增 `FaceAxis` / `kFaceAxes` / `solidAt` / `vertexAo`，AO 按空气侧两边与对角取 `level = (s1 && s2) ? 0 : 3 - (s1 + s2 + cc)`、系数 `0.55 + 0.15 * level`，乘进顶点色。
+
+**可观测**：`[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, boundary continuous, solid=12090`；`--voxel-world 1` 的 triangles 338299 -> 275641（约 -18.5%），draw calls 不变。
+
+**回归**：`f3-voxel`（engine 自检串已更新）。

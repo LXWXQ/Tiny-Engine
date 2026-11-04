@@ -32,8 +32,8 @@ updated: 2026-11-04
 
 `voxel::buildMesh(const Chunk&, terrain::TerrainMeshData&, MeshStats*)`：
 
-- 6 个面各一组 `FaceDef`，**邻格 `opaque` 就整面跳过**（面剔除）；
-- 每面 4 顶点 6 索引，顶点色 = 方块色 x 面明暗（+Y 1.00、-Y 0.55、+X 0.82、-X 0.74、+Z 0.68、-Z 0.90）；
+- 六个方向各做一次**贪心合并**：按 32 层切片建 mask（记录该格方块 id，邻格 `opaque` 的格不写），先在平面 u 方向扩展宽度、再在 v 方向扩展高度，同材质的矩形只输出 1 个 quad（4 顶点 6 索引）；
+- 每面 4 顶点 6 索引，顶点色 = 方块色 x 面明暗（+Y 1.00、-Y 0.55、+X 0.82、-X 0.74、+Z 0.68、-Z 0.90）x 顶点 AO；AO 看空气侧两条边与对角（`level = (s1 && s2) ? 0 : 3 - (s1 + s2 + cc)`，系数 `0.55 + 0.15 * level`），矩形四个角各取所在方块的 AO；
 - 顶点布局直接复用 `terrain::TerrainVertex`（44 字节，与 `Vertex` 同布局）→ `terrain::TerrainMeshData` → `Model::Builder` 的上传路径，无需新缓冲格式；
 - 不采样贴图：材质用 `MaterialSystem::getDefaultWhiteTexture()` 作 albedo（**必须给白图**，否则 `albedoFallback` 会画棋盘格），metallic 0 / roughness 0.9，颜色全部来自顶点。
 
@@ -80,16 +80,16 @@ updated: 2026-11-04
 
 - **体素世界不进存档**：`captureDescription()` / `buildFromDescription()` 只处理地形与普通实体，
   重建场景（打开新场景、流送序列化自检）会把体素世界清掉（见 tech-debt）。
-- 立方体网格没有贪心合并（相邻同色面仍是独立四边形），大世界顶点数偏高；
+- chunk 网格生成仍在主线程同步完成（一块 32³ 约 1 ms 量级），没有并行 meshing；
   chunk 网格生成目前在主线程同步完成（一块 32³ 约 1 ms 量级）。
-- 没有 LOD、没有 AO、没有贴图集；颜色只有一张 16 色调色板。
+- 没有 LOD、没有贴图集；颜色只有 16 色调色板，AO 是逐顶点环境光遮蔽（不是烘焙贴图）。
 - 水/透明方块只做了 `opaque = false`（玻璃、树叶），排序仍是按实体，没有逐面透明排序。
 
 ## 8. 自检
 
 | 打印 | 覆盖 |
 |---|---|
-| `[Voxel] selfTest PASS \| face culling 6/10/6, boundary continuous, solid=<n>` | 空块不出面、单块 6 面、相邻块共享面剔除、挖掉后恢复、边界列高度与 `surfaceHeight` 一致 |
+| `[Voxel] selfTest PASS \| face culling + greedy 6/6/6/6, boundary continuous, solid=<n>` | 空块不出面、单块 6 面、相邻两块贪心合并成 6 面、2×2 平板仍是 6 面、挖掉后恢复、边界列高度与 `surfaceHeight` 一致 |
 | `[Voxel] scene selfTest PASS \| chunks=9 hit=.. dugDeeper=1 restored=1 groundY=.. characterLanded=1 placedOnFace=1` | 世界创建、DDA 命中、挖深、放回、地面高度、角色落地、面放置 |
 
 相关：[scene-ecs](scene-ecs.md)、[terrain](terrain.md)、[编辑器面板](../90-editor/panels.md)。
