@@ -54,7 +54,7 @@ updated: 2026-11-04
 ## 4. 编辑器：Voxel Brush
 
 - 工具栏「体素」开关，或 Inspector 的 `Voxel Brush` 段；
-- `Ctrl + 左键` 挖掉命中方块，`Ctrl + Shift + 左键` 在命中面放置当前方块；
+- `Alt + 左键` 挖掉命中方块，`Alt + Shift + 左键` 在命中面放置当前方块；
 - 每次改动都是一条 `VoxelEditCommand(before, after)`，`Ctrl+Z` 逐格撤销；
 - 没有体素世界时面板提示「创建 -> 体素世界」；启动参数 `--voxel-world [r]` 也会自动被笔刷认领。
 

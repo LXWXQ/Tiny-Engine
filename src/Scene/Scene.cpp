@@ -2743,6 +2743,18 @@ entt::entity Scene::resolveTerrainChunkOwner(entt::entity entity) const
     return entity;
 }
 
+entt::entity Scene::resolveVoxelChunkOwner(entt::entity entity) const
+{
+    if (!registry.valid(entity))
+        return entt::null;
+    if (const auto* chunk = registry.try_get<VoxelChunkComponent>(entity))
+    {
+        if (chunk->world != entt::null && registry.valid(chunk->world))
+            return chunk->world;
+    }
+    return entity;
+}
+
 bool Scene::adoptStreamingTerrainManager(entt::entity entity)
 {
     if (!registry.valid(entity) ||

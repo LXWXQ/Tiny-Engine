@@ -324,13 +324,16 @@ Console 顶部在「全部」按钮右侧有搜索框（占位文本 `搜索日�
 
 ## 体素笔刷（F3）
 
-- 入口：工具栏「体素」开关，或 Inspector 的 `Voxel Brush` 段（`Enable (Ctrl+LMB)` + `Block` 下拉）。
-- 操作：`Ctrl + 左键` 挖掉命中方块，`Ctrl + Shift + 左键` 在命中面的外侧放当前方块；
+- 入口：工具栏「体素」开关，或 Inspector 的 `Voxel Brush` 段（`Enable (Alt+LMB)` + `Block` 下拉）。
+- 操作：`Alt + 左键` 挖掉命中方块，`Alt + Shift + 左键` 在命中面的外侧放当前方块；
   射线用 `Scene::raycastVoxelWorld()`（DDA），笔刷与地形笔刷互斥（`voxelBrushConsumed`）。
 - 每次改动一条 `VoxelEditCommand(before, after)`：`Ctrl+Z` 逐格撤销，重做重新挖/放。
 - 没有体素世界时面板提示「创建 -> 体素世界」；`--voxel-world [r]` 启动的世界会在
   `EditorLayer::beginFrame()` 里被自动认领（打开存档同理）。
 - 边界格（chunk 内 local 0/31）会连带重建相邻 chunk，笔刷不会在接缝处留下缺面。
+- **修饰键分工**：`Ctrl + 左键` 永远是「加选/减选」（E1 多选），笔刷一律用 `Alt`；
+  地形雕刻笔刷同样用 `Alt + 左键`。视口点中 chunk 实体时先解析到世界管理器
+  （`Scene::resolveVoxelChunkOwner()`），避免选中一个随时会被重建的内部实体。
 
 ## 硬约束
 

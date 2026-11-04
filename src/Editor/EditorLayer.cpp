@@ -164,7 +164,8 @@ namespace
 bool isBatchExcluded(entt::registry& registry, entt::entity entity)
 {
     return registry.any_of<TerrainChunkComponent>(entity) ||
-           registry.any_of<TerrainStreamingComponent>(entity);
+           registry.any_of<TerrainStreamingComponent>(entity) ||
+           registry.any_of<VoxelChunkComponent>(entity);
 }
 
 // 只保留"父节点没有被同时选中"的根，否则同一棵子树会被删两次。
@@ -994,7 +995,7 @@ void EditorLayer::drawToolbar()
         if (auto* renderPanel = findPanel("Render"))
         {
             if (barToggle("体素", state.voxelBrushEnabled,
-                          "体素笔刷：Ctrl+左键挖掉方块，Ctrl+Shift+左键放置方块"))
+                          "体素笔刷：Alt+左键挖掉方块，Alt+Shift+左键放置方块（Ctrl+左键始终是多选）"))
                 state.voxelBrushEnabled = !state.voxelBrushEnabled;
             if (barToggle("渲染", renderPanel->visible, "渲染设置：曝光 / Bloom / SSAO / 方向光"))
                 renderPanel->visible = !renderPanel->visible;
@@ -2980,6 +2981,20 @@ bool EditorLayer::selfTestWithScene()
         const uint8_t before = testScene->getVoxelBlock(
             voxelWorld, hitBlock.x, hitBlock.y, hitBlock.z);
 
+        // 视口里点中 chunk 实体时必须解析到世界管理器，否则删除/变换会落到
+        // 一个随时会被重建的内部实体上（Ctrl+左键多选与笔刷也因此不打架）。
+        entt::entity pickedChunk = entt::null;
+        for (auto [entity, chunk] : registry.view<VoxelChunkComponent>().each())
+        {
+            if (chunk.world == voxelWorld)
+            {
+                pickedChunk = entity;
+                break;
+            }
+        }
+        const bool resolvesToWorld = pickedChunk != entt::null &&
+            testScene->resolveVoxelChunkOwner(pickedChunk) == voxelWorld;
+
         CommandStack voxelStack;
         voxelStack.execute(std::make_unique<VoxelEditCommand>(
             *testScene, voxelWorld, hitBlock.x, hitBlock.y, hitBlock.z, before, 0));
@@ -3001,10 +3016,11 @@ bool EditorLayer::selfTestWithScene()
             testScene->destroyEntity(entity);
         testScene->destroyEntity(voxelWorld);
 
-        if (!hit || !dug || !restored)
+        if (!hit || !dug || !restored || !resolvesToWorld)
         {
             std::cerr << "[Editor] selfTest FAIL: voxel dig/undo (hit=" << hit
-                      << " dug=" << dug << " restored=" << restored << ")" << std::endl;
+                      << " dug=" << dug << " restored=" << restored
+                      << " resolve=" << resolvesToWorld << ")" << std::endl;
             return false;
         }
         std::cout << "[Editor] voxel edit selfTest PASS | dug and restored ("

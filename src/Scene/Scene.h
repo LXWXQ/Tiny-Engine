@@ -206,6 +206,7 @@ public:
     size_t getStreamingTerrainChunkCount() const { return streamingTerrainChunks.size(); }
     uint32_t getInFlightTerrainGpuRequests() const;
     entt::entity resolveTerrainChunkOwner(entt::entity entity) const;
+    entt::entity resolveVoxelChunkOwner(entt::entity entity) const;
     // B-06: query streamed terrain chunk entities through the coarse XZ region
     // index instead of scanning every entity. Entities with TerrainChunkComponent
     // are filtered out of the generic spatial result.

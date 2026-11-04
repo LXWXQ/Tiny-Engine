@@ -333,11 +333,11 @@ void ViewportPanel::draw(EditorState& state)
     state.gizmo.draw(gizmoView);
 
     // ---- B-07 地形雕刻 ----
-    // Ctrl+左键把当前笔刷作用到射线命中的地形上。普通左键仍然用于选中，
+    // Alt+左键把当前笔刷作用到射线命中的地形上。普通左键仍然用于选中，
     // 避免"只想选地形却改了高度"。
     bool terrainBrushConsumed = false;
     if (!gizmoConsumed && imageHovered && state.terrainBrushEnabled &&
-        ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        ImGui::GetIO().KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         state.services.scene != nullptr)
     {
         glm::vec3 rayOrigin, rayDir;
@@ -382,12 +382,12 @@ void ViewportPanel::draw(EditorState& state)
     }
 
     // ---- F3 体素笔刷 ----
-    // Ctrl+左键挖掉射线命中的方块；Ctrl+Shift+左键在命中面外侧放一块。
+    // Alt+左键挖掉射线命中的方块；Alt+Shift+左键在命中面外侧放一块。
     // 一次点击 = 一条 VoxelEditCommand，所以撤销能逐块还原。
     bool voxelBrushConsumed = false;
     if (!gizmoConsumed && !terrainBrushConsumed && !voxelBrushConsumed && imageHovered &&
         state.voxelBrushEnabled && state.voxelWorld != entt::null &&
-        ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        ImGui::GetIO().KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         state.services.scene != nullptr)
     {
         glm::vec3 rayOrigin, rayDir;
@@ -437,7 +437,7 @@ void ViewportPanel::draw(EditorState& state)
     }
     // ---- 点选 ----
     // 只有"手柄没吃掉这次点击"时才做拾取，否则拖拽手柄会顺手改掉选中。
-    if (!gizmoConsumed && !terrainBrushConsumed && imageHovered &&
+    if (!gizmoConsumed && !terrainBrushConsumed && !voxelBrushConsumed && imageHovered &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         state.services.registry != nullptr && state.services.scene != nullptr)
     {
@@ -450,7 +450,8 @@ void ViewportPanel::draw(EditorState& state)
         // undo/transform semantics stay stable across unload/reload.
         const entt::entity hit = picked == entt::null
             ? entt::null
-            : state.services.scene->resolveTerrainChunkOwner(picked);
+            : state.services.scene->resolveVoxelChunkOwner(
+                  state.services.scene->resolveTerrainChunkOwner(picked));
 
         // E1：Ctrl 点击把实体加入/移出选中集合；点空白仍然清空（Ctrl 时不清）。
         ImGuiIO& clickIo = ImGui::GetIO();

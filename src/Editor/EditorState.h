@@ -210,12 +210,12 @@ struct EditorState
     bool transformRefreshPending = false;
 
     // ---- B-07 地形笔刷 ----
-    // 视口中 Ctrl+左键应用；中心点由射线命中地形决定。
+    // 视口中 Alt+左键应用；中心点由射线命中地形决定。
     bool terrainBrushEnabled = false;
     terrain::TerrainBrushSettings terrainBrush;
 
     // ---- F3 体素笔刷 ----
-    // 视口中 Ctrl+左键挖掉命中方块、Ctrl+Shift+左键在命中面外放一块。
+    // 视口中 Alt+左键挖掉命中方块、Alt+Shift+左键在命中面外放一块（Ctrl 留给多选）。
     // voxelWorld 为 null 时这些操作无目标。
     bool voxelBrushEnabled = false;
     int voxelBrushBlock = 1;   // voxel::BlockId 的整数值

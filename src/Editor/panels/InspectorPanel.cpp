@@ -26,9 +26,9 @@ void drawVoxelBrushControls(EditorState& state)
     if (!ImGui::CollapsingHeader("Voxel Brush"))
         return;
 
-    ImGui::Checkbox("Enable (Ctrl+LMB)", &state.voxelBrushEnabled);
+    ImGui::Checkbox("Enable (Alt+LMB)", &state.voxelBrushEnabled);
     ImGui::SameLine();
-    ImGui::TextDisabled("dig / Ctrl+Shift+LMB place");
+    ImGui::TextDisabled("dig / Alt+Shift+LMB place");
 
     if (state.voxelWorld == entt::null)
     {
@@ -42,7 +42,7 @@ void drawVoxelBrushControls(EditorState& state)
         names[i] = voxel::blockName(static_cast<uint8_t>(i));
     if (ImGui::Combo("Block", &block, names, static_cast<int>(voxel::kBlockCount)))
         state.voxelBrushBlock = block;
-    ImGui::TextDisabled("Ctrl+LMB digs, Ctrl+Shift+LMB places on the hit face.");
+    ImGui::TextDisabled("Alt+LMB digs, Alt+Shift+LMB places on the hit face. Ctrl+LMB stays selection.");
 }
 
 void drawTerrainBrushControls(EditorState& state)
@@ -50,7 +50,7 @@ void drawTerrainBrushControls(EditorState& state)
     if (!ImGui::CollapsingHeader("Sculpt Brush"))
         return;
 
-    ImGui::Checkbox("Enable (Ctrl+LMB)", &state.terrainBrushEnabled);
+    ImGui::Checkbox("Enable (Alt+LMB)", &state.terrainBrushEnabled);
     ImGui::SameLine();
     ImGui::TextDisabled("viewport");
 
