@@ -56,6 +56,8 @@ layout(push_constant) uniform Push
     uint terrainLodBlendMode;
     uint gpuScene;
     uint terrainBatched;
+    float clipY;
+    uint clipMode;
 } push;
 
 // F1：与 shaders/scene_cull.comp 的 InstanceRecord 严格一致。

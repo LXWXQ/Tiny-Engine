@@ -28,6 +28,9 @@ public:
     void resize(VkExtent2D extent) override;
     std::string getName() const override { return "Geometry"; }
 
+    // C1：平面反射复用同一套几何提交路径。
+    GeometrySystem* getGeometrySystem() const { return geometrySystem.get(); }
+
 private:
     Device& vulkanDevice;
     std::array<GBuffer*, kFramesInFlight> gBuffers{};

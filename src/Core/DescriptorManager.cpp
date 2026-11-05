@@ -151,7 +151,8 @@ void DescriptorManager::createGlobalLayout()
 	//   8 prefiltered cubemap（镜面 IBL）
 	//   9 BRDF 积分表
 	// F6：binding 11 = 3 级联阴影图（sampler2DArray）。
-	std::vector<VkDescriptorSetLayoutBinding> bindings(12);
+	// C1：binding 12 = 平面反射颜色（半分辨率）。
+	std::vector<VkDescriptorSetLayoutBinding> bindings(13);
 
 	bindings[0].binding = 0;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -168,6 +169,11 @@ void DescriptorManager::createGlobalLayout()
 	bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	bindings[11].descriptorCount = 1;
 	bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	bindings[12].binding = 12;
+	bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	bindings[12].descriptorCount = 1;
+	bindings[12].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	for (uint32_t i = 1; i <= 9; i++)
 	{
@@ -337,7 +343,8 @@ void DescriptorManager::buildGlobalSet(
 	const VkDescriptorImageInfo& irradianceInfo,
 	const VkDescriptorImageInfo& prefilteredInfo,
 	const VkDescriptorImageInfo& brdfLutInfo,
-	VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews)
+	VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews,
+	VkSampler reflectionSampler, const std::array<VkImageView, kFramesInFlight>& reflectionViews)
 {
 	// TD-03: rebuild in place so repeated resizes do not exhaust the descriptor pool.
 	if (globalSets.size() != kFramesInFlight)
@@ -370,7 +377,7 @@ void DescriptorManager::buildGlobalSet(
 			irradianceCopy, prefilteredCopy, brdfLutCopy
 		};
 
-		std::array<VkWriteDescriptorSet, 12> writes{};
+		std::array<VkWriteDescriptorSet, 13> writes{};
 
 		VkDescriptorImageInfo shadowInfo{ shadowSampler, shadowViews[frame],
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -387,6 +394,15 @@ void DescriptorManager::buildGlobalSet(
 		writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		writes[0].descriptorCount = 1;
 		writes[0].pBufferInfo = &uboInfo;
+
+		VkDescriptorImageInfo reflectionInfo{ reflectionSampler, reflectionViews[frame],
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		writes[12].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[12].dstSet = globalSets[frame];
+		writes[12].dstBinding = 12;
+		writes[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		writes[12].descriptorCount = 1;
+		writes[12].pImageInfo = &reflectionInfo;
 
 		VkDescriptorBufferInfo factorBufferInfo{ materialFactorBuffer, 0, VK_WHOLE_SIZE };
 		writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

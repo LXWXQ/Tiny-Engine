@@ -89,6 +89,9 @@ layout(push_constant) uniform Push {
     uint terrainLodBlendMode;
     uint gpuScene;
     uint terrainBatched;
+    // C1：平面反射相机在水下，丢弃水位以下的片元（否则湖底会遮挡反射）。
+    float clipY;
+    uint clipMode;
 } push;
 
 // F1：与 shaders/scene_cull.comp / mrt.vert 的 InstanceRecord 严格一致。
@@ -274,6 +277,9 @@ float terrainBayer4(ivec2 pixel)
 }
 
 void main() {
+    if (push.clipMode != 0u && fragPosWorld.y < push.clipY)
+        discard;
+
     gMaterial.material = push.material;
     gMaterial.alphaCutoff = push.alphaCutoff;
     gMaterial.alphaMasked = push.alphaMasked;

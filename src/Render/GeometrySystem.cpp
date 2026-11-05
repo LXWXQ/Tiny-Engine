@@ -442,7 +442,18 @@ void GeometrySystem::createPipelines()
 
 void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 {
+    render(commandBuffer, frameInfo, nullptr);
+}
+
+void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
+                            const GeometryViewOverride* viewOverride)
+{
     DescriptorManager& descMgr = *frameInfo.descriptorManager;
+    const bool reflection = viewOverride != nullptr && viewOverride->reflection;
+    const VkDescriptorSet globalSet =
+        (viewOverride != nullptr && viewOverride->globalSet != VK_NULL_HANDLE)
+            ? viewOverride->globalSet
+            : descMgr.getGlobalSet(frameInfo.frameInFlightIndex);
 
     // -----------------------------------------------------------------------
     // D-3 bindless：**整帧只绑一次 set 1**。
@@ -451,7 +462,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     // 103 个子网格，于是 104 次 draw 伴随多达 104 次描述符集绑定。
     // 现在材质纹理在一个数组里，下标走 push constant，绑定与绘制彻底解耦。
     // -----------------------------------------------------------------------
-    VkDescriptorSet sets[] = { descMgr.getGlobalSet(frameInfo.frameInFlightIndex), descMgr.getMaterialSet(), descMgr.getTerrainSet() };
+    VkDescriptorSet sets[] = { globalSet, descMgr.getMaterialSet(), descMgr.getTerrainSet() };
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
         pipelineLayout, 0, 3, sets, 0, nullptr);
     frameInfo.telemetry.descriptorBinds += 1;
@@ -477,11 +488,15 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     // 但"没绑定的内容"采出来是未定义值。所以退化路径不指向数组，
     // 而是让着色器走 materialValid = 0 的分支（直接输出顶点色 / 默认 PBR）。
     const uint32_t fallbackMatId = 0;
-    const render::SubMeshCuller subMeshCuller(
-        frameInfo.projectionMatrix * frameInfo.viewMatrix);
-    const glm::vec3 cameraPosition = frameInfo.cameraTransform
-        ? frameInfo.cameraTransform->getTranslation()
-        : glm::vec3(0.0f);
+    const glm::mat4 viewProjection = viewOverride != nullptr
+        ? viewOverride->viewProjection
+        : frameInfo.projectionMatrix * frameInfo.viewMatrix;
+    const render::SubMeshCuller subMeshCuller(viewProjection);
+    const glm::vec3 cameraPosition = viewOverride != nullptr
+        ? viewOverride->cameraPosition
+        : (frameInfo.cameraTransform
+            ? glm::vec3(frameInfo.cameraTransform->getTranslation())
+            : glm::vec3(0.0f));
 
     struct ChunkLodSelection
     {
@@ -539,6 +554,9 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         const bool isSkybox = tag && tag->isSkybox;
         const bool isGrid = tag && tag->isGrid;
         const bool isTerrain = tag && tag->isTerrain;
+        // 反射里不重建编辑器网格辅助线；它没有材质，只会多出一层线。
+        if (reflection && isGrid)
+            continue;
         const TerrainComponent* terrain = frameInfo.registry.try_get<TerrainComponent>(entity);
         const uint32_t entityId = static_cast<uint32_t>(entt::to_integral(entity));
         const auto gpuSlotIt = gpuRun.entitySlots.find(entityId);
@@ -555,7 +573,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
         // F1：普通网格交给 SceneGpuBatch 的 GPU 驱动提交（实例缓冲 + compute 剔除 +
         // indirect draw）。天空盒、网格辅助线、地形仍然留在下面的 CPU 路径。
-        if (sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
+        if (!reflection && sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
             !isSkybox && !isGrid && !isTerrain &&
             !mesh->model->isDynamic() &&
             mesh->model->getIndexCount() > 0)
@@ -597,7 +615,9 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
             terrainLodDistanceScale = terrain->config.lodDistanceScale;
         }
         TerrainEntityLodState* terrainState = nullptr;
-        if (isTerrain && terrain && mesh->model && !terrainGpuEntity)
+        // 反射用独立相机，绝不能把主视角的 LOD 状态改掉。这里只读选择结果，
+        // 不写 terrainLodStates（否则主画面会跟着反射相机抖动/跳 LOD）。
+        if (!reflection && isTerrain && terrain && mesh->model && !terrainGpuEntity)
         {
             TerrainEntityLodState& state = terrainLodStates[entityId];
             if (state.model != mesh->model.get() || state.revision != terrain->revision)
@@ -682,7 +702,9 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                 }
             }
         }
-        const bool terrainUseIndirect = isTerrain && !terrainGpuEntity &&
+        // 反射路径禁止重写间接命令：那块缓冲本帧已被主视角填过，
+        // 再写会把主画面的地形间接绘制指到反射相机的可见集合上。
+        const bool terrainUseIndirect = !reflection && isTerrain && !terrainGpuEntity &&
             !terrainBlending && vulkanDevice.supportsMultiDrawIndirect() &&
             visibleChunkCount > 0u &&
             indirectCursor + visibleChunkCount <= indirectBuffer.capacity;
@@ -690,6 +712,8 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         SimplePushConstantData push{};
         push.modelMatrix = worldTransform->matrix;
         push.normalMatrix = worldTransform->normalMatrix;
+        push.clipY = viewOverride != nullptr ? viewOverride->clipY : 0.0f;
+        push.clipMode = viewOverride != nullptr ? viewOverride->clipMode : 0u;
 
         const bool objectUsesMaterial = !isSkybox && !isGrid && !isTerrain;
         push.materialValid = objectUsesMaterial ? 1u : 0u;
@@ -985,6 +1009,8 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         batchTerrainPush.terrainLodBlendMode = 0u;
         batchTerrainPush.materialValid = 0u;
         batchTerrainPush.materialId = fallbackMatId;
+        batchTerrainPush.clipY = viewOverride != nullptr ? viewOverride->clipY : 0.0f;
+        batchTerrainPush.clipMode = viewOverride != nullptr ? viewOverride->clipMode : 0u;
 
         geometryPipeline->bind(commandBuffer);
         VkBuffer arenaVertices = terrainMeshArena->getVertexBuffer();
@@ -1018,7 +1044,9 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
     // F1：GPU 驱动提交。间接命令与计数由 SceneGpuCull pass 写好，这里只按模型
     // 绑一次顶点/索引缓冲再提交；实例缓冲走 set 3。
-    if (sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo))
+    // 反射不复用主视角 compute 生成的间接命令：那批命令只包含主相机可见集合，
+    // 反射相机看到的对岸/山体可能在其外。普通网格在上面已走 CPU 路径。
+    if (!reflection && sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo))
     {
         SimplePushConstantData batchPush{};
         batchPush.gpuScene = 1u;

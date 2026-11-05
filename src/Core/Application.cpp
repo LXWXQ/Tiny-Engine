@@ -28,6 +28,8 @@
 #include "Render/SSAOPass.h"
 #include "Render/GlassPass.h"
 #include "Render/WaterPass.h"
+#include "Render/ReflectionPass.h"
+#include "Core/Material.h"
 #include "Render/TAAPass.h"
 #include "Render/ShadowPass.h"
 #include "Voxel/VoxelChunk.h"
@@ -795,6 +797,12 @@ streamingConfig.skirtsEnabled = false;
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	auto lightPass = std::make_unique<LightingPass>(*vulkanDevice, *gBuffers[0], *vulkanSwapchain,
 		*renderGraph, *renderResources, descriptorManager->getGlobalSetLayout());
+	// C1：平面反射用镜像相机把水面以上的几何重画到半分辨率 G-Buffer，再跑一遍
+	// 光照。必须排在 Lighting 之后（LightingPass::init 先建好 hdrScene，反射
+	// 据此决定分辨率），Glass/Water 之前（水面要读反射颜色）。
+	auto reflectionPass = std::make_unique<ReflectionPass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager.get(), descriptorManager->getGlobalSetLayout(),
+		gBuffers[0]->getDepth().format);
 	// D-2 的两个新成员：Bloom 只负责在 HDR 图上生成辉光，
 	// PresentPass 负责把 HDR + 辉光变成最终显示值并叠加 ImGui。
 	auto bloomPass = std::make_unique<BloomPass>(*vulkanDevice, *renderGraph, *renderResources,
@@ -809,6 +817,7 @@ streamingConfig.skirtsEnabled = false;
 	auto waterPass = std::make_unique<WaterPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
 		gBuffers[0]->getDepth().format);
+	waterPass->setReflectionPass(reflectionPass.get());
 	// TAA：必须在 Glass/Water 之后（要拿混合后的 HDR）、Bloom 之前（辉光作用在
 	// 抗锯齿后的画面上）。每帧都注册 —— 否则 Bloom/Present 会读到没人写的
 	// taaOutput，渲染图的写覆盖校验会直接报错。
@@ -834,6 +843,8 @@ streamingConfig.skirtsEnabled = false;
 	editorOverlayPassPtr = editorOverlay.get();
 	taaPassPtr = taaPass.get();
 	ssaoPassPtr = ssaoPass.get();
+	reflectionPassPtr = reflectionPass.get();
+	geometryPassPtr = geoPass.get();
 	computeProbePassPtr = computeProbePass.get();
 	crossQueueProbePassPtr = crossQueueProbePass.get();
 	subresourceProbePassPtr = subresourceProbePass.get();
@@ -842,6 +853,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(geoPass));
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
+	renderPipeline.addPass(std::move(reflectionPass));
 	renderPipeline.addPass(std::move(glassPass));
 	renderPipeline.addPass(std::move(waterPass));
 	renderPipeline.addPass(std::move(taaPass));
@@ -855,6 +867,10 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(computeProbePass));
 
 	renderPipeline.initAll();
+
+	// GeometrySystem 是 GeometryPass::init 里创建的，只能在 initAll 之后注入。
+	if (reflectionPassPtr != nullptr && geometryPassPtr != nullptr)
+		reflectionPassPtr->setGeometrySystem(geometryPassPtr->getGeometrySystem());
 
 	// ---- 把跨帧常驻的只读资源导入渲染图 ----
 	// initialLayout 给 SHADER_READ_ONLY，渲染图会把它们标成「跨帧常驻」，
@@ -1235,10 +1251,38 @@ void FirstApp::rebuildGlobalDescriptors()
 			shadowViews[frame] = shadowPassPtr->getShadowView(frame);
 	}
 
+	// C1：主 global set 的 binding12 是平面反射颜色。平面反射关闭时绑定环境图，
+	// 水面 shader 由 params3.x 分支决定是否采样，描述符本身必须始终有效。
+	VkSampler reflectionSampler = environmentTex->getSampler();
+	std::array<VkImageView, kFramesInFlight> reflectionViews{};
+	const EngineSettings& reflectionSettings = scene->getSettings();
+	const bool reflectionRuns = reflectionSettings.waterEnabled &&
+		reflectionSettings.waterPlanarReflection &&
+		(scene->getRegistry().view<TerrainComponent>().size() > 0 ||
+		 scene->getRegistry().view<VoxelChunkComponent>().size() > 0);
+	reflectionDescriptorsEnabled = reflectionRuns;
+	for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+	{
+		reflectionViews[frame] = environmentTex->getView();
+		if (reflectionRuns && reflectionPassPtr != nullptr)
+		{
+			VkImageView view = reflectionPassPtr->getColorView(frame);
+			if (view != VK_NULL_HANDLE)
+				reflectionViews[frame] = view;
+		}
+	}
+
 	descriptorManager->buildGlobalSet(globalUboBuffers, envInfo, constGBufferPtrs,
-	ssaoPassPtr->getOutputSampler(), ssaoViews,
-	irradianceInfo, prefilteredInfo, brdfLutInfo,
-	shadowSampler, shadowViews);
+		ssaoPassPtr->getOutputSampler(), ssaoViews,
+		irradianceInfo, prefilteredInfo, brdfLutInfo,
+		shadowSampler, shadowViews, reflectionSampler, reflectionViews);
+
+	if (reflectionPassPtr != nullptr)
+	{
+		reflectionPassPtr->setSharedInputs(envInfo, irradianceInfo, prefilteredInfo, brdfLutInfo,
+			Material::defaultWhiteTextureInfo, shadowSampler, shadowViews);
+		reflectionPassPtr->rebuildDescriptors();
+	}
 }
 
 bool FirstApp::handleWindowMaintenance()
@@ -2364,6 +2408,20 @@ void FirstApp::render(float dt)
 		// vmaFlushAllocation 对 coherent 内存是空操作，可以无条件调用。
 		vmaFlushAllocation(vulkanDevice->getVmaAllocator(),
 			globalUboAllocations[frameInFlight], 0, sizeof(ubo));
+
+		// C1：开关在运行时变化时重新绑定 binding12。关闭平面反射后若还留着
+		// 反射纹理，该纹理本帧没有 Pass 写入/转换布局，验证层会报 40 条错误。
+		const bool reflectionWanted = settings.waterEnabled && settings.waterPlanarReflection &&
+			(scene->getRegistry().view<TerrainComponent>().size() > 0 ||
+			 scene->getRegistry().view<VoxelChunkComponent>().size() > 0);
+		if (reflectionWanted != reflectionDescriptorsEnabled)
+			rebuildGlobalDescriptors();
+
+		// C1：反射相机由未抖动的投影 + 镜像 view 推导，避免 TAA 抖动被放大成
+		// 反射里的位移；主 UBO 的副本在反射 pass 里再改 projectionView/cameraPos。
+		if (reflectionPassPtr != nullptr)
+			reflectionPassPtr->prepareFrame(ubo, scene->getCamera().getView(),
+				unjitteredProjection, settings.waterLevel);
 
 		FrameInfo frameInfo{
 			frameInFlight,

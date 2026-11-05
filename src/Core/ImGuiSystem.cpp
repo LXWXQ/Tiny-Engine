@@ -286,6 +286,8 @@ void ImGuiSystem::renderWaterPanel(EngineSettings& settings)
 		ImGui::SliderFloat("Level", &settings.waterLevel, -10.0f, 20.0f, "%.2f");
 		ImGui::SliderFloat("Wave Strength", &settings.waterWaveStrength, 0.0f, 2.0f, "%.2f");
 		ImGui::SliderFloat("Wave Speed", &settings.waterWaveSpeed, 0.0f, 2.0f, "%.2f");
+		ImGui::Checkbox("Planar Reflection", &settings.waterPlanarReflection);
+		ImGui::SetItemTooltip("半分辨率镜像反射：远水能映出对岸/山体；关闭则退回环境贴图");
 		ImGui::TextDisabled("Fresnel reflection + depth absorption");
 		ImGui::Unindent();
 	}

@@ -61,7 +61,10 @@ public:
 		const VkDescriptorImageInfo& brdfLutInfo,
 		// F6：3 级联阴影图（sampler2DArray，每帧槽位一份）。没有阴影时传空句柄，
 		// 着色器那边用 shadowParams.w 关掉采样，不会读到未定义内容。
-		VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews);
+		VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews,
+		// C1：binding 12 = 平面反射颜色（水面片元用它替换环境贴图反射）。
+		// 关闭平面反射时传环境贴图作为占位，水面着色器不会采样。
+		VkSampler reflectionSampler, const std::array<VkImageView, kFramesInFlight>& reflectionViews);
 	VkDescriptorSet getGlobalSet(uint32_t frameInFlightIndex) const
 	{
 		return globalSets[frameInFlightIndex];
@@ -131,6 +134,9 @@ public:
 	void writeSet(VkDescriptorSet set, const std::vector<VkWriteDescriptorSet>& writes);
 
 	VkDescriptorPool getPool() const { return pool; }
+
+	// C1：平面反射的全局 set 也要绑定同一张材质 factor 表。
+	VkBuffer getMaterialFactorBuffer() const { return materialFactorBuffer; }
 
 	// E3: 写某个材质槽位的 baseColor / metallic / roughness factor。
 	// 越界或缓冲未建时静默返回（自检/无设备路径也会调到这里）。

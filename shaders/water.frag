@@ -19,11 +19,13 @@ layout(set = 0, binding = 0) uniform GlobalUbo
 
 layout(set = 0, binding = 1) uniform sampler2D environmentMap;
 layout(set = 0, binding = 2) uniform sampler2D inPosition;
+layout(set = 0, binding = 12) uniform sampler2D reflectionMap;
 
 layout(push_constant) uniform WaterPush
 {
     vec4 params;   // time, level, waveStrength, waveSpeed
     vec4 params2;  // farRadius, foamStrength, fogStart, fogDensity
+    vec4 params3;  // x = planar reflection enabled
 } push;
 
 const vec4 WAVES[4] = vec4[4](
@@ -162,6 +164,18 @@ void main()
     // 水后不透明几何的世界坐标 -> 沿视线方向的厚度。天空写入的是约 10000m，
     // 于是"没有底"的地方自动变成深海。
     vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(inPosition, 0));
+
+    // C1：半分辨率平面反射。镜像相机把水面以上的真实几何重画一遍，
+    // 远水因此能反射对岸/山体，而不是只剩天空环境贴图。
+    // 反射纹理是半分辨率，UV 直接沿用屏幕坐标并按法线做轻微扰动；
+    // 关掉开关时 params3.x = 0，保持原来的环境贴图反射。
+    if (push.params3.x > 0.5)
+    {
+        vec2 reflectionUV = clamp(screenUV + N.xz * (0.0015 + roughness * 0.006),
+                                  vec2(0.001), vec2(0.999));
+        reflection = texture(reflectionMap, reflectionUV).rgb;
+    }
+
     vec3 scenePos = texture(inPosition, screenUV).xyz;
     const float sceneDistance = length(scenePos - ubo.cameraPos.xyz);
     const float waterDistance = length(fragWorldPos - ubo.cameraPos.xyz);

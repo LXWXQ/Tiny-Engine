@@ -24,7 +24,7 @@ updated: 2026-11-05
 后处理抗锯齿已有 TAA，但只有相机重投影、没有运动向量，物体自身运动不会被单独补偿。
 骨骼动画目前只服务运行模式的单角色（CPU 蒙皮，见 [character](../30-systems/character.md)），不是通用动画系统。
 地形单 chunk 子集已接 GPU culling、indirect count 与 GPU 顶点/索引组装；体素走独立 `Model` 路径（无合批、无 LOD）。
-体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。水面（`Water`）是独立的水平前向混合 Pass，只在有地形/体素块时注册，反射只来自全局环境图，无折射/SSR/水下后处理。距离雾（`fog`）是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；雾色固定取环境图地平线 LOD3，天空本身不参与。
+体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。水面（`Water`）是独立的水平前向混合 Pass，只在有地形/体素块时注册；反射由半分辨率平面反射（`ReflectionPass`，镜像相机重画不透明几何）提供，玻璃/水面/粒子不进入倒影，无折射/SSR/水下后处理。距离雾（`fog`）是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；雾色固定取环境图地平线 LOD3，天空本身不参与。
 
 ## 3. 架构限制
 

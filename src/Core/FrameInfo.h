@@ -139,6 +139,12 @@ float checkerScale = 1.0f;
 	// chunk 实例表里按 gl_InstanceIndex 取模型矩阵。
 	uint32_t terrainBatched = 0;
 
+	// C1：平面反射第二遍几何。clipMode 非 0 时丢弃世界坐标 y < clipY 的片元。
+	// 反射相机在水面下方，若保留水下湖底会挡住水面之上的反射内容。
+	// 主视角固定 clipMode = 0，因此这两个字段对正常渲染没有影响。
+	float clipY = 0.0f;
+	uint32_t clipMode = 0;
+
 	// 偏移必须在编译期钉死，否则"某个字段悄悄移位"会导致材质错乱，
 	// 而且这类错乱看起来像"贴图加载错了"，极难往回追。
 	static constexpr size_t kMaterialOffset = 2 * sizeof(glm::mat4);
@@ -175,6 +181,10 @@ static_assert(offsetof(SimplePushConstantData, terrainBatched) == SimplePushCons
 	"terrainBatched must follow gpuScene");
 static_assert(offsetof(SimplePushConstantData, gpuScene) == SimplePushConstantData::kMaterialOffset + 80,
 	"gpuScene must follow terrainLodBlendMode");
+static_assert(offsetof(SimplePushConstantData, clipY) == SimplePushConstantData::kMaterialOffset + 88,
+	"clipY must follow terrainBatched");
+static_assert(offsetof(SimplePushConstantData, clipMode) == SimplePushConstantData::kMaterialOffset + 92,
+	"clipMode must follow clipY");
 // 结构体按 glm::mat4 的 16 字节对齐补齐：GLSL 侧块是 212 字节，C++ 侧 sizeof 是 224。
 // push range 用 sizeof 是合法的，多出的 12 字节着色器不读。
 static_assert(sizeof(SimplePushConstantData) == SimplePushConstantData::kMaterialOffset + 96,
@@ -276,6 +286,9 @@ struct EngineSettings
 	float waterLevel = 2.0f;
 	float waterWaveStrength = 1.0f;
 	float waterWaveSpeed = 1.0f;
+	// C1：半分辨率平面反射。关闭后水面回退到仅环境贴图反射，
+	// 方便 A/B 和低配机器省掉第二遍几何+光照。
+	bool  waterPlanarReflection = true;
 
 	// B：全场景距离雾（空气透视）。远处地形/水面/玻璃一起淡出到环境图
 	// 的地平线颜色，解决 4km 水面只剩一块硬切镜面、远山边界过锐的问题。

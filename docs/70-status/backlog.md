@@ -287,6 +287,8 @@ updated: 2026-11-05
 > 同日把场景树补成真正的父子结构：`createVoxelWorld()` 对每个 chunk 调 `setParent(entity, world)`，chunk 不再与 `Voxel World` 并列成根；世界节点默认展开、按 `chunkZ/chunkX` 排序，Hierarchy 使用 `DrawLinesFull` 树线。详见 [milestones](milestones.md#场景树体素-chunk-归入世界子树2026-11-05)，验证日志 `build/validation/20261105-125330`。
 >
 > E-P1 已完成（2026-11-05）：交互式启动失败先弹原生 `MessageBoxW`，正文含阶段、原因、`startup-error.log` 路径、`--help` 与 Vulkan 下一步；`--hidden` / `--selftest` / 截图等无人值守路径保持静默。详见 [milestones](milestones.md#e-p1启动失败原生-messagebox2026-11-05)。
+>
+> C1 半分辨率平面反射已完成（2026-11-05）：`ReflectionPass` 用镜像相机重画 960x540 的 G-Buffer 与延迟光照，`WaterPass` 从 Set0 binding12 采样；开关为 `water.planarReflection`，默认开启。它替代了“远水只能反射环境图”的旧边界，但 F6-01 的 SSR 仍未开始。详见 [milestones](milestones.md#c1-半分辨率平面反射2026-11-05)。
 
 ## 更新方式
 

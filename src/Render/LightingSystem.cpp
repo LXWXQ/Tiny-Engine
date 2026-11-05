@@ -50,7 +50,9 @@ void LightingSystem::createPipeline()
 
 void LightingSystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 {
-    (void)commandBuffer;
-    lightingPipeline->bind(frameInfo.commandBuffer);
-    vkCmdDraw(frameInfo.commandBuffer, 3, 1, 0, 0);
+    (void)frameInfo;
+    // 必须使用传入的命令缓冲：平面反射会在同一个主命令缓冲里插入第二遍光照，
+    // 如果用 frameInfo.commandBuffer，内层调用依旧画到主目标上。
+    lightingPipeline->bind(commandBuffer);
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 }

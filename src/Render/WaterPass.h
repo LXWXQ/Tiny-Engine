@@ -28,7 +28,10 @@ struct WaterPushConstantData
 {
     glm::vec4 params{ 0.0f };   // x=time(s), y=waterLevel, z=waveStrength, w=waveSpeed
     glm::vec4 params2{ 0.0f };  // x=farRadius, y=foamStrength, z=fogStart, w=fogDensity
+    glm::vec4 params3{ 0.0f };  // x=planar reflection enabled
 };
+
+class ReflectionPass;
 
 class WaterPass : public IRenderPass
 {
@@ -41,6 +44,7 @@ public:
     void init() override;
     void addToGraph(RenderGraph& graph, FrameInfo& frameInfo) override;
     std::string getName() const override { return "Water"; }
+    void setReflectionPass(ReflectionPass* pass) { reflectionPass = pass; }
 
 private:
     void createBuffers();
@@ -51,6 +55,7 @@ private:
     RenderGraph& renderGraph;
     RenderResources& resources;
     DescriptorManager* descriptorManager = nullptr;
+    ReflectionPass* reflectionPass = nullptr;
     VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
 

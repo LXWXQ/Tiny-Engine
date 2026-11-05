@@ -31,6 +31,8 @@ class SSAOPass;
 class ShadowPass;
 class TAAPass;
 class SubresourceProbePass;
+class GeometryPass;
+class ReflectionPass;
 
 class FirstApp
 {
@@ -137,6 +139,10 @@ private:
 	ShadowPass* shadowPassPtr = nullptr;
 	// TAA：Glass 之后、Bloom 之前，负责抖动重建与历史混合。
 	TAAPass* taaPassPtr = nullptr;
+	// C1：半分辨率平面反射（Lighting 之后、Glass/Water 之前）。
+	ReflectionPass* reflectionPassPtr = nullptr;
+	GeometryPass* geometryPassPtr = nullptr;
+	bool reflectionDescriptorsEnabled = false;
 
 
 	RenderPipeline renderPipeline;

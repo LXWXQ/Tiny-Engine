@@ -118,6 +118,7 @@ namespace
 		water["level"] = s.waterLevel;
 		water["waveStrength"] = s.waterWaveStrength;
 		water["waveSpeed"] = s.waterWaveSpeed;
+		water["planarReflection"] = s.waterPlanarReflection;
 		j["water"] = std::move(water);
 
 		// B：距离雾。独立节点而不是塞进 water，地形/玻璃也吃同一份参数。
@@ -194,6 +195,7 @@ namespace
 			out.waterLevel = read(n, "level", out.waterLevel, warnings);
 			out.waterWaveStrength = read(n, "waveStrength", out.waterWaveStrength, warnings);
 			out.waterWaveSpeed = read(n, "waveSpeed", out.waterWaveSpeed, warnings);
+			out.waterPlanarReflection = read(n, "planarReflection", out.waterPlanarReflection, warnings);
 		}
 
 		if (j.contains("fog") && j["fog"].is_object())

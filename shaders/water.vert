@@ -16,6 +16,7 @@ layout(push_constant) uniform WaterPush
 {
     vec4 params;   // time, level, waveStrength, waveSpeed
     vec4 params2;  // farRadius, foamStrength, reserved, reserved
+    vec4 params3;  // x = planar reflection enabled
 } push;
 
 layout(location = 0) in vec3 inPosition;

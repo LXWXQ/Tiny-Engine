@@ -1,5 +1,6 @@
 #include "WaterPass.h"
 
+#include "Render/ReflectionPass.h"
 #include "Scene/Components.h"
 #include "AssetPaths.h"
 
@@ -10,7 +11,7 @@
 #include <stdexcept>
 #include <vector>
 
-static_assert(sizeof(WaterPushConstantData) == 32, "water push constant must stay 32 bytes");
+static_assert(sizeof(WaterPushConstantData) == 48, "water push constant must stay 48 bytes");
 
 namespace
 {
@@ -265,11 +266,18 @@ void WaterPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         indexBuffer == VK_NULL_HANDLE || waterPipeline == nullptr)
         return;
 
+    const bool planarReflection =
+        frameInfo.settings.waterPlanarReflection && reflectionPass != nullptr &&
+        reflectionPass->isActive() &&
+        reflectionPass->getColorHandle(frame).valid();
+
     auto& pass = graph.addGraphicsPass("Water");
     pass.writeColor(resources.hdrScene[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
     pass.writeDepth(resources.gbDepth[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
+    if (planarReflection)
+        pass.read(reflectionPass->getColorHandle(frame));
 
-    pass.execute([this, &frameInfo, frame](VkCommandBuffer cmd)
+    pass.execute([this, &frameInfo, frame, planarReflection](VkCommandBuffer cmd)
     {
         if (indexCount == 0u || waterPipeline == nullptr)
             return;
@@ -296,6 +304,7 @@ void WaterPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         push.params2 = glm::vec4(kFarRadius, 1.0f,
                                  settings.fogEnabled ? std::max(settings.fogStart, 0.0f) : 0.0f,
                                  settings.fogEnabled ? std::max(settings.fogDensity, 0.0f) : 0.0f);
+        push.params3 = glm::vec4(planarReflection ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
         vkCmdPushConstants(cmd, pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(WaterPushConstantData), &push);
@@ -316,7 +325,8 @@ void WaterPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
             std::cout << "[Water] first draw | level=" << settings.waterLevel
                       << " waveStrength=" << settings.waterWaveStrength
                       << " waveSpeed=" << settings.waterWaveSpeed
-                      << " cameraY=" << cameraPosition.y << "\n";
+                      << " cameraY=" << cameraPosition.y
+                      << " planarReflection=" << (planarReflection ? 1 : 0) << "\n";
             loggedFirstDraw = true;
         }
     });

@@ -27,6 +27,8 @@ SSAOBlur          模糊遮蔽图
    |
 LightingPass      读 G-Buffer + SSAO + IBL 三件套 + 环境图 -> 写 R16G16B16A16_SFLOAT（线性 HDR）
    |
+PlanarReflection  半分辨率平面反射：镜像相机重画 960x540 G-Buffer + 延迟光照 -> 反射色，供水面倒影
+   |
 GlassPass         V-01：体素玻璃前向混合；LOAD HDR + 深度，写深度关，按面质心远->近，只画 Glass
    |
 WaterPass         水面前向混合：LOAD HDR + 深度，写深度关；径向网格铺到约 4km，逐像素 footprint 过滤波浪 + 距离雾
@@ -45,7 +47,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 `TerrainGpuSelection` 与 `SceneGpuCull` 都由 `GeometryPass::addToGraph()` 在 `Geometry` 之前注册（顺序固定为 Terrain -> SceneGpuCull -> Geometry）：两者写的 indirect command 会被 `Geometry` 的 `vkCmdDrawIndexedIndirect` 直接消费。
 `HiZBuild` 必须排在 `Geometry` **之后**：金字塔要包含本帧刚画出的几何；它写的是 `(frameInFlight + 1) % kFramesInFlight` 槽，供下一帧 `SceneGpuCull` 读（错帧一帧，第一帧 `params.z = 0` 关闭遮挡）。
 渲染图里注册的 pass 名依次是：
-`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `Glass`, `Water`, `TAA`,
+`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `Glass`, `Water`, `TAA`,
 `Bloom.Bright`, `Bloom.Down0/1/2`, `Bloom.Up2/1/0`, `Present`,
 `PresentTransition`。
 
@@ -68,6 +70,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 |---|---|
 | SSAO 在 Lighting **之前** | SSAO 调制环境光项（`ambient *= ssao`），是光照的输入 |
 | Glass 在 Lighting **之后**、Bloom **之前** | 玻璃必须混合在已经着色好的 HDR 上（延迟着色只存一个表面，玻璃进 G-Buffer 会把后面的层盖掉）；放在 Bloom 前，玻璃高光也参与辉光。深度 `LOAD` 但 `depthWrite = FALSE`、`compare = LESS_OR_EQUAL`：不透明几何仍挡住玻璃，玻璃之间由 CPU 排序（远->近）决定顺序 |
+| PlanarReflection 在 Lighting **之后**、Glass/Water **之前** | 反射必须用本帧 G-Buffer 和 IBL 重新着色；透明 Pass 之前写完，Water 才能把反射色当输入。只有水面启用、平面反射开启且场景有地形/体素块时才注册；镜像相机沿水面对称，用未抖动投影重画半分辨率 960x540 的 G-Buffer，再用第二套 Lighting 着色，开销约为全分辨率的一半 |
 | Water 在 Glass **之后**、TAA **之前** | 水面要混合进已经着色的 HDR；先于 TAA 才能让水边缘参与时域抗锯齿；先于 Bloom 才能让太阳高光参与辉光。深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，不透明几何与玻璃都能挡住它；相机中心径向网格跟随相机，铺到约 4km。片元用 `dFdx/dFdy` 足迹逐波过滤，未解析能量转成粗糙度/高光展宽；距离雾在 Lighting、Water、Glass 内共用 `fogParams` |
 | TAA 在 Water **之后**、Bloom **之前** | 先把玻璃和水面混合进 HDR 再做时域解析，透明边缘也能被抗锯齿；Bloom 读到的是已收敛的 HDR，不会把抖动噪声放大成辉光。TAA 用未抖动 VP 把 G-Buffer 世界坐标反投影到上一帧，不需要运动向量（当前只有相机运动）；ImGui 在 Present 内叠加，不参与历史混合 |
 | Bloom 在 tonemap **之前** | ACES 最后一步是 `clamp(0,1)`，高光被压到 1.0 后 Bloom 只能"把白涂白" |
@@ -81,7 +84,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | `--no-ssao` | SSAO Pass 仍执行，但着色器最前面就 `enabled < 0.5 -> 输出 1.0`（连 G-Buffer 采样都省） |
 | `--no-bloom` | **真的跳过 7 个 Bloom pass**；Present 走 `present_no_bloom.frag` 单输入管线 |
 | `--no-taa` | TAA Pass 仍执行，但 `historyWeight = 0`、jitter = 0，着色器直接输出当前帧；窗口/渲染目标 resize 与重新开启时 `historyValid = false`，首帧不吃旧历史 |
-| `--no-water` | Water Pass **完全不注册**，只打印一次 `[Water] disabled`；有地形/体素块时才可能注册 |
+| `--no-water` | Water Pass **完全不注册**，只打印一次 `[Water] disabled`；有地形/体素块时才可能注册。PlanarReflection 的两个 Pass 也因 `waterEnabled=false` 不注册，全局 Set0 的 binding12 回退到环境图 |
 | 距离雾 | 没有命令行开关；只能通过 `config/engine.json` 的 `fog.enabled` 或编辑器/运行时 UI 关闭。它不是 Pass，关闭时着色器按密度 0 跳过混合 |
 
 距离雾不是独立 Pass：`GlobalUbo.fogParams`（x=起始距离、y=密度、z=保留、w=启用）由

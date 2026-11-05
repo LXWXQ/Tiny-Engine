@@ -815,14 +815,14 @@ updated: 2026-11-05
 - 几何是相机中心径向网格：160 圈 × 192 段（30721 顶点 / 183744 索引），半径 `r_i = 1.2i + 0.15i²`，最远约 4032m；顶点只存局部 XZ，着色器加 `cameraPos.xz`，网格因此永远跟随相机而不用重建缓冲。近处环密、远处环疏。
 - 顶点位移 4 个大波（波长 23 / 14 / 9 / 5.5m）；像素着色器解析求梯度得到法线，再叠加 3 个近距 ripple（波长 1.7 / 1.1 / 0.75m，60..220m 内淡出，避免远处闪烁）。
 - 着色：Fresnel `0.02 + 0.98·(1-NdotV)^5`；反射直接采样全局 Set0 binding1 的等距柱状环境图，并用 `textureGrad` 折回经度接缝；从 G-Buffer `inPosition` 取水后不透明几何位置算视线厚度，`depthFactor = 1 - exp(-thickness·0.22)` 控制浅水/深水；岸边薄水加波峰生成泡沫；太阳高光 `pow 900` + `pow 120`。
-- Pass 合同：`LOAD` HDR + 深度，`SRC_ALPHA/ONE_MINUS_SRC_ALPHA`，`depthTest = TRUE`、`depthWrite = FALSE`、`LESS_OR_EQUAL`，关闭背面剔除，只绑 Set0，push constant 32 字节。
+- Pass 合同：`LOAD` HDR + 深度，`SRC_ALPHA/ONE_MINUS_SRC_ALPHA`，`depthTest = TRUE`、`depthWrite = FALSE`、`LESS_OR_EQUAL`，关闭背面剔除，只绑 Set0，push constant 32 字节（C1 后为 48 字节，见下节）。
 - 只有 registry 中存在 `TerrainComponent` 或 `VoxelChunkComponent` 才注册 Water，避免 Sponza/空场景出现全球水面。`EngineSettings` 增加 `waterEnabled/waterLevel/waterWaveStrength/waterWaveSpeed`；编辑器 Render 面板与运行时 ImGui 都有“水面”分组；`--no-water` 直接不注册，打印一次 `[Water] disabled`；`config/engine.json` 持久化 `water` 节点。
 
 **可观测**：启动打印 `[Water] initialized | rings=160 segments=192 vertices=30721 indices=183744 radius=4032m`；首帧打印 `[Water] first draw | level=... waveStrength=... waveSpeed=... cameraY=...`；`--no-water` 打印 `[Water] disabled`。
 
 **回归**：`f3v-water`（断言 initialized/first draw + `[Validation] errors=0 warnings=0`）与 `f3v-water-off`（断言 `[Water] disabled`）；全套 **69 项引擎 + 2 项工具 = 71 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-162911`；DocCheck PASS（documents=67）。
 
-**已知边界**：水面是无限水平面，不跟随地形起伏；反射只来自环境图，没有 SSR，近处物体不会出现在倒影里；没有折射和水下后处理，镜头进入水下后不会切换色调；没有交互（涟漪/尾迹）。
+**已知边界**：水面是无限水平面，不跟随地形起伏；本阶段反射只来自环境图，没有 SSR，近处物体不会出现在倒影里（C1 后改为半分辨率平面反射，见下节）；没有折射和水下后处理，镜头进入水下后不会切换色调；没有交互（涟漪/尾迹）。
 
 ## 远水 A+B：footprint 波浪滤波 + 距离雾（2026-11-05）
 
@@ -844,4 +844,24 @@ updated: 2026-11-05
 
 **回归**：全套 **69 项引擎 + 2 项工具 = 71 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-172117`；DocCheck PASS（documents=67）。
 
-**已知边界**：远水反射仍只来自环境图，没有对岸/山体倒影（C 阶段再做平面反射/SSR）；雾是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；footprint 滤波只修法线与高光，不改变几何，外圈网格 132m 段长的几何欠采样仍在。
+**已知边界**：本阶段远水反射仍只来自环境图（2026-11-05 的 C1 已补半分辨率平面反射，见下节）；雾是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；footprint 滤波只修法线与高光，不改变几何，外圈网格 132m 段长的几何欠采样仍在。
+
+## C1 半分辨率平面反射（2026-11-05）
+
+**问题**：A+B 把远水的波浪条带和硬切边压下去了，但远水仍然只反射环境图里的天空。视高 6.4m、距离 1km 时 Fresnel 已到 0.97，水面近似一块灰蓝镜面；近处能看到水色、透底和波纹，远处却看不到对岸山体和石墙，缺少“这是水”的空间线索。
+
+**实现**：
+- 新增 `src/Render/ReflectionPass.{h,cpp}`。半分辨率（1920x1080 -> 960x540）重建一套 G-Buffer：Position / Normal / Albedo / Pbr 四张颜色 + 深度 + 反射色；深度沿用主 G-Buffer 格式，反射色沿用 HDR 格式。每帧在飞 2 槽。
+- 反射相机是水面平面镜像：`mirror[1][1] = -1`、`mirror[3][1] = 2 * waterLevel`，`reflectionView = mainView * mirror`；投影用**未抖动**的主投影，避免 TAA jitter 进入反射；反射相机位置 `(x, 2w - y, z)`。反射 UBO 复制主 UBO 后只替换 `projectionView` / `cameraPos`。
+- 渲染图新增两个 pass：`PlanarReflection.GBuffer`（CLEAR 4 色 + 深度，写反射 UBO 后调用 `GeometrySystem` 重画不透明几何）与 `PlanarReflection.Lighting`（读 4 色 + IBL 三件套 + 环境图，CLEAR 后写反射色）。`GeometrySystem::render` 增加视图覆盖参数，反射时不画网格、不建 CPU terrain 状态；`SimplePushConstantData` 末尾增加 `clipY/clipMode`，`mrt.frag` 丢弃水面以下的片元，避免水下地形进入倒影。
+- `WaterPass` 从 Set0 binding12 采样反射色：`screenUV + N.xz * (0.0015 + roughness * 0.006)` 做轻微扰动；push constant 从 32 字节扩到 48 字节，末尾 `params3.x` 是平面反射开关。关闭时 binding12 回退环境图，着色器走原来的天空反射分支。
+- 开关 `water.planarReflection`（默认 `true`），编辑器 Render 面板与运行时 ImGui 都有 `Planar Reflection`；`config/engine.json` 持久化 `water.planarReflection`。运行时切换会重建全局描述符，避免 binding12 指向未转换布局的纹理。
+- 只有“水面开启 + 平面反射开启 + registry 有 Terrain/VoxelChunk”同时成立才注册反射 pass；没有可反射的不透明几何时不付这份代价。
+
+**可观测**：启动打印 `[Reflection] planar reflection initialized | extent=960x540`；首帧打印 `[Reflection] first draw | level=2 mirrorY=-6.8105 extent=960x540`；Water 首绘日志末尾带 `planarReflection=1`；关闭时为 `0`。
+
+**证据**：同机位 `build/reflection_on.png` 能看到绿色山体与石墙倒影，`build/reflection_off.png` 只剩纯天空反射。早期关闭路径曾出现 `[Validation] errors=40 warnings=0`，原因是 binding12 仍指向从未转换布局的反射纹理；回退环境图并在开关变化时重建描述符后恢复 `0/0`。
+
+**回归**：新增 `f3v-water-reflection`（`--selftest 20 --voxel-world 1`，断言 initialized / first draw / `planarReflection=1` / `[Validation] errors=0 warnings=0`）；全套 **70 项引擎 + 2 项工具 = 72 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-180749`；DocCheck PASS（documents=67）。
+
+**已知边界**：反射只有半分辨率，边缘有轻微软/锯齿；倒影只含不透明几何，玻璃、水面本身、粒子与编辑器 gizmo 不进倒影；没有 SSR、没有折射、没有独立于主视角的时域累积；反射相机使用主相机的阴影级联，远处倒影的阴影精度有限；`--no-water` 时反射 pass 不注册。

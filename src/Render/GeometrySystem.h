@@ -30,7 +30,22 @@ public:
     GeometrySystem& operator=(const GeometrySystem&) = delete;
 
     void prepareTerrainGpuSelection(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
+
+    // C1：第二遍（平面反射）用。覆盖 global set / 视图投影 / 相机位置，
+    // 并开启水面以下的片元裁剪；主视角调用传 nullptr，行为完全不变。
+    struct GeometryViewOverride
+    {
+        VkDescriptorSet globalSet = VK_NULL_HANDLE;
+        glm::mat4 viewProjection{ 1.0f };
+        glm::vec3 cameraPosition{ 0.0f };
+        float clipY = 0.0f;
+        uint32_t clipMode = 0;
+        bool reflection = false;
+    };
     void render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
+    void render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
+                const GeometryViewOverride* viewOverride);
+
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
 
 private:

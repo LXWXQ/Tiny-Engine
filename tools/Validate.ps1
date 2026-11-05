@@ -294,6 +294,10 @@ $tests = @(
     # 都要保持验证层零消息（关掉时 RenderGraph 不能留下没人写的目标）。
     @{ Name = "f3v-water"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
        MustContain = @("[Water] initialized |", "[Water] first draw |", "[Validation] errors=0 warnings=0") },
+    # C1：半分辨率平面反射。镜像相机重画不透明几何，水面从 binding12 采样；
+    # 开关默认开启，渲染图注册两个反射 pass 且验证层仍为零消息。
+    @{ Name = "f3v-water-reflection"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
+       MustContain = @("[Reflection] planar reflection initialized |", "[Reflection] first draw |", "planarReflection=1", "[Validation] errors=0 warnings=0") },
     @{ Name = "f3v-water-off"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1", "--no-water");
        MustContain = @("[Water] disabled", "[Validation] errors=0 warnings=0") },
   @{ Name = "f3-voxel-persist"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
