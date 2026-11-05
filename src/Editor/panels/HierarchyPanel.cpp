@@ -200,7 +200,8 @@ void HierarchyPanel::drawEntityNode(EditorState& state, entt::entity entity)
     if (!registry.valid(entity) || registry.any_of<TerrainChunkComponent>(entity))
         return;
 
-    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+        ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DrawLinesFull;
     if (state.selection.contains(entity))
         flags |= ImGuiTreeNodeFlags_Selected;
 
@@ -208,6 +209,11 @@ void HierarchyPanel::drawEntityNode(EditorState& state, entt::entity entity)
     const bool hasChildren = hierarchy && !hierarchy->children.empty();
     if (!hasChildren)
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+    // 体素/地形世界是编辑器里的“文件夹”节点：加载后默认展开，
+    // 否则用户只能看到 Voxel World 一个根，误以为 chunk 丢了。
+    else if (registry.any_of<VoxelWorldComponent>(entity) ||
+             registry.any_of<TerrainStreamingComponent>(entity))
+        flags |= ImGuiTreeNodeFlags_DefaultOpen;
 
     // 用实体 ID 作为 ImGui ID，避免同名实体互相干扰
     ImGui::PushID(static_cast<int>(static_cast<uint32_t>(entity)));

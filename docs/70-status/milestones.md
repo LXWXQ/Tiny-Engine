@@ -748,3 +748,20 @@ updated: 2026-11-05
 **验证注意**：`--streaming-world 3` 的测试世界在这些机位下看起来是平的；修复前的大片白斑是材质权重伪影，不是几何起伏或纹理平铺错误，修复未改变任何高度场/网格数据。全套用例按仓库基线 `config/engine.json` 跑，用户本地相机/关闭阴影会让 `terrain-render`/`f6-shadows` 的默认相机断言失败；跑前临时换基线、跑完恢复本地 config，未提交用户 config。
 
 **已知边界**：沙/草/岩/雪阈值仍与 `heightScale` 绑定；若未来地形使用真正的高山参数，需要重新校准阈值，而不是改回 per-chunk 归一化。
+
+## 场景树体素 chunk 归入世界子树（2026-11-05）
+
+**问题**：Hierarchy 中 9 个 `Voxel Chunk` 与 `Voxel World`、`Camera` 全部平铺成根节点（用户截图 241×528），树形结构没有体现 `VoxelWorldComponent` 与 `VoxelChunkComponent` 的归属关系，也无法按世界节点折叠/移动/删除整块。
+
+**实现**：
+- `Scene::createVoxelWorld()` 在创建每个 chunk 实体后调用 `setParent(entity, world)`，chunk 成为 `Voxel World` 的子节点；世界默认单位变换，挂接不改变 chunk 世界位置。
+- chunk 创建完后对 `world` 的 `HierarchyComponent::children` 按 `(chunkZ, chunkX)` 稳定排序，异步完成顺序/存档重建顺序不会让 Hierarchy 行序每次不同。
+- `HierarchyPanel` 的树节点统一加 `ImGuiTreeNodeFlags_DrawLinesFull`；`VoxelWorldComponent` / `TerrainStreamingComponent` 有子节点时加 `DefaultOpen`，加载后直接看到 3×3 子树。
+- 示例自检增加父节点断言：9 个 chunk 的 `HierarchyComponent::parent` 必须等于世界实体，打印 `voxel-world meshes=9 bounds=9 parented=9`；`tools/Validate.ps1` 的 `e8-editor-mode` 断言该行。
+- 搜索框仍按匹配项拍平（E1 行为），不强行展开树；只影响显示，不影响父子关系。
+
+**可观测**：`.tmp/hierarchy_tree2.png` 中 `Voxel World` 默认展开，9 个 chunk 按 `-1,-1` → `1,1` 顺序缩进，带树线；`Camera`、`Skybox` 保持根节点。`--selftest 5 --empty-scene` 输出 `[Editor] example presets selfTest PASS | voxel-world meshes=9 bounds=9 parented=9`，`[Validation] errors=0 warnings=0`。
+
+**回归**：`e8-editor-mode`（新增 `parented=9` 断言）；全套验证日志 `build/validation/20261105-125330`（69 项 ALL PASS，`CONFIG_USER_RESTORED`）；DocCheck PASS（`documents=65`）。
+
+**已知边界**：`DeleteEntityCommand` 的组件快照尚未包含 `VoxelWorldComponent` / `VoxelChunkComponent`。在 Hierarchy 中删除整个 `Voxel World` 会级联删除 chunk 网格，但撤销只能恢复 Transform/Name/Mesh 等通用组件，体素数据不完整；当前先避免用删除世界节点来验证撤销，后续若世界需要可撤销删除，应单独补体素组件快照。

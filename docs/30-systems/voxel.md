@@ -28,6 +28,10 @@ updated: 2026-11-04
 `Chunk::generate()` 用同一套值噪声（`splitmix64` + 双线性 `valueNoise`）按世界列算高度，
 所以相邻 chunk 的边界天然连续，不需要缝合、也没有 LOD。
 
+场景树：`Scene::createVoxelWorld()` 对每个 chunk 调 `setParent(entity, world)`，chunk 是 `Voxel World`
+的子节点而不是并列根；子节点按 `chunkZ, chunkX` 稳定排序，Hierarchy 默认展开世界节点。世界默认单位变换，
+挂接不改变 chunk 世界位置；删除/移动世界时可沿子树统一处理。
+
 ## 2. 网格
 
 `voxel::buildMesh(const Chunk&, terrain::TerrainMeshData&, MeshStats*)`：

@@ -254,6 +254,7 @@ updated: 2026-11-05
 | R-01 | 已完成 | TAA 时域抗锯齿（Halton 抖动 + 未抖动 VP 历史重投影 + 3x3 AABB clamp） | — | 远处几何边缘与纹理闪烁明显下降；`--no-taa` 可关；回归项 `f3v-taa`/`f3v-taa-off` 通过 |
 | R-02 | 已完成 | 体素图集 mip 跨格渗色（远处规则白点/摩尔纹） | — | 远处草地/石面规则白点消失，近景纹理与玻璃图集正常；`f3-voxel` 断言 `atlas=512 tile=64 pitch=128 gutter=32` |
 | R-03 | 已完成 | 流送地形 chunk 边界材质断层（高度层权重改用全局 `baseHeight`/`heightScale`） | — | 合批与非合批截图均无矩形沙/雪色块；`f2b-terrain-batch`/`f2b-terrain-batch-off` 通过 |
+| R-04 | 已完成 | 场景树父子结构（体素 chunk 归入 Voxel World 子树，按坐标稳定排序并默认展开） | — | Hierarchy 中 chunk 缩进在世界节点下、树线正常；`e8-editor-mode` 断言 `parented=9` |
 | V-02 | 未开始 | 体素网格化的每帧预算与取消（当前每块一个 job，`processVoxelChunkBuilds()` 每帧最多上传 4 块，但提交阶段没有总预算） | V-04、JobSystem | 半径 12 首帧提交仍有 7.9 ms（Release），要压到 <2 ms；取消后不再上传 |
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
 | V-04 | 未开始 | 体素几何走 `TerrainMeshArena` / 间接合批（当前每 chunk 一份 `Model` + 一次 bind） | F1 合批路径 | 625 块的 draw calls 从数百降到个位数 |
@@ -278,6 +279,8 @@ updated: 2026-11-05
 > 2026-11-05 的后续：显式梯度后远处仍有规则白点/摩尔纹，根因是全局 mip 仍把相邻图集格平均；图集扩为 512×512、每格 64px 内容 + 32px edge-clamp gutter，`mrt.frag` 与 `glass.frag` 同步新映射。详见 [milestones](milestones.md#体素图集-mip-跨格渗色与摩尔纹修复2026-11-05)。
 >
 > 同日修复流送地形 chunk 边界的材质断层：`mrt.frag` 的高度层权重原先用每个 chunk 的局部 Y 范围归一化，同一世界高度在边界两侧得到不同 `h`；`GeometrySystemGpu` 与 `GeometrySystem` 统一改用 `TerrainConfig::baseHeight`/`heightScale`，合批与非合批截图都恢复连续。详见 [milestones](milestones.md#流送地形-chunk-边界材质断层修复2026-11-05)。
+>
+> 同日把场景树补成真正的父子结构：`createVoxelWorld()` 对每个 chunk 调 `setParent(entity, world)`，chunk 不再与 `Voxel World` 并列成根；世界节点默认展开、按 `chunkZ/chunkX` 排序，Hierarchy 使用 `DrawLinesFull` 树线。详见 [milestones](milestones.md#场景树体素-chunk-归入世界子树2026-11-05)，验证日志 `build/validation/20261105-125330`。
 
 ## 更新方式
 

@@ -20,6 +20,10 @@ updated: 2026-11-05
 | Assets | 扫描 `Resources/Models`，双击创建实体（走命令栈，可撤销） |
 | Viewport | 离屏纹理 + 点选 + 三轴手柄（见 [viewport](viewport.md)、[gizmo](gizmo.md)） |
 
+Hierarchy 用 `HierarchyComponent::children` 画真正的父子树：`Voxel World` / 流送地形 manager 作为父节点，
+体素 chunk 挂在世界下并按 `chunkZ, chunkX` 稳定排序，加载后默认展开（`ImGuiTreeNodeFlags_DefaultOpen` +
+`DrawLinesFull` 树线），不再与 `Voxel World` / `Camera` 并列成根。搜索过滤仍按匹配项拍平，便于快速定位。
+
 ## Inspector 地形分组
 
 地形实体多一个 `Terrain` 分组，放在 Transform 之后。参数控件（seed、分辨率、

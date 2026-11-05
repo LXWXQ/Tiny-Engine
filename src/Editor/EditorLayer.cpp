@@ -4258,8 +4258,15 @@ bool EditorLayer::selfTestWithScene()
             return false;
         }
         scene->waitForVoxelBuilds();
+        entt::entity worldRoot = entt::null;
+        for (auto [entity, worldComp] : registry->view<VoxelWorldComponent>().each())
+        {
+            (void)worldComp;
+            worldRoot = entity;
+        }
         size_t worldMeshes = 0;
         size_t worldBounds = 0;
+        size_t worldParented = 0;
         for (auto [entity, chunk] : registry->view<VoxelChunkComponent>().each())
         {
             (void)chunk;
@@ -4267,19 +4274,22 @@ bool EditorLayer::selfTestWithScene()
                 ++worldMeshes;
             if (registry->all_of<WorldBoundsComponent>(entity))
                 ++worldBounds;
+            const auto* hierarchy = registry->try_get<HierarchyComponent>(entity);
+            if (hierarchy != nullptr && hierarchy->parent == worldRoot)
+                ++worldParented;
         }
         const glm::vec3 worldCamera = scene->getCameraTransform().getTranslation();
         const bool worldCameraPlaced =
             glm::length(worldCamera - glm::vec3(16.0f, 46.0f, 118.0f)) < 0.01f;
-        if (worldMeshes != 9 || worldBounds != 9 || !worldCameraPlaced)
+        if (worldMeshes != 9 || worldBounds != 9 || worldParented != 9 || !worldCameraPlaced)
         {
             std::cerr << "[Editor] example presets selfTest FAIL: voxel-world meshes=" << worldMeshes
-                      << " bounds=" << worldBounds
+                      << " bounds=" << worldBounds << " parented=" << worldParented
                       << " cameraPlaced=" << worldCameraPlaced << std::endl;
             return false;
         }
         std::cout << "[Editor] example presets selfTest PASS | voxel-world meshes=" << worldMeshes
-                  << " bounds=" << worldBounds << std::endl;
+                  << " bounds=" << worldBounds << " parented=" << worldParented << std::endl;
 
         // 清掉示例，避免后面的截图/测试带着一个 3x3 体素世界。
         newScene(false);

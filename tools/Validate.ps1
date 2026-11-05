@@ -293,7 +293,7 @@ $tests = @(
   @{ Name = "f3-voxel-persist"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("capture + json round trip", "[Editor] voxel edit selfTest PASS") },
   @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
-       MustContain = @("[Editor] editor mode selfTest PASS", "entries=20 conflicts=0", "[Editor] example presets selfTest PASS") },
+       MustContain = @("[Editor] editor mode selfTest PASS", "entries=20 conflicts=0", "[Editor] example presets selfTest PASS", "voxel-world meshes=9 bounds=9 parented=9") },
   @{ Name = "e9-runtime-character"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] runtime character selfTest PASS") },
     @{ Name = "e6-asset-and-textures"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

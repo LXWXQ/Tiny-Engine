@@ -1908,6 +1908,9 @@ entt::entity Scene::createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_
 		for (int32_t chunkX = -radiusChunks; chunkX <= radiusChunks; ++chunkX)
 		{
 			const entt::entity entity = createTransformEntity(registry);
+			// 场景树：chunk 必须挂在世界节点下。否则 Hierarchy 会把它显示成一排
+			// 与 Voxel World 并列的根节点；挂成子树后也能按父节点统一移动/删除。
+			setParent(entity, world);
 			markTransformDirty(entity);
 			registry.get<TransformComponent>(entity).setTranslation(glm::vec3(
 				static_cast<float>(chunkX * voxel::Chunk::kSize), static_cast<float>(baseY),
@@ -1959,6 +1962,23 @@ entt::entity Scene::createVoxelWorld(uint64_t seed, int32_t radiusChunks, int32_
 			}
 			++created;
 		}
+	}
+
+	// 场景树展示顺序按 chunk 坐标固定下来：Async 完成顺序、存档重建顺序都不该
+	// 影响 Hierarchy 里看到的行序，否则同一世界每次打开列表顺序都不一样。
+	if (auto* worldHierarchy = registry.try_get<HierarchyComponent>(world))
+	{
+		std::stable_sort(worldHierarchy->children.begin(), worldHierarchy->children.end(),
+			[this](entt::entity lhs, entt::entity rhs)
+			{
+				const auto* a = registry.try_get<VoxelChunkComponent>(lhs);
+				const auto* b = registry.try_get<VoxelChunkComponent>(rhs);
+				if (a == nullptr || b == nullptr)
+					return lhs < rhs;
+				if (a->chunkZ != b->chunkZ)
+					return a->chunkZ < b->chunkZ;
+				return a->chunkX < b->chunkX;
+			});
 	}
 
 	updateWorldTransforms();
