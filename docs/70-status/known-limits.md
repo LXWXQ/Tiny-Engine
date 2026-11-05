@@ -19,12 +19,12 @@ updated: 2026-11-05
 
 ## 2. 渲染特性缺失
 
-无：SSR、自动曝光、超分、通用动画/骨骼系统、粒子（`ExternalInstance` 入口已就位，无生产方）、
+无：SSR、折射、水下后处理、自动曝光、超分、通用动画/骨骼系统、粒子（`ExternalInstance` 入口已就位，无生产方）、
 点光源阴影（方向光 CSM 已做，只支持单方向光、级联固定 3 级）、体积光、通用透明排序（仅体素玻璃有独立 pass）、通用 GPU LOD/网格组装。
 后处理抗锯齿已有 TAA，但只有相机重投影、没有运动向量，物体自身运动不会被单独补偿。
 骨骼动画目前只服务运行模式的单角色（CPU 蒙皮，见 [character](../30-systems/character.md)），不是通用动画系统。
 地形单 chunk 子集已接 GPU culling、indirect count 与 GPU 顶点/索引组装；体素走独立 `Model` 路径（无合批、无 LOD）。
-体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。
+体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。水面（`Water`）是独立的水平前向混合 Pass，只在有地形/体素块时注册，反射只来自全局环境图，无折射/SSR/水下后处理。
 
 ## 3. 架构限制
 

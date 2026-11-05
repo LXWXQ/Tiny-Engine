@@ -28,6 +28,7 @@ updated: 2026-10-30
     "lighting":   { "color", "direction", "exposure" },
     "ssao":       { "enabled", "bias", "kernelSize", "radius" },
     "motionBlur": { "enabled", "maxRadius", "strength" },
+    "water":      { "enabled", "level", "waveStrength", "waveSpeed" },
     "renderScale": 1.0,
     "windowTitle": "...",
     "planned":    { "shadowEnabled", "ssrEnabled" }

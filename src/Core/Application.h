@@ -59,6 +59,7 @@ public:
 	void setShadowsEnabled(bool enabled);
 	// TAA：无人值守自检里对比开关效果。
 	void setTAAEnabled(bool enabled);
+	void setWaterEnabled(bool enabled);
 	void setTerrainBatchEnabled(bool enabled);
 	void setGpuSceneMinScreenPixels(float pixels);
 	void setGpuSceneExternalDebugCount(uint32_t count);

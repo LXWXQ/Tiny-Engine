@@ -10,7 +10,7 @@ updated: 2026-11-05
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **67 项引擎用例 + 2 项工具自测 = 69 项**；
+`tools/Validate.ps1` 默认跑 **69 项引擎用例 + 2 项工具自测 = 71 项**；
 加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`。
 
 ## 1. 每项的判据（统一）
@@ -96,14 +96,16 @@ updated: 2026-11-05
 | 65 | `f3-voxel-glass` | 体素玻璃透明：玻璃拆出独立网格（每面 4 顶点）走 `GlassPass`，按面质心从远到近排序后一次 draw，透明叠放无黑边 | `TinyEngine.exe --selftest 20 --voxel-world 1 --voxel-glass-demo` | `[Voxel] glass demo placed \| blocks=`、`[Glass] sorted=`、`drawcalls=1` | 玻璃不进 G-Buffer；`GlassPass` 深度 LOAD + depthWrite 关；图集无 alpha，只有 Glass 走混合；CLI 放玻璃前必须 `waitForVoxelBuilds()`，否则初始异步网格落地会覆盖 `glassFaceCount`，玻璃 pass 一场都不画 |
 | 66 | `f3v-taa` | TAA 时域抗锯齿：Halton(2,3) 抖动、历史重投影与 AABB clamp 生效，渲染图双附件正常 | `TinyEngine.exe --selftest 40 --voxel-world 1` | `[TAA] initialized \|`、`[Validation] errors=0 warnings=0` | 历史图读写不能与颜色附件同一 layout；`updateDescriptors` 的 currentColor 必须绑 `hdrScene` |
 | 67 | `f3v-taa-off` | TAA 关闭路径：权重与抖动归零，Pass 仍执行以写 `taaOutput` | `TinyEngine.exe --selftest 20 --no-taa` | `[TAA] disabled`、`[Validation] errors=0 warnings=0` | 下游 Bloom/Present 固定绑 `taaOutput`，不能真跳过 |
+| 68 | `f3v-water` | 水面在主路径注册：径向网格、4 个大波、环境反射与厚度吸收；只绑 Set0，混合进 HDR | `TinyEngine.exe --selftest 20 --voxel-world 1 --hidden` | `[Water] initialized \|`、`[Water] first draw \|`、`[Validation] errors=0 warnings=0` | 没有地形/体素块时不注册；`--no-water` 时完全不注册；push constant 32 字节，shader 只消费 position |
+| 69 | `f3v-water-off` | 水面关闭路径 | `TinyEngine.exe --selftest 10 --voxel-world 1 --no-water --hidden` | `[Water] disabled`、`[Validation] errors=0 warnings=0` | 与 TAA 不同：Water 是"真跳过"，因为下游没有任何 pass 固定读它的输出 |
 
 ## 3. 工具自测
 
 | # | 名称 | 内容 |
 |---|---|---|
-| 68 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
-| 69 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
-| 70 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 69 项不含它） |
+| 70 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
+| 71 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
+| 72 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 71 项不含它） |
 
 ## 4. 文档一致性检查
 

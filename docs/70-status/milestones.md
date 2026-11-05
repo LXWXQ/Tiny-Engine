@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~780 行
+size: ~840 行
 updated: 2026-11-05
 ---
 
@@ -805,3 +805,21 @@ updated: 2026-11-05
 **回归**：`e9-runtime-character`（`tools/Validate.ps1`，断言 `skinned=1`、`animations=18`、6 个 clip 与 `active=Idle`）；全套 **69 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-155458`；DocCheck PASS（documents=66）。
 
 **已知边界**：单角色、CPU 蒙皮、无动画混合/事件/IK/root motion；角色只绕 Y 轴转；出生点依赖地形高度采样，悬空平台场景仍需手动摆位。
+
+## 水面（2026-11-05）
+
+**问题**：地形和体素世界都没有任何水体；没有海平面，也就没有反射、岸边过渡和水面动画。
+
+**实现**：
+- 新增 `src/Render/WaterPass.{h,cpp}` 与 `shaders/water.vert` / `water.frag`。Pass 插在 Glass 之后、TAA 之前：水面混合进已经着色的 HDR，水边缘能参与 TAA，太阳高光能参与 Bloom。
+- 几何是相机中心径向网格：160 圈 × 192 段（30721 顶点 / 183744 索引），半径 `r_i = 1.2i + 0.15i²`，最远约 4032m；顶点只存局部 XZ，着色器加 `cameraPos.xz`，网格因此永远跟随相机而不用重建缓冲。近处环密、远处环疏。
+- 顶点位移 4 个大波（波长 23 / 14 / 9 / 5.5m）；像素着色器解析求梯度得到法线，再叠加 3 个近距 ripple（波长 1.7 / 1.1 / 0.75m，60..220m 内淡出，避免远处闪烁）。
+- 着色：Fresnel `0.02 + 0.98·(1-NdotV)^5`；反射直接采样全局 Set0 binding1 的等距柱状环境图，并用 `textureGrad` 折回经度接缝；从 G-Buffer `inPosition` 取水后不透明几何位置算视线厚度，`depthFactor = 1 - exp(-thickness·0.22)` 控制浅水/深水；岸边薄水加波峰生成泡沫；太阳高光 `pow 900` + `pow 120`。
+- Pass 合同：`LOAD` HDR + 深度，`SRC_ALPHA/ONE_MINUS_SRC_ALPHA`，`depthTest = TRUE`、`depthWrite = FALSE`、`LESS_OR_EQUAL`，关闭背面剔除，只绑 Set0，push constant 32 字节。
+- 只有 registry 中存在 `TerrainComponent` 或 `VoxelChunkComponent` 才注册 Water，避免 Sponza/空场景出现全球水面。`EngineSettings` 增加 `waterEnabled/waterLevel/waterWaveStrength/waterWaveSpeed`；编辑器 Render 面板与运行时 ImGui 都有“水面”分组；`--no-water` 直接不注册，打印一次 `[Water] disabled`；`config/engine.json` 持久化 `water` 节点。
+
+**可观测**：启动打印 `[Water] initialized | rings=160 segments=192 vertices=30721 indices=183744 radius=4032m`；首帧打印 `[Water] first draw | level=... waveStrength=... waveSpeed=... cameraY=...`；`--no-water` 打印 `[Water] disabled`。
+
+**回归**：`f3v-water`（断言 initialized/first draw + `[Validation] errors=0 warnings=0`）与 `f3v-water-off`（断言 `[Water] disabled`）；全套 **69 项引擎 + 2 项工具 = 71 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-162911`；DocCheck PASS（documents=67）。
+
+**已知边界**：水面是无限水平面，不跟随地形起伏；反射只来自环境图，没有 SSR，近处物体不会出现在倒影里；没有折射和水下后处理，镜头进入水下后不会切换色调；没有交互（涟漪/尾迹）。

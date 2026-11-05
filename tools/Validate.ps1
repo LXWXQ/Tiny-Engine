@@ -290,6 +290,12 @@ $tests = @(
        MustContain = @("[TAA] initialized |", "[Validation] errors=0 warnings=0") },
     @{ Name = "f3v-taa-off"; Exe = "engine"; Args = @("--selftest", "20", "--no-taa");
        MustContain = @("[TAA] disabled", "[Validation] errors=0 warnings=0") },
+    # 水面：有地形/体素时注册透明 Pass，并能被 --no-water 关掉。两条路径
+    # 都要保持验证层零消息（关掉时 RenderGraph 不能留下没人写的目标）。
+    @{ Name = "f3v-water"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
+       MustContain = @("[Water] initialized |", "[Water] first draw |", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f3v-water-off"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1", "--no-water");
+       MustContain = @("[Water] disabled", "[Validation] errors=0 warnings=0") },
   @{ Name = "f3-voxel-persist"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("capture + json round trip", "[Editor] voxel edit selfTest PASS") },
   @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

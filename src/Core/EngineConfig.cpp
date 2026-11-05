@@ -113,6 +113,13 @@ namespace
 		taa["jitterScale"] = s.taaJitterScale;
 		j["taa"] = std::move(taa);
 
+		json water;
+		water["enabled"] = s.waterEnabled;
+		water["level"] = s.waterLevel;
+		water["waveStrength"] = s.waterWaveStrength;
+		water["waveSpeed"] = s.waterWaveSpeed;
+		j["water"] = std::move(water);
+
 		json light;
 		writeVec(light, "direction", s.directionalLightDir);
 		writeVec(light, "color", s.directionalLightColor);
@@ -171,6 +178,15 @@ namespace
 			out.taaEnabled = read(n, "enabled", out.taaEnabled, warnings);
 			out.taaBlend = read(n, "blend", out.taaBlend, warnings);
 			out.taaJitterScale = read(n, "jitterScale", out.taaJitterScale, warnings);
+		}
+
+		if (j.contains("water") && j["water"].is_object())
+		{
+			const json& n = j["water"];
+			out.waterEnabled = read(n, "enabled", out.waterEnabled, warnings);
+			out.waterLevel = read(n, "level", out.waterLevel, warnings);
+			out.waterWaveStrength = read(n, "waveStrength", out.waterWaveStrength, warnings);
+			out.waterWaveSpeed = read(n, "waveSpeed", out.waterWaveSpeed, warnings);
 		}
 
 		if (j.contains("lighting") && j["lighting"].is_object())

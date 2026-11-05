@@ -19,4 +19,5 @@ updated: 2026-11-05
 | [terrain](terrain.md) | 程序化地形怎么生成、chunk/LOD 怎么选择与遮缝、存读与限制？ |
 | [voxel](voxel.md) | 方块体素怎么存、怎么出网格、怎么挖放、角色怎么站在方块上？ |
 | [character](character.md) | 运行模式角色怎么加载、怎么动、骨骼动画怎么切、为什么全黑/悬空？ |
+| [water](water.md) | 水面在哪一步画、径向网格怎么跟随相机、波浪/反射/泡沫怎么算、为什么某些场景没有水？ |
 | [terrain-materials](terrain-materials.md) | Set2 的 12 个 sampler 怎么排？四套材质集怎么加载/回退？四层 PBR 在 shader 里怎么混？ |

@@ -85,7 +85,8 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     │   ├── imgui.md             面板 / 后端 / ASCII 约束
     │   ├── terrain.md           程序化地形：参数 / 生成 / 渲染 / 存读
     │   ├── terrain-materials.md 地形 Set2：四层 PBR / 材质集 / Surface Style
-    │   └── character.md         运行模式角色：glTF 蒙皮 / 动画状态机 / CPU skinning
+    │   ├── character.md         运行模式角色：glTF 蒙皮 / 动画状态机 / CPU skinning
+    │   └── water.md             水面：相机中心径向网格 / 波浪 / 环境反射 / 泡沫
     ├── 40-build/
     │   ├── README.md
     │   ├── dependencies.md      8 个固定版本 / 目录布局 / setup 脚本
@@ -205,6 +206,7 @@ updated: 2026-10-30
 | systems | [config](30-systems/config.md) | 改可调参数 / 配置格式 |
 | systems | [imgui](30-systems/imgui.md) | 改面板 |
 | systems | [terrain](30-systems/terrain.md) | 改地形生成 / 网格 / 顶点色 / 地形存读 |
+| systems | [water](30-systems/water.md) | 改水面外观 / 波浪 / 反射 |
 | build | [dependencies](40-build/dependencies.md) | 换机器 / 加依赖 |
 | build | [build](40-build/build.md) | 每次构建 |
 | build | [troubleshooting](40-build/troubleshooting.md) | 编不过 / 跑不起来 |

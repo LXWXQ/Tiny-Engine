@@ -261,6 +261,14 @@ struct EngineSettings
 	bool  taaEnabled = true;
 	float taaBlend = 0.9f;
 	float taaJitterScale = 1.0f;
+
+	// 水面（Lighting 之后的前向混合通道）。默认高度 2m：地形默认 0~25m，
+	// 低洼处形成湖泊，山峰仍然露出水面。waveStrength/Speed 是整体缩放，
+	// 调 0 可以得到完全静止的镜面水。
+	bool  waterEnabled = true;
+	float waterLevel = 2.0f;
+	float waterWaveStrength = 1.0f;
+	float waterWaveSpeed = 1.0f;
 };
 
 struct RenderTelemetry

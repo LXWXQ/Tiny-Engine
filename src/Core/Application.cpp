@@ -27,6 +27,7 @@
 #include "Render/EditorOverlayPass.h"
 #include "Render/SSAOPass.h"
 #include "Render/GlassPass.h"
+#include "Render/WaterPass.h"
 #include "Render/TAAPass.h"
 #include "Render/ShadowPass.h"
 #include "Voxel/VoxelChunk.h"
@@ -803,7 +804,12 @@ streamingConfig.skirtsEnabled = false;
 	auto glassPass = std::make_unique<GlassPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),
 		descriptorManager.get(), gBuffers[0]->getDepth().format);
-	// TAA：必须在 Glass 之后（要拿混合后的 HDR）、Bloom 之前（辉光作用在
+	// 水面：与 Glass 同一段（Lighting 之后、TAA 之前）。它只绑全局 set，
+	// 直接采样环境贴图做反射、采样 G-Buffer 位置做厚度吸收。
+	auto waterPass = std::make_unique<WaterPass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
+		gBuffers[0]->getDepth().format);
+	// TAA：必须在 Glass/Water 之后（要拿混合后的 HDR）、Bloom 之前（辉光作用在
 	// 抗锯齿后的画面上）。每帧都注册 —— 否则 Bloom/Present 会读到没人写的
 	// taaOutput，渲染图的写覆盖校验会直接报错。
 	auto taaPass = std::make_unique<TAAPass>(*vulkanDevice, *renderGraph, *renderResources,
@@ -837,6 +843,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
 	renderPipeline.addPass(std::move(glassPass));
+	renderPipeline.addPass(std::move(waterPass));
 	renderPipeline.addPass(std::move(taaPass));
 	renderPipeline.addPass(std::move(bloomPass));
 	renderPipeline.addPass(std::move(presentPass));
@@ -1519,6 +1526,11 @@ void FirstApp::setTAAEnabled(bool enabled)
 	// 与 ImGui 面板共用同一条路径；关掉后 TAA Pass 仍会运行（输出当前帧），
 	// 只是历史权重为 0 —— 下游 Bloom/Present 始终能读到合法的 taaOutput。
 	scene->getSettings().taaEnabled = enabled;
+}
+
+void FirstApp::setWaterEnabled(bool enabled)
+{
+	scene->getSettings().waterEnabled = enabled;
 }
 
 void FirstApp::setGpuSceneEnabled(bool enabled)

@@ -149,6 +149,7 @@ return;
 	renderBloomPanel(frameInfo.settings);
 	renderMotionBlurPanel(frameInfo.settings);
 	renderTAAPanel(frameInfo.settings);
+	renderWaterPanel(frameInfo.settings);
 
 	if (frameInfo.cameraTransform)
 		renderCameraPanel(*frameInfo.cameraTransform, frameInfo.cameraController);
@@ -267,6 +268,24 @@ void ImGuiSystem::renderTAAPanel(EngineSettings& settings)
 		ImGui::SliderFloat("Jitter Scale", &settings.taaJitterScale, 0.0f, 1.5f, "%.2f");
 		ImGui::SetItemTooltip("亚像素抖动幅度；0 = 只做历史混合，方便对比");
 		ImGui::TextDisabled("Halton(2,3) | history reset on resize/toggle");
+		ImGui::Unindent();
+	}
+}
+
+void ImGuiSystem::renderWaterPanel(EngineSettings& settings)
+{
+	if (!ImGui::CollapsingHeader("Water"))
+		return;
+
+	ImGui::Checkbox("Enable Water", &settings.waterEnabled);
+	ImGui::SetItemTooltip("地形/体素场景里的透明水面；没有地面时不绘制");
+	if (settings.waterEnabled)
+	{
+		ImGui::Indent();
+		ImGui::SliderFloat("Level", &settings.waterLevel, -10.0f, 20.0f, "%.2f");
+		ImGui::SliderFloat("Wave Strength", &settings.waterWaveStrength, 0.0f, 2.0f, "%.2f");
+		ImGui::SliderFloat("Wave Speed", &settings.waterWaveSpeed, 0.0f, 2.0f, "%.2f");
+		ImGui::TextDisabled("Fresnel reflection + depth absorption");
 		ImGui::Unindent();
 	}
 }

@@ -134,6 +134,17 @@ void RenderSettingsPanel::draw(EditorState& state)
         ImGui::TextDisabled("Halton(2,3) | 开关或缩放窗口会重置历史");
     }
 
+    if (ImGui::CollapsingHeader("水面", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Checkbox("Enabled##water", &settings->waterEnabled);
+        ImGui::SetItemTooltip("Lighting 之后的透明通道；只有场景里存在地形或体素时才绘制");
+        ImGui::SliderFloat("Level", &settings->waterLevel, -10.0f, 20.0f, "%.2f");
+        ImGui::SetItemTooltip("海平面高度（世界 Y）。地形默认 0~25m，2m 会在低洼处形成湖泊");
+        ImGui::SliderFloat("Wave Strength", &settings->waterWaveStrength, 0.0f, 2.0f, "%.2f");
+        ImGui::SliderFloat("Wave Speed", &settings->waterWaveSpeed, 0.0f, 2.0f, "%.2f");
+        ImGui::TextDisabled("Fresnel + 环境反射 | 0 = 静止镜面");
+    }
+
     // F6：阴影（3 级 CSM）。strength 是"阴影方向的衰减比例"，
     // 0 = 完全无阴影，1 = 全黑；默认 0.65 是有意留一点环境光，纯黑看着像贴纸。
     if (ImGui::CollapsingHeader("阴影", ImGuiTreeNodeFlags_DefaultOpen))
