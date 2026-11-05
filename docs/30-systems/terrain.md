@@ -5,7 +5,7 @@ type: system
 scope: src/Terrain/, src/Render/TerrainGpuMeshBuilder.*, Scene 地形生成接口, shaders/terrain_mesh.comp（材质与 Set2 见 terrain-materials）
 read-when: 改地形生成算法、网格规则、顶点色、创建/重建流程、地形存读或地形自检
 size: ~560 行
-updated: 2026-11-02
+updated: 2026-11-05
 ---
 
 # 程序化地形
@@ -208,6 +208,8 @@ normal = normalize(vec3(-dWorldHeight/dx, 1, -dWorldHeight/dz))
 - 顶点色按**当前高度场局部范围**归一化后的高度和坡度混合
   沙地 / 草地 / 岩石 / 雪；颜色先做 sRGB -> linear。局部归一化是为了让默认
   Perlin 的窄幅高度范围也能出现沙地和雪线，而不是整片草地。阈值仍是 MVP 常量。
+  这条是 CPU 顶点色路径；片元着色器的沙/草/岩/雪层权重用全局范围，见 §7.1，
+  两条路径不能混用。
 
 ### 5.1 GPU 网格组装与异步上传（B-04/B-05）
 
@@ -387,13 +389,26 @@ incoming: dither <  blend 时 discard
   visible/lodA/lodB/blend/commandCount/stable/to；不一致会直接让自检失败。
   它还会临时切换 `lodDistanceScale`，强制检查 GPU 过渡输出。
 
-`GeometrySystem` 在 push constant 中写 `terrainMode = 1`、地形局部 Y 范围
+`GeometrySystem` 在 push constant 中写 `terrainMode = 1`、地形全局 Y 范围
 （`terrainMinY` / `terrainHeightRange`）、`terrainDetailStrength`、
 `terrainUvTiling`、`terrainMaterialStyle`，以及 CPU fallback 的
 `terrainLodBlend` / `terrainLodBlendMode`。GPU-selected indirect 命令会优先
-从 `firstInstance` payload 覆盖这两个值。`mrt.vert/.frag` 的 push block
-同步声明这些字段；`SimplePushConstantData` 用 `offsetof` / `sizeof`
+从 `firstInstance` payload 覆盖后两者的 CPU fallback 值。`mrt.vert/.frag` 的
+push block 同步声明这些字段；`SimplePushConstantData` 用 `offsetof` / `sizeof`
 静态断言钉住布局，总大小仍为 208 字节。
+
+地形全局 Y 范围取 `TerrainConfig::baseHeight` 与
+`std::max(TerrainConfig::heightScale, 1e-4f)`，**不能**取每个 chunk 的
+`BoundsComponent` 局部 min/max。流送 chunk 各自覆盖高度场的一块，局部范围
+不同；`mrt.frag` 用 `(fragPosLocal.y - terrainMinY) / terrainHeightRange`
+归一化高度后决定沙/草/岩/雪权重，按 chunk 归一化会让同一世界高度在边界两侧
+得到不同的 `h`，表现为矩形沙/雪色块。合批实例表（`GeometrySystemGpu`）与
+逐 chunk push（`GeometrySystem`）使用同一组全局值；`TerrainMeshBuilder` 的
+世界 Y 也是 `baseHeight + heightScale * h`。
+
+`GeometrySystemGpu` 的 `[Terrain] batched draw |` 日志与 `GeometrySystem` 的
+`[Terrain] chunk shading |` 日志都会输出 `heightMin` / `heightRange` /
+`heightMixed`，用于确认所有 chunk 共用全局范围（`heightMixed=0`）。
 
 ### 7.2 GPU 网格与 Model 生命周期
 

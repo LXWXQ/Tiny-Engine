@@ -220,9 +220,9 @@ $tests = @(
     @{ Name = "f2-streaming-fly"; Args = @("--selftest", "$([Math]::Max($Frames, 150))", "--streaming-world", "2", "--streaming-fly", "60");
        MustContain = @("[Streaming] chunks=", "unloaded=", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2b-terrain-batch"; Args = @("--selftest", "$([Math]::Max($Frames, 130))", "--streaming-world", "2");
-       MustContain = @("[Terrain] mesh arena ready", "[Terrain] batched draw |", "[Validation] errors=0 warnings=0") },
+       MustContain = @("[Terrain] mesh arena ready", "[Terrain] batched draw |", "heightCaptured=1 heightMin=0 heightRange=12 heightMixed=0", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2b-terrain-batch-off"; Args = @("--selftest", "$([Math]::Max($Frames, 60))", "--streaming-world", "2", "--no-terrain-batch");
-       MustContain = @("[Terrain] terrain batching disabled |", "[Validation] errors=0 warnings=0") },
+       MustContain = @("[Terrain] terrain batching disabled |", "[Terrain] chunk shading | heightCaptured=1 heightMin=0 heightRange=12 heightMixed=0", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2c-origin-rebase"; Args = @("--selftest", "$([Math]::Max($Frames, 240))", "--streaming-world", "2", "--streaming-fly", "60", "--origin-threshold", "64");
        MustContain = @("[Origin] rebased |", "[Origin] stats |", "[Validation] errors=0 warnings=0") },
     @{ Name = "f2c-origin-off"; Args = @("--selftest", "$([Math]::Max($Frames, 240))", "--streaming-world", "2", "--streaming-fly", "60", "--origin-threshold", "64", "--no-origin-rebase");

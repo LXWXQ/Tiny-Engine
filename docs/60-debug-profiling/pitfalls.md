@@ -5,7 +5,7 @@ type: debug
 scope: 空（跨代码库）
 read-when: 改任何代码之前；或遇到"看起来不可能"的怪异现象时
 size: ~430 行
-updated: 2026-11-01
+updated: 2026-11-05
 ---
 
 # 已踩过的坑
@@ -499,3 +499,18 @@ vec2 sampleSphericalMap(vec3 v) {
 - **判据**：近距离应看到细颗粒；中远距离应只剩低频色块，不应有可数的 tile
   网格。若网格仍明显，先检查是否只采样了一次 albedo，再检查 normal 的
   footprint 衰减。
+
+## 34. 流送地形按 chunk 局部高度归一化导致材质断层
+
+- **现象**：流送地形上出现大片米色/白色斑块和笔直的矩形边界，边界沿 chunk
+  网格走；关掉 TAA/Bloom/SSAO/阴影后仍存在，看起来像“纹理不无缝”。
+- **原因**：片元着色器用 `(fragPosLocal.y - terrainMinY) / terrainHeightRange`
+  还原 0..1 高度，再用它决定沙/草/岩/雪权重。若 `terrainMinY/heightRange`
+  来自每个 chunk 自己的 `BoundsComponent`，同一世界高度在相邻 chunk 会得到
+  不同 `h`，层权重在边界跳变。纹理本身可以完全无缝，问题在材质参数。
+- **修法**：所有 chunk 统一使用 `TerrainConfig::baseHeight` 与
+  `std::max(TerrainConfig::heightScale, 1e-4f)`；合批实例表和逐 chunk push
+  必须共用同一组值。日志同时输出 `heightMin/heightRange/heightMixed`，
+  `heightMixed=0` 才说明没有混入 per-chunk 范围。
+- **判据**：同一机位下合批与 `--no-terrain-batch` 都不应出现沿 chunk 边界的
+  色块；若只有非合批路径出问题，检查 `GeometrySystem` 的 push 是否漏改。

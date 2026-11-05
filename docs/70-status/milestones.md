@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
 size: ~680 行
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # 里程碑与实测基线
@@ -726,3 +726,25 @@ updated: 2026-11-04
 **验证注意**：全套用例按仓库基线 `config/engine.json` 跑。用户本地存的相机位姿/关闭阴影会让 `terrain-render` 与 `f6-shadows` 依赖默认相机的断言失败（不是本次代码回归）；跑前临时换基线、跑完恢复本地 config，未把用户 config 提交。
 
 **已知边界**：512 图集 + gutter 比 256 多 4 倍显存（1MB），当前体素规模可忽略；gutter 只保护格边界，若未来图集格尺寸/间距改变，必须同步 `mrt.frag` 与 `glass.frag`，否则会重现渗色或采样错位。
+
+## 流送地形 chunk 边界材质断层修复（2026-11-05）
+
+**问题**：用户截图中的流送地形出现大片米色/白色云状斑块和笔直的矩形边界（`.tmp/stream_correct.png`）。斑块与 TAA 无关：关闭 TAA、Bloom、SSAO、阴影后仍存在；也不是地形纹理平铺问题。
+
+**根因**：`shaders/mrt.frag` 用 `h = clamp((fragPosLocal.y - terrainMinY) / max(terrainHeightRange, 1e-4), 0, 1)` 决定 sand/grass/rock/snow 权重，而 `GeometrySystemGpu` 合批实例与 `GeometrySystem` 逐 chunk push 原先都写**每个 chunk 的 `BoundsComponent` 局部 min/max**。流送 chunk 各自覆盖高度场的一块，局部范围不同；同一世界高度在 chunk 边界两侧得到不同的 `h`，层权重跳变，于是出现矩形沙/雪色块。
+
+**实现**：
+- `src/Render/GeometrySystemGpu.cpp` 的 chunk 实例行：`terrainMinY = terrain->config.baseHeight`、`terrainHeightRange = std::max(terrain->config.heightScale, 1e-4f)`。
+- `src/Render/GeometrySystem.cpp` 的非合批 push 使用同一组全局值；只有 `terrain == nullptr` 时才回退到旧 bounds。`TerrainMeshBuilder` 的世界 Y 也是 `baseHeight + heightScale * h`，定义一致。
+- 两处都增加观测：合批日志输出 `heightCaptured/heightMin/heightRange/heightMixed`，逐 chunk 路径输出 `[Terrain] chunk shading | heightCaptured=1 ...`；`heightMixed=0` 表示所有 chunk 共用全局范围。
+- `tools/Validate.ps1` 的 `f2b-terrain-batch` 与 `f2b-terrain-batch-off` 断言 `heightCaptured=1 heightMin=0 heightRange=12 heightMixed=0`。
+
+**可观测**：同一机位 `[0,18,56]` / rotation `[0.3, π, 0]`、`--streaming-world 3 --no-bloom --no-ssao --no-taa --no-shadows`：修复前 `.tmp/stream_correct.png` 有大片沙/雪斑块与矩形边界；修复后 `.tmp/stream_fixed.png` 连续绿色、无边界，日志 `[Terrain] batched draw | chunks=19 ... heightMixed=0`。抬高与俯视机位 `.tmp/stream_fixed_top.png`、`.tmp/stream_fixed_over.png` 同样无斑块；`--no-terrain-batch` 的 `.tmp/stream_fixed_nobatch.png` 与非合批日志也一致。对比图 `.tmp/terrain_seam_compare.png`（上 BEFORE / 下 AFTER）。
+
+**回归**：`f2b-terrain-batch`、`f2b-terrain-batch-off` 断言新增高度范围；全套 **69 项** PASS；验证日志 `build/validation/20261105-115950`；DocCheck PASS。
+
+**附带修复**：`f3-voxel-glass` 曾偶发缺少 `[Glass] sorted=`——CLI 在初始 chunk 的异步网格落地前就摆玻璃，随后落地的旧网格把 `glassFaceCount` 覆盖回 0。`--voxel-glass-demo` 现在先 `scene->waitForVoxelBuilds()`，三次重复运行均稳定输出 `[Glass] sorted=879 drawcalls=1`。
+
+**验证注意**：`--streaming-world 3` 的测试世界在这些机位下看起来是平的；修复前的大片白斑是材质权重伪影，不是几何起伏或纹理平铺错误，修复未改变任何高度场/网格数据。全套用例按仓库基线 `config/engine.json` 跑，用户本地相机/关闭阴影会让 `terrain-render`/`f6-shadows` 的默认相机断言失败；跑前临时换基线、跑完恢复本地 config，未提交用户 config。
+
+**已知边界**：沙/草/岩/雪阈值仍与 `heightScale` 绑定；若未来地形使用真正的高山参数，需要重新校准阈值，而不是改回 per-chunk 归一化。

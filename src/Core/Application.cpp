@@ -936,6 +936,9 @@ streamingConfig.skirtsEnabled = false;
 			std::cout << "[Voxel] --voxel-glass-demo ignored: needs --voxel-world\n";
 		else
 		{
+			// 初始 chunk 的异步网格还在飞：如果现在放玻璃，随后落地的旧网格会把
+			// glassFaceCount 覆盖回 0，玻璃 pass 就一场都画不出来。先等初始上传完。
+			scene->waitForVoxelBuilds();
 			std::cout << "[Voxel] glass demo placed | blocks="
 				<< scene->placeVoxelGlassDemo(voxelWorldEntity) << std::endl;
 			// 近景相机：宽景机位下玻璃只有几十像素，看不出排序/混合对不对。

@@ -5,7 +5,7 @@ type: system
 scope: src/Render/TerrainMaterial.*, DescriptorManager 的 terrain sets, shaders/mrt.frag 的 terrainMode, Resources/Texture/Terrain/
 read-when: 改地形 Set2 纹理布局、材质集加载/回退、四层 PBR 混合、Surface Style 或材质切换统计
 size: ~75 行
-updated: 2026-11-02
+updated: 2026-11-05
 ---
 
 # 地形材质与 Set2
@@ -55,7 +55,10 @@ normal/height/roughness 按线性 UNORM 加载；height 与 roughness 在 CPU �
 
 片元着色器在真实几何法线写入后进入地形分支：
 
-- 用局部 Y 范围还原高度（0..1），用 `1 - normal.y` 还原坡度；
+- 用地形配置的全局 Y 范围（`baseHeight` / `heightScale`）还原高度（0..1），
+  用 `1 - normal.y` 还原坡度；不要用每个 chunk 的 `BoundsComponent` 局部范围：
+  流送 chunk 覆盖的高度切片不同，按局部范围归一化会让同一世界高度在 chunk
+  边界两侧得到不同层权重，出现矩形沙/雪色块；
 - 按高度/坡度得到沙地、草地、岩石、雪基础权重，再应用 `surfaceStyle`
   的权重偏置；
 - 以世界 XZ 采样四层 height，对层权重乘 0.72~1.28 的高度调制并重新归一化；

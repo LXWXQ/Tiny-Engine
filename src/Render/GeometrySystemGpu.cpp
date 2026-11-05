@@ -202,6 +202,14 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
     parityExpected.reserve(kTerrainGpuMaxRecords);
     uint32_t recordCursor = 0u;
 
+    // 观测：记录实际写进 chunk 实例表的高度归一化范围。流送地形的每个
+    // chunk 必须共享同一组全局 baseHeight/heightScale；一旦这里出现混合值，
+    // 说明有人又改回了 per-chunk bounds，材质层权重会在边界跳变。
+    float terrainShadingMinY = 0.0f;
+    float terrainShadingHeightRange = 0.0f;
+    bool terrainShadingCaptured = false;
+    bool terrainShadingMixed = false;
+
     const bool terrainBatchRequested =
         frameInfo.settings.terrainBatchEnabled && sceneInstanceSetLayout != VK_NULL_HANDLE;
     if (!frameInfo.settings.terrainBatchEnabled)
@@ -312,15 +320,23 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
                 static_cast<size_t>(slotIndex) * kTerrainChunkInstanceStride);
             std::memcpy(row, &worldTransform->matrix, sizeof(glm::mat4));
             std::memcpy(row + 16, &worldTransform->normalMatrix, sizeof(glm::mat4));
-            const BoundsComponent* terrainBounds =
-                frameInfo.registry.try_get<BoundsComponent>(entity);
-            float terrainMinY = 0.0f;
-            float terrainHeightRange = 1.0f;
-            if (terrainBounds && terrainBounds->getLocal().valid)
+            // Use the terrain config's global height range, not this chunk's
+            // own bounds. Consecutive streaming chunks cover different slices of
+            // the height field; normalising each one by its local min/max makes
+            // the same world height map to a different h on either side of a
+            // chunk border, so the sand/grass/rock/snow weights jump there.
+            const float terrainMinY = terrain->config.baseHeight;
+            const float terrainHeightRange = std::max(terrain->config.heightScale, 1e-4f);
+            if (!terrainShadingCaptured)
             {
-                const AABB& localBounds = terrainBounds->getLocal();
-                terrainMinY = localBounds.min.y;
-                terrainHeightRange = std::max(localBounds.max.y - localBounds.min.y, 1e-4f);
+                terrainShadingCaptured = true;
+                terrainShadingMinY = terrainMinY;
+                terrainShadingHeightRange = terrainHeightRange;
+            }
+            else if (std::fabs(terrainMinY - terrainShadingMinY) > 1e-4f ||
+                     std::fabs(terrainHeightRange - terrainShadingHeightRange) > 1e-4f)
+            {
+                terrainShadingMixed = true;
             }
             row[38] = 1.0f; // misc.z: terrainMode (float field, not a bit pattern)
             row[39] = static_cast<float>(terrain->config.surfaceStyle);
@@ -552,6 +568,10 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
         std::cout << "[Terrain] batched draw | chunks=" << recordCursor
                   << " arenaAllocs=" << (terrainMeshArena ? terrainMeshArena->getAllocationCount() : 0u)
                   << " commandSpan=" << (kTerrainGpuMaxEntities * kTerrainGpuCommandsPerEntity)
+                  << " heightCaptured=" << (terrainShadingCaptured ? 1 : 0)
+                  << " heightMin=" << terrainShadingMinY
+                  << " heightRange=" << terrainShadingHeightRange
+                  << " heightMixed=" << (terrainShadingMixed ? 1 : 0)
                   << std::endl;
     }
     terrainBatchWasActive = terrainBatchActive;

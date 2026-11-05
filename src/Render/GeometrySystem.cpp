@@ -8,6 +8,7 @@
 #include <iostream>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -511,6 +512,13 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     uint32_t indirectCursor =
         currentTerrainGpuRun.enabled ? kTerrainGpuMaxEntities * kTerrainGpuCommandsPerEntity : 0u;
 
+    // 观测：逐 chunk push 时实际使用的高度归一化范围。与合批路径一样，
+    // 流送地形的所有 chunk 必须共享全局 baseHeight/heightScale。
+    float terrainShadingMinY = 0.0f;
+    float terrainShadingHeightRange = 0.0f;
+    bool terrainShadingCaptured = false;
+    bool terrainShadingMixed = false;
+
     // GPU compute selection was recorded in a pre-graphics graph pass.
     const TerrainGpuRunContext& gpuRun = currentTerrainGpuRun;
 
@@ -708,17 +716,33 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
         if (isTerrain)
         {
-            if (bounds && bounds->getLocal().valid)
+            if (terrain)
+            {
+                // Keep the height normalisation identical for every chunk of a
+                // streaming terrain. Per-chunk local bounds shift the layer
+                // weights at chunk borders (visible as rectangular colour seams).
+                push.terrainMinY = terrain->config.baseHeight;
+                push.terrainHeightRange = std::max(terrain->config.heightScale, 1e-4f);
+                push.terrainDetailStrength = terrain->config.materialDetailStrength;
+                push.terrainUvTiling = terrain->config.uvTiling;
+                push.terrainMaterialStyle = static_cast<uint32_t>(terrain->config.surfaceStyle);
+                if (!terrainShadingCaptured)
+                {
+                    terrainShadingCaptured = true;
+                    terrainShadingMinY = push.terrainMinY;
+                    terrainShadingHeightRange = push.terrainHeightRange;
+                }
+                else if (std::fabs(push.terrainMinY - terrainShadingMinY) > 1e-4f ||
+                         std::fabs(push.terrainHeightRange - terrainShadingHeightRange) > 1e-4f)
+                {
+                    terrainShadingMixed = true;
+                }
+            }
+            else if (bounds && bounds->getLocal().valid)
             {
                 const AABB& localBounds = bounds->getLocal();
                 push.terrainMinY = localBounds.min.y;
                 push.terrainHeightRange = std::max(localBounds.max.y - localBounds.min.y, 1e-4f);
-            }
-            if (terrain)
-            {
-                push.terrainDetailStrength = terrain->config.materialDetailStrength;
-                push.terrainUvTiling = terrain->config.uvTiling;
-                push.terrainMaterialStyle = static_cast<uint32_t>(terrain->config.surfaceStyle);
             }
         }
 
@@ -1009,6 +1033,20 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                                 pipelineLayout, 3, 1, sceneSets, 0, nullptr);
         frameInfo.telemetry.descriptorBinds += 1u;
         sceneGpuBatch->recordDraw(commandBuffer, frameInfo);
+    }
+
+    if (terrainShadingCaptured)
+    {
+        static bool loggedTerrainChunkShading = false;
+        if (!loggedTerrainChunkShading)
+        {
+            loggedTerrainChunkShading = true;
+            std::cout << "[Terrain] chunk shading | heightCaptured=1"
+                      << " heightMin=" << terrainShadingMinY
+                      << " heightRange=" << terrainShadingHeightRange
+                      << " heightMixed=" << (terrainShadingMixed ? 1 : 0)
+                      << std::endl;
+        }
     }
 
 }
