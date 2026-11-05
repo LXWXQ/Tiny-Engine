@@ -5,7 +5,7 @@ type: status
 scope: 空
 size: ~110 行
 read-when: 想知道编辑器做过哪些轮次与每轮的验证基线
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # 编辑器里程碑
@@ -201,8 +201,9 @@ updated: 2026-11-04
 
 **问题**：`Ctrl+左键` 既被多选又被体素/地形笔刷占用，用户按习惯去选中却挖了方块。
 
-**实现**：`EditorState::EditorMode { Edit, Runtime }` + `allowsSelection()/isRuntime()`；工具栏「编辑 / 运行」+ `F8`；进入运行模式清空选中；
-视口手柄与点选按模式门控，运行模式裸左键 = 挖 / 地形笔刷、裸右键 = 放方块；层级面板与快捷键的选中动作都看 `allowsSelection()`；状态栏显示当前模式。
+**实现**：`EditorState::EditorMode { Edit, Runtime }` + `allowsSelection()/isRuntime()`；进入运行模式清空选中；
+视口手柄与点选按模式门控，运行模式裸左键 = 挖 / 地形笔刷、裸右键 = 放方块；层级面板与快捷键的选中动作都看 `allowsSelection()`。
+2026-11-05 调整为视口左上角单个可点击徽标，工具栏与状态栏不再重复模式；旧的分辨率/手柄提示移除。
 
 **可观测**：`[Editor] editor mode selfTest PASS | runtime blocks selection, edit allows`；快捷键表 19 → 20 条。
 

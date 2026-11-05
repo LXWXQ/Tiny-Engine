@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <ctime>
+#include <functional>
 #include <deque>
 #include <string>
 #include <vector>
@@ -179,6 +180,11 @@ struct EditorState
     EditorMode mode = EditorMode::Edit;
     bool allowsSelection() const { return mode == EditorMode::Edit; }
     bool isRuntime() const { return mode == EditorMode::Runtime; }
+
+    // 视口左上角的状态徽标是模式的唯一入口；面板不能直接改 mode，
+    // 否则会绕过 enterRuntimeMode()/exitRuntimeMode() 的相机与角色接管。
+    // 由 EditorLayer::initialize() 绑定到 setEditorMode()。
+    std::function<void()> toggleEditorMode;
 
     // ---- 播放状态机 ----
     PlayState playState = PlayState::Editing;

@@ -306,7 +306,30 @@ void ViewportPanel::draw(EditorState& state)
         ImGui::EndChild();
     }
 
-    state.viewportHovered = imageHovered;
+    // ---- 模式徽标（编辑 / 运行合并为唯一状态入口）----
+    // 原先工具栏里并排两个按钮，状态栏再重复一次；现在只在视口左上角保留
+    // 一个可点击徽标，旧的“分辨率 | 手柄 | W/E/R”提示一并移除。
+    const bool runtimeMode = state.isRuntime();
+    const char* modeLabel = runtimeMode ? "运行模式" : "编辑模式";
+    const ImVec4 modeColor = runtimeMode ? ImVec4(1.0f, 0.68f, 0.28f, 1.0f)
+                                         : ImVec4(0.55f, 0.78f, 1.0f, 1.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rectMin.x + 10.0f, rectMin.y + 10.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.04f, 0.05f, 0.07f, 0.78f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.10f, 0.12f, 0.16f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.17f, 0.22f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_Text, modeColor);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 5.0f));
+    if (ImGui::Button(modeLabel) && state.toggleEditorMode)
+        state.toggleEditorMode();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(4);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("F8：切换编辑 / 运行模式\n运行模式：左键挖方块，右键放方块");
+    const bool badgeHovered = ImGui::IsItemHovered();
+
+    const bool viewportHovered = imageHovered && !badgeHovered;
+    state.viewportHovered = viewportHovered;
 
     // ---- 三轴手柄 ----
     GizmoView gizmoView;
@@ -326,7 +349,7 @@ void ViewportPanel::draw(EditorState& state)
     // 3) 手柄最后画，压在框上面才看得清。
     // E8：运行模式下不显示、也不响应手柄 —— 物体在这一模式下不可编辑。
     const bool runtime = state.isRuntime();
-    const bool gizmoConsumed = !runtime && state.gizmo.interact(state, gizmoView);
+    const bool gizmoConsumed = !runtime && !badgeHovered && state.gizmo.interact(state, gizmoView);
 
     // 包围盒不再用 ImGui 画：ImGui 的 draw list 是纯 2D 叠加，没有深度概念，
     // 框会穿透墙体永远画在最前面。现在改由 EditorOverlayPass 作为真正的 3D 线段绘制，
@@ -339,7 +362,7 @@ void ViewportPanel::draw(EditorState& state)
     // E8：运行模式下左键就是"用工具"，不需要任何修饰键。
     // 编辑模式下左键只做选中，避免"只想选地形却改了高度"。
     bool terrainBrushConsumed = false;
-    if (!gizmoConsumed && imageHovered && runtime && state.terrainBrushEnabled &&
+    if (!gizmoConsumed && viewportHovered && runtime && state.terrainBrushEnabled &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         state.services.scene != nullptr)
     {
@@ -388,11 +411,11 @@ void ViewportPanel::draw(EditorState& state)
     // E8：运行模式 —— 左键挖掉命中方块，右键在命中面外侧放一块，不需要修饰键。
     // 一次点击 = 一条 VoxelEditCommand，所以撤销能逐块还原。
     bool voxelBrushConsumed = false;
-    const bool voxelLeftClick = runtime && imageHovered &&
+    const bool voxelLeftClick = runtime && viewportHovered &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-    const bool voxelRightClick = runtime && imageHovered &&
+    const bool voxelRightClick = runtime && viewportHovered &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-    if (!gizmoConsumed && imageHovered && runtime &&
+    if (!gizmoConsumed && viewportHovered && runtime &&
         state.voxelWorld != entt::null &&
         (voxelLeftClick || voxelRightClick) &&
         state.services.scene != nullptr)
@@ -444,7 +467,7 @@ void ViewportPanel::draw(EditorState& state)
     }
     // ---- 点选 ----
     // 只有"手柄没吃掉这次点击"时才做拾取，否则拖拽手柄会顺手改掉选中。
-    if (!runtime && !gizmoConsumed && !terrainBrushConsumed && !voxelBrushConsumed && imageHovered &&
+    if (!runtime && !gizmoConsumed && !terrainBrushConsumed && !voxelBrushConsumed && viewportHovered &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         state.services.registry != nullptr && state.services.scene != nullptr)
     {
@@ -491,14 +514,6 @@ void ViewportPanel::draw(EditorState& state)
             state.pushLog(LogEntry::Level::Info, message);
         }
     }
-
-    // ---- 左上角信息 ----
-    const char* modeName = (state.gizmo.mode == GizmoMode::Translate) ? "Move"
-                         : (state.gizmo.mode == GizmoMode::Rotate) ? "Rotate" : "Scale";
-
-    ImGui::SetCursorPos(ImVec2(8.0f, 8.0f));
-    ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.6f), "%ux%u  |  %s  |  W/E/R",
-                       width, height, modeName);
 
     ImGui::End();
 }

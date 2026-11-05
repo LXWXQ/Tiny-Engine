@@ -5,7 +5,7 @@ type: system
 scope: src/Editor/, src/Core/ImGuiSystem.cpp, main.cpp
 read-when: 计划一轮 UX 改造前，先确认哪些问题仍然存在、哪些已经修掉
 size: ~190 行
-updated: 2026-11-03
+updated: 2026-11-05
 ---
 
 # 界面友好性现状审计
@@ -167,7 +167,8 @@ updated: 2026-11-03
 | 未保存提示是三选一且失败不吞意图 | `drawUnsavedPrompt()`，保存失败时停在弹窗 | U8 的正例 |
 | 快捷键速查表可 `?` 唤起，且按组分类 | `kShortcutEntries` + `drawShortcutSheet()` | U1 的兜底层已存在 |
 | 最近场景、面板可见性、gizmo 模式跨会话保存 | `EditorPreferences` | U6 的正例 |
-| 状态栏常驻选中数、模式、吸附、脏标记 | `drawStatusBar()` | U6 大部分已满足 |
+| 工具栏常驻保存/播放状态，视口徽标常驻编辑/运行模式 | `drawToolbar()` / `ViewportPanel::draw()` | U6 大部分已满足 |
+| 状态栏常驻选中数、手柄、吸附、最近错误 | `drawStatusBar()` | U6 大部分已满足 |
 
 ## 7. 复现一次审计
 

@@ -5,7 +5,7 @@ type: system
 scope: 现有面板、布局实现方式、以及没有 docking 时的注意事项
 read-when: 写新面板、改布局、或面板位置错乱
 size: ~200 行
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # 面板与布局
@@ -161,7 +161,8 @@ for (panel : panels) {
 
 ## 编辑 / 运行模式（E8）
 
-状态栏第一个词就是当前模式。工具栏左侧「编辑 / 运行」，快捷键 `F8`：
+视口左上角只有一枚可点击的模式徽标（「编辑模式」/「运行模式」）。
+工具栏和状态栏不再重复显示；快捷键 `F8`，旧的分辨率/手柄提示已移除：
 
 | 模式 | 左键 | 右键 | 选中 | 手柄 | 面板 |
 |---|---|---|---|---|---|
@@ -222,8 +223,8 @@ public:
 
 | 区域 | 高度 | 内容 |
 |---|---|---|
-| 工具栏 | 34 px | Play/Stop、Move/Rotate/Scale、Snap、Focus、Undo/Redo；右侧 `saved \| Editing \| 245 FPS` |
-| 状态栏 | 26 px | 选中数量、当前手柄、吸附开关；右侧 FPS/帧耗时/draw calls/三角形/undo 深度 |
+| 工具栏 | 34 px | Play/Stop、Move/Rotate/Scale、Snap、Focus、Undo/Redo；右侧 `saved \| Editing \| 245 FPS`；模式徽标在视口左上角 |
+| 状态栏 | 26 px | 选中数量、当前手柄、吸附开关、最近错误；右侧 FPS/帧耗时/draw calls/三角形/undo 深度 |
 
 布局公式（`src/Editor/EditorLayer.cpp` 的 `drawPanels()`）：
 

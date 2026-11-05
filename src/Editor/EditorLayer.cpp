@@ -40,6 +40,13 @@ void EditorLayer::initialize(const EngineServices& services, const std::string& 
     state.documentPath = defaultScenePath;
     state.playState = PlayState::Editing;
     state.documentDirty = false;
+    // 视口左上角的模式徽标通过这个回调切换，确保仍走 setEditorMode() 的
+    // 相机/角色接管与通知逻辑，而不是面板直接改 mode。
+    state.toggleEditorMode = [this]()
+    {
+        setEditorMode(state.isRuntime() ? EditorState::EditorMode::Edit
+                                        : EditorState::EditorMode::Runtime);
+    };
 
     // E4-b：本机偏好。读不到就当首次运行，用默认值，不阻塞启动。
     preferencesPath = TINY_EDITOR_CONFIG_PATH;
@@ -994,14 +1001,6 @@ void EditorLayer::drawToolbar()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5.0f, 4.0f));
     if (ImGui::Begin("##toolbar", nullptr, kBarFlags))
     {
-        // ---- 编辑 / 运行模式（E8）----
-        // 这是"输入归属"的开关，不是播放开关：编辑模式改数据，运行模式操作世界。
-        barToggle("编辑", state.mode == EditorState::EditorMode::Edit,
-                  "编辑模式：左键选中、手柄拖拽、面板改参数");
-        barToggle("运行", state.isRuntime(),
-                  "运行模式：物体不可选中；左键挖方块 / 地形笔刷，右键放方块");
-        ImGui::TextDisabled("|");
-
         // ---- 播放 ----
         const bool editing = state.playState == PlayState::Editing;
         const bool playing = state.playState == PlayState::Playing;
@@ -1254,14 +1253,8 @@ void EditorLayer::drawStatusBar()
         //   中：场景统计（"屏幕上画了多少东西"）
         //   右：帧率 / 帧耗时 / 撤销深度（"跑得快不快"）
         // 以前五组数字挤在右边一行，扫读时要一字一字读；分三段后眼睛有落点。
-        // E8：模式是状态栏第一个词 —— 用户随时该知道"我现在点左键会发生什么"。
-        if (state.isRuntime())
-            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.35f, 1.0f), "运行");
-        else
-            ImGui::TextDisabled("编辑");
-        ImGui::SameLine();
-        ImGui::TextDisabled("·");
-        ImGui::SameLine();
+        // E8：模式不再在状态栏重复显示；视口左上角的徽标是唯一常驻入口。
+        // 这里只保留当前模式下"左键会发生什么"的上下文说明。
         if (state.isRuntime())
         {
             ImGui::TextDisabled("左键挖方块 / 右键放方块（F8 回编辑）");
