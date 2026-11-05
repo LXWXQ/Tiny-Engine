@@ -4,9 +4,70 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 #include <stb_image.h>
 
-Texture::Texture(Device& device, const std::string& filepath, VkFormat format, VkCommandPool commandPool, bool isHDR)
+namespace
+{
+// Tileable textures must wrap when their mip chain is built. vkCmdBlitImage
+// clamps at the image edge, so every texture repeat keeps a darker/lighter
+// 1px seam that turns into a visible square quilt at distance. This CPU box
+// filter wraps the 2x2 taps, which keeps the mip chain periodic.
+std::vector<unsigned char> buildWrappedMipChain(const unsigned char* base,
+                                                uint32_t width, uint32_t height,
+                                                uint32_t levels)
+{
+	std::vector<unsigned char> chain;
+	size_t totalBytes = 0;
+	for (uint32_t level = 0; level < levels; ++level)
+	{
+		const uint32_t w = std::max(1u, width >> level);
+		const uint32_t h = std::max(1u, height >> level);
+		totalBytes += static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
+	}
+	chain.resize(totalBytes);
+	std::memcpy(chain.data(), base, static_cast<size_t>(width) * height * 4u);
+
+	size_t previousOffset = 0;
+	size_t destinationOffset = static_cast<size_t>(width) * height * 4u;
+	uint32_t previousWidth = width;
+	uint32_t previousHeight = height;
+	for (uint32_t level = 1; level < levels; ++level)
+	{
+		const uint32_t w = std::max(1u, width >> level);
+		const uint32_t h = std::max(1u, height >> level);
+		const unsigned char* src = chain.data() + previousOffset;
+		unsigned char* dst = chain.data() + destinationOffset;
+		for (uint32_t y = 0; y < h; ++y)
+		{
+			const uint32_t sy0 = (y * 2u) % previousHeight;
+			const uint32_t sy1 = (y * 2u + 1u) % previousHeight;
+			for (uint32_t x = 0; x < w; ++x)
+			{
+				const uint32_t sx0 = (x * 2u) % previousWidth;
+				const uint32_t sx1 = (x * 2u + 1u) % previousWidth;
+				const unsigned char* p00 = src + (static_cast<size_t>(sy0) * previousWidth + sx0) * 4u;
+				const unsigned char* p10 = src + (static_cast<size_t>(sy0) * previousWidth + sx1) * 4u;
+				const unsigned char* p01 = src + (static_cast<size_t>(sy1) * previousWidth + sx0) * 4u;
+				const unsigned char* p11 = src + (static_cast<size_t>(sy1) * previousWidth + sx1) * 4u;
+				unsigned char* out = dst + (static_cast<size_t>(y) * w + x) * 4u;
+				for (uint32_t c = 0; c < 4u; ++c)
+				{
+					out[c] = static_cast<unsigned char>(
+						(static_cast<uint32_t>(p00[c]) + p10[c] + p01[c] + p11[c] + 2u) / 4u);
+				}
+			}
+		}
+		previousOffset = destinationOffset;
+		destinationOffset += static_cast<size_t>(w) * h * 4u;
+		previousWidth = w;
+		previousHeight = h;
+	}
+	return chain;
+}
+} // namespace
+
+Texture::Texture(Device& device, const std::string& filepath, VkFormat format, VkCommandPool commandPool, bool isHDR, bool tileableMips)
 	: vulkanDevice(device)
 {
 	// 记录来源路径：场景序列化时要用它写回文件。
@@ -14,15 +75,15 @@ Texture::Texture(Device& device, const std::string& filepath, VkFormat format, V
 	if (isHDR)
 		loadHDR(filepath, commandPool);
 	else
-		loadLDR(filepath, format, commandPool);
+		loadLDR(filepath, format, commandPool, tileableMips);
 }
 
 Texture::Texture(Device& device, const void* pixelData, uint32_t width, uint32_t height,
-	VkFormat format, VkCommandPool commandPool, bool isHDR)
+	VkFormat format, VkCommandPool commandPool, bool isHDR, bool tileableMips)
 	: vulkanDevice(device)
 {
 	VkDeviceSize pixelSize = isHDR ? sizeof(float) : 1;
-	createFromPixels(pixelData, width, height, pixelSize, format, commandPool, isHDR);
+	createFromPixels(pixelData, width, height, pixelSize, format, commandPool, isHDR, tileableMips);
 }
 
 Texture::~Texture()
@@ -62,7 +123,7 @@ Texture& Texture::operator=(Texture&& other) noexcept
 	return *this;
 }
 
-void Texture::loadLDR(const std::string& filepath, VkFormat format, VkCommandPool commandPool)
+void Texture::loadLDR(const std::string& filepath, VkFormat format, VkCommandPool commandPool, bool tileableMips)
 {
 	int texWidth, texHeight, texChannels;
 	stbi_uc* pixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
@@ -71,7 +132,7 @@ void Texture::loadLDR(const std::string& filepath, VkFormat format, VkCommandPoo
 		throw std::runtime_error("Texture: failed to load " + filepath);
 
 	createFromPixels(pixels, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight),
-		1, format, commandPool, false);
+		1, format, commandPool, false, tileableMips);
 
 	stbi_image_free(pixels);
 
@@ -87,7 +148,7 @@ void Texture::loadHDR(const std::string& filepath, VkCommandPool commandPool)
 		throw std::runtime_error("Texture: failed to load HDR " + filepath);
 
 	createFromPixels(pixels, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight),
-		sizeof(float), VK_FORMAT_R32G32B32A32_SFLOAT, commandPool, true);
+		sizeof(float), VK_FORMAT_R32G32B32A32_SFLOAT, commandPool, true, false);
 
 	stbi_image_free(pixels);
 
@@ -96,7 +157,7 @@ void Texture::loadHDR(const std::string& filepath, VkCommandPool commandPool)
 
 void Texture::createFromPixels(const void* pixels, uint32_t width, uint32_t height,
 VkDeviceSize pixelSize, VkFormat format, VkCommandPool commandPool,
-bool isFloat)
+bool isFloat, bool tileableMips)
 {
 VkDeviceSize imageSize = width * height * 4 * pixelSize;
 
@@ -107,11 +168,22 @@ VkFormatProperties formatProperties{};
 vkGetPhysicalDeviceFormatProperties(vulkanDevice.getPhysicalDevice(), format, &formatProperties);
 const bool canBlit = (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) &&
 (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT);
+const bool wrappedMipRequested = tileableMips && !isFloat && pixelSize == 1;
 uint32_t mipLevels = 1;
-if (canBlit)
+if (canBlit || wrappedMipRequested)
 {
 mipLevels = static_cast<uint32_t>(
 std::floor(std::log2(static_cast<float>(std::max(width, height))))) + 1;
+}
+const bool useWrappedMips = wrappedMipRequested && mipLevels > 1;
+
+std::vector<unsigned char> wrappedChain;
+VkDeviceSize uploadSize = imageSize;
+if (useWrappedMips)
+{
+wrappedChain = buildWrappedMipChain(static_cast<const unsigned char*>(pixels),
+width, height, mipLevels);
+uploadSize = static_cast<VkDeviceSize>(wrappedChain.size());
 }
 
 VkBuffer stagingBuffer = VK_NULL_HANDLE;
@@ -119,7 +191,7 @@ VmaAllocation stagingAllocation = VK_NULL_HANDLE;
 
 VkBufferCreateInfo bufferInfo{};
 bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-bufferInfo.size = imageSize;
+bufferInfo.size = uploadSize;
 bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
 VmaAllocationCreateInfo stagingAllocInfo{};
@@ -133,7 +205,7 @@ throw std::runtime_error("Texture: staging buffer creation failed");
 
 void* data = nullptr;
 vmaMapMemory(vulkanDevice.getVmaAllocator(), stagingAllocation, &data);
-memcpy(data, pixels, static_cast<size_t>(imageSize));
+memcpy(data, useWrappedMips ? wrappedChain.data() : pixels, static_cast<size_t>(uploadSize));
 vmaUnmapMemory(vulkanDevice.getVmaAllocator(), stagingAllocation);
 
 VkImageCreateInfo imageInfo{};
@@ -196,6 +268,35 @@ vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0,
 0, nullptr, 0, nullptr, 1, &barrier);
 };
 
+if (useWrappedMips)
+{
+transitionMip(0, mipLevels, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+0, VK_ACCESS_TRANSFER_WRITE_BIT,
+VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+VkBufferImageCopy wrappedRegion{};
+wrappedRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+wrappedRegion.imageSubresource.layerCount = 1;
+VkDeviceSize mipOffset = 0;
+for (uint32_t level = 0; level < mipLevels; ++level)
+{
+const uint32_t levelWidth = std::max(1u, width >> level);
+const uint32_t levelHeight = std::max(1u, height >> level);
+wrappedRegion.bufferOffset = mipOffset;
+wrappedRegion.imageSubresource.mipLevel = level;
+wrappedRegion.imageExtent = { levelWidth, levelHeight, 1 };
+vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, this->image,
+VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &wrappedRegion);
+mipOffset += static_cast<VkDeviceSize>(levelWidth) * levelHeight * 4u;
+}
+
+transitionMip(0, mipLevels, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+}
+else
+{
 transitionMip(0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 0, VK_ACCESS_TRANSFER_WRITE_BIT,
 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -270,6 +371,8 @@ transitionMip(0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+}
+
 }
 
 vkEndCommandBuffer(commandBuffer);

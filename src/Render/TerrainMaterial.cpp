@@ -194,14 +194,14 @@ bool TerrainMaterial::uploadMaterialSet(uint32_t index, const std::string& direc
             for (uint32_t layer = 0; layer < 4; ++layer)
             {
                 set.albedoTextures[layer] = std::make_shared<Texture>(
-                    *device, externalPaths[0][layer], VK_FORMAT_R8G8B8A8_SRGB, commandPool);
+                    *device, externalPaths[0][layer], VK_FORMAT_R8G8B8A8_SRGB, commandPool, false, true);
                 set.normalTextures[layer] = std::make_shared<Texture>(
-                    *device, externalPaths[1][layer], VK_FORMAT_R8G8B8A8_UNORM, commandPool);
+                    *device, externalPaths[1][layer], VK_FORMAT_R8G8B8A8_UNORM, commandPool, false, true);
                 const PackedImage packed = loadExternalHeightRoughness(
                     externalPaths[2][layer], externalPaths[3][layer]);
                 set.heightRoughnessTextures[layer] = std::make_shared<Texture>(
                     *device, packed.rgba.data(), packed.width, packed.height,
-                    VK_FORMAT_R8G8B8A8_UNORM, commandPool);
+                    VK_FORMAT_R8G8B8A8_UNORM, commandPool, false, true);
                 set.heightRoughnessTextures[layer]->setPath(
                     "external://terrain/set" + std::to_string(index) + "/layer" +
                     std::to_string(layer) + "/height_roughness");
@@ -233,12 +233,12 @@ bool TerrainMaterial::uploadMaterialSet(uint32_t index, const std::string& direc
                                        "/layer" + std::to_string(layer);
             set.albedoTextures[layer] = std::make_shared<Texture>(
                 *device, generated.albedoRGBA[layer].data(), generated.width, generated.height,
-                VK_FORMAT_R8G8B8A8_SRGB, commandPool);
+                VK_FORMAT_R8G8B8A8_SRGB, commandPool, false, true);
             set.albedoTextures[layer]->setPath(prefix + "/albedo");
 
             set.normalTextures[layer] = std::make_shared<Texture>(
                 *device, generated.normalRGBA[layer].data(), generated.width, generated.height,
-                VK_FORMAT_R8G8B8A8_UNORM, commandPool);
+                VK_FORMAT_R8G8B8A8_UNORM, commandPool, false, true);
             set.normalTextures[layer]->setPath(prefix + "/normal");
 
             const PackedImage packed = packHeightRoughness(
@@ -246,7 +246,7 @@ bool TerrainMaterial::uploadMaterialSet(uint32_t index, const std::string& direc
                 generated.heightRGBA[layer].data(), generated.roughnessRGBA[layer].data());
             set.heightRoughnessTextures[layer] = std::make_shared<Texture>(
                 *device, packed.rgba.data(), packed.width, packed.height,
-                VK_FORMAT_R8G8B8A8_UNORM, commandPool);
+                VK_FORMAT_R8G8B8A8_UNORM, commandPool, false, true);
             set.heightRoughnessTextures[layer]->setPath(prefix + "/height_roughness");
         }
         set.external = false;

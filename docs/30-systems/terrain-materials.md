@@ -44,6 +44,10 @@ PNG 是每套 16 张源文件。set 0 在启动时从 `Resources/Texture/Terrain
 normal/height/roughness 按线性 UNORM 加载；height 与 roughness 在 CPU 侧打包，
 因此同一层两张图尺寸必须一致。文件名约定见 `README.txt`。
 
+四层纹理都以 `tileableMips=true` 上传：CPU 用 2x2 box filter 按纹理尺寸取模生成
+完整 mip 链，再整链 `vkCmdCopyBufferToImage`；不再逐级 `vkCmdBlitImage`。blit 在
+图像边缘 clamp，会让每个平铺块的 mip 边缘带上不同偏色，远看就是一块块拼布。
+
 ## 4. 绑定与切换
 
 `TerrainConfig::materialSetIndex`（0..3）随地形配置写入场景 JSON；仅切换材质
@@ -61,12 +65,14 @@ normal/height/roughness 按线性 UNORM 加载；height 与 roughness 在 CPU �
   边界两侧得到不同层权重，出现矩形沙/雪色块；
 - 按高度/坡度得到沙地、草地、岩石、雪基础权重，再应用 `surfaceStyle`
   的权重偏置；
-- 以世界 XZ 采样四层 height，对层权重乘 0.72~1.28 的高度调制并重新归一化；
-- albedo 用第二尺度样本和 patch mask 混合，抑制单张纹理的明显平铺；
+- 以世界 XZ 采样四层 height，对层权重乘 0.90~1.10 的高度调制并重新归一化
+  （幅度过大时会在草地上形成整块深色/浅色斑）；
+- albedo 用第二尺度样本和 patch mask 混合，patch mask 只保留 35% 对比度，
+  抑制单张纹理的明显平铺，同时收敛低频大色块；
 - 对四层 normal 解码后按权重混合，投影到由几何法线构造的 XZ 切线基；
   屏幕空间 footprint 控制法线细节淡出；
 - 四层 roughness 按权重混合，再叠加 Style 偏置和低频噪声；
-- 用低频 fBm 做宏观亮度变化，metallic 固定为 0；
+- 用低频 fBm 做宏观亮度变化（±6%，只保留轻微起伏），metallic 固定为 0；
 - `outNormal.w = 0` 保持 SSAO policy mask，地形继续跳过 SSAO。
 
 ## 6. Surface Style 与"不改几何"的字段

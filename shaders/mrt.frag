@@ -400,14 +400,14 @@ void main() {
         const vec4 packedSnow = texture(terrainHeightRoughnessSnow, snowUv);
         const vec4 layerHeight = vec4(packedSand.r, packedGrass.r,
                                       packedRock.r, packedSnow.r);
-        layerWeight *= mix(vec4(0.72), vec4(1.28), layerHeight);
+        layerWeight *= mix(vec4(0.90), vec4(1.10), layerHeight);
         const vec4 layerW = layerWeight / max(dot(layerWeight, vec4(1.0)), 1e-4);
         const float sandN = layerW.x;
         const float grassN = layerW.y;
         const float rockN = layerW.z;
         const float snowN = layerW.w;
 
-        const float patchMask = terrainFbm(worldXZ * 0.19 + vec2(3.7, 8.1));
+        const float patchMask = mix(0.5, terrainFbm(worldXZ * 0.19 + vec2(3.7, 8.1)), 0.35);
         const vec3 sandAlbedo = mix(
             texture(terrainAlbedoSand, sandUv).rgb,
             texture(terrainAlbedoSand, sandUv * 0.37 + vec2(0.43, 0.19)).rgb,
@@ -430,7 +430,7 @@ void main() {
 
         const float macro = terrainFbm(worldXZ * 0.50 + vec2(1.3, -2.1));
         const float materialStrength = clamp(tDetailStrength, 0.0, 1.0);
-        albedo *= mix(1.0, mix(0.82, 1.18, macro), 0.35 + materialStrength * 0.35);
+        albedo *= mix(1.0, mix(0.94, 1.06, macro), 0.35 + materialStrength * 0.35);
 
         const vec3 sandNormal = texture(terrainNormalSand, sandUv).xyz * 2.0 - 1.0;
         const vec3 grassNormal = texture(terrainNormalGrass, grassUv).xyz * 2.0 - 1.0;
