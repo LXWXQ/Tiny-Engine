@@ -12,4 +12,15 @@ namespace tiny
     std::string writeStartupErrorLog(const std::string& stage,
                                      const std::string& message,
                                      const std::string& directory = std::string());
+
+    // 把致命错误整理成给人看的正文：阶段、原因、日志路径、下一步。
+    // 单独成函数是为了能自检文本，而不必真的弹一个模态框。
+    std::string formatStartupErrorMessage(const std::string& stage,
+                                          const std::string& message,
+                                          const std::string& logPath);
+
+    // UX-04：原生 MessageBox。只在交互式启动失败时调用；无人值守的
+    // --selftest / 截图 / 回归必须保持静默，否则会卡在等人点“确定”。
+    // 非 Windows 平台退化为空操作（错误仍已写 stderr 与 startup-error.log）。
+    void showStartupErrorBox(const std::string& title, const std::string& message);
 }

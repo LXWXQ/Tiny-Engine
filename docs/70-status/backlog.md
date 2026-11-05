@@ -246,7 +246,8 @@ updated: 2026-11-05
 ## 归档时的剩余队列（2026-11-05）
 
 体素四步（持久化 / 运行模式接管角色 / 贪心合并 + 贴图集 + AO / 异步生成 + 半径 12）已全部落地，
-下面按“什么时候必须做”排序，供后续接续。
+下面按“什么时候必须做”排序，供后续接续。2026-11-05 调整优先级：先完成 E-P1；其余未开始项
+继续保留在此表，等以后再做，不另开临时清单。
 
 | ID | 状态 | 任务 | 依赖 | 完成判据 |
 |---|---|---|---|---|
@@ -266,7 +267,7 @@ updated: 2026-11-05
 | F4-01 | 未开始 | glTF 保留 node 层级（决策 13 的翻转）、primitive 独立变换、异步加载 | — | 载入后可改任意 node 局部变换并实时可见 |
 | F4-02 | 未开始 | 模型 LOD 链（GPU 端 LOD 选级的前置，见 F1 剩余项） | F4-01 | 同一模型可切 2~3 级，切换无跳变 |
 | F1-R1 | 未开始 | 粒子真实接入（`ExternalInstance` 入口已就位，还没有生产方） | F6 | 粒子与 ECS 实例共用分组/合批/剔除 |
-| E-P1 | 未开始 | 启动失败的原生 MessageBox（UX-04 仍缺） | — | 双击启动失败时用户能看到可读提示 |
+| E-P1 | 已完成 | 启动失败的原生 MessageBox（UX-04） | — | 双击启动失败时用户能看到可读提示 |
 
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
@@ -281,6 +282,8 @@ updated: 2026-11-05
 > 同日修复流送地形 chunk 边界的材质断层：`mrt.frag` 的高度层权重原先用每个 chunk 的局部 Y 范围归一化，同一世界高度在边界两侧得到不同 `h`；`GeometrySystemGpu` 与 `GeometrySystem` 统一改用 `TerrainConfig::baseHeight`/`heightScale`，合批与非合批截图都恢复连续。详见 [milestones](milestones.md#流送地形-chunk-边界材质断层修复2026-11-05)。
 >
 > 同日把场景树补成真正的父子结构：`createVoxelWorld()` 对每个 chunk 调 `setParent(entity, world)`，chunk 不再与 `Voxel World` 并列成根；世界节点默认展开、按 `chunkZ/chunkX` 排序，Hierarchy 使用 `DrawLinesFull` 树线。详见 [milestones](milestones.md#场景树体素-chunk-归入世界子树2026-11-05)，验证日志 `build/validation/20261105-125330`。
+>
+> E-P1 已完成（2026-11-05）：交互式启动失败先弹原生 `MessageBoxW`，正文含阶段、原因、`startup-error.log` 路径、`--help` 与 Vulkan 下一步；`--hidden` / `--selftest` / 截图等无人值守路径保持静默。详见 [milestones](milestones.md#e-p1启动失败原生-messagebox2026-11-05)。
 
 ## 更新方式
 

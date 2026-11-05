@@ -79,7 +79,7 @@ updated: 2026-11-05
 | 影响 | 陌生人的结论是"这是个坏程序"，而不是"我的显卡缺 maintenance4" |
 | 判据 | U4 失败可行动、U9 降级可见 |
 | 修法指向 | 启动早期捕获初始化异常，弹一个原生 MessageBox（或最小 ImGui 窗口）说明缺哪个特性、去哪看 `--help`；同时写 `startup-error.log` 到可执行文件同目录 |
-| 状态 | **部分 fixed**（2026-11-03）：`main.cpp` 的 catch 已把「阶段 + 消息 + 工作目录 + 提示」追加进可执行文件旁的 `startup-error.log`（`tiny::writeStartupErrorLog`，`src/Core/StartupLog.cpp`），并在 stderr 打印文件路径；设备丢失且驱动未启用 `VK_EXT_device_fault` 时，`Device::reportDeviceFault` 会打印原因与下一步并调用同一个写入函数。仍缺：原生 MessageBox（无控制台时仍要靠用户主动找文件）。回归：`b1-window-fit`（断言 `[Startup] error log selfTest PASS`） |
+| 状态 | **fixed**（2026-11-05）：`main.cpp` 的 catch 仍先把「阶段 + 消息 + 工作目录 + 提示」追加进可执行文件旁的 `startup-error.log`，并在 stderr 打印文件路径；新增 `tiny::formatStartupErrorMessage` 与 `tiny::showStartupErrorBox`（`src/Core/StartupLog.h/.cpp`），交互式启动失败时用原生 `MessageBoxW` 显示阶段、原因、日志路径、`--help` 与 Vulkan 下一步，点确定后进程以失败码退出。`--hidden` / `--selftest` / 截图 / 地形测试等无人值守路径保持静默，只写日志，避免回归卡在弹窗上。设备丢失且驱动未启用 `VK_EXT_device_fault` 时，`Device::reportDeviceFault` 仍打印原因与下一步并写同一文件。回归：`b1-window-fit` 新增断言 `[Startup] error dialog text selfTest PASS`；真实弹窗桌面手测见 `.tmp/startup_dialog.png` |
 
 ### UX-05 中文字体缺失时静默退化为问号
 

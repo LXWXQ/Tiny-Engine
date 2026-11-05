@@ -498,6 +498,15 @@ int main(int argc, char** argv)
         const std::string logPath = tiny::writeStartupErrorLog("启动/运行", e.what(), errorLogDirectory);
         if (!logPath.empty())
             std::cerr << "详情已写入 " << logPath << "（没用控制台启动时看这个文件）" << std::endl;
+
+        // UX-04：交互式启动失败时再弹原生提示；--hidden / --selftest / 截图等
+        // 无人值守运行保持静默，否则回归会卡在等人的“确定”上。
+        if (!unattendedRun && !diagOptions.windowHidden)
+        {
+            tiny::showStartupErrorBox(
+                "Tiny Engine 启动失败",
+                tiny::formatStartupErrorMessage("启动/运行", e.what(), logPath));
+        }
         return EXIT_FAILURE;
     }
 

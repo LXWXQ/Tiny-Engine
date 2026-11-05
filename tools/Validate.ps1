@@ -263,7 +263,7 @@ $tests = @(
        AllowStderr = $true; SkipValidationMarker = $true;
        MustContainStderr = @("unknown argument: --not-a-flag") },
     @{ Name = "b1-window-fit"; Exe = "engine"; Args = @("--selftest", "5", "--hidden");
-       MustContain = @("[Window] fit selfTest PASS", "[Startup] error log selfTest PASS", "[Window] sizing") },
+       MustContain = @("[Window] fit selfTest PASS", "[Startup] error log selfTest PASS", "[Startup] error dialog text selfTest PASS", "[Window] sizing") },
     @{ Name = "e5-render-settings"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("render settings selfTest PASS") },
     @{ Name = "b3-notices"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

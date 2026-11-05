@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~680 行
+size: ~780 行
 updated: 2026-11-05
 ---
 
@@ -585,6 +585,7 @@ updated: 2026-11-05
   `FirstApp::computeWindowSize` 按工作区 92% 收敛，`initWindow` 打印 `[Window] sizing | workarea=... -> WxH`。
 - 可观测：`[Startup] error log selfTest PASS`、`[Window] fit selfTest PASS | 1280x720 -> 1177x662`。
 - 验证：回归 54 项（新增 `b1-window-fit`）。
+- 2026-11-05 补上 UX-04 的最后一段：交互式启动失败弹原生 MessageBox，`--hidden` / `--selftest` 等无人值守路径保持静默；`b1-window-fit` 增加正文断言。详见 [E-P1](#e-p1启动失败原生-messagebox2026-11-05)。
 
 ## F6-a：级联阴影（3 级 CSM + PCF）
 **实现**：`src/Render/ShadowPass.h/.cpp` 三级联（2048²、2D 数组 3 层）+ 纹素吸附 + AABB 8 角点剔除 + 3x3 PCF；`GlobalUbo` 尾部追加 `shadowMatrices[3]`/`shadowCascadeSplits`/`shadowParams`，全局 set 加 binding 11（`sampler2DArray`）；`--no-shadows` 与渲染面板「阴影」分组可关。
@@ -765,3 +766,19 @@ updated: 2026-11-05
 **回归**：`e8-editor-mode`（新增 `parented=9` 断言）；全套验证日志 `build/validation/20261105-125330`（69 项 ALL PASS，`CONFIG_USER_RESTORED`）；DocCheck PASS（`documents=65`）。
 
 **已知边界**：`DeleteEntityCommand` 的组件快照尚未包含 `VoxelWorldComponent` / `VoxelChunkComponent`。在 Hierarchy 中删除整个 `Voxel World` 会级联删除 chunk 网格，但撤销只能恢复 Transform/Name/Mesh 等通用组件，体素数据不完整；当前先避免用删除世界节点来验证撤销，后续若世界需要可撤销删除，应单独补体素组件快照。
+
+## E-P1：启动失败原生 MessageBox（2026-11-05）
+
+**问题**：双击启动失败时，`main.cpp` 的 catch 只写 `std::cerr` 与可执行文件旁的 `startup-error.log`；没有控制台时用户完全看不到错误，必须自己知道去翻日志（UX-04 的剩余缺口）。
+
+**实现**：
+- `src/Core/StartupLog.h/.cpp` 新增 `formatStartupErrorMessage(stage, message, logPath)` 与 `showStartupErrorBox(title, message)`。正文分四段：阶段、原因、诊断日志完整路径、下一步（用 `--help` 看参数、确认驱动支持 Vulkan 1.3、提交日志）。
+- Windows 走原生 `MessageBoxW(nullptr, ..., MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST)`；UTF-8 正文先按 `MB_ERR_INVALID_CHARS` 转 UTF-16，失败回退系统代码页。非 Windows 为空操作。弹窗前 stderr 打 `[Startup] showing native error dialog`；`MessageBoxW` 返回 0 时打 `[Startup] MessageBoxW failed (GetLastError=...)`。
+- `main.cpp` 的 catch 仍先写 `startup-error.log`，只有交互式启动才弹窗：`if (!unattendedRun && !diagOptions.windowHidden)`。`--hidden`、`--selftest`、截图、地形测试等无人值守路径保持静默，避免 CI/回归卡在“确定”上。
+- `src/Core/Application.cpp` 的 UX-04 自检新增 `[Startup] error dialog text selfTest PASS | stage + reason + log path + help hint`，断言弹窗正文确实包含阶段、原因、日志路径与 `--help`；自检不真的弹窗。`tools/Validate.ps1` 的 `b1-window-fit` 断言该行。
+
+**可观测**：`.tmp/startup_dialog.png` 是真实弹窗（用无效 `VK_ICD_FILENAMES` 触发 `Failed to create Vulkan instance!`）：标题 `Tiny Engine 启动失败`，正文含“阶段：启动/运行”“原因：Failed to create Vulkan instance!”、`build\Debug\startup-error.log` 与三步下一步，按钮“确定”；确认后进程以失败码退出。`--selftest 5 --hidden` 输出 `[Startup] error dialog text selfTest PASS`、`[Validation] errors=0 warnings=0`。
+
+**回归**：`b1-window-fit` 增加弹窗正文断言；全套验证日志 `build/validation/20261105-143428`（67 项引擎 + 2 项工具 = 69 项 ALL PASS，stderr 全 0）；DocCheck PASS。真实弹窗无法在无人值守测试里断言，保留无效 ICD 桌面手测。
+
+**已知边界**：弹窗只有“确定”，没有“打开日志/复制路径”按钮；没有交互桌面时 `MessageBoxW` 可能返回 0，此时错误仍完整写在日志里。启动失败后的进程清理与退出码不变。

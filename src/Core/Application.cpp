@@ -1725,6 +1725,16 @@ int FirstApp::runHeadlessSelfTest(int frames)
 		if (logPath.empty() || logText.find(marker) == std::string::npos)
 			throw std::runtime_error("startup error log selfTest failed");
 		std::cout << "[Startup] error log selfTest PASS | " << logPath << std::endl;
+
+		// UX-04：原生 MessageBox 的正文单独自检（不弹模态框，避免卡住回归）。
+		const std::string dialogText = tiny::formatStartupErrorMessage("selfTest", marker, logPath);
+		const bool dialogHasStage = dialogText.find("阶段：selfTest") != std::string::npos;
+		const bool dialogHasReason = dialogText.find(marker) != std::string::npos;
+		const bool dialogHasLogPath = dialogText.find(logPath) != std::string::npos;
+		const bool dialogHasHelp = dialogText.find("--help") != std::string::npos;
+		if (!dialogHasStage || !dialogHasReason || !dialogHasLogPath || !dialogHasHelp)
+			throw std::runtime_error("startup error dialog text selfTest failed");
+		std::cout << "[Startup] error dialog text selfTest PASS | stage + reason + log path + help hint" << std::endl;
 	}
 
 	// D-8：编辑器自检（命令栈 / 删除撤销 / 序列化往返）。
