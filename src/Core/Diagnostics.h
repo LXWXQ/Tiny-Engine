@@ -63,6 +63,9 @@ bool updateProfile = false;
 // 会干扰"点选/包围盒/手柄"这类交互的观察。
 bool emptyScene = false;
 
+// --runtime-mode：编辑器启动后直接进入运行模式（便于截图/演练角色）。
+bool runtimeMode = false;
+
 // --terrain-test：启动时创建一块持久地形，用于渲染/截图回归。
 bool terrainTest = false;
 

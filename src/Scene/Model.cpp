@@ -1,8 +1,13 @@
 #include "Model.h"
 
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <algorithm>
 #include <limits>
+#include <cstring>
+#include <cctype>
+#include <functional>
 #include "RHI/Device.h"
 #include "RHI/CommandUtils.h"
 #include <stdexcept>
@@ -38,7 +43,6 @@ Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& bu
     geometryId = g_nextGeometryId.fetch_add(1, std::memory_order_relaxed);
     createVertexBuffers(builder.vertices, commandPool);
     createIndexBuffers(builder.indices, commandPool);
-    computeBounds(builder.vertices);
     computeUvBounds(builder.vertices);
     finalizeSubMeshes(builder.subMeshes);
     // 地形模型每块 LOD 都是独立几何，保留 CPU 副本太贵；它们不走 GPU 批。
@@ -50,6 +54,23 @@ Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& bu
         cpuVertices = builder.vertices;
         cpuIndices = builder.indices;
     }
+
+    // 蒙皮模型：保留网格局部绑定姿态顶点，后面每帧由 CPU 重新蒙皮。
+    // 注意不能用 node world 烘进顶点，否则 jointMatrix 会把变换算两遍。
+    const bool skinned =
+        !builder.skinJoints.empty()
+        && builder.skinJoints.size() == builder.vertices.size()
+        && builder.skinWeights.size() == builder.vertices.size()
+        && !builder.skeleton.empty()
+        && !builder.jointNodes.empty()
+        && builder.jointNodes.size() == builder.inverseBindMatrices.size();
+    if (skinned)
+    {
+        initializeSkinning(commandPool, builder);
+        return;
+    }
+
+    computeBounds(builder.vertices);
 
     // 保留一份 CPU 侧几何用于编辑器点选。
     // 只拷位置：法线/UV 对射线求交没有意义，Sponza 那种规模能省下 2/3 内存。
@@ -149,6 +170,7 @@ void Model::releaseGpuBuffers()
 }
 Model::~Model()
 {
+    destroyDynamicVertexBuffers();
     vmaDestroyBuffer(device.getVmaAllocator(), vertexBuffer, vertexAllocation);
 
     if (hasIndexBuffer)
@@ -372,10 +394,17 @@ void Model::uploadViaStaging(VkBuffer dstBuffer, const void* srcData, VkDeviceSi
 
 void Model::bind(VkCommandBuffer commandBuffer) const
 {
-    if (vertexBuffer == VK_NULL_HANDLE)
+    VkBuffer boundVertexBuffer = vertexBuffer;
+    if (isSkinned())
+    {
+        const DynamicVertexBuffer& dynamic = dynamicVertexBuffers[dynamicVertexBufferIndex];
+        if (dynamic.buffer != VK_NULL_HANDLE)
+            boundVertexBuffer = dynamic.buffer;
+    }
+    if (boundVertexBuffer == VK_NULL_HANDLE)
         return;
 
-    VkBuffer buffers[] = { vertexBuffer };
+    VkBuffer buffers[] = { boundVertexBuffer };
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
 
@@ -402,6 +431,317 @@ void Model::drawSubMesh(VkCommandBuffer commandBuffer, const SubMesh& subMesh) c
     if (!hasIndexBuffer || subMesh.indexCount == 0)
         return;
     vkCmdDrawIndexed(commandBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
+}
+
+int Model::findAnimation(const std::string& name) const
+{
+    for (size_t i = 0; i < animations.size(); ++i)
+    {
+        if (animations[i].name == name)
+            return static_cast<int>(i);
+    }
+
+    // glTF 里大小写并不统一（有的导出器写 Walk，有的写 walk）。
+    auto lower = [](std::string s)
+    {
+        std::transform(s.begin(), s.end(), s.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+    const std::string wanted = lower(name);
+    for (size_t i = 0; i < animations.size(); ++i)
+    {
+        if (lower(animations[i].name) == wanted)
+            return static_cast<int>(i);
+    }
+    return -1;
+}
+
+float Model::getAnimationDuration(int clipIndex) const
+{
+    if (clipIndex < 0 || static_cast<size_t>(clipIndex) >= animations.size())
+        return 0.0f;
+    return animations[static_cast<size_t>(clipIndex)].duration;
+}
+
+void Model::initializeSkinning(VkCommandPool commandPool, const Builder& builder)
+{
+    skinJoints = builder.skinJoints;
+    skinWeights = builder.skinWeights;
+    bindSkeletonNodes = builder.skeleton;
+    jointNodes = builder.jointNodes;
+    inverseBindMatrices = builder.inverseBindMatrices;
+    animations = builder.animations;
+
+    // 权重归一化：有的导出器会把 4 个权重写成 0.999 之类的近似值。
+    for (glm::vec4& weights : skinWeights)
+    {
+        const float sum = weights.x + weights.y + weights.z + weights.w;
+        if (sum > 1e-6f)
+            weights /= sum;
+    }
+
+    createDynamicVertexBuffer(commandPool);
+
+    std::vector<glm::mat4> jointMatrices;
+    buildPoseMatrices(bindSkeletonNodes, jointMatrices);
+    std::vector<Vertex> skinnedVertices;
+    skinVertices(bindSkeletonNodes, jointMatrices, skinnedVertices);
+    writeDynamicVertices(skinnedVertices);
+    updateBoundsAndPicking(skinnedVertices, cpuIndices);
+
+    float normalLengthSum = 0.0f;
+    for (const Vertex& vertex : skinnedVertices)
+        normalLengthSum += glm::length(vertex.normal);
+    const float averageNormalLength = skinnedVertices.empty()
+        ? 0.0f : normalLengthSum / static_cast<float>(skinnedVertices.size());
+
+    std::cout << "[Model] skinned | vertices=" << skinJoints.size()
+              << " joints=" << jointNodes.size()
+              << " animations=" << animations.size()
+              << " bounds=" << (boundsMax.y - boundsMin.y) << "m"
+              << " avgNormal=" << averageNormalLength << "\n";
+}
+
+void Model::createDynamicVertexBuffer(VkCommandPool commandPool)
+{
+    if (vertexCount == 0)
+        return;
+
+    const VkDeviceSize bufferSize = sizeof(Vertex) * static_cast<VkDeviceSize>(vertexCount);
+    VmaAllocator allocator = device.getVmaAllocator();
+
+    for (DynamicVertexBuffer& dynamic : dynamicVertexBuffers)
+    {
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = bufferSize;
+        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+            | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+        VmaAllocationInfo allocationInfo{};
+        if (vmaCreateBuffer(allocator, &bufferInfo, &allocInfo,
+                &dynamic.buffer, &dynamic.allocation, &allocationInfo) != VK_SUCCESS)
+        {
+            throw std::runtime_error("蒙皮动态顶点缓冲创建失败");
+        }
+        dynamic.mapped = allocationInfo.pMappedData;
+        if (dynamic.mapped == nullptr)
+            throw std::runtime_error("蒙皮动态顶点缓冲没有映射地址");
+    }
+
+    (void)commandPool;
+}
+
+void Model::destroyDynamicVertexBuffers()
+{
+    VmaAllocator allocator = device.getVmaAllocator();
+    for (DynamicVertexBuffer& dynamic : dynamicVertexBuffers)
+    {
+        if (dynamic.buffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(allocator, dynamic.buffer, dynamic.allocation);
+        }
+        dynamic.buffer = VK_NULL_HANDLE;
+        dynamic.allocation = VK_NULL_HANDLE;
+        dynamic.mapped = nullptr;
+    }
+}
+
+void Model::buildPoseMatrices(const std::vector<SkeletonNode>& nodes,
+                              std::vector<glm::mat4>& outJointMatrices) const
+{
+    const size_t nodeCount = nodes.size();
+    std::vector<glm::mat4> world(nodeCount, glm::mat4(1.0f));
+    std::vector<uint8_t> state(nodeCount, 0);
+
+    std::function<void(size_t)> computeWorld = [&](size_t index)
+    {
+        if (index >= nodeCount || state[index] == 2)
+            return;
+        if (state[index] == 1)
+        {
+            // 理论上 glTF 的节点层级不会成环；真成环时按单位矩阵兜底，
+            // 避免递归无限展开。
+            world[index] = glm::mat4(1.0f);
+            state[index] = 2;
+            return;
+        }
+
+        state[index] = 1;
+        const SkeletonNode& node = nodes[index];
+        const glm::mat4 local =
+            glm::translate(glm::mat4(1.0f), node.translation)
+            * glm::mat4_cast(node.rotation)
+            * glm::scale(glm::mat4(1.0f), node.scale);
+
+        if (node.parent >= 0 && static_cast<size_t>(node.parent) < nodeCount)
+        {
+            computeWorld(static_cast<size_t>(node.parent));
+            world[index] = world[static_cast<size_t>(node.parent)] * local;
+        }
+        else
+        {
+            world[index] = local;
+        }
+        state[index] = 2;
+    };
+
+    for (size_t i = 0; i < nodeCount; ++i)
+        computeWorld(i);
+
+    outJointMatrices.resize(jointNodes.size());
+    for (size_t slot = 0; slot < jointNodes.size(); ++slot)
+    {
+        const uint32_t nodeIndex = jointNodes[slot];
+        const glm::mat4 jointWorld = nodeIndex < nodeCount
+            ? world[nodeIndex]
+            : glm::mat4(1.0f);
+        outJointMatrices[slot] = jointWorld * inverseBindMatrices[slot];
+    }
+}
+
+void Model::skinVertices(const std::vector<SkeletonNode>& nodes,
+                         const std::vector<glm::mat4>& jointMatrices,
+                         std::vector<Vertex>& outVertices) const
+{
+    (void)nodes;
+    outVertices.resize(cpuVertices.size());
+    for (size_t i = 0; i < cpuVertices.size(); ++i)
+    {
+        const Vertex& base = cpuVertices[i];
+        Vertex skinned = base;
+
+        if (i >= skinJoints.size() || i >= skinWeights.size())
+        {
+            outVertices[i] = skinned;
+            continue;
+        }
+
+        const glm::uvec4& joints = skinJoints[i];
+        const glm::vec4& weights = skinWeights[i];
+        glm::vec3 position(0.0f);
+        glm::vec3 normal(0.0f);
+        float weightSum = 0.0f;
+
+        for (int k = 0; k < 4; ++k)
+        {
+            const float weight = weights[k];
+            if (weight <= 0.0f)
+                continue;
+            const uint32_t slot = joints[k];
+            if (slot >= jointMatrices.size())
+                continue;
+
+            const glm::mat4& jointMatrix = jointMatrices[slot];
+            position += weight * glm::vec3(jointMatrix * glm::vec4(base.position, 1.0f));
+            normal += weight * glm::mat3(jointMatrix) * base.normal;
+            weightSum += weight;
+        }
+
+        if (weightSum > 1e-6f)
+        {
+            skinned.position = position;
+            skinned.normal = glm::length(normal) > 1e-6f ? glm::normalize(normal) : base.normal;
+        }
+        outVertices[i] = skinned;
+    }
+}
+
+void Model::writeDynamicVertices(const std::vector<Vertex>& vertices)
+{
+    if (vertices.empty())
+        return;
+    DynamicVertexBuffer& dynamic = dynamicVertexBuffers[dynamicVertexBufferIndex];
+    if (dynamic.mapped == nullptr || dynamic.allocation == VK_NULL_HANDLE)
+        return;
+
+    const size_t copyCount = std::min(vertices.size(), static_cast<size_t>(vertexCount));
+    std::memcpy(dynamic.mapped, vertices.data(), sizeof(Vertex) * copyCount);
+    vmaFlushAllocation(device.getVmaAllocator(), dynamic.allocation, 0, VK_WHOLE_SIZE);
+}
+
+void Model::updateBoundsAndPicking(const std::vector<Vertex>& vertices,
+                                   const std::vector<uint32_t>& indices)
+{
+    computeBounds(vertices);
+    pickingPositions.clear();
+    pickingPositions.reserve(vertices.size());
+    for (const Vertex& vertex : vertices)
+        pickingPositions.push_back(vertex.position);
+    pickingIndices = indices;
+}
+
+void Model::applyAnimation(int clipIndex, float time)
+{
+    if (!isSkinned() || cpuVertices.empty())
+        return;
+
+    std::vector<SkeletonNode> posed = bindSkeletonNodes;
+    const bool hasClip = clipIndex >= 0 && static_cast<size_t>(clipIndex) < animations.size();
+    if (hasClip)
+    {
+        const AnimationClip& clip = animations[static_cast<size_t>(clipIndex)];
+        const float clampedTime = glm::clamp(time, 0.0f, clip.duration);
+        for (const AnimationChannel& channel : clip.channels)
+        {
+            if (channel.node >= posed.size() || channel.times.empty() || channel.values.empty())
+                continue;
+
+            const size_t timeCount = std::min(channel.times.size(), channel.values.size());
+            if (timeCount == 0)
+                continue;
+
+            size_t upper = 1;
+            while (upper < timeCount && channel.times[upper] < clampedTime)
+                ++upper;
+            const size_t lower = upper > 0 ? upper - 1 : 0;
+            upper = std::min(upper, timeCount - 1);
+
+            glm::vec4 value = channel.values[lower];
+            if (upper != lower && !channel.step)
+            {
+                const float t0 = channel.times[lower];
+                const float t1 = channel.times[upper];
+                const float span = std::max(t1 - t0, 1e-6f);
+                const float alpha = glm::clamp((clampedTime - t0) / span, 0.0f, 1.0f);
+                if (channel.path == AnimationPath::Rotation)
+                {
+                    const glm::quat a(channel.values[lower].w, channel.values[lower].x,
+                                      channel.values[lower].y, channel.values[lower].z);
+                    const glm::quat b(channel.values[upper].w, channel.values[upper].x,
+                                      channel.values[upper].y, channel.values[upper].z);
+                    const glm::quat q = glm::normalize(glm::slerp(a, b, alpha));
+                    value = glm::vec4(q.x, q.y, q.z, q.w);
+                }
+                else
+                {
+                    value = glm::mix(channel.values[lower], channel.values[upper], alpha);
+                }
+            }
+
+            SkeletonNode& target = posed[channel.node];
+            if (channel.path == AnimationPath::Translation)
+                target.translation = glm::vec3(value);
+            else if (channel.path == AnimationPath::Scale)
+                target.scale = glm::vec3(value);
+            else
+                target.rotation = glm::normalize(glm::quat(value.w, value.x, value.y, value.z));
+        }
+    }
+
+    std::vector<glm::mat4> jointMatrices;
+    buildPoseMatrices(posed, jointMatrices);
+
+    std::vector<Vertex> skinned;
+    skinVertices(posed, jointMatrices, skinned);
+    dynamicVertexBufferIndex = (dynamicVertexBufferIndex + 1) % dynamicVertexBuffers.size();
+    writeDynamicVertices(skinned);
 }
 
 std::shared_ptr<Model> Model::createModelFromFile(Device& device, VkCommandPool commandPool, const std::string& filepath)

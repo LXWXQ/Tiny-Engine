@@ -295,7 +295,7 @@ $tests = @(
   @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] editor mode selfTest PASS", "entries=20 conflicts=0", "[Editor] example presets selfTest PASS", "voxel-world meshes=9 bounds=9 parented=9") },
   @{ Name = "e9-runtime-character"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
-       MustContain = @("[Editor] runtime character selfTest PASS") },
+       MustContain = @("[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose | skinned=1 animations=18", "clips=Idle/Walk/Run/Jump/Jump_Idle/Jump_Land active=Idle") },
     @{ Name = "e6-asset-and-textures"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("[Editor] asset drop selfTest PASS", "[Editor] texture library selfTest PASS") },
     @{ Name = "b2-empty-state"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

@@ -1781,6 +1781,11 @@ void EditorLayer::setEditorMode(EditorState::EditorMode mode)
     }
 }
 
+void EditorLayer::startInRuntimeMode()
+{
+    setEditorMode(EditorState::EditorMode::Runtime);
+}
+
 void EditorLayer::enterRuntimeMode()
 {
     Scene* scene = state.services.scene;
@@ -1797,14 +1802,56 @@ void EditorLayer::enterRuntimeMode()
     state.runtimePitch = glm::clamp(camera.getEuler().x,
         -glm::radians(85.0f), glm::radians(85.0f));
 
-    // 出生点放在相机前方两米（脚底 = 相机 - 眼高），之后交给重力和地面吸附落地。
+    // 出生点优先取「相机视线打到地面的位置」，这样俯视地形/体素世界时
+    // 角色会站进画面里，而不是落在镜头前方两米的空气里一路坠落。
+    const float cosPitch = std::cos(state.runtimePitch);
+    const glm::vec3 viewForward{
+        std::sin(state.runtimeYaw) * cosPitch,
+        -std::sin(state.runtimePitch),
+        std::cos(state.runtimeYaw) * cosPitch
+    };
     glm::vec3 spawn = camera.getTranslation() +
         glm::vec3(std::sin(state.runtimeYaw), 0.0f, std::cos(state.runtimeYaw)) * 2.0f;
     spawn.y -= 1.62f;
+    bool spawnOnGround = false;
+    for (float distance = 2.0f; distance <= 180.0f; distance += 1.0f)
+    {
+        const glm::vec3 probe = camera.getTranslation() + viewForward * distance;
+        float ground = 0.0f;
+        entt::entity groundEntity = entt::null;
+        if (scene->sampleTerrainGroundHeightWorld(probe.x, probe.z, ground, &groundEntity) &&
+            probe.y <= ground + 0.1f && probe.y >= ground - 6.0f)
+        {
+            spawn = glm::vec3(probe.x, ground, probe.z);
+            spawnOnGround = true;
+            break;
+        }
+    }
+    if (!spawnOnGround)
+    {
+        float ground = 0.0f;
+        entt::entity groundEntity = entt::null;
+        if (scene->sampleTerrainGroundHeightWorld(spawn.x, spawn.z, ground, &groundEntity))
+        {
+            spawn.y = ground;
+            spawnOnGround = true;
+        }
+    }
 
     state.runtimeCharacter = scene->createCharacterEntity("Runtime Player", spawn);
+    // 初始朝向与进入运行模式时的视线一致，避免角色先面向镜头再被第一步转过去。
+    registry->get<TransformComponent>(state.runtimeCharacter).setEuler(
+        glm::vec3(0.0f, state.runtimeYaw, 0.0f));
+    std::cout << "[Runtime] spawn=" << spawn.x << "," << spawn.y << "," << spawn.z
+              << " onGround=" << (spawnOnGround ? 1 : 0) << std::endl;
+    const bool modelAttached = scene->attachCharacterModel(
+        state.runtimeCharacter,
+        std::string(TINY_RESOURCE_DIR) + "Models/Character/Character.glb",
+        0.5f);
     state.notify(LogEntry::Level::Info,
-        "运行模式：WASD 走、空格跳、中键拖动看、左键挖 / 右键放（F8 回编辑）");
+        modelAttached
+            ? "运行模式：WASD 走、Shift 跑、空格跳、中键拖动看、左键挖 / 右键放（F8 回编辑）"
+            : "运行模式：角色模型加载失败，使用空控制器（WASD 走、空格跳、F8 回编辑）");
 }
 
 void EditorLayer::exitRuntimeMode()
@@ -1836,8 +1883,22 @@ void EditorLayer::applyRuntimeCameraPose()
     if (feet == nullptr)
         return;
 
+    // 第三人称：相机沿“视线反方向”退到角色身后，焦点在胸口高度。
+    // 引擎相机的前方是 +w = (sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch))，
+    // pitch 为正表示向下看。
+    const glm::vec3 feetPosition = feet->getTranslation();
+    const glm::vec3 focus = feetPosition + glm::vec3(0.0f, 1.25f, 0.0f);
+    const float cosPitch = std::cos(state.runtimePitch);
+    const glm::vec3 viewForward{
+        std::sin(state.runtimeYaw) * cosPitch,
+        -std::sin(state.runtimePitch),
+        std::cos(state.runtimeYaw) * cosPitch
+    };
+    glm::vec3 cameraPosition = focus - viewForward * 4.0f;
+    cameraPosition.y = std::max(cameraPosition.y, feetPosition.y + 0.6f);
+
     TransformComponent& camera = scene->getCameraTransform();
-    camera.setTranslation(feet->getTranslation() + glm::vec3(0.0f, 1.62f, 0.0f));
+    camera.setTranslation(cameraPosition);
     camera.setEuler(glm::vec3(state.runtimePitch, state.runtimeYaw, 0.0f));
     scene->markTransformDirty(scene->getCameraEntity());
 }
@@ -1872,11 +1933,28 @@ void EditorLayer::updateRuntimeMode(float dt)
     }
 
     const bool jump = !io.WantTextInput && ImGui::IsKeyDown(ImGuiKey_Space);
+    // Win32/远程桌面下 Shift 可能只上报通用修饰键，不一定落到 LeftShift/RightShift
+    // 两个具体键上，所以 io.KeyShift 也要认。
+    const bool sprint = !io.WantTextInput &&
+        (io.KeyShift || ImGui::IsKeyDown(ImGuiKey_LeftShift) ||
+         ImGui::IsKeyDown(ImGuiKey_RightShift));
     CharacterMoveResult result;
-    if (scene->updateCharacterController(state.runtimeCharacter, move, jump, dt, result))
+    if (scene->updateCharacterController(state.runtimeCharacter, move, jump, dt, result,
+                                         sprint ? 1.35f : 0.55f))
         state.transformRefreshPending = true;
 
     applyRuntimeCameraPose();
+
+    static std::string lastRuntimeClip;
+    const auto* animation = registry->try_get<CharacterAnimationComponent>(state.runtimeCharacter);
+    if (animation != nullptr && animation->currentClipName != lastRuntimeClip)
+    {
+        lastRuntimeClip = animation->currentClipName;
+        const glm::vec3 feet = registry->get<TransformComponent>(state.runtimeCharacter).getTranslation();
+        std::cout << "[Runtime] clip=" << lastRuntimeClip
+                  << " feet=" << feet.x << "," << feet.y << "," << feet.z
+                  << " grounded=" << (result.grounded ? 1 : 0) << "\n";
+    }
 }
 
 void EditorLayer::enterPlay()
@@ -4169,6 +4247,25 @@ bool EditorLayer::selfTestWithScene()
             std::abs(state.runtimePitch - glm::clamp(enteredEuler.x,
                 -glm::radians(85.0f), glm::radians(85.0f))) < 1e-5f;
 
+        auto* animation = registry->try_get<CharacterAnimationComponent>(state.runtimeCharacter);
+        const bool skinned = animation != nullptr && animation->model != nullptr &&
+            animation->model->isSkinned();
+        const size_t animations = (animation != nullptr && animation->model != nullptr)
+            ? animation->model->getAnimations().size() : 0u;
+        // Quaternius 的 clip 名带 "CharacterArmature|" 前缀；加载时必须剥掉，
+        // 否则 findAnimation("Idle"/"Walk"/...) 全部落空，角色停在绑定姿态。
+        const int idleClip = (animation && animation->model)
+            ? animation->model->findAnimation("Idle") : -1;
+        const bool clipsFound = animation && animation->model &&
+            idleClip >= 0 &&
+            animation->model->findAnimation("Walk") >= 0 &&
+            animation->model->findAnimation("Run") >= 0 &&
+            animation->model->findAnimation("Jump") >= 0 &&
+            animation->model->findAnimation("Jump_Idle") >= 0 &&
+            animation->model->findAnimation("Jump_Land") >= 0;
+        const bool idleActive = animation && clipsFound &&
+            animation->currentClip == idleClip && animation->currentClipName == "Idle";
+
         TransformComponent* feet = registry->try_get<TransformComponent>(state.runtimeCharacter);
         if (feet == nullptr)
         {
@@ -4177,21 +4274,31 @@ bool EditorLayer::selfTestWithScene()
         }
         feet->setTranslation(glm::vec3(4.0f, 3.0f, 4.0f));
         applyRuntimeCameraPose();
-        const bool follows =
-            std::abs(scene->getCameraTransform().getTranslation().y - 4.62f) < 0.01f;
+        const glm::vec3 cameraPosition = scene->getCameraTransform().getTranslation();
+        const glm::vec3 toCamera = cameraPosition - feet->getTranslation();
+        const glm::vec3 flatForward{ std::sin(state.runtimeYaw), 0.0f, std::cos(state.runtimeYaw) };
+        const bool follows = cameraPosition.y > feet->getTranslation().y + 0.5f &&
+            glm::dot(toCamera, flatForward) < -0.1f;
 
         setEditorMode(EditorState::EditorMode::Edit);
         const bool restored = state.runtimeCharacter == entt::null &&
             glm::length(scene->getCameraTransform().getTranslation() - savedPosition) < 1e-4f;
-        if (!follows || !restored || !yawPreserved || !pitchPreserved)
+        if (!follows || !restored || !yawPreserved || !pitchPreserved || !skinned ||
+            animations != 18 || !clipsFound || !idleActive)
         {
             std::cerr << "[Editor] runtime character selfTest FAIL: follows=" << follows
                       << " restored=" << restored
                       << " yawPreserved=" << yawPreserved
-                      << " pitchPreserved=" << pitchPreserved << std::endl;
+                      << " pitchPreserved=" << pitchPreserved
+                      << " skinned=" << skinned
+                      << " animations=" << animations
+                      << " clipsFound=" << clipsFound
+                      << " idleActive=" << idleActive << std::endl;
             return false;
         }
         std::cout << "[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose"
+                  << " | skinned=" << (skinned ? 1 : 0) << " animations=" << animations
+                  << " clips=Idle/Walk/Run/Jump/Jump_Idle/Jump_Land active=Idle"
                   << std::endl;
     }
 

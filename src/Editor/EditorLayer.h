@@ -41,6 +41,8 @@ public:
 
     // 引擎构造完成后调用一次。services 里的指针必须活到 shutdown()。
     void initialize(const EngineServices& services, const std::string& defaultScenePath);
+    // --runtime-mode：启动后直接进入运行模式（CLI 截图/演练用）。
+    void startInRuntimeMode();
 
     // 每帧：处理编辑器输入（快捷键、播放状态），必须在 ImGui::NewFrame 之后调用。
     void beginFrame(float dt, bool viewportHovered);

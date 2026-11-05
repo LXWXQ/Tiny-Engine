@@ -782,3 +782,26 @@ updated: 2026-11-05
 **回归**：`b1-window-fit` 增加弹窗正文断言；全套验证日志 `build/validation/20261105-143428`（67 项引擎 + 2 项工具 = 69 项 ALL PASS，stderr 全 0）；DocCheck PASS。真实弹窗无法在无人值守测试里断言，保留无效 ICD 桌面手测。
 
 **已知边界**：弹窗只有“确定”，没有“打开日志/复制路径”按钮；没有交互桌面时 `MessageBoxW` 可能返回 0，此时错误仍完整写在日志里。启动失败后的进程清理与退出码不变。
+
+## 运行模式角色与骨骼动画（2026-11-05）
+
+**问题**：运行模式只有无形的角色控制器，没有可见模型；即便挂上 Quaternius `Character.glb`，还会出现全黑/灰白棋盘格、动画不切换、进入运行模式后坠出世界、WASD 方向与相机相反四个问题。
+
+**根因与实现**：
+- **纯色材质走棋盘格**：`src/Scene/GLTFLoader.cpp` 的 `materialAlbedoFallback` 默认值不是 0，没有 `baseColorTexture` 的材质被当成"缺贴图"走棋盘格。改为 0 后保留 `baseColorFactor` 纯色。
+- **动画名带前缀**：`CharacterArmature|Idle` 之类的前缀让状态机查不到 clip。导入时按最后一个 `|` 剥掉前缀，只保留 `Idle/Walk/Run/Jump/Jump_Idle/Jump_Land`。
+- **蒙皮模型进静态合批**：`src/Render/GeometrySystem.cpp` / `src/Render/SceneGpuBatch.cpp` 只按"有无动画"筛选不够，蒙皮模型必须用 `Model::isDynamic()` 排除，否则顶点被静态缓存、每帧不更新。
+- **出生点与 yaw**：`EditorLayer::enterRuntimeMode()` 沿相机视线 2..180m、步长 1m ray-march 找地面（`probe.y` 在 ground-6..ground+0.1）；找不到时退到相机前方 2m 并下移 1.62m。相机 yaw/pitch 本身是弧度，存进 `runtimeYaw/runtimePitch` 后不能再转一次；角色初始朝 `runtimeYaw`，WASD 跟随同一 yaw。
+
+**动画接入**：
+- `src/Scene/Model.{h,cpp}` 增加 CPU 蒙皮：骨架节点 world × inverse bind matrix，每顶点 4 joint 加权，3 个环形 host-visible 动态顶点缓冲，每帧 `vmaFlushAllocation` 后按环形索引提交。
+- `Scene::createCharacterEntity()` + `attachCharacterModel()` 建 `CharacterControllerComponent` / `CharacterAnimationComponent`；`updateCharacterAnimation()` 状态机优先级 Jump_Land > Jump > Jump_Idle > Run > Walk > Idle，落地判定 `previousVerticalVelocity < -1` 触发 0.45s 落地动作。
+- 第三人称相机焦点为脚底 +1.25m、后撤 4m、不低于脚底 +0.6m；中键 0.01 rad/px、pitch ±85°；Shift 跑，走 0.55、跑 1.35 倍速（相对 6m/s 基础速度）。
+- `--runtime-mode` 可启动即进入运行模式；`src/Render/GeometrySystem.cpp` / `SceneGpuBatch.cpp` 跳过动态模型。
+- **加载器审计重构**：`loadGLTFModel` 原本一个函数承担材质/骨架/几何/动画，圈复杂度 112 触发审计 blocker；拆成 `buildMaterialTable` / `buildSkeletonData` / `appendPrimitive` / `parseAnimations` 等匿名命名空间 helper，`loadGLTFModel` 只做编排，行为不变，`code_audit scope=diff` 0 blocker。
+
+**可观测**：控制台依次出现 `[Character] model attached | ... skinned=1 animations=18 scale=0.5`、`[Runtime] spawn=... onGround=1`、按 W/Shift+W/Space 时 `[Runtime] clip=Walk/Run/Jump`；`--selftest 20 --empty-scene` 输出 `[Editor] runtime character selfTest PASS | ... clips=Idle/Walk/Run/Jump/Jump_Idle/Jump_Land active=Idle`。
+
+**回归**：`e9-runtime-character`（`tools/Validate.ps1`，断言 `skinned=1`、`animations=18`、6 个 clip 与 `active=Idle`）；全套 **69 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-155458`；DocCheck PASS（documents=66）。
+
+**已知边界**：单角色、CPU 蒙皮、无动画混合/事件/IK/root motion；角色只绕 Y 轴转；出生点依赖地形高度采样，悬空平台场景仍需手动摆位。

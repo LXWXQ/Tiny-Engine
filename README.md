@@ -73,10 +73,11 @@ cmake --build build --config Debug
 | **离屏视口** | 3D 渲染到纹理后作为 ImGui 图片嵌入面板；相机纵横比按视口算 | [viewport](docs/90-editor/viewport.md) |
 | **程序化地形** | 257² 默认精度；单实体/独立 chunk 流送；chunk 区域索引查询；4 层 albedo/normal、height/roughness 打包纹理、最多 4 个 Set2 材质集（按需外部 16 PNG/程序化回退、materialSetIndex 序列化、按批次重绑）、Surface Style、height/slope 混合（高度层权重用全局 `baseHeight`/`heightScale`，流送 chunk 边界无材质断层）、Set2 材质；chunk/LOD 子网格、逐块剔除、滞回选层、抖动 cross-fade、可选裙边回退、稳定帧 indirect 合批、GPU compute 高度场、拓扑级 LOD 缝合、GPU selection/indirect count；单 chunk GPU 顶点/索引组装 + device-local Model 接管 + 4 槽异步 GPU mesh submit/poll + worker picking mirror，多 chunk CPU fallback；CPU 高度采样/射线查询、kinematic 角色控制器（贴地/重力/跳跃/step/slope）、区域限定运行期雕刻（Alt+LMB；不写 JSON）+ GPU/JobSystem 异步 Generate + 可撤销重建 + 场景存读 | [terrain](docs/30-systems/terrain.md) |
 | **级联阴影** | 3 级 CSM（每级 2048²，2D 数组 3 层）、纹素吸附、AABB 8 角点剔除、3x3 PCF、法线偏移 + 斜率 bias；`--no-shadows` 关掉。**默认场景阴影偏淡**：IBL 占主导，方向光只占约 5% 亮度（室内/压低环境光后非常明显） | [shadow](docs/20-pipeline/shadow.md) |
+| **运行模式角色** | 第三人称角色 + 骨骼动画：`Resources/Models/Character/Character.glb`（Quaternius，CC0，4 蒙皮网格 / 29 骨骼 / 18 动画），CPU 蒙皮 + 3 帧环形动态顶点缓冲，Idle/Walk/Run/Jump/Jump_Idle/Jump_Land 状态机，视线地面 ray-march 出生，`Shift` 跑、`Space` 跳，`--runtime-mode` 启动直达 | [character](docs/30-systems/character.md) |
 | **方块体素** | 32³ chunk、面剔除 + 贪心合并 + 顶点 AO、程序化 512 图集（每格 64px 内容 + 32px edge-clamp gutter，UV 编码图块 id）、Amanatides-Woo DDA 拾取、挖/放（Alt 挖 / Alt+Shift 放；Ctrl+左键仍是多选）与逐格撤销、`queryGroundAtWorld` 叠加体素分支让角色站上方块（运行模式接管角色：`WASD` 走、`Space` 跳、中键拖动看）；`--voxel-world [r]` 启动世界（半径 1..12，几何在 JobSystem 后台生成、逐帧上传）；编辑/运行模式分离（`F8`，运行模式左键挖、右键放）；场景存档只记 seed + 差分区（改动格）；玻璃走独立 `GlassPass`（Lighting 后、Bloom 前，按面质心排序混合，glass-only chunk 免 Model），`--voxel-glass-demo` 摆叠放场景 | [voxel](docs/30-systems/voxel.md) |
 | 调试剖析基础设施 | `--build-info` / `--gpu-timing` / `--screenshot` / 验证层增强 / RenderDoc / Tracy | [debug](docs/60-debug-profiling/README.md) |
 
-**已知边界**：无 SSR / 自动曝光 / 点光源阴影 / 动画 / 音频；TAA 只有相机重投影、没有运动向量（物体运动不会单独补偿）；体素存档只记 seed + 差分区（改动格），无 LOD（面剔除已升级为贪心合并 + 顶点 AO，贴图集为程序化生成）；跨队列资源走 `CONCURRENT` sharing；
+**已知边界**：无 SSR / 自动曝光 / 点光源阴影 / 音频；角色动画是单角色 CPU 蒙皮，无动画混合、动画事件、IK 或动画编辑器；TAA 只有相机重投影、没有运动向量（物体运动不会单独补偿）；体素存档只记 seed + 差分区（改动格），无 LOD（面剔除已升级为贪心合并 + 顶点 AO，贴图集为程序化生成）；跨队列资源走 `CONCURRENT` sharing；
 glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`docs/70-status/known-limits.md`](docs/70-status/known-limits.md)。
 
 ---
@@ -97,6 +98,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | `--material-stress` | 材质槽位延迟回收压测 |
 | `--config-test` | 配置迁移 / 损坏保护自检 |
 | `--editor` | 以场景编辑器模式启动（默认关闭，运行时行为完全不变） |
+| `--runtime-mode` | 编辑器启动后直接进入运行模式（第三人称角色 + 动画；仅编辑器构建有效） |
 | `--voxel-world [r]` / `--voxel-glass-demo` | 生成方块体素世界（半径 1..12）/ 摆交叉玻璃墙做透明排序目测 |
 | `--terrain-test` | 启动时创建持久地形 + 流送/雕刻/角色 smoke，校验 GPU 高度场、GPU mesh parity、GPU selection 过渡、区域限定重建与截图路径（常配合 `--empty-scene --selftest`） |
 

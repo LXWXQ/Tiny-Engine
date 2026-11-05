@@ -5,7 +5,7 @@ type: meta
 scope: docs/
 read-when: 第一次接触本项目、或要新增/移动/删除文档
 size: ~200 行
-updated: 2026-10-31
+updated: 2026-11-05
 ---
 # 文档系统总纲
 
@@ -84,7 +84,8 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     │   ├── config.md            EngineConfig v2 / 迁移 / 原子写
     │   ├── imgui.md             面板 / 后端 / ASCII 约束
     │   ├── terrain.md           程序化地形：参数 / 生成 / 渲染 / 存读
-    │   └── terrain-materials.md 地形 Set2：四层 PBR / 材质集 / Surface Style
+    │   ├── terrain-materials.md 地形 Set2：四层 PBR / 材质集 / Surface Style
+    │   └── character.md         运行模式角色：glTF 蒙皮 / 动画状态机 / CPU skinning
     ├── 40-build/
     │   ├── README.md
     │   ├── dependencies.md      8 个固定版本 / 目录布局 / setup 脚本

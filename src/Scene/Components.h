@@ -331,6 +331,27 @@ struct CharacterMoveResult
     glm::vec3 position{ 0.0f };
 };
 
+// 运行模式角色的骨骼动画状态机。Scene::updateCharacterController 末尾推进，
+// 根据水平速度/离地状态在 Idle/Walk/Run/Jump/Jump_Idle/Jump_Land 之间切换。
+struct CharacterAnimationComponent
+{
+    std::shared_ptr<Model> model;
+    int currentClip = -1;
+    float time = 0.0f;
+    float playbackSpeed = 1.0f;
+    bool loop = true;
+    float landTimer = 0.0f;
+    std::string currentClipName;
+
+    // 模型里的 clip 名（Quaternius 的命名）。找不到时状态机退化为绑定姿态。
+    std::string idleClip = "Idle";
+    std::string walkClip = "Walk";
+    std::string runClip = "Run";
+    std::string jumpClip = "Jump";
+    std::string jumpIdleClip = "Jump_Idle";
+    std::string jumpLandClip = "Jump_Land";
+};
+
 struct BoundsComponent
 {
     // B-06: bounds are private as well. setLocal() is the only mutation path

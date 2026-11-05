@@ -3663,6 +3663,58 @@ entt::entity Scene::createCharacterEntity(const std::string& name,
     return entity;
 }
 
+bool Scene::attachCharacterModel(entt::entity entity,
+                                 const std::string& glbPath,
+                                 float uniformScale)
+{
+    if (!registry.valid(entity) || glbPath.empty() || !device)
+        return false;
+
+    tiny::GLTFLoadContext ctx;
+    ctx.device = device;
+    ctx.commandPool = commandPool;
+    ctx.materialSystem = &materialSystem;
+    ctx.descriptorManager = descriptorManager;
+
+    const std::shared_ptr<Model> model = tiny::loadGLTFModel(ctx, glbPath);
+    if (!model || !model->isSkinned())
+    {
+        std::cerr << "[Character] model attach failed | path=" << glbPath << "\n";
+        return false;
+    }
+
+    std::shared_ptr<Model> previousModel;
+    if (const auto* previousMesh = registry.try_get<MeshComponent>(entity))
+        previousModel = previousMesh->model;
+    registry.emplace_or_replace<MeshComponent>(entity, MeshComponent{ model });
+    retireModel(previousModel);
+
+    auto& transform = registry.get<TransformComponent>(entity);
+    const float scale = uniformScale > 0.0f ? uniformScale : 1.0f;
+    transform.setScale(glm::vec3(scale));
+
+    CharacterAnimationComponent animation;
+    animation.model = model;
+    animation.currentClip = model->findAnimation(animation.idleClip);
+    if (animation.currentClip >= 0)
+    {
+        animation.currentClipName = animation.idleClip;
+        model->applyAnimation(animation.currentClip, 0.0f);
+    }
+    registry.emplace_or_replace<CharacterAnimationComponent>(entity,
+                                                            std::move(animation));
+
+    setModelBounds(registry, entity, model, &dirtySpatialEntities);
+    attachDirtyTracking(entity);
+    markTransformDirty(entity);
+    refreshTransformsAndVisibility();
+
+    std::cout << "[Character] model attached | " << glbPath
+              << " | skinned=1 animations=" << model->getAnimations().size()
+              << " scale=" << scale << "\n";
+    return true;
+}
+
 bool Scene::queryGroundAtWorld(float worldX, float worldZ, float& outHeight,
                                entt::entity& outEntity,
                                float* outSlopeDegrees) const
@@ -3760,11 +3812,90 @@ bool Scene::sampleTerrainGroundHeightWorld(float worldX, float worldZ,
     return found;
 }
 
+namespace
+{
+void updateCharacterAnimation(entt::registry& registry, entt::entity entity,
+                              const CharacterControllerComponent& controller,
+                              float horizontalSpeed, bool justLanded, float dt)
+{
+    auto* animation = registry.try_get<CharacterAnimationComponent>(entity);
+    if (!animation || !animation->model)
+        return;
+
+    if (justLanded)
+        animation->landTimer = 0.45f;
+    if (animation->landTimer > 0.0f)
+        animation->landTimer = std::max(0.0f, animation->landTimer - dt);
+
+    Model& model = *animation->model;
+    std::string clipName;
+    bool clipLoops = true;
+    if (animation->landTimer > 0.0f && model.findAnimation(animation->jumpLandClip) >= 0)
+    {
+        clipName = animation->jumpLandClip;
+        clipLoops = false;
+    }
+    else if (!controller.grounded)
+    {
+        if (controller.verticalVelocity > 0.2f)
+        {
+            clipName = animation->jumpClip;
+            clipLoops = false;
+        }
+        else
+        {
+            clipName = animation->jumpIdleClip;
+        }
+    }
+    else if (horizontalSpeed > 5.0f)
+    {
+        clipName = animation->runClip;
+    }
+    else if (horizontalSpeed > 0.2f)
+    {
+        clipName = animation->walkClip;
+    }
+    else
+    {
+        clipName = animation->idleClip;
+    }
+
+    const int clip = model.findAnimation(clipName);
+    if (clip < 0)
+        return;
+
+    if (clip != animation->currentClip)
+    {
+        animation->currentClip = clip;
+        animation->currentClipName = clipName;
+        animation->time = 0.0f;
+    }
+    animation->loop = clipLoops;
+
+    const float duration = model.getAnimationDuration(clip);
+    animation->time += dt * animation->playbackSpeed;
+    if (duration > 0.0f)
+    {
+        if (clipLoops)
+            animation->time = std::fmod(animation->time, duration);
+        else
+            animation->time = std::min(animation->time, duration);
+    }
+    else
+    {
+        animation->time = 0.0f;
+    }
+
+    model.applyAnimation(clip, animation->time);
+}
+} // namespace
+
 bool Scene::updateCharacterController(entt::entity entity,
                                       const glm::vec3& worldMoveDirection,
                                       bool jump,
                                       float dt,
-                                      CharacterMoveResult& outResult)
+                                      CharacterMoveResult& outResult,
+                                      float speedMultiplier)
 {
     outResult = {};
     if (!registry.valid(entity) || !std::isfinite(dt) || dt <= 0.0f)
@@ -3777,6 +3908,10 @@ bool Scene::updateCharacterController(entt::entity entity,
 
     dt = std::min(dt, 0.1f);
     glm::vec3 position = transform->getTranslation();
+    const glm::vec3 startPosition = position;
+    const bool wasGrounded = controller->grounded;
+    const float previousVerticalVelocity = controller->verticalVelocity;
+    speedMultiplier = std::max(speedMultiplier, 0.0f);
 
     float groundHeight = 0.0f;
     entt::entity groundEntity = entt::null;
@@ -3796,8 +3931,8 @@ bool Scene::updateCharacterController(entt::entity entity,
         controller->grounded = false;
     }
 
-    const float targetX = position.x + move.x * controller->moveSpeed * dt;
-    const float targetZ = position.z + move.z * controller->moveSpeed * dt;
+    const float targetX = position.x + move.x * controller->moveSpeed * speedMultiplier * dt;
+    const float targetZ = position.z + move.z * controller->moveSpeed * speedMultiplier * dt;
 
     float targetGroundHeight = 0.0f;
     entt::entity targetGroundEntity = entt::null;
@@ -3885,6 +4020,21 @@ bool Scene::updateCharacterController(entt::entity entity,
     }
 
     transform->setTranslation(position);
+
+    const float horizontalSpeed =
+        glm::length(glm::vec2(position.x - startPosition.x,
+                              position.z - startPosition.z)) / dt;
+    if (glm::dot(move, move) > 1.0e-8f && horizontalSpeed > 0.05f)
+    {
+        // 角色只绕 Y 轴转向；前向为 +Z，和 glTF 角色默认朝向一致（截图会复核）。
+        transform->setEuler(glm::vec3(0.0f, std::atan2(move.x, move.z), 0.0f));
+    }
+
+    const bool justLanded = !wasGrounded && controller->grounded &&
+                            previousVerticalVelocity < -1.0f;
+    updateCharacterAnimation(registry, entity, *controller, horizontalSpeed,
+                             justLanded, dt);
+
     outResult.grounded = controller->grounded;
     outResult.blocked = blocked;
     outResult.groundHeight = currentGround;

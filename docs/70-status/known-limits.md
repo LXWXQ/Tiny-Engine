@@ -19,9 +19,10 @@ updated: 2026-11-05
 
 ## 2. 渲染特性缺失
 
-无：SSR、自动曝光、超分、动画、骨骼、粒子（`ExternalInstance` 入口已就位，无生产方）、
+无：SSR、自动曝光、超分、通用动画/骨骼系统、粒子（`ExternalInstance` 入口已就位，无生产方）、
 点光源阴影（方向光 CSM 已做，只支持单方向光、级联固定 3 级）、体积光、通用透明排序（仅体素玻璃有独立 pass）、通用 GPU LOD/网格组装。
 后处理抗锯齿已有 TAA，但只有相机重投影、没有运动向量，物体自身运动不会被单独补偿。
+骨骼动画目前只服务运行模式的单角色（CPU 蒙皮，见 [character](../30-systems/character.md)），不是通用动画系统。
 地形单 chunk 子集已接 GPU culling、indirect count 与 GPU 顶点/索引组装；体素走独立 `Model` 路径（无合批、无 LOD）。
 体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。
 
@@ -45,7 +46,7 @@ updated: 2026-11-05
 
 ## 5. 内容与资产
 
-- `3rdParty/` 与 `Resources/` **不入库**，需 `SetupDependencies.ps1` + 手动准备。
+- `3rdParty/` 与 `Resources/` 的绝大部分 **不入库**，需 `SetupDependencies.ps1` + 手动准备；例外是运行模式角色 `Resources/Models/Character/`（CC0，随仓库提供）。
 - 当前场景固定为 Sponza + 一个测试球 + 天空盒，没有场景描述格式。
 - 材质只支持 4 张 PBR 贴图（albedo / normal / metallic / roughness），
   无法线贴图实际采样、无 emissive / AO 的独立通道（emissive 贴在 albedo 里）。
@@ -67,6 +68,16 @@ updated: 2026-11-05
   换成 docking 分支后 `drawPanels()` 里的布局分支可以整段删掉。
 - **实体 ID 不稳定**：删除后撤销，实体 ID 会变。任何跨帧缓存 `entt::entity`
   的地方（选中态除外，它会被显式更新）都不能假设 ID 稳定。
+
+## 角色与动画（E9）
+
+- **单角色**：运行模式只有一个角色；没有 NPC / 多角色/多骨架管理。
+- **CPU 蒙皮**：每帧在 CPU 上重算全部顶点并写动态缓冲；角色顶点数量上来后必须改成 GPU skinning。
+- **无动画混合**：Idle/Walk/Run/Jump 之间硬切，没有 cross-fade、分层、遮罩；切 clip 时 time 归零，快速来回按键会有轻微跳变。
+- **无动画事件 / IK / root motion**：不能从动画里触发逻辑或提取位移；位移完全由 `CharacterControllerComponent` 决定。
+- **状态机阈值固定**：Run 需要水平速度 > 5，Walk > 0.2；默认移速 6 × 运行倍率 1.35 才进 Run，改移速/倍率时要同步检查阈值。
+- **出生点依赖地面查询**：视线 2..180m 内找不到可站立面时，退化为相机前方 2m + 重力；相机完全朝天或脚下是空洞时角色会先下落。
+- **资源固定**：`Resources/Models/Character/Character.glb`（Quaternius Platformer Game Pack，CC0）；替换模型时必须保留 Idle/Walk/Run/Jump/Jump_Idle/Jump_Land 这 6 个 clip 短名，或改 `CharacterAnimationComponent` 的默认名。
 
 ## 视口交互（D-10）
 

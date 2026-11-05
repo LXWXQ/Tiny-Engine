@@ -213,17 +213,20 @@ updated: 2026-11-05
 
 **问题**：运行模式只挡住了选中，但相机仍是编辑器相机，WASD 不动，所谓「运行」只是能挖方块。
 
-**实现**：`EditorState` 增加 `runtimeCharacter / runtimeSavedCameraPosition / runtimeYaw / runtimePitch`；
-`EditorLayer::enterRuntimeMode()` 在相机前方 2 米生成不可见角色并保存相机位姿，`updateRuntimeMode(dt)`
-用中键拖动改 yaw/pitch、`WASD`+`Space` 驱 `updateCharacterController`，`applyRuntimeCameraPose()`
-把相机放到「脚底 + 1.62 米眼高」；`exitRuntimeMode()` 销毁角色并还原相机。`setEditorMode` 首尾挂钩，
-`beginFrame` 在 `updatePlayState` 之后调用；`queryGroundAtWorld` 是私有接口，出生点放在相机前方 2 米、
-靠重力落地。`runtimeYaw / runtimePitch` 与相机 euler 一样存**弧度**，鼠标灵敏度 `0.01 rad/px`、
-pitch 夹在 ±85°，移动基为 `forward=(sin yaw,0,cos yaw)` / `right=(cos yaw,0,-sin yaw)`。
+**初版实现**：`EditorState` 增加 `runtimeCharacter / runtimeSavedCameraPosition / runtimeYaw / runtimePitch`；
+`EditorLayer::enterRuntimeMode()` 保存相机位姿并生成角色，`updateRuntimeMode(dt)` 用中键拖动改 yaw/pitch、
+`WASD`+`Space` 驱 `updateCharacterController`；`exitRuntimeMode()` 销毁角色并还原相机。`setEditorMode` 首尾挂钩，
+`beginFrame` 在 `updatePlayState` 之后调用。`runtimeYaw / runtimePitch` 与相机 euler 一样存**弧度**，
+鼠标灵敏度 `0.01 rad/px`、pitch 夹在 ±85°，移动基为 `forward=(sin yaw,0,cos yaw)` / `right=(cos yaw,0,-sin yaw)`。
 
-**可观测**：`[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose`。
+**2026-11-05 扩展**：出生点改为沿视线 2..180m ray-march 找地面（失败才退到前方 2m + 重力）；
+运行模式挂 Quaternius `Character.glb`（缩放 0.5，CPU 蒙皮），第三人称相机改为焦脚底 +1.25m、后撤 4m；
+Shift 跑，状态机 `Idle/Walk/Run/Jump/Jump_Idle/Jump_Land`，并修掉纯色材质棋盘格、动画名前缀、
+蒙皮模型进静态合批、yaw 二次转弧度四类问题。
 
-**回归**：`e9-runtime-character`（编辑/运行切换后相机跟随与还原）。
+**可观测**：`[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose | skinned=1 animations=18 clips=... active=Idle`。
+
+**回归**：`e9-runtime-character`（出生点、模型、6 个 clip、相机跟随与还原）；全套验证日志 `build/validation/20261105-154226`。
 
 ## E10：帮助 → 示例（预设场景一键加载）
 

@@ -790,6 +790,9 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
                 collectView.get<WorldTransformComponent>(entity);
             if (!mesh.model || !worldTransform.valid || mesh.model->getIndexCount() == 0)
                 continue;
+            // 蒙皮模型每帧改写顶点，烘焙进静态合并缓冲会永远停在某一帧。
+            if (mesh.model->isDynamic())
+                continue;
             const RenderTagComponent* tag =
                 frameInfo.registry.try_get<RenderTagComponent>(entity);
             if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
@@ -805,6 +808,8 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
         for (const ExternalInstance& external : externalInstances)
         {
             if (external.model == nullptr || external.model->getIndexCount() == 0)
+                continue;
+            if (external.model->isDynamic())
                 continue;
             if (external.subMeshIndex >= external.model->getSubMeshes().size())
                 continue;

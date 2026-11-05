@@ -180,11 +180,13 @@ for (panel : panels) {
 
 运行模式的具体操作（E9）：
 
-- `WASD` 走、`Space` 跳，角色是 `Scene::createCharacterEntity` 建出的不可见胶囊，落地/上台阶由 `updateCharacterController` 负责；
+- 进入时从相机沿视线 ray-march（2..180m）找地面，角色落在命中点；找不到才退化为相机前方 2m + 重力；
+- `WASD` 走、`Shift` 跑、`Space` 跳；控制器实体由 `Scene::createCharacterEntity` 建，外观由 `attachCharacterModel` 挂 `Character.glb`（缩放 0.5），落地/上台阶由 `updateCharacterController` 负责；
+- 动画状态机在 Idle / Walk / Run / Jump / Jump_Idle / Jump_Land 之间切换，详见 [character](../30-systems/character.md)；
 - 按住鼠标中键拖动看四周（左右改 yaw、上下改 pitch，pitch 夹在 ±85 度）；
 - 视口左键挖方块（或跑地形笔刷）、右键在命中面放方块，笔刷逻辑与编辑模式完全同一份代码；
-- 相机 = 角色脚底 + 1.62 米眼高，`F8` 回编辑模式时销毁角色并把相机还原到进入前的位姿；
-- 自检打印 `[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose`。
+- 第三人称相机：焦点在角色脚底 + 1.25m，相机退到焦点后方 4m；`F8` 回编辑模式时销毁角色并把相机还原到进入前的位姿；
+- 自检打印 `[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose`，并附带 `skinned=1 animations=18 clips=... active=Idle`。
 
 ## 撤销历史（E4-d）
 

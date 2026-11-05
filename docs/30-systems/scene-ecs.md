@@ -28,6 +28,7 @@ updated: 2026-11-01
 | `TerrainStreamingComponent` | 流送 manager：chunk 模板、半径、每帧加载预算 |
 | `TerrainChunkComponent` | 运行期 chunk 标记与 chunk 坐标；不逐项序列化 |
 | `CharacterControllerComponent` | kinematic 角色：半径/高度/移速/跳跃/重力/坡度/step/snap；`verticalVelocity`/`grounded`/`groundEntity` 为运行期状态 |
+| `CharacterAnimationComponent` | 运行模式角色的动画状态机：当前 clip / time / loop / landTimer + 6 个 clip 名（默认 Idle/Walk/Run/Jump/Jump_Idle/Jump_Land） |
 
 ## 2. Transform 层级
 

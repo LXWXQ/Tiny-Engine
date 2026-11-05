@@ -557,6 +557,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         // indirect draw）。天空盒、网格辅助线、地形仍然留在下面的 CPU 路径。
         if (sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
             !isSkybox && !isGrid && !isTerrain &&
+            !mesh->model->isDynamic() &&
             mesh->model->getIndexCount() > 0)
         {
             continue;

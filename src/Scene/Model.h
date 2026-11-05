@@ -6,9 +6,11 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
 
+#include <array>
 #include <vector>
 #include <memory>
 #include <string>
@@ -114,6 +116,43 @@ struct SubMesh
     uint32_t terrainSurfaceIndexCount = 0;
 };
 
+// ---- 骨骼动画（CPU 蒙皮）----
+//
+// 引擎的普通管线只认 Vertex，不认 joints/weights。为了不改顶点输入布局和
+// 所有渲染 Pass，蒙皮在 CPU 上做：每帧把绑定姿态的顶点变换到当前姿势，
+// 写进 host-visible 的动态顶点缓冲，再走原有 bind/draw 路径。
+// 代价是角色顶点每帧要过一遍矩阵，但一个角色只有几千个顶点，完全可接受。
+enum class AnimationPath
+{
+    Translation = 0,
+    Rotation,
+    Scale,
+};
+
+struct AnimationChannel
+{
+    uint32_t node = 0;                 // glTF node index
+    AnimationPath path = AnimationPath::Translation;
+    bool step = false;                 // STEP 采样；其余按 LINEAR
+    std::vector<float> times;          // 秒，升序
+    std::vector<glm::vec4> values;     // translation/scale 用 xyz，rotation 用 xyzw
+};
+
+struct AnimationClip
+{
+    std::string name;
+    float duration = 0.0f;
+    std::vector<AnimationChannel> channels;
+};
+
+struct SkeletonNode
+{
+    glm::vec3 translation{ 0.0f };
+    glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::vec3 scale{ 1.0f };
+    int32_t parent = -1;
+};
+
 class Model
 {
 public:
@@ -123,6 +162,19 @@ public:
         std::vector<uint32_t> indices;
         std::vector<SubMesh>  subMeshes;
         void loadModel(const std::string& filepath);
+
+        // 蒙皮数据（与 vertices 一一对应）。没有蒙皮的模型留空。
+        std::vector<glm::uvec4> skinJoints;
+        std::vector<glm::vec4>  skinWeights;
+
+        // 骨架：节点按 glTF node index 存，parent=-1 表示根。
+        std::vector<SkeletonNode> skeleton;
+
+        // 参与蒙皮的 node index；inverseBindMatrices 与它一一对应。
+        std::vector<uint32_t> jointNodes;
+        std::vector<glm::mat4> inverseBindMatrices;
+
+        std::vector<AnimationClip> animations;
     };
 
     // 顶点/索引缓冲现在是 Device-Local，需要 commandPool 做 staging 上传
@@ -155,6 +207,19 @@ public:
     void bind(VkCommandBuffer commandBuffer) const;
     void draw(VkCommandBuffer commandBuffer) const;                                 // 画全部子网格
     void drawSubMesh(VkCommandBuffer commandBuffer, const SubMesh& subMesh) const;  // 只画一个子网格
+
+    // ---- 骨骼动画 ----
+    bool isSkinned() const { return !jointNodes.empty(); }
+    // 动态模型不能进静态 GPU 合批：它的顶点每帧都在变。
+    bool isDynamic() const { return isSkinned(); }
+
+    const std::vector<AnimationClip>& getAnimations() const { return animations; }
+    int findAnimation(const std::string& name) const;
+    float getAnimationDuration(int clipIndex) const;
+
+    // 按 clip 的时间采样骨架，CPU 蒙皮后写入动态顶点缓冲。
+    // clipIndex < 0 或无效时回到绑定姿态。
+    void applyAnimation(int clipIndex, float time);
 
     // ---- CPU 侧拾取几何（编辑器点选用）----
     //
@@ -231,6 +296,18 @@ private:
     void computeBounds(const std::vector<Vertex>& vertices);
     void computeUvBounds(const std::vector<Vertex>& vertices);
 
+    void initializeSkinning(VkCommandPool commandPool, const Builder& builder);
+    void createDynamicVertexBuffer(VkCommandPool commandPool);
+    void destroyDynamicVertexBuffers();
+    void buildPoseMatrices(const std::vector<SkeletonNode>& nodes,
+                           std::vector<glm::mat4>& outJointMatrices) const;
+    void skinVertices(const std::vector<SkeletonNode>& nodes,
+                      const std::vector<glm::mat4>& jointMatrices,
+                      std::vector<Vertex>& outVertices) const;
+    void writeDynamicVertices(const std::vector<Vertex>& vertices);
+    void updateBoundsAndPicking(const std::vector<Vertex>& vertices,
+                                const std::vector<uint32_t>& indices);
+
     Device& device;
 
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
@@ -260,4 +337,24 @@ private:
     glm::vec2 uvMin{ 0.0f };
     glm::vec2 uvMax{ 0.0f };
     bool uvValid = false;
+
+    // ---- 蒙皮 ----
+    // 绑定姿态的网格局部顶点。cpuVertices 仍然保留这份数据（供序列化/调试），
+    // 动态顶点缓冲初始时也由它蒙皮得到。
+    std::vector<glm::uvec4> skinJoints;
+    std::vector<glm::vec4>  skinWeights;
+    std::vector<SkeletonNode> bindSkeletonNodes;
+    std::vector<uint32_t> jointNodes;
+    std::vector<glm::mat4> inverseBindMatrices;
+    std::vector<AnimationClip> animations;
+
+    struct DynamicVertexBuffer
+    {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        void* mapped = nullptr;
+    };
+    // 3 个环：GPU 可能还在读上一帧/上上帧的顶点缓冲。
+    std::array<DynamicVertexBuffer, 3> dynamicVertexBuffers{};
+    uint32_t dynamicVertexBufferIndex = 0;
 };

@@ -5,7 +5,7 @@ type: validation
 scope: main.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
 size: ~180 行
-updated: 2026-11-02
+updated: 2026-11-05
 ---
 
 # 命令行参数全表
@@ -25,6 +25,8 @@ updated: 2026-11-02
 | `--hidden` | 不创建可见窗口；自检/截图/回归这类无人值守运行**默认开启**。窗口仍有真实客户区尺寸，交换链、渲染与截图不受影响 |
 | `--minimized` | 启动后最小化窗口（先隐藏创建，渲染器就绪后再 `glfwShowWindow` + `glfwIconifyWindow`，避免启动瞬间抢焦点）；最小化会命中 `handleWindowMaintenance()` 的跳过分支、不出帧，只适合看日志。与自检/截图等无人值守运行组合时自动退化为 `--hidden` |
 | `--visible` | 强制显示窗口，覆盖 `--hidden` 的默认行为（交互调试 / RenderDoc 抓帧时用） |
+| `--editor` | 以场景编辑器模式启动；`TinyEditor.exe` 默认开启，`TinyEngine.exe` 需显式传 |
+| `--runtime-mode` | 编辑器启动后直接进入运行模式（第三人称角色 + 动画）；仅编辑器构建有效，普通渲染开关不变 |
 
 ## 2. Pass 开关与场景
 

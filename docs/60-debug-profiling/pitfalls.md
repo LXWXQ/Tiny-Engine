@@ -514,3 +514,11 @@ vec2 sampleSphericalMap(vec3 v) {
   `heightMixed=0` 才说明没有混入 per-chunk 范围。
 - **判据**：同一机位下合批与 `--no-terrain-batch` 都不应出现沿 chunk 边界的
   色块；若只有非合批路径出问题，检查 `GeometrySystem` 的 push 是否漏改。
+
+## 35. 角色动画接入：四个看起来无关的坑
+
+- **角色全黑 / 灰白棋盘格**：glTF 材质没有 `baseColorTexture` 时，`materialAlbedoFallback` 必须是 0，否则渲染走"无贴图 fallback"的棋盘格。角色是纯 `baseColorFactor` 材质，最容易踩。
+- **动画一个都不切**：Blender/Quaternius 导出的 clip 名常带 `CharacterArmature|` 前缀。导入时只保留最后一个 `|` 之后的部分；否则状态机按 `Idle` 查不到，永远停在绑定姿态或当前 clip。
+- **角色不显示 / 位置乱跳**：蒙皮模型 `isDynamic() == true`，不能进静态 GPU 合批，也不能被"合并 buffer"路径缓存。`GeometrySystem` / `SceneGpuBatch` 都要显式跳过它。
+- **进入运行模式后角色坠出世界**：出生点不能固定在"相机前方 2m"，要沿视线 ray-march 找地面；相机 yaw/pitch 本来就是弧度，存进 `runtimeYaw/runtimePitch` 后不能再按"度→弧度"转一次，否则 WASD 方向整体反向、角度缩小约 57 倍。
+- **判据**：`[Character] model attached | skinned=1 animations=18`、`[Runtime] spawn=... onGround=1`、按 W/Shift+W/Space 时 `[Runtime] clip=Walk/Run/Jump` 依次出现；没有这些日志时先查导入参数，再查状态机阈值和输入分支。

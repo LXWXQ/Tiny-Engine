@@ -78,6 +78,7 @@ const UsageLine kUsageLines[] = {
     { "运行模式", "--selftest [N]", "跑 N 帧后退出（默认 600），无人值守回归用" },
     { "运行模式", "--editor", "以场景编辑器模式启动（TinyEditor.exe 默认开启）" },
     { "运行模式", "--empty-scene", "不加载 Sponza / 天空盒，只留相机" },
+    { "运行模式", "--runtime-mode", "编辑器启动后直接进入运行模式（角色 + 第三人称相机）" },
     { "窗口", "--hidden / --visible", "不显示 / 强制显示窗口（自检与截图默认 --hidden）" },
     { "窗口", "--minimized", "启动后最小化（最小化会跳过渲染）" },
     { "截图", "--screenshot <path>", "把第 --screenshot-frame 帧写成 PNG" },
@@ -339,6 +340,7 @@ int main(int argc, char** argv)
         else if (arg == "--screenshot-viewport") diagOptions.screenshotViewport = true;
         else if (arg == "--update-profile") diagOptions.updateProfile = true;
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
+        else if (arg == "--runtime-mode") diagOptions.runtimeMode = true;
         else if (arg == "--terrain-test") diagOptions.terrainTest = true;
         else if (arg == "--hidden") windowHiddenFlag = true;
         else if (arg == "--minimized") windowMinimizedFlag = true;

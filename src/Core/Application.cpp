@@ -2166,6 +2166,8 @@ void FirstApp::initEditor()
 
     editorLayer = std::make_unique<editor::EditorLayer>();
     editorLayer->initialize(services, std::string(TINY_RESOURCE_DIR) + "Scenes/main.scene.json");
+    if (diagnosticsOptions.runtimeMode)
+        editorLayer->startInRuntimeMode();
 
     // 先按窗口尺寸建一张，之后由编辑器的布局回调纠正成真实视口大小。
     {

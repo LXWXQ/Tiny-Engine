@@ -256,6 +256,7 @@ updated: 2026-11-05
 | R-02 | 已完成 | 体素图集 mip 跨格渗色（远处规则白点/摩尔纹） | — | 远处草地/石面规则白点消失，近景纹理与玻璃图集正常；`f3-voxel` 断言 `atlas=512 tile=64 pitch=128 gutter=32` |
 | R-03 | 已完成 | 流送地形 chunk 边界材质断层（高度层权重改用全局 `baseHeight`/`heightScale`） | — | 合批与非合批截图均无矩形沙/雪色块；`f2b-terrain-batch`/`f2b-terrain-batch-off` 通过 |
 | R-04 | 已完成 | 场景树父子结构（体素 chunk 归入 Voxel World 子树，按坐标稳定排序并默认展开） | — | Hierarchy 中 chunk 缩进在世界节点下、树线正常；`e8-editor-mode` 断言 `parented=9` |
+| R-05 | 已完成 | 运行模式角色接入（真实模型 + 视线出生 + WASD/Shift 跑 + 6 段骨骼动画状态机） | B-07、R-01 | 示例体素世界可见角色、不坠出世界、无黑色/棋盘格；`e9-runtime-character` 断言 `skinned=1 animations=18` 与 6 个 clip；`--runtime-mode` 可直达 |
 | V-02 | 未开始 | 体素网格化的每帧预算与取消（当前每块一个 job，`processVoxelChunkBuilds()` 每帧最多上传 4 块，但提交阶段没有总预算） | V-04、JobSystem | 半径 12 首帧提交仍有 7.9 ms（Release），要压到 <2 ms；取消后不再上传 |
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
 | V-04 | 未开始 | 体素几何走 `TerrainMeshArena` / 间接合批（当前每 chunk 一份 `Model` + 一次 bind） | F1 合批路径 | 625 块的 draw calls 从数百降到个位数 |
@@ -276,6 +277,8 @@ updated: 2026-11-05
 > TAA 已完成（2026-11-05）：插在 `GlassPass` 后、`BloomPass` 前；读 `hdrScene` + G-Buffer.Position + 上一帧历史，写 `taaOutput` 与 ping-pong 历史；关闭时权重/抖动归零但 Pass 仍执行。实现与验证细节见 [milestones](milestones.md#taa-时域抗锯齿2026-11-05)，回归日志 `build/validation/20261105-094857`。
 >
 > 同日修复体素图集格边界白线/远处闪烁：`fract()` 在每格边界的导数尖峰把 mip 推到最粗级，平均到图集里 7 个纯白未用格，形成白线；改用 `textureGrad` 显式梯度 + 半纹素内缩 + 未用格填草绿。详见 [milestones](milestones.md#体素图集格边界白线--远处闪烁修复2026-11-04)。
+>
+> R-05 已完成（2026-11-05）：运行模式挂 Quaternius `Character.glb`（CC0，4 蒙皮网格 / 29 骨骼 / 18 动画），CPU 蒙皮 + 3 帧环形动态缓冲；出生点改为沿视线 ray-march 找地面，Shift 跑、Space 跳，状态机 Idle/Walk/Run/Jump/Jump_Idle/Jump_Land。期间修复纯色材质走棋盘格、动画名带 `CharacterArmature|` 前缀、蒙皮模型进静态合批、yaw 弧度二次转换四个问题。详见 [milestones](milestones.md#运行模式角色与骨骼动画2026-11-05)，回归项 `e9-runtime-character`。
 >
 > 2026-11-05 的后续：显式梯度后远处仍有规则白点/摩尔纹，根因是全局 mip 仍把相邻图集格平均；图集扩为 512×512、每格 64px 内容 + 32px edge-clamp gutter，`mrt.frag` 与 `glass.frag` 同步新映射。详见 [milestones](milestones.md#体素图集-mip-跨格渗色与摩尔纹修复2026-11-05)。
 >

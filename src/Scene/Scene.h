@@ -199,7 +199,14 @@ public:
                                    const glm::vec3& worldMoveDirection,
                                    bool jump,
                                    float dt,
-                                   CharacterMoveResult& outResult);
+                                   CharacterMoveResult& outResult,
+                                   float speedMultiplier = 1.0f);
+
+    // 运行时角色：把带蒙皮/动画的 glTF 挂到已有角色实体上。模型绑定姿势的
+    // 脚底在原点，uniformScale 用来把 3.55m 的 Quaternius 绑定高度压到约 1.78m。
+    bool attachCharacterModel(entt::entity entity,
+                              const std::string& glbPath,
+                              float uniformScale = 1.0f);
 
     // B-01: camera-centred streamed terrain. The manager entity owns no mesh;
     // chunk entities are independent TerrainComponent + MeshComponent entities
