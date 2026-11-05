@@ -151,6 +151,7 @@ Transform/Bounds 字段已私有并通过 setter 自动通知 Scene；streaming 
 | SSR | 屏幕空间反射，读 HDR + depth | HDR 管线已就绪 |
 | 自动曝光 | compute 直方图 + 曝光纹理 | compute/graphics 跨队列（已有基础） |
 | Compute Bloom | Bloom 金字塔迁移到 compute | TD-06 / TD-07 已完成 |
+| TAA（已完成，见 [pass-order](../20-pipeline/pass-order.md)） | Halton 抖动 + 相机重投影 + 3x3 邻域 clamp；无运动向量 | HDR + G-Buffer Position（已有） |
 | 时间超分 | 内部低分辨率 + 上采样 | TAA、动态分辨率（已有） |
 | 切线空间法线贴图 | 启用 `getNormalFromMap()` | 可靠切线或 TBN 构造 |
 

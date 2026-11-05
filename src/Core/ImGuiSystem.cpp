@@ -148,6 +148,7 @@ return;
 	renderLightingPanel(frameInfo.settings);
 	renderBloomPanel(frameInfo.settings);
 	renderMotionBlurPanel(frameInfo.settings);
+	renderTAAPanel(frameInfo.settings);
 
 	if (frameInfo.cameraTransform)
 		renderCameraPanel(*frameInfo.cameraTransform, frameInfo.cameraController);
@@ -247,6 +248,25 @@ void ImGuiSystem::renderMotionBlurPanel(EngineSettings& settings)
 		ImGui::SliderFloat("Strength", &settings.motionBlurStrength, 0.0f, 2.0f, "%.2f");
 		ImGui::SliderFloat("Max Radius", &settings.motionBlurMaxRadius, 0.005f, 0.15f, "%.3f");
 		ImGui::TextDisabled("Camera reprojection blur (10 samples)");
+		ImGui::Unindent();
+	}
+}
+
+void ImGuiSystem::renderTAAPanel(EngineSettings& settings)
+{
+	if (!ImGui::CollapsingHeader("TAA"))
+		return;
+
+	ImGui::Checkbox("Enable TAA", &settings.taaEnabled);
+	ImGui::SetItemTooltip("时域抗锯齿：抖动画面的同时混合历史帧，专门处理远处几何边缘");
+	if (settings.taaEnabled)
+	{
+		ImGui::Indent();
+		ImGui::SliderFloat("History Blend", &settings.taaBlend, 0.0f, 0.98f, "%.2f");
+		ImGui::SetItemTooltip("越高越稳，但快速运动时拖影更明显");
+		ImGui::SliderFloat("Jitter Scale", &settings.taaJitterScale, 0.0f, 1.5f, "%.2f");
+		ImGui::SetItemTooltip("亚像素抖动幅度；0 = 只做历史混合，方便对比");
+		ImGui::TextDisabled("Halton(2,3) | history reset on resize/toggle");
 		ImGui::Unindent();
 	}
 }

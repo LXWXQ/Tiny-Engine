@@ -27,6 +27,7 @@
 #include "Render/EditorOverlayPass.h"
 #include "Render/SSAOPass.h"
 #include "Render/GlassPass.h"
+#include "Render/TAAPass.h"
 #include "Render/ShadowPass.h"
 #include "Voxel/VoxelChunk.h"
 #include "Render/ComputeProbePass.h"
@@ -802,6 +803,11 @@ streamingConfig.skirtsEnabled = false;
 	auto glassPass = std::make_unique<GlassPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),
 		descriptorManager.get(), gBuffers[0]->getDepth().format);
+	// TAA：必须在 Glass 之后（要拿混合后的 HDR）、Bloom 之前（辉光作用在
+	// 抗锯齿后的画面上）。每帧都注册 —— 否则 Bloom/Present 会读到没人写的
+	// taaOutput，渲染图的写覆盖校验会直接报错。
+	auto taaPass = std::make_unique<TAAPass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	auto presentPass = std::make_unique<PresentPass>(*vulkanDevice, *vulkanSwapchain, *renderGraph,
 		*renderResources, descriptorManager.get(), descriptorManager->getGlobalSetLayout());
 
@@ -820,6 +826,7 @@ streamingConfig.skirtsEnabled = false;
 	presentPassPtr = presentPass.get();
 	uiCompositePassPtr = uiComposite.get();
 	editorOverlayPassPtr = editorOverlay.get();
+	taaPassPtr = taaPass.get();
 	ssaoPassPtr = ssaoPass.get();
 	computeProbePassPtr = computeProbePass.get();
 	crossQueueProbePassPtr = crossQueueProbePass.get();
@@ -830,6 +837,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
 	renderPipeline.addPass(std::move(glassPass));
+	renderPipeline.addPass(std::move(taaPass));
 	renderPipeline.addPass(std::move(bloomPass));
 	renderPipeline.addPass(std::move(presentPass));
 	// TD-15：带深度测试的包围盒线框，必须在 Present 之后、UiComposite 之前。
@@ -1501,6 +1509,13 @@ void FirstApp::setBloomEnabled(bool enabled)
 void FirstApp::setSSAOEnabled(bool enabled)
 {
 	scene->getSettings().ssaoEnabled = enabled;
+}
+
+void FirstApp::setTAAEnabled(bool enabled)
+{
+	// 与 ImGui 面板共用同一条路径；关掉后 TAA Pass 仍会运行（输出当前帧），
+	// 只是历史权重为 0 —— 下游 Bloom/Present 始终能读到合法的 taaOutput。
+	scene->getSettings().taaEnabled = enabled;
 }
 
 void FirstApp::setGpuSceneEnabled(bool enabled)
@@ -2261,12 +2276,31 @@ void FirstApp::render(float dt)
 
 		// beginFrame 已确认本 frame slot 的上一轮 GPU 工作完成，可以安全覆写 UBO。
 		const uint32_t frameInFlight = renderer->getCurrentFrameInFlightIndex();
+		const EngineSettings& settings = scene->getSettings();
+
+		// TAA：先取本帧的亚像素抖动，再抖一份投影给实际光栅化用。抖动只进 UBO
+		// （几何/玻璃/天空统一），不能污染阴影、CPU 剔除和 FrameInfo 的未抖动
+		// 投影 —— 编辑器线框/包围盒一旦跟着抖就会明显发颤。
+		const glm::mat4 unjitteredProjection = scene->getCamera().getProjection();
+		glm::mat4 renderProjection = unjitteredProjection;
+		const VkExtent2D renderExtent = renderGraph->getExtent(renderResources->hdrScene[frameInFlight]);
+		if (taaPassPtr != nullptr)
+		{
+			const glm::vec2 jitter = taaPassPtr->prepareFrame(renderer->getFrameNumber(),
+				renderExtent, settings.taaEnabled, settings.taaJitterScale);
+			if (settings.taaEnabled && renderExtent.width > 0 && renderExtent.height > 0)
+			{
+				renderProjection[2][0] += 2.0f * jitter.x / static_cast<float>(renderExtent.width);
+				renderProjection[2][1] += 2.0f * jitter.y / static_cast<float>(renderExtent.height);
+			}
+		}
+		const glm::mat4 currentViewProjection = unjitteredProjection * scene->getCamera().getView();
 
 		GlobalUbo ubo{};
-		ubo.projectionView = scene->getCamera().getProjection() * scene->getCamera().getView();
+		ubo.projectionView = renderProjection * scene->getCamera().getView();
 		ubo.previousProjectionView = hasPreviousViewProjection
 			? previousViewProjection
-			: ubo.projectionView;
+			: currentViewProjection;
 		ubo.cameraPos = glm::vec4(scene->getCameraTransform().getTranslation(), 1.0f);
 		ubo.lightDirection = scene->getSettings().directionalLightDir;
 		ubo.lightColor = scene->getSettings().directionalLightColor;
@@ -2274,7 +2308,6 @@ void FirstApp::render(float dt)
 		ubo.exposure = scene->getSettings().exposure;
 
 		// F6：级联矩阵每帧重算（相机一动阴影就要跟），然后写进 UBO 尾部。
-		const EngineSettings& settings = scene->getSettings();
 		if (shadowPassPtr != nullptr)
 		{
 			shadowPassPtr->setEnabled(settings.shadowEnabled);
@@ -2386,7 +2419,9 @@ frameInfo.editorSelection = editorLayer->getState().selection.primary();
 
 		// This frame is fully submitted. It becomes the reprojection source for
 		// the next frame's camera motion blur.
-		previousViewProjection = ubo.projectionView;
+		// 存未抖动的 VP：下一帧的 TAA 重投影与相机运动模糊都以它为基准，
+		// 抖动只能留在当帧的光栅化投影里。
+		previousViewProjection = currentViewProjection;
 		hasPreviousViewProjection = true;
 		if (screenshotCapture.hasPendingCopy())
 		{

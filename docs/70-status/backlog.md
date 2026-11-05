@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
 size: ~120 行
-updated: 2026-11-02
+updated: 2026-11-05
 ---
 
 # 后续任务台账
@@ -243,7 +243,7 @@ updated: 2026-11-02
 - 已知边界：仓库不附带外部美术资产；材质集切换未按材质排序/合批，交替材质会
   增加 descriptor switch；地形雕刻持久化仍是独立后续项。
 
-## 归档时的剩余队列（2026-11-04）
+## 归档时的剩余队列（2026-11-05）
 
 体素四步（持久化 / 运行模式接管角色 / 贪心合并 + 贴图集 + AO / 异步生成 + 半径 12）已全部落地，
 下面按“什么时候必须做”排序，供后续接续。
@@ -251,6 +251,7 @@ updated: 2026-11-02
 | ID | 状态 | 任务 | 依赖 | 完成判据 |
 |---|---|---|---|---|
 | V-01 | 已完成 | 体素透明方块排序（玻璃拆独立网格 + 前向混合 pass，按面从远到近） | F3 | 透明方块叠放不出现“后面先画”的黑边；截图与手工目测一致 |
+| R-01 | 已完成 | TAA 时域抗锯齿（Halton 抖动 + 未抖动 VP 历史重投影 + 3x3 AABB clamp） | — | 远处几何边缘与纹理闪烁明显下降；`--no-taa` 可关；回归项 `f3v-taa`/`f3v-taa-off` 通过 |
 | V-02 | 未开始 | 体素网格化的每帧预算与取消（当前每块一个 job，`processVoxelChunkBuilds()` 每帧最多上传 4 块，但提交阶段没有总预算） | V-04、JobSystem | 半径 12 首帧提交仍有 7.9 ms（Release），要压到 <2 ms；取消后不再上传 |
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
 | V-04 | 未开始 | 体素几何走 `TerrainMeshArena` / 间接合批（当前每 chunk 一份 `Model` + 一次 bind） | F1 合批路径 | 625 块的 draw calls 从数百降到个位数 |
@@ -267,6 +268,8 @@ updated: 2026-11-02
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
 > 同日修复示例体素世界全黑：异步 chunk 落地后未登记 `dirtySpatialEntities`，建不出 `WorldBoundsComponent` 被全部剔除；`clearEntities()/cleanup()` 同时补上 pending 作业取消标记，加载示例等待网格落地。详见 [milestones](milestones.md#示例体素世界黑屏修复--运行模式-wasd-方向修正2026-11-04)。
+>
+> TAA 已完成（2026-11-05）：插在 `GlassPass` 后、`BloomPass` 前；读 `hdrScene` + G-Buffer.Position + 上一帧历史，写 `taaOutput` 与 ping-pong 历史；关闭时权重/抖动归零但 Pass 仍执行。实现与验证细节见 [milestones](milestones.md#taa-时域抗锯齿2026-11-05)，回归日志 `build/validation/20261105-094857`。
 >
 > 同日修复体素图集格边界白线/远处闪烁：`fract()` 在每格边界的导数尖峰把 mip 推到最粗级，平均到图集里 7 个纯白未用格，形成白线；改用 `textureGrad` 显式梯度 + 半纹素内缩 + 未用格填草绿。详见 [milestones](milestones.md#体素图集格边界白线--远处闪烁修复2026-11-04)。
 

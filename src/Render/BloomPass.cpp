@@ -79,7 +79,7 @@ void BloomPass::init()
 
         // 纹理由渲染图持有，VkImageView 只在 start/end 时重建 —— 启动时写一次就够，
         // 不需要每帧 vkUpdateDescriptorSets。
-        updateDescriptor(base, renderGraph.getView(resources.hdrScene[frame]));
+        updateDescriptor(base, renderGraph.getView(resources.taaOutput[frame]));
         for (uint32_t i = 0; i < kLevelCount - 1; ++i)
         {
             updateDescriptor(base + 1 + i, renderGraph.getView(levels[i]));
@@ -225,7 +225,7 @@ void BloomPass::resize(VkExtent2D extent)
 
         resources.bloomResult[frame] = levels.front();
         const uint32_t base = frame * setCount;
-        updateDescriptor(base, renderGraph.getView(resources.hdrScene[frame]));
+        updateDescriptor(base, renderGraph.getView(resources.taaOutput[frame]));
         for (uint32_t i = 0; i < kLevelCount - 1; ++i)
         {
             updateDescriptor(base + 1 + i, renderGraph.getView(levels[i]));
@@ -263,7 +263,7 @@ void BloomPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     // ---- 1) 亮部提取：HDR -> 最细一级 ----
     {
         auto& pass = graph.addGraphicsPass("Bloom.Bright");
-        pass.read(resources.hdrScene[frame]);
+        pass.read(resources.taaOutput[frame]);
         pass.writeColor(levels[0], VK_ATTACHMENT_LOAD_OP_CLEAR, clear);
 
         BrightPush push{ s.bloomThreshold, s.bloomKnee, 1.0f };

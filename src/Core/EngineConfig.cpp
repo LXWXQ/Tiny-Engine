@@ -107,6 +107,12 @@ namespace
 		motionBlur["maxRadius"] = s.motionBlurMaxRadius;
 		j["motionBlur"] = std::move(motionBlur);
 
+		json taa;
+		taa["enabled"] = s.taaEnabled;
+		taa["blend"] = s.taaBlend;
+		taa["jitterScale"] = s.taaJitterScale;
+		j["taa"] = std::move(taa);
+
 		json light;
 		writeVec(light, "direction", s.directionalLightDir);
 		writeVec(light, "color", s.directionalLightColor);
@@ -157,6 +163,14 @@ namespace
 			out.motionBlurEnabled = read(n, "enabled", out.motionBlurEnabled, warnings);
 			out.motionBlurStrength = read(n, "strength", out.motionBlurStrength, warnings);
 			out.motionBlurMaxRadius = read(n, "maxRadius", out.motionBlurMaxRadius, warnings);
+		}
+
+		if (j.contains("taa") && j["taa"].is_object())
+		{
+			const json& n = j["taa"];
+			out.taaEnabled = read(n, "enabled", out.taaEnabled, warnings);
+			out.taaBlend = read(n, "blend", out.taaBlend, warnings);
+			out.taaJitterScale = read(n, "jitterScale", out.taaJitterScale, warnings);
 		}
 
 		if (j.contains("lighting") && j["lighting"].is_object())

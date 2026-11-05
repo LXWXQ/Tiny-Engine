@@ -65,7 +65,7 @@ void PresentPass::init()
 void PresentPass::updateBloomDescriptor(uint32_t frame)
 {
     VkDescriptorImageInfo infos[3] = {
-        { sampler, renderGraph.getView(resources.hdrScene[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { sampler, renderGraph.getView(resources.taaOutput[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { sampler, renderGraph.getView(resources.bloomResult[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { positionSampler, renderGraph.getView(resources.gbPosition[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
     };
@@ -86,7 +86,7 @@ void PresentPass::updateBloomDescriptor(uint32_t frame)
 void PresentPass::updateNoBloomDescriptor(uint32_t frame)
 {
     VkDescriptorImageInfo infos[2] = {
-        { sampler, renderGraph.getView(resources.hdrScene[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { sampler, renderGraph.getView(resources.taaOutput[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { positionSampler, renderGraph.getView(resources.gbPosition[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
     };
 
@@ -214,7 +214,7 @@ void PresentPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     const bool bloomEnabled = frameInfo.settings.bloomEnabled;
     auto& pass = graph.addGraphicsPass("Present");
 
-    pass.read(resources.hdrScene[frame]);
+    pass.read(resources.taaOutput[frame]);
     if (bloomEnabled)
         pass.read(resources.bloomResult[frame]);
     pass.read(resources.gbPosition[frame]);

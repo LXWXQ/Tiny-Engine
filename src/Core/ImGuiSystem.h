@@ -40,6 +40,7 @@ private:
 	void renderLightingPanel(EngineSettings& settings);
 	void renderBloomPanel(EngineSettings& settings);
 	void renderMotionBlurPanel(EngineSettings& settings);
+	void renderTAAPanel(EngineSettings& settings);
 	void renderConfigPanel(FrameInfo& frameInfo);
 	void renderCameraPanel(TransformComponent& cameraTransform, class CameraController* controller);
 

@@ -125,6 +125,15 @@ void RenderSettingsPanel::draw(EditorState& state)
         ImGui::SliderFloat("Max Radius", &settings->motionBlurMaxRadius, 0.0f, 0.2f, "%.3f");
     }
 
+    if (ImGui::CollapsingHeader("TAA 时域抗锯齿", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::Checkbox("Enabled##taa", &settings->taaEnabled);
+        ImGui::SetItemTooltip("亚像素抖动 + 历史帧混合；远处几何边缘和树叶闪烁主要靠它");
+        ImGui::SliderFloat("History Blend", &settings->taaBlend, 0.0f, 0.98f, "%.2f");
+        ImGui::SliderFloat("Jitter Scale", &settings->taaJitterScale, 0.0f, 1.5f, "%.2f");
+        ImGui::TextDisabled("Halton(2,3) | 开关或缩放窗口会重置历史");
+    }
+
     // F6：阴影（3 级 CSM）。strength 是"阴影方向的衰减比例"，
     // 0 = 完全无阴影，1 = 全黑；默认 0.65 是有意留一点环境光，纯黑看着像贴纸。
     if (ImGui::CollapsingHeader("阴影", ImGuiTreeNodeFlags_DefaultOpen))

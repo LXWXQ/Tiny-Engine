@@ -5,12 +5,12 @@ type: validation
 scope: tools/Validate.ps1
 read-when: 加/改回归项，或某项失败需要知道它在测什么
 size: ~200 行
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **65 项引擎用例 + 2 项工具自测 = 67 项**；
+`tools/Validate.ps1` 默认跑 **67 项引擎用例 + 2 项工具自测 = 69 项**；
 加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`。
 
 ## 1. 每项的判据（统一）
@@ -94,14 +94,16 @@ updated: 2026-11-04
 | 63 | `e9-runtime-character` | 运行模式接管角色：进入后生成不可见角色、相机跟脚底 + 1.62 米眼高，退出后销毁角色并还原相机；`runtimeYaw/runtimePitch` 原样保存相机弧度，WASD 方向与视线一致 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] runtime character selfTest PASS` | 出生点在相机前方 2 米（`queryGroundAtWorld` 是私有接口，靠重力落地）；yaw 若再按“度→弧度”转一次会缩小约 57 倍，W/S/A/D 全部反向 |
 | 64 | `f3-voxel-persist` | 体素世界持久化：挖掉一格后 `captureDescription()` 记录该格 Air、JSON 往返后 seed/半径/baseY/chunk 坐标/edit 四元组逐字段一致 | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] voxel edit selfTest PASS`、`capture + json round trip` | 只存 seed + 差分，不存 32768 格；场景 JSON 版本 2，老文件缺 `voxelWorlds` 按空处理 |
 | 65 | `f3-voxel-glass` | 体素玻璃透明：玻璃拆出独立网格（每面 4 顶点）走 `GlassPass`，按面质心从远到近排序后一次 draw，透明叠放无黑边 | `TinyEngine.exe --selftest 20 --voxel-world 1 --voxel-glass-demo` | `[Voxel] glass demo placed \| blocks=`、`[Glass] sorted=`、`drawcalls=1` | 玻璃不进 G-Buffer；`GlassPass` 深度 LOAD + depthWrite 关；图集无 alpha，只有 Glass 走混合 |
+| 66 | `f3v-taa` | TAA 时域抗锯齿：Halton(2,3) 抖动、历史重投影与 AABB clamp 生效，渲染图双附件正常 | `TinyEngine.exe --selftest 40 --voxel-world 1` | `[TAA] initialized \|`、`[Validation] errors=0 warnings=0` | 历史图读写不能与颜色附件同一 layout；`updateDescriptors` 的 currentColor 必须绑 `hdrScene` |
+| 67 | `f3v-taa-off` | TAA 关闭路径：权重与抖动归零，Pass 仍执行以写 `taaOutput` | `TinyEngine.exe --selftest 20 --no-taa` | `[TAA] disabled`、`[Validation] errors=0 warnings=0` | 下游 Bloom/Present 固定绑 `taaOutput`，不能真跳过 |
 
 ## 3. 工具自测
 
 | # | 名称 | 内容 |
 |---|---|---|
-| 20 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
-| 21 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
-| 22 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时：`--capture-frame 10` 抓帧路径 |
+| 68 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
+| 69 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
+| 70 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 69 项不含它） |
 
 ## 4. 文档一致性检查
 

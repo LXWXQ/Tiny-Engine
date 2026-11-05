@@ -283,6 +283,13 @@ $tests = @(
     # 排序后被一次 draw 画掉（drawcalls=1），且验证层仍为零消息。
     @{ Name = "f3-voxel-glass"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1", "--voxel-glass-demo");
        MustContain = @("[Voxel] glass demo placed | blocks=", "[Glass] sorted=", "drawcalls=1", "[Voxel] selfTest PASS") },
+
+    # TAA：抖动 + 历史混合。开关两条路径都要保持验证层零消息，
+    # 关闭时 Pass 仍运行（只输出当前帧），否则下游 Bloom/Present 会读到没人写的图。
+    @{ Name = "f3v-taa"; Exe = "engine"; Args = @("--selftest", "40", "--voxel-world", "1");
+       MustContain = @("[TAA] initialized |", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f3v-taa-off"; Exe = "engine"; Args = @("--selftest", "20", "--no-taa");
+       MustContain = @("[TAA] disabled", "[Validation] errors=0 warnings=0") },
   @{ Name = "f3-voxel-persist"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("capture + json round trip", "[Editor] voxel edit selfTest PASS") },
   @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

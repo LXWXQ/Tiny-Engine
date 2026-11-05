@@ -3,8 +3,8 @@
 一个面向**学习与工程验证**的 Vulkan 1.3 渲染器（Windows x64 / C++17 / MSVC）。
 重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
 
-- 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> Bloom -> Present(ACES+gamma+ImGui)`
-- 一条命令完成：依赖准备 -> 全新 configure/build -> 67 项回归
+- 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> Glass -> TAA -> Bloom -> Present(ACES+gamma+ImGui)`
+- 一条命令完成：依赖准备 -> 全新 configure/build -> 69 项回归
 - 验收基线：**退出码 0** + **stderr 0 字节** + `[Validation] errors=0 warnings=0`
 
 > 本文件是仓库根目录**唯一**的文档。所有细节在 [`docs/`](docs/README.md) 下，按类型分层。
@@ -60,6 +60,7 @@ cmake --build build --config Debug
 | 异步 compute 双队列 | graphics/compute 独立队列与 timeline；跨队列单向依赖推导 + 环检测 | [synchronization](docs/10-architecture/synchronization.md) |
 | Bindless 材质 | 1 个 set 4 个纹理数组 + push constant 索引；`desc binds` 104 -> 1 | [descriptors](docs/10-architecture/descriptors.md) |
 | HDR + Bloom + ACES | 光照输出线性 HDR，tonemap 独立成 PresentPass；Bloom 关闭时真跳过 7 个 pass | [pass-order](docs/20-pipeline/pass-order.md) |
+| TAA 时域抗锯齿 | Halton(2,3) 抖动 + 未抖动 VP 反投影 + 3x3 邻域 AABB clamp；`--no-taa` 关闭，窗口 resize 重置历史 | [pass-order](docs/20-pipeline/pass-order.md) |
 | IBL split-sum | irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙 | [ibl](docs/20-pipeline/ibl.md) |
 | EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播 | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | 空间索引 + 视锥剔除 | 均匀网格 broad phase + Transform/Bounds 私有字段/dirty + 增量 AABB upsert + XZ region bucket + frustum-AABB | [scene-ecs](docs/30-systems/scene-ecs.md) |
@@ -75,7 +76,7 @@ cmake --build build --config Debug
 | **方块体素** | 32³ chunk、面剔除 + 贪心合并 + 顶点 AO、程序化贴图集（UV 编码图块 id）、Amanatides-Woo DDA 拾取、挖/放（Alt 挖 / Alt+Shift 放；Ctrl+左键仍是多选）与逐格撤销、`queryGroundAtWorld` 叠加体素分支让角色站上方块（运行模式接管角色：`WASD` 走、`Space` 跳、中键拖动看）；`--voxel-world [r]` 启动世界（半径 1..12，几何在 JobSystem 后台生成、逐帧上传）；编辑/运行模式分离（`F8`，运行模式左键挖、右键放）；场景存档只记 seed + 差分区（改动格）；玻璃走独立 `GlassPass`（Lighting 后、Bloom 前，按面质心排序混合，glass-only chunk 免 Model），`--voxel-glass-demo` 摆叠放场景 | [voxel](docs/30-systems/voxel.md) |
 | 调试剖析基础设施 | `--build-info` / `--gpu-timing` / `--screenshot` / 验证层增强 / RenderDoc / Tracy | [debug](docs/60-debug-profiling/README.md) |
 
-**已知边界**：无 SSR / 自动曝光 / 点光源阴影 / 动画 / 音频；体素存档只记 seed + 差分区（改动格），无 LOD（面剔除已升级为贪心合并 + 顶点 AO，贴图集为程序化生成）；跨队列资源走 `CONCURRENT` sharing；
+**已知边界**：无 SSR / 自动曝光 / 点光源阴影 / 动画 / 音频；TAA 只有相机重投影、没有运动向量（物体运动不会单独补偿）；体素存档只记 seed + 差分区（改动格），无 LOD（面剔除已升级为贪心合并 + 顶点 AO，贴图集为程序化生成）；跨队列资源走 `CONCURRENT` sharing；
 glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`docs/70-status/known-limits.md`](docs/70-status/known-limits.md)。
 
 ---
@@ -86,7 +87,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 |---|---|
 | 无参数 | 正常窗口运行 |
 | `--selftest N` | 无交互跑 N 帧后退出 |
-| `--no-bloom` / `--no-ssao` | 关闭对应 Pass（自检与普通运行均可） |
+| `--no-bloom` / `--no-ssao` / `--no-taa` | 关闭对应 Pass（自检与普通运行均可） |
 | `--render-scale F` | 中间目标倍率 0.25~1.0 |
 | `--resize-test` | 连续缩放 / 动态分辨率 / 最小化恢复 |
 | `--jobtest` | 只测 CPU JobSystem（不建窗口） |
@@ -123,7 +124,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/20-pipeline/`](docs/20-pipeline/README.md) | Pass 顺序、G-Buffer/中间目标、IBL、Shader 清单 | 改 `src/Render/` 或 `shaders/` |
 | [`docs/30-systems/`](docs/30-systems/README.md) | ECS/场景、JobSystem、配置、ImGui | 改 `src/Scene/`、`src/Core/` 对应模块 |
 | [`docs/40-build/`](docs/40-build/README.md) | 依赖版本、构建运行、排障 | 构建失败 / 换机器 |
-| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、67 项回归矩阵、验收标准 | 加测试 / 定位回归 |
+| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、69 项回归矩阵、验收标准 | 加测试 / 定位回归 |
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
 | [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
@@ -156,7 +157,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 
 | 项 | 值 |
 |---|---|
-| 回归 | `tools/Validate.ps1`：**67 项全 PASS**，stderr 全 0 字节 |
+| 回归 | `tools/Validate.ps1`：**69 项全 PASS**，stderr 全 0 字节 |
 | 启动排错 | 双击启动失败看可执行文件旁的 `startup-error.log`；窗口尺寸按显示器工作区 92% 收敛 |
 | 快捷键 | 只有一份 `kShortcutEntries`：速查表、`handleShortcuts()` 分发都读它；自检扫键位冲突（`entries=20 conflicts=0`，B4） |
 | 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |

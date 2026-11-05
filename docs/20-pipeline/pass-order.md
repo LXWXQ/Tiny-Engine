@@ -5,7 +5,7 @@ type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
 size: ~180 行
-updated: 2026-10-30
+updated: 2026-11-05
 ---
 
 # Pass 顺序与原因
@@ -29,11 +29,13 @@ LightingPass      读 G-Buffer + SSAO + IBL 三件套 + 环境图 -> 写 R16G16B
    |
 GlassPass         V-01：体素玻璃前向混合；LOAD HDR + 深度，写深度关，按面质心远->近，只画 Glass
    |
-Bloom.Bright      HDR -> level0（1/2 分辨率）
+TAAPass           时域抗锯齿：读 HDR / G-Buffer.Position / 上一帧 history，写 taaOutput + 新 history
+   |
+Bloom.Bright      taaOutput -> level0（1/2 分辨率）
 Bloom.Down0/1/2   level0 -> level1 -> level2 -> level3
 Bloom.Up2/1/0     level3 -> level2 -> level1 -> level0（加法混合累加）
    |
-PresentPass       HDR + Bloom*intensity -> 曝光 -> ACES -> gamma(1/2.2) -> 交换链，并叠加 ImGui
+PresentPass       TAA 输出 + Bloom*intensity -> 曝光 -> ACES -> gamma(1/2.2) -> 交换链，并叠加 ImGui
    |
 PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 ```
@@ -41,7 +43,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 `TerrainGpuSelection` 与 `SceneGpuCull` 都由 `GeometryPass::addToGraph()` 在 `Geometry` 之前注册（顺序固定为 Terrain -> SceneGpuCull -> Geometry）：两者写的 indirect command 会被 `Geometry` 的 `vkCmdDrawIndexedIndirect` 直接消费。
 `HiZBuild` 必须排在 `Geometry` **之后**：金字塔要包含本帧刚画出的几何；它写的是 `(frameInFlight + 1) % kFramesInFlight` 槽，供下一帧 `SceneGpuCull` 读（错帧一帧，第一帧 `params.z = 0` 关闭遮挡）。
 渲染图里注册的 pass 名依次是：
-`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `Glass`,
+`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `Glass`, `TAA`,
 `Bloom.Bright`, `Bloom.Down0/1/2`, `Bloom.Up2/1/0`, `Present`,
 `PresentTransition`。
 
@@ -64,6 +66,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 |---|---|
 | SSAO 在 Lighting **之前** | SSAO 调制环境光项（`ambient *= ssao`），是光照的输入 |
 | Glass 在 Lighting **之后**、Bloom **之前** | 玻璃必须混合在已经着色好的 HDR 上（延迟着色只存一个表面，玻璃进 G-Buffer 会把后面的层盖掉）；放在 Bloom 前，玻璃高光也参与辉光。深度 `LOAD` 但 `depthWrite = FALSE`、`compare = LESS_OR_EQUAL`：不透明几何仍挡住玻璃，玻璃之间由 CPU 排序（远->近）决定顺序 |
+| TAA 在 Glass **之后**、Bloom **之前** | 先把玻璃混合进 HDR 再做时域解析，透明边缘也能被抗锯齿；Bloom 读到的是已收敛的 HDR，不会把抖动噪声放大成辉光。TAA 用未抖动 VP 把 G-Buffer 世界坐标反投影到上一帧，不需要运动向量（当前只有相机运动）；ImGui 在 Present 内叠加，不参与历史混合 |
 | Bloom 在 tonemap **之前** | ACES 最后一步是 `clamp(0,1)`，高光被压到 1.0 后 Bloom 只能"把白涂白" |
 | 曝光在 Bloom **之后** | 曝光是 tonemap 的输入缩放；若写在光照里，Bloom 阈值会随曝光漂移，拖滑块时辉光乱跳 |
 | ImGui **最后** | 放在 Present 里，以后往 Present 前插任何后效，UI 都自动不被糊掉 |
@@ -74,13 +77,18 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 |---|---|
 | `--no-ssao` | SSAO Pass 仍执行，但着色器最前面就 `enabled < 0.5 -> 输出 1.0`（连 G-Buffer 采样都省） |
 | `--no-bloom` | **真的跳过 7 个 Bloom pass**；Present 走 `present_no_bloom.frag` 单输入管线 |
+| `--no-taa` | TAA Pass 仍执行，但 `historyWeight = 0`、jitter = 0，着色器直接输出当前帧；窗口/渲染目标 resize 与重新开启时 `historyValid = false`，首帧不吃旧历史 |
 
 为什么 SSAO 是"Pass 照跑 + 着色器短路"而不是跳过：`lighting.frag` 里 `ambient *= ssao` 是
 **无条件**执行的，跳过会让它乘上未定义内容。这是真实踩过的 bug（见
 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 14）。
 
-为什么 Bloom 能真跳过：PresentPass 准备了**两套描述符布局**（开：`hdrScene`+`bloomResult`；
-关：只有 `hdrScene`），关闭时根本不绑 `bloomResult`，于是语义校验的不变量成立。
+为什么 Bloom 能真跳过：PresentPass 准备了**两套描述符布局**（开：`taaOutput`+`bloomResult`；
+关：只有 `taaOutput`），关闭时根本不绑 `bloomResult`，于是语义校验的不变量成立。
+
+为什么 TAA 不能真跳过：Bloom 与 Present 的输入都固定在 `taaOutput` 上，跳过 TAA 会让这张
+瞬时图本帧没人写，渲染图的"必须有人写"硬校验会直接抛异常。关闭时让权重与抖动都为 0，
+输出等价于未抖动的当前帧；重新开启时 `historyValid = false`，避免把关闭期间的内容拉进历史。
 
 > 这两条差异是刻意的，不是不一致。**新增可关闭 Pass 时先判断它属于哪一类。**
 

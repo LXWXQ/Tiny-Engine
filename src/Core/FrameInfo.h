@@ -255,6 +255,12 @@ struct EngineSettings
 	bool  motionBlurEnabled = true;
 	float motionBlurStrength = 1.0f;
 	float motionBlurMaxRadius = 0.035f;
+
+	// TAA（时域抗锯齿）。历史混合权重越高越稳，但快速运动会拖影；
+	// jitterScale 用来在自检/对比截图中关掉亚像素抖动。
+	bool  taaEnabled = true;
+	float taaBlend = 0.9f;
+	float taaJitterScale = 1.0f;
 };
 
 struct RenderTelemetry

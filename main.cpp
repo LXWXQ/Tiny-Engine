@@ -21,6 +21,7 @@
 //   --selftest [N]                跑 N 帧（默认 600）后退出，用于验证层回归
 //   --no-bloom                    自检时关掉 Bloom
 //   --no-ssao                     自检时关掉 SSAO
+//   --no-taa                      自检时关掉 TAA（Pass 仍运行，只输出当前帧）
 //   --cross-queue-test            启用 TD-02 跨队列验收探针（需配合 --selftest）
 //   --resize-test                 自检中连续缩放窗口并切换动态分辨率
 //   --material-stress             自检中每帧分配/延迟归还材质槽位（TD-04）
@@ -84,7 +85,7 @@ const UsageLine kUsageLines[] = {
     { "截图", "--screenshot-viewport", "截图只拍编辑器离屏视口（纯 3D，不含 UI）" },
     { "截图", "--capture-frame <n>", "RenderDoc 在第 n 帧抓帧（需注入 RenderDoc）" },
     { "截图", "--render-scale <f>", "动态分辨率初始倍率 0.25..1.0" },
-    { "渲染", "--no-bloom / --no-ssao", "关掉 Bloom / SSAO（同 UI 复选框）" },
+    { "渲染", "--no-bloom / --no-ssao / --no-taa", "关掉 Bloom / SSAO / TAA（同 UI 复选框）" },
     { "渲染", "--gpu-scene / --no-gpu-scene", "强制开 / 关 GPU 驱动提交" },
     { "渲染", "--gpu-scene-min-px <px>", "GPU 提交的屏幕空间剔除阈值（像素）" },
     { "渲染", "--gpu-scene-external <n>", "外部实例数（粒子/体素共用的提交入口）" },
@@ -150,6 +151,7 @@ int main(int argc, char** argv)
 
     bool selfTest = false;
     bool noBloom = false;
+    bool noTAA = false;
     bool noSSAO = false;
     bool noGpuScene = false;
     bool forceGpuScene = false;
@@ -226,6 +228,7 @@ int main(int argc, char** argv)
         }
         else if (arg == "--no-bloom") noBloom = true;
         else if (arg == "--no-ssao")  noSSAO = true;
+        else if (arg == "--no-taa")   noTAA = true;
         else if (arg == "--no-gpu-scene") noGpuScene = true;
         else if (arg == "--gpu-scene") forceGpuScene = true;
         else if (arg == "--no-merged-buffers") noMergedBuffers = true;
@@ -454,6 +457,7 @@ int main(int argc, char** argv)
         if (editorMode) app.setEditorEnabled(true);
         if (noBloom) app.setBloomEnabled(false);
         if (noSSAO) app.setSSAOEnabled(false);
+        if (noTAA) app.setTAAEnabled(false);
         if (noGpuScene) app.setGpuSceneEnabled(false);
         if (forceGpuScene) app.setGpuSceneForced(true);
         if (noMergedBuffers) app.setGpuMergedBuffers(false);

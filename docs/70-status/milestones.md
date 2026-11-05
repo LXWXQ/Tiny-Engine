@@ -674,7 +674,7 @@ updated: 2026-11-04
 
 **问题**：体素地形每个方块顶面边缘出现白色细线，越远越密并连成白网格；移动视角时纹理闪烁，距离越远越明显，地形上方还有绿色辉光。程序化地形也有轻微闪烁，但轻得多。
 
-**根因**：顶点 UV 用 `uv.x = tile * 64 + 面内跨度` 编码图块，片元用 `fract()` 还原格内 UV。`fract()` 在每个方块边界从 ≈1 跳回 0，`dFdx/dFdy` 在边界处产生整格大小的导数尖峰，硬件据此把 mip 选到最粗一级；而 256×256 图集只有 9/16 格有内容，其余 7 格是纯白，最粗 mip 平均后就是白色，于是每个方块边界出现一圈白线。距离越远，mip 越高、边界像素占比越大，白线越粗且随视角闪烁；Bloom 再把白线扩散成绿色散光。程序化地形不用 `fract()` 解码图集，所以只有普通纹理的轻微锯齿。**不是 TAA 问题**：管线当前没有 TAA/FXAA/MSAA，但纯时域/几何锯齿不会只沿每个方块边界出现。
+**根因**：顶点 UV 用 `uv.x = tile * 64 + 面内跨度` 编码图块，片元用 `fract()` 还原格内 UV。`fract()` 在每个方块边界从 ≈1 跳回 0，`dFdx/dFdy` 在边界处产生整格大小的导数尖峰，硬件据此把 mip 选到最粗一级；而 256×256 图集只有 9/16 格有内容，其余 7 格是纯白，最粗 mip 平均后就是白色，于是每个方块边界出现一圈白线。距离越远，mip 越高、边界像素占比越大，白线越粗且随视角闪烁；Bloom 再把白线扩散成绿色散光。程序化地形不用 `fract()` 解码图集，所以只有普通纹理的轻微锯齿。**当时判断不是 TAA 问题**：修补前管线没有 TAA/FXAA/MSAA，但纯时域/几何锯齿不会只沿每个方块边界出现。
 
 **实现**：
 - `shaders/mrt.frag` / `shaders/glass.frag`：体素分支用 `textureGrad` + 显式梯度 `dFdx(fragUV) * 0.25 / dFdy(fragUV) * 0.25`，绕开 `fract()` 的导数不连续；普通材质同样用 `textureGrad`（梯度不缩放），与隐式 LOD 等价。
@@ -685,4 +685,23 @@ updated: 2026-11-04
 
 **回归**：`f3-voxel`、`f3-voxel-glass`；全套 `tools/Validate.ps1 -Incremental -SkipSetup` **ALL PASS**，日志 `build/validation/20261104-181700`。
 
-**残留**：没有 TAA/FXAA/MSAA，远处几何轮廓仍有普通锯齿；若需要进一步消除运动时的边缘闪烁，应单独做后处理 AA 项，不混在本次纹理修复里。
+**残留**：没有 TAA/FXAA/MSAA，远处几何轮廓仍有普通锯齿；若需要进一步消除运动时的边缘闪烁，应单独做后处理 AA 项，不混在本次纹理修复里。（2026-11-05 已由 TAA 单独补上。）
+
+## TAA 时域抗锯齿（2026-11-05）
+
+**问题**：修复体素图集白线后，远处方块边缘仍有阶梯状锯齿；移动视角时远处表面纹理（草地/土层）持续闪烁，距离越远越明显。根因是每帧只采样一个像素中心，几何边缘与高频纹理在投影缩小时产生欠采样；没有时域累积，运动时相邻帧的采样点跳变就表现为闪烁。
+
+**实现**：新增 `src/Render/TAAPass`，插在 `GlassPass` 之后、`BloomPass` 之前，读 `hdrScene`、G-Buffer Position 与上一帧历史，写 `taaOutput` 与 ping-pong 历史。
+
+- 抖动：`Halton(2,3)` 像素偏移只加到场景投影矩阵 `[2][0]/[2][1]`；阴影、FrameInfo 与 ImGui 使用未抖动投影。
+- 重投影：`shaders/taa.frag` 用未抖动 `previousProjectionView` 把 G-Buffer 世界坐标投回上一帧 UV，不需要运动向量（当前只有相机运动）。
+- 历史拒绝：3x3 当前帧颜色 AABB clamp；历史 alpha 通道存世界半径，半径差超过 `max(0.05, worldRadius * 0.0025)` 时丢弃历史。
+- 双颜色附件：第二个颜色附件必须显式设置 `blendEnable=false` 与 `colorWriteMask`，否则会被静默丢弃。
+- 描述符：`currentColor` 必须绑 `hdrScene`，绑成 `taaOutput` 会与颜色附件形成 feedback loop，验证层报 `VUID-VkDescriptorImageInfo-imageLayout-00344`。
+- 关闭：`--no-taa` 让权重与抖动归零，但 Pass 仍执行（Bloom/Present 固定绑 `taaOutput`）；resize 与重新开启时重置历史。
+
+**可观测**：`[TAA] initialized | 1920x1080 | history=2 | jitter=Halton(2,3)`；开启/关闭对比裁剪 `.tmp/taa_compare.png` 中，开启时远处草地与坡边的细密波纹明显收敛，关闭时网格状噪点仍在；`[Validation] errors=0 warnings=0`。
+
+**回归**：新增 `f3v-taa`、`f3v-taa-off`；全套 **69 项** PASS；验证日志 `build/validation/20261105-094857`；DocCheck PASS（documents=65）。
+
+**已知边界**：TAA 只有相机重投影，没有运动向量；物体自身运动、蒙皮或粒子不会被单独补偿。当前场景以静态几何 + 相机移动为主。

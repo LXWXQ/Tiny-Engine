@@ -5,16 +5,17 @@ type: pipeline
 scope: shaders/, CMakeLists.txt 的 shader 编译段
 read-when: 增删 shader、编译报错、改 GLSL 版本或编译选项
 size: ~130 行
-updated: 2026-11-02
+updated: 2026-11-05
 ---
 
 # Shader 清单与编译管线
 
-## 1. 清单（28 个文件）
+## 1. 清单（37 个文件）
 
 | 文件 | 阶段 | 用途 |
 |---|---|---|
 | `mrt.vert` / `mrt.frag` | vert/frag | 普通网格 / 地形写 G-Buffer；`terrainMode` 分支采样当前地形材质集 Set2（4 个描述符集，按 `materialSetIndex` 重绑）的四层 albedo/normal/packed heightRoughness，叠加坡度权重、Surface Style、宏观噪声、切线空间法线，并在 LOD 过渡帧用 IGN 抖动 mask 混合两级 |
+| `glass.vert` / `glass.frag` | vert/frag | 体素玻璃前向着色；采样图集、输出 `SRC_ALPHA/ONE_MINUS_SRC_ALPHA`，不写深度 |
 | `grid_mrt.vert` / `grid_mrt.frag` | vert/frag | 网格线写 G-Buffer（当前无实体触发） |
 | `skybox_mrt.vert` / `skybox_mrt.frag` | vert/frag | 天空盒写 G-Buffer（写 `outNormal=(0,0,0)`） |
 | `ssao.frag` | frag | SSAO（视图空间遮挡判断）；Normal.w=0 的地形/网格线直接输出 1.0 |
@@ -25,6 +26,8 @@ updated: 2026-11-02
 | `bloom_up.frag` | frag | 升采样（加法混合） |
 | `present.frag` | frag | tonemap + ImGui 前合成（Bloom 开） |
 | `present_no_bloom.frag` | frag | 单输入 tonemap（Bloom 关） |
+| `taa.frag` | frag | 时域抗锯齿：反投影上一帧、AABB clamp 历史、写当前颜色与世界半径到双附件 |
+| `shadow.vert` / `shadow.frag` | vert/frag | 3 级 CSM 深度渲染，法线偏移 + 斜率 bias |
 | `fullscreen.vert` | vert | 全屏三角 |
 | `ibl_equirect_to_cube.frag` | frag | 等距柱状 -> cubemap |
 | `ibl_irradiance.frag` | frag | 漫反射 irradiance |
@@ -32,6 +35,8 @@ updated: 2026-11-02
 | `ibl_brdf_lut.frag` | frag | BRDF LUT |
 | `ibl_capture.vert` | vert | IBL 面渲染 |
 | `compute_probe.comp` | comp | D-5 compute 验收探针 |
+| `scene_cull.comp` | comp | F1 场景实例视锥/Hi-Z 剔除，写组级 indirect command |
+| `hiz_build.comp` / `hiz_downsample.comp` | comp | 从 G-Buffer.Position 建 Hi-Z 金字塔（下一帧剔除用） |
 | `terrain_height.comp` | comp | GPU 地形高度场：Perlin/fBm、ridge/detail、island/edge mask、height curve |
 | `terrain_lod.comp` | comp | B-03：chunk frustum cull、LOD 滞回/过渡状态、indirect command/count/stats/debug 输出；stateIndex 按 4-int slot 寻址 |
 | `terrain_mesh.comp` | comp | B-04：单 chunk 顶点/索引组装；11-float tight Vertex、B-02 transition band、可选裙边 |

@@ -35,6 +35,14 @@ struct RenderResources
     // 光照终点：每帧一份线性 HDR 中间目标。
     std::array<RenderGraph::TextureHandle, kFramesInFlight> hdrScene;
 
+    // TAA：每帧解析后的抗锯齿 HDR 输出。Bloom 与 Present 固定读它，
+    // 因此即使 taaEnabled=false，TAA Pass 也要照常运行并写这张图。
+    std::array<RenderGraph::TextureHandle, kFramesInFlight> taaOutput;
+
+    // TAA 历史：两张常驻图 ping-pong。alpha 通道存世界半径，供重投影时
+    // 判断历史像素是否来自同一块几何（静态场景里相机平移不会改变它）。
+    std::array<RenderGraph::TextureHandle, 2> taaHistory;
+
     // 每帧一棵 Bloom 金字塔；每棵 4 级。
     std::array<std::vector<RenderGraph::TextureHandle>, kFramesInFlight> bloomLevels;
     std::array<RenderGraph::TextureHandle, kFramesInFlight> bloomResult;

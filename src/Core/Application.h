@@ -29,6 +29,7 @@ class UiCompositePass;
 class EditorOverlayPass;
 class SSAOPass;
 class ShadowPass;
+class TAAPass;
 class SubresourceProbePass;
 
 class FirstApp
@@ -56,6 +57,8 @@ public:
 	void setHiZEnabled(bool enabled);
 	// F6：关掉级联阴影（排查 / 对比截图用）。
 	void setShadowsEnabled(bool enabled);
+	// TAA：无人值守自检里对比开关效果。
+	void setTAAEnabled(bool enabled);
 	void setTerrainBatchEnabled(bool enabled);
 	void setGpuSceneMinScreenPixels(float pixels);
 	void setGpuSceneExternalDebugCount(uint32_t count);
@@ -131,6 +134,8 @@ private:
 	SSAOPass* ssaoPassPtr = nullptr;
 	// F6：级联阴影。指针不拥有对象（unique_ptr 在 init 里，随渲染管线走）。
 	ShadowPass* shadowPassPtr = nullptr;
+	// TAA：Glass 之后、Bloom 之前，负责抖动重建与历史混合。
+	TAAPass* taaPassPtr = nullptr;
 
 
 	RenderPipeline renderPipeline;
