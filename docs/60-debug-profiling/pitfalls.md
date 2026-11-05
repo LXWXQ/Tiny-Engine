@@ -239,6 +239,9 @@ vec3 envColor = textureGrad(environmentMap, envUV, dx, dy).rgb;
 - **注意**：这不是 TAA 问题。修补前管线没有 TAA/FXAA/MSAA，但纯时域锯齿不会只沿
   每个方块边界出现；先修纹理 LOD，再考虑后处理 AA（TAA 已于 2026-11-05 接入，
   是本条之外的独立项）。
+- **后续（2026-11-05）**：本条修完仍有规则白点，根因是全局 mip 跨格渗色；最终图集扩为
+  512×512、每格 64px 内容 + 32px edge-clamp gutter，`mrt.frag` 与 `glass.frag` 同步映射。
+  详见 23.4。
 
 ### 23.2 天空上下颠倒 / 与 IBL 光照方向相反
 
@@ -260,6 +263,32 @@ vec2 sampleSphericalMap(vec3 v) {
 
 **教训**：同一个数学约定出现在两个 shader 里时，必须有一处是"权威实现"并被交叉引用。
 本项目的权威是 `ibl_equirect_to_cube.frag`（它的注释里写明了图像顶部是天顶）。
+
+### 23.4 体素图集：显式梯度 + 半纹素内缩后仍有规则白点（mip 跨格）
+
+- **现象**：2026-11-04 的白线修完后，远处草地/石面仍有一层规则的浅色点阵，越远越密；
+  旋转视角时点阵闪烁，TAA 只能压时域闪烁，静态摩尔纹还在。放大到 4x 后，点是去饱和的
+  浅色（约 `(187,201,153)`，草地中位色 `(114,177,89)`），沿每个方块面边缘分布。
+- **已排除**：逐 texel 噪声、顶点色/AO、天空洞、方向光、Bloom/SSAO。决定性判据是把
+  `lighting.frag` 的输出临时改成 raw albedo：白点仍在；把输出改成常量 0.5：白点消失。
+  再把 `mrt.frag` 的体素分支改成只输出 `atlasUV`，确认白点确实来自图集采样。
+- **原因**：`textureGrad` 的显式梯度只解决 `fract()` 的导数尖峰，**不能阻止高 mip 的采样点
+  落到图集格边界**。`0.5/64` 半纹素内缩在 mip 0 是纹素中心，但 mip N 下只离格边 0.25 个
+  mip texel，线性过滤仍会采到邻格（草/土），高 mip 平均成浅色。逐格 mip 单独也不够：
+  UV 不内缩到当前 mip 的纹素中心，仍会越界。
+- **修法（当前）**：图集从 256×256 扩为 512×512，每格 64px 内容 + 32px **edge-clamp gutter**
+  （128px 间距）；gutter 复制最近内容边缘像素，不填纯基色。`mrt.frag` 与 `glass.frag`
+  使用同一组映射：
+  ```glsl
+  const float kAtlasSize = 512.0, kPitch = 128.0, kPad = 32.0, kTile = 64.0;
+  vec2 cellOrigin = vec2(mod(tileId, 4.0), floor(tileId / 4.0)) * kPitch + kPad;
+  albedoUV = (cellOrigin + clamp(local, 0.5/kTile, 1.0 - 0.5/kTile) * kTile) / kAtlasSize;
+  albedoGradX *= kTile / kAtlasSize;   // 0.125
+  ```
+- **不要只改 `mrt.frag`**：`glass.frag` 也按同一套 UV 编码解码图集；漏改时玻璃会采样到
+  图集其他区域，表现为整块颜色错误/发白，验证层不会报错。
+- **判据**：同机位对比 baseline（256 无 gutter）和修复版，baseline 的规则白点网格消失，
+  近景纹理与玻璃仍正常；启动日志应出现 `[Voxel] atlas=512 tile=64 pitch=128 gutter=32`。
 
 ## 24. `try_get` 返回的是指针，闭包捕获它会在实体销毁后悬空
 

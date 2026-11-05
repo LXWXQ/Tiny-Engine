@@ -47,12 +47,19 @@ void main()
     vec2 albedoGradY = dFdy(fragUV);
     if (voxelAtlas)
     {
-        const float tileId = floor(fragUV.x / 64.0);
-        const vec2 local = fract(vec2(fragUV.x - tileId * 64.0, fragUV.y));
-        albedoUV = (vec2(mod(tileId, 4.0), floor(tileId / 4.0)) + clamp(local, 0.5 / 64.0, 1.0 - 0.5 / 64.0)) * 0.25;
-        // 同 mrt.frag：fract() 的导数在格边界跳变，显式梯度避免误选最粗 mip。
-        albedoGradX *= 0.25;
-        albedoGradY *= 0.25;
+        // 4x4 格，每格 64px 内容 + 32px edge-clamp gutter，128px 间距，512 总尺寸。
+        const float kAtlasSize = 512.0;
+        const float kPitch = 128.0;
+        const float kPad = 32.0;
+        const float kTile = 64.0;
+        const float tileId = floor(fragUV.x / kTile);
+        const vec2 local = fract(vec2(fragUV.x - tileId * kTile, fragUV.y));
+        const vec2 cellOrigin = vec2(mod(tileId, 4.0), floor(tileId / 4.0)) * kPitch + kPad;
+        albedoUV = (cellOrigin + clamp(local, 0.5 / kTile, 1.0 - 0.5 / kTile) * kTile) / kAtlasSize;
+        // 同 mrt.frag：fract() 的导数在格边界跳变，显式梯度避免误选最粗 mip；
+        // gutter 保证高 mip 只采到本格边缘，不会渗到相邻格。
+        albedoGradX *= kTile / kAtlasSize;
+        albedoGradY *= kTile / kAtlasSize;
     }
 
     vec3 albedo = materialFactors.factors[matId * 2u].rgb *

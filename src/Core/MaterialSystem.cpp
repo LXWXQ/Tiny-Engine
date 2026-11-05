@@ -4,8 +4,15 @@
 
 namespace
 {
-	// F3-f：程序化体素图集 —— 4x4 格 x 64 像素，格内 = BlockId - 1。
-	void fillVoxelAtlas(unsigned char* pixels, int size, int tile)
+	constexpr int kVoxelAtlasSize = 512;
+	constexpr int kVoxelTile = 64;
+	constexpr int kVoxelPitch = 128;
+	constexpr int kVoxelPadding = 32;
+	static_assert(kVoxelPitch == kVoxelTile + 2 * kVoxelPadding, "voxel atlas pitch must match tile + gutters");
+
+	// F3-f：程序化体素图集 —— 4x4 格，每格 64px 内容 + 32px edge-clamp gutter，128px 间距，512 总尺寸。
+	// gutter 复制最近的内容边缘像素：高 mip 仍有纹理，又不会把相邻格（草/土）平均成浅色线。
+	void fillVoxelAtlas(unsigned char* pixels, int size, int tile, int pitch, int pad)
 	{
 		const unsigned char palette[9][3] = {
 			{ 89, 140, 56 }, { 115, 82, 51 }, { 128, 128, 133 },
@@ -16,21 +23,24 @@ namespace
 		{
 			for (int x = 0; x < size; ++x)
 			{
-				const int id = (y / tile) * 4 + (x / tile);
-				const int lx = x % tile;
-				const int ly = y % tile;
+				const int id = (y / pitch) * 4 + (x / pitch);
+				const int lx = (x % pitch) - pad;
+				const int ly = (y % pitch) - pad;
 				unsigned char r = 255, g = 255, b = 255;
 				if (id >= 9)
 				{
-					// 未使用的格子也填成草色：高 mip / 跨格采样时不会把整张图集平均成白色，
-					// 否则体素方块边界会因为 LOD 尖峰出现白线。
+					// 未使用的格子也填成草色：高 mip 不会把整张图集平均成白色。
 					r = palette[0][0]; g = palette[0][1]; b = palette[0][2];
 				}
 				else if (id >= 0 && id < 9)
 				{
 					r = palette[id][0]; g = palette[id][1]; b = palette[id][2];
-					const unsigned int n = (static_cast<unsigned int>(x) * 73856093u)
-						^ (static_cast<unsigned int>(y) * 19349663u);
+					// gutter 用最近内容像素的颜色（edge clamp），而不是纯基色：
+					// 高 mip 仍有纹理细节，同时格边界不会采到邻格颜色。
+					const int cx = lx < 0 ? 0 : (lx >= tile ? tile - 1 : lx);
+					const int cy = ly < 0 ? 0 : (ly >= tile ? tile - 1 : ly);
+					const unsigned int n = (static_cast<unsigned int>(cx) * 73856093u)
+						^ (static_cast<unsigned int>(cy) * 19349663u);
 					const int speck = static_cast<int>((n >> 5) % 5);
 					const int k = 82 + speck * 6;
 					switch (id)
@@ -41,19 +51,19 @@ namespace
 						b = static_cast<unsigned char>(b * k / 100);
 						break;
 					case 2:
-						if (((lx * 3 + ly * 5) % 29) < 2) { r = 96; g = 96; b = 100; }
+						if (((cx * 3 + cy * 5) % 29) < 2) { r = 96; g = 96; b = 100; }
 						break;
 					case 4:
-						if ((lx % 7) < 2) { r = static_cast<unsigned char>(r * 78 / 100); g = static_cast<unsigned char>(g * 78 / 100); b = static_cast<unsigned char>(b * 78 / 100); }
+						if ((cx % 7) < 2) { r = static_cast<unsigned char>(r * 78 / 100); g = static_cast<unsigned char>(g * 78 / 100); b = static_cast<unsigned char>(b * 78 / 100); }
 						break;
 					case 6:
-						if ((ly % 9) < 1) { r = static_cast<unsigned char>(r * 72 / 100); g = static_cast<unsigned char>(g * 72 / 100); b = static_cast<unsigned char>(b * 72 / 100); }
+						if ((cy % 9) < 1) { r = static_cast<unsigned char>(r * 72 / 100); g = static_cast<unsigned char>(g * 72 / 100); b = static_cast<unsigned char>(b * 72 / 100); }
 						break;
 					case 7:
-						if ((ly % 16) < 2 || ((lx + ((ly / 16) % 2) * 8) % 16) < 2) { r = 196; g = 190; b = 180; }
+						if ((cy % 16) < 2 || ((cx + ((cy / 16) % 2) * 8) % 16) < 2) { r = 196; g = 190; b = 180; }
 						break;
 					case 8:
-						if (lx < 2 || ly < 2 || lx > tile - 3 || ly > tile - 3) { r = 210; g = 232; b = 240; }
+						if (cx < 2 || cy < 2 || cx > tile - 3 || cy > tile - 3) { r = 210; g = 232; b = 240; }
 						break;
 					default: break;
 					}
@@ -77,11 +87,15 @@ void MaterialSystem::initDefaultTextures(Device& device, VkCommandPool commandPo
 	defaultNormalTex = std::make_shared<Texture>(device, flatNormal, 1, 1,
 		VK_FORMAT_R8G8B8A8_UNORM, commandPool);
 
-	std::vector<unsigned char> atlasPixels(256 * 256 * 4, 255);
-	fillVoxelAtlas(atlasPixels.data(), 256, 64);
+	std::vector<unsigned char> atlasPixels(kVoxelAtlasSize * kVoxelAtlasSize * 4, 255);
+	fillVoxelAtlas(atlasPixels.data(), kVoxelAtlasSize, kVoxelTile, kVoxelPitch, kVoxelPadding);
 	// 用 sRGB 格式：调色板是按显示色写的，采样时自动解码到线性空间。
-	voxelAtlasTex = std::make_shared<Texture>(device, atlasPixels.data(), 256, 256,
+	voxelAtlasTex = std::make_shared<Texture>(device, atlasPixels.data(), kVoxelAtlasSize, kVoxelAtlasSize,
 		VK_FORMAT_R8G8B8A8_SRGB, commandPool);
+	std::cout << "[Voxel] atlas=" << kVoxelAtlasSize
+		<< " tile=" << kVoxelTile
+		<< " pitch=" << kVoxelPitch
+		<< " gutter=" << kVoxelPadding << std::endl;
 	Material::defaultWhiteTextureInfo = {
 		defaultWhiteTex->getSampler(), defaultWhiteTex->getView(),
 		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL

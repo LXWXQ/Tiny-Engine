@@ -619,7 +619,7 @@ updated: 2026-11-04
 
 **问题**：体素只有一张 16 色的方块色板，放大了看是纯色平面，挖矿/建造缺少材质细节。
 
-**实现**：`MaterialSystem::fillVoxelAtlas()` 启动时程序化生成 256x256 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格 x 64px，九种方块，含噪点/石纹/木纹/砖缝/玻璃边框）；顶点 `uv.x = tile * 64 + 面内跨度 u`、`uv.y = 面内跨度 v`（贪心矩形在图块内平铺），顶点色退化为 `面明暗 x AO` 灰度；`Material::shaderFlags` 写进 `metalRough.z`，`shaders/mrt.frag` 见到 `> 0.5` 就把 `fragUV` 解码成 `atlasUV`（`mod/floor` 定位图块、半纹素内缩防渗色，采样用 `textureGrad` 显式梯度；2026-11-04 修复格边界白线，见下方）。
+**实现**：`MaterialSystem::fillVoxelAtlas()` 启动时程序化生成 256x256 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格 x 64px，九种方块，含噪点/石纹/木纹/砖缝/玻璃边框）；顶点 `uv.x = tile * 64 + 面内跨度 u`、`uv.y = 面内跨度 v`（贪心矩形在图块内平铺），顶点色退化为 `面明暗 x AO` 灰度；`Material::shaderFlags` 写进 `metalRough.z`，`shaders/mrt.frag` 见到 `> 0.5` 就把 `fragUV` 解码成 `atlasUV`（`mod/floor` 定位图块、半纹素内缩防渗色，采样用 `textureGrad` 显式梯度；2026-11-04 修复格边界白线，见下方）。**注：2026-11-05 图集已扩为 512×512 + 32px edge-clamp gutter，见文末。**
 
 **可观测**：`[Voxel] selfTest PASS | face culling + greedy 6/6/6/6, boundary continuous, solid=12090`（新增 UV 区间断言）；`--voxel-world 1` 画面出现草皮/土层/石层/砖墙纹理，triangles 仍 275641。
 
@@ -705,3 +705,24 @@ updated: 2026-11-04
 **回归**：新增 `f3v-taa`、`f3v-taa-off`；全套 **69 项** PASS；验证日志 `build/validation/20261105-094857`；DocCheck PASS（documents=65）。
 
 **已知边界**：TAA 只有相机重投影，没有运动向量；物体自身运动、蒙皮或粒子不会被单独补偿。当前场景以静态几何 + 相机移动为主。
+
+## 体素图集 mip 跨格渗色与摩尔纹修复（2026-11-05）
+
+**问题**：2026-11-04 的白线修复后，远处草地/石面仍出现规则的浅色点阵（用户截图 987×571，越远越密）；移动视角时纹理闪烁，TAA 开启只能减轻时域闪烁，无法消除静态摩尔纹。此前误判为图集全局 mip 跨格渗色并试过 32px 纯基色 gutter，但高 mip 把 gutter 平均掉，地形发平。
+
+**根因**：256×256 图集的全局 mip 在高层会把相邻格（草/土/石）平均；显式梯度只解决 `fract()` 导数尖峰，不能阻止采样点在高 mip 落到格边界。逐格 mip 单独也不够：`0.5/64` 半纹素内缩在 mip N 下只离格边 0.25 个 mip texel，线性采样仍会采到邻格。
+
+**实现**：
+- `MaterialSystem::fillVoxelAtlas()` 改为 512×512、4×4 格、每格 64px 内容 + 32px gutter、128px 间距；gutter 不再填纯基色，而是 edge-clamp 最近内容像素（`cx/cy` 夹到 0..63 后再算 hash/图案），高 mip 保留本格纹理且不渗邻格。
+- `shaders/mrt.frag`：`kAtlasSize=512`、`kPitch=128`、`kPad=32`、`kTile=64`；`cellOrigin=(mod(tileId,4), floor(tileId/4))*kPitch+kPad`；`atlasUV=(cellOrigin+clamp(local,0.5/kTile,1-0.5/kTile)*kTile)/512`；显式梯度乘 `kTile/kAtlasSize`。
+- `shaders/glass.frag` 同步同一组常量与映射；否则玻璃会采到错误的图集区域（此坑已实际踩到）。
+- 没有采用逐格 mip / 动态 inset：实验中 `max` 轴梯度会把 inset 推到 0.5、整片抹平，`min` 轴能保细节但边界仍渗；最终保留全局 mip + edge-clamp gutter。
+- 启动日志 `[Voxel] atlas=512 tile=64 pitch=128 gutter=32`，`f3-voxel` 断言该行。
+
+**可观测**：`.tmp/gutter_edge2.png`（修复后）与 `.tmp/control_original.png`（256 无 gutter）同机位对比：baseline 草地/土层/灰色台面上有规则白点网格，修复后白点消失，近景草地纹理与玻璃图集正常；`.tmp/gutter_glass.png` 中 `[Glass] sorted=879 drawcalls=1`，玻璃透明无白块。`[Validation] errors=0 warnings=0`。
+
+**回归**：`f3-voxel`（新增 atlas 布局断言）、`f3-voxel-glass`；全套 **69 项** PASS；验证日志 `build/validation/20261105-111952`；DocCheck PASS。
+
+**验证注意**：全套用例按仓库基线 `config/engine.json` 跑。用户本地存的相机位姿/关闭阴影会让 `terrain-render` 与 `f6-shadows` 依赖默认相机的断言失败（不是本次代码回归）；跑前临时换基线、跑完恢复本地 config，未把用户 config 提交。
+
+**已知边界**：512 图集 + gutter 比 256 多 4 倍显存（1MB），当前体素规模可忽略；gutter 只保护格边界，若未来图集格尺寸/间距改变，必须同步 `mrt.frag` 与 `glass.frag`，否则会重现渗色或采样错位。

@@ -35,9 +35,9 @@ updated: 2026-11-04
 - 六个方向各做一次**贪心合并**：按 32 层切片建 mask（记录该格方块 id，邻格 `opaque` 的格不写），先在平面 u 方向扩展宽度、再在 v 方向扩展高度，同材质的矩形只输出 1 个 quad（4 顶点 6 索引）；
 - 每面 4 顶点 6 索引，顶点色 = 方块色 x 面明暗（+Y 1.00、-Y 0.55、+X 0.82、-X 0.74、+Z 0.68、-Z 0.90）x 顶点 AO；AO 看空气侧两条边与对角（`level = (s1 && s2) ? 0 : 3 - (s1 + s2 + cc)`，系数 `0.55 + 0.15 * level`），矩形四个角各取所在方块的 AO；
 - 顶点布局直接复用 `terrain::TerrainVertex`（44 字节，与 `Vertex` 同布局）→ `terrain::TerrainMeshData` → `Model::Builder` 的上传路径，无需新缓冲格式；
-- **贴图集（F3-f，方案 A）**：`MaterialSystem::fillVoxelAtlas()` 在启动时程序化生成 256x256 的 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格、每格 64px，格内 = `BlockId - 1`），九种方块各有噪点/石纹/木纹/砖缝/玻璃边框；未使用的 7 格填草绿色，避免高 mip 把整张图集平均成白色；
+- **贴图集（F3-f + 2026-11-05 gutter 扩展）**：`MaterialSystem::fillVoxelAtlas()` 在启动时程序化生成 512x512 的 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格、每格 64px 内容 + 32px edge-clamp gutter、128px 间距，格内 = `BlockId - 1`），九种方块各有噪点/石纹/木纹/砖缝/玻璃边框；未使用的 7 格填草绿色，gutter 复制最近内容边缘像素，避免高 mip 把整张图集/邻格平均成浅色线；启动日志 `[Voxel] atlas=512 tile=64 pitch=128 gutter=32`；
 - **UV 编码**：顶点 `uv.x = tile * 64 + 面内跨度 u`、`uv.y = 面内跨度 v`，跨度取贪心矩形的宽/高，因此一片大矩形在图块内平铺而不是拉伸；顶点色只保留 `面明暗 x AO` 的灰度；
-- **片元解码**：`materialFactors.factors[matId * 2u + 1u].z > 0.5`（材质 `shaderFlags = 1.0`）时，`tileId = floor(uv.x / 64)`、`local = fract(vec2(uv.x - tileId * 64, uv.y))`、`atlasUV = (vec2(mod(tileId, 4), floor(tileId / 4)) + clamp(local, 0.5 / 64.0, 1.0 - 0.5 / 64.0)) * 0.25`（半纹素内缩，既防图块间渗色又不留下 2px 色带）；采样必须用 `textureGrad` + 显式梯度 `dFdx(fragUV) * 0.25 / dFdy(fragUV) * 0.25` —— `fract()` 在每格边界产生导数跳变，隐式 LOD 会误选最粗 mip（整张图集平均），表现为方块边缘白线、越远越强并随视角闪烁；
+- **片元解码**：`materialFactors.factors[matId * 2u + 1u].z > 0.5`（材质 `shaderFlags = 1.0`）时，`kAtlasSize = 512`、`kPitch = 128`、`kPad = 32`、`kTile = 64`；`tileId = floor(uv.x / kTile)`、`local = fract(vec2(uv.x - tileId * kTile, uv.y))`、`cellOrigin = vec2(mod(tileId, 4), floor(tileId / 4)) * kPitch + kPad`、`atlasUV = (cellOrigin + clamp(local, 0.5 / kTile, 1.0 - 0.5 / kTile) * kTile) / kAtlasSize`；采样必须用 `textureGrad` + 显式梯度 `dFdx(fragUV) * kTile / kAtlasSize` / `dFdy(fragUV) * kTile / kAtlasSize` —— `fract()` 在每格边界产生导数跳变，隐式 LOD 会误选最粗 mip；32px edge-clamp gutter 让高 mip 只平均到本格边缘，不会把相邻格（草/土）混成浅色线；`shaders/glass.frag` 必须使用同一组常量和同一套映射；
 - 体素材质因此必须同时设 `albedoMap = getVoxelAtlasTexture()` 与 `shaderFlags = 1.0f`；普通模型走 `textureGrad(albedoMaps[matId], fragUV, dFdx(fragUV), dFdy(fragUV))`，与隐式导数等价，且避免在分支里依赖未定义的隐式 LOD。
 - **玻璃走独立网格（V-01）**：`buildMesh` 遇到 `isGlass` 直接跳过，玻璃不进贪心不透明网格（否则会先写进 G-Buffer 深度，`GlassPass` 里同一层玻璃被自己挡掉）；`buildGlassMesh` 逐面输出（不做贪心），只有邻格是空气才出面 —— 玻璃-玻璃、玻璃-不透明方块的贴面直接跳过，避免叠暗；UV/AO 编码与不透明网格一致，结果挂在 `VoxelChunkComponent::glassMesh / glassFaceCount`。
 
@@ -48,7 +48,7 @@ updated: 2026-11-04
 - **管线**：`kHdrSceneFormat` 单颜色附件，`LOAD` 载入 Lighting 结果；深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`（不透明几何仍挡住玻璃，玻璃自己不写深度）；`blendEnable = TRUE`，`SRC_ALPHA / ONE_MINUS_SRC_ALPHA`，`srcAlpha = ONE / dstAlpha = ZERO`。
 - **排序**：CPU 每帧按面质心到相机的距离平方**从远到近**排序（`writeSortedIndices()`），索引写进按帧轮转的 host-visible 索引池，一个 pass 一次 `vkCmdDrawIndexed`。
 - **几何来源**：`GlassPass` 直接读 `VoxelChunkComponent::glassMesh`，用实体世界矩阵变换（位置 `world->matrix`、法线 `normalMatrix`），所以 glass-only chunk 不需要 `Model` / `MeshComponent`，但要有材质槽位。
-- **着色**：`glass.frag` 复用图集解码（半纹素内缩 + `textureGrad` 显式梯度，同 `mrt.frag`），颜色乘玻璃蓝 `vec3(0.72, 0.88, 0.95)` 与顶点 AO；法线按视线双面翻转；alpha = `0.45 + fresnel * 0.35 + spec * 0.5`（上限 0.95），边缘更不透明。
+- **着色**：`glass.frag` 复用图集解码（512 图集 + 32px edge-clamp gutter + `textureGrad` 显式梯度，同 `mrt.frag`），颜色乘玻璃蓝 `vec3(0.72, 0.88, 0.95)` 与顶点 AO；法线按视线双面翻转；alpha = `0.45 + fresnel * 0.35 + spec * 0.5`（上限 0.95），边缘更不透明。
 - **日志**：`[Glass] sorted=<面数> drawcalls=1`（面数变化时打印）；没有玻璃时 pass 早退，不产生 draw/bind。`--voxel-glass-demo` 在 `--voxel-world` 里摆交叉玻璃墙并把相机拉近，供目测与回归。
 - **范围**：只有 `Glass` 走这条路；`Leaves` 留在 G-Buffer（图集没有 alpha 通道，做混合会变成半透明色块）。
 

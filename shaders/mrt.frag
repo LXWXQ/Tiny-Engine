@@ -485,17 +485,24 @@ void main() {
     const bool voxelAtlas = materialFactors.factors[matId * 2u + 1u].z > 0.5;
     vec2 albedoUV = fragUV;
     // 体素图集：fract() 在每格边界产生导数尖峰，隐式 LOD 会被推到最粗 mip，
-    // 采样到整张图集的平均值（其中包含未使用的白色 tile）→ 方块边缘白线/闪烁。
-    // 用显式梯度绕开 fract 的导数不连续：面内 uv 本身是线性的，直接缩放 0.25 即可。
+    // 采样到邻格/整张图集的平均值 → 方块边缘浅色线。
+    // 用显式梯度绕开 fract 的导数不连续；图集每格四周有 edge-clamp gutter，
+    // 高 mip 只会平均到本格边缘，不会渗到邻格。
     vec2 albedoGradX = dFdx(fragUV);
     vec2 albedoGradY = dFdy(fragUV);
     if (voxelAtlas)
     {
-        const float tileId = floor(fragUV.x / 64.0);
-        const vec2 local = fract(vec2(fragUV.x - tileId * 64.0, fragUV.y));
-        albedoUV = (vec2(mod(tileId, 4.0), floor(tileId / 4.0)) + clamp(local, 0.5 / 64.0, 1.0 - 0.5 / 64.0)) * 0.25;
-        albedoGradX *= 0.25;
-        albedoGradY *= 0.25;
+        // 4x4 格，每格 64px 内容 + 32px edge-clamp gutter，128px 间距，512 总尺寸。
+        const float kAtlasSize = 512.0;
+        const float kPitch = 128.0;
+        const float kPad = 32.0;
+        const float kTile = 64.0;
+        const float tileId = floor(fragUV.x / kTile);
+        const vec2 local = fract(vec2(fragUV.x - tileId * kTile, fragUV.y));
+        const vec2 cellOrigin = vec2(mod(tileId, 4.0), floor(tileId / 4.0)) * kPitch + kPad;
+        albedoUV = (cellOrigin + clamp(local, 0.5 / kTile, 1.0 - 0.5 / kTile) * kTile) / kAtlasSize;
+        albedoGradX *= kTile / kAtlasSize;
+        albedoGradY *= kTile / kAtlasSize;
     }
     vec4 albedoColor = (gMaterial.albedoFallback != 0u)
         ? vec4(checkerboardFallback(fragPosLocal), 1.0)
