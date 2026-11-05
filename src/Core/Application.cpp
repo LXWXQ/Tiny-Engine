@@ -2353,6 +2353,11 @@ void FirstApp::render(float dt)
 				settings.shadowEnabled ? 1.0f : 0.0f);
 		}
 
+		// B：距离雾参数。和阴影无关，即使 ShadowPass 被关掉也要写入。
+		ubo.fogParams = glm::vec4(std::max(settings.fogStart, 0.0f),
+			std::max(settings.fogDensity, 0.0f), 0.0f,
+			settings.fogEnabled ? 1.0f : 0.0f);
+
 		memcpy(uboMapped[frameInFlight], &ubo, sizeof(ubo));
 		// 持久映射的 UBO 不保证落在 HOST_COHERENT 内存，必须显式 flush，
 		// 否则 GPU 可能读到上一帧的旧数据（对 non-coherent 堆是未定义行为）。

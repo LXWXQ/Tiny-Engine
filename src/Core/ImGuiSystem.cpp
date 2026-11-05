@@ -150,6 +150,7 @@ return;
 	renderMotionBlurPanel(frameInfo.settings);
 	renderTAAPanel(frameInfo.settings);
 	renderWaterPanel(frameInfo.settings);
+	renderFogPanel(frameInfo.settings);
 
 	if (frameInfo.cameraTransform)
 		renderCameraPanel(*frameInfo.cameraTransform, frameInfo.cameraController);
@@ -286,6 +287,23 @@ void ImGuiSystem::renderWaterPanel(EngineSettings& settings)
 		ImGui::SliderFloat("Wave Strength", &settings.waterWaveStrength, 0.0f, 2.0f, "%.2f");
 		ImGui::SliderFloat("Wave Speed", &settings.waterWaveSpeed, 0.0f, 2.0f, "%.2f");
 		ImGui::TextDisabled("Fresnel reflection + depth absorption");
+		ImGui::Unindent();
+	}
+}
+
+void ImGuiSystem::renderFogPanel(EngineSettings& settings)
+{
+	if (!ImGui::CollapsingHeader("Atmosphere / Fog"))
+		return;
+
+	ImGui::Checkbox("Enable Fog", &settings.fogEnabled);
+	ImGui::SetItemTooltip("Distance fade toward the horizon color for terrain, water and glass");
+	if (settings.fogEnabled)
+	{
+		ImGui::Indent();
+		ImGui::SliderFloat("Start", &settings.fogStart, 0.0f, 500.0f, "%.0f m");
+		ImGui::SliderFloat("Density", &settings.fogDensity, 0.0f, 0.003f, "%.5f");
+		ImGui::TextDisabled("1/m | 0.00045 ~ 34%% at 1km, 83%% at 4km");
 		ImGui::Unindent();
 	}
 }

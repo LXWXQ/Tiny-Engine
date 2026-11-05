@@ -27,7 +27,7 @@
 struct WaterPushConstantData
 {
     glm::vec4 params{ 0.0f };   // x=time(s), y=waterLevel, z=waveStrength, w=waveSpeed
-    glm::vec4 params2{ 0.0f };  // x=farRadius, y=foamStrength, z=reserved, w=reserved
+    glm::vec4 params2{ 0.0f };  // x=farRadius, y=foamStrength, z=fogStart, w=fogDensity
 };
 
 class WaterPass : public IRenderPass

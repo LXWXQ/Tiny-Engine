@@ -4,7 +4,7 @@ title: 水面
 type: system
 scope: src/Render/WaterPass.{h,cpp}, shaders/water.vert, shaders/water.frag
 read-when: 改水面外观/波浪/反射、排查水面不出现或被地形裁掉
-size: ~150 行
+size: ~205 行
 updated: 2026-11-05
 ---
 
@@ -12,7 +12,8 @@ updated: 2026-11-05
 
 水面是 **Lighting 之后、TAA 之前**的前向混合通道（`WaterPass`）：读已经着色好的
 线性 HDR 与 G-Buffer 深度，把水色、环境反射、泡沫按 alpha 叠上去。它不写 G-Buffer，
-也不写深度。
+也不写深度。片元阶段按像素足迹过滤波浪，避免远处条带/闪烁；同一套距离雾也作用于
+地形（`lighting.frag`）和玻璃（`glass.frag`）。
 
 ## 1. 为什么是独立 Pass
 
@@ -59,27 +60,53 @@ h    += amplitude * sin(phase)
 ```
 
 像素阶段再加 3 个高频 ripple（波长 1.7 / 1.1 / 0.75m，振幅 0.010 / 0.006 / 0.004），
-它们只贡献法线细节，不做顶点位移，并在距相机 60..220m 内淡出——否则细密波纹在
-低采样率下会变成闪烁点阵。
+它们只贡献法线细节，不做顶点位移。
+
+**footprint 过滤**：远处/掠射角下，一个像素覆盖的世界 XZ 范围会迅速变大，解析法线
+在相邻像素间跳相位，形成条带和闪烁。着色器用 `dFdx(p)` / `dFdy(p)` 得到像素足迹，
+对每个波判断相邻像素的相位跨度；超过约 1 rad 就淡出该波：
+
+```
+footprint = |dot(dir, dFdx(p))| + |dot(dir, dFdy(p))|
+resolve   = 1 - smoothstep(0.5, 1.5, k * footprint)
+grad     += dir * (amplitude * strength) * k * cos(phase) * resolve
+variance += 0.5 * ((amplitude * strength) * k)^2 * (1 - resolve^2)
+```
+
+淡出的斜率能量不会丢，而是累加成 `slopeVariance`，下一节转成粗糙度。ripple 仍保留
+距相机 60..220m 的距离淡出，与 footprint 过滤相乘。
 
 法线：
 
 ```
-gradient = bigWaveGradient + rippleGradient * rippleFade
+gradient = filteredBigWaveGradient + filteredRippleGradient
 N = normalize(vec3(-gradient.x, 1.0, -gradient.y))
 ```
 
 ## 4. 着色
 
 - **Fresnel**：`0.02 + 0.98 * pow(1 - NdotV, 5)`；从水下往上看时翻转法线。
+- **像素足迹 → 粗糙度**：把上一步的 `bigSlopeVariance + rippleSlopeVariance` 转成
+  `roughness = clamp(sqrt(variance) * 7.0 + distanceRoughness, 0.02, 0.65)`；
+  `distanceRoughness = smoothstep(120, 3000, distanceToCamera) * 0.30`。
+  `roughNorm = smoothstep(0.03, 0.55, roughness)` 控制反射模糊与高光展宽。
 - **环境反射**：直接采样 Set0 binding 1 的等距柱状 HDR `environmentMap`，用
-  `textureGrad` 并在 ±PI 接缝处折回导数，避免接缝退到最低 mip 出现亮线。
+  `textureGrad` 并在 ±PI 接缝处折回导数，避免接缝退到最低 mip 出现亮线；导数再乘
+  `1 + roughness * 12`，让远处未解析的波变成略模糊的反射，而不是随机镜面点。
 - **厚度吸收**：读 G-Buffer `inPosition`（不透明场景的世界坐标），沿视线算
   `thickness = sceneDistance - waterDistance`；`depthFactor = 1 - exp(-thickness * 0.22)`，
   水薄处偏浅、厚处偏深。天空的 10000m 让远处自动变成深海。
 - **水体颜色**：`mix(shallow(0.045,0.150,0.160), deep(0.008,0.035,0.055), depthFactor)`；
   再乘 `0.55 + 0.45 * max(dot(N, L), 0)` 接方向光。
-- **太阳高光**：`pow(NdotH, 900) * 3.0 + pow(NdotH, 120) * 0.10`，前者很窄、后者很淡。
+- **太阳高光**：高光指数从近处的 900 按 `roughNorm` 展宽到 24，峰值从 3.0 降到 0.55；
+  宽层从 120 展宽到 8、强度从 0.10 提到 0.18。这是 specular AA：远处高光变宽变暗，
+  不会在一条线上闪。
+- **距离雾**：在泡沫之后、alpha 之前，用真实视线距离
+  `waterDistance` 做指数雾：
+  `fogAmount = 1 - exp(-fogDensity * max(waterDistance - fogStart, 0))`。
+  雾色取环境图地平线方向 `normalize(vec3(-V.x, 0.035, -V.z))` 的 LOD3，和天空同源，
+  远水与地平线无缝淡出而不是一条硬切边。`lighting.frag` 对不透明地形做同一套雾
+  （天空提前返回、不参与）；`glass.frag` 只淡出玻璃颜色，alpha 不变。
 - **岸边泡沫**：`shore = 1 - smoothstep(0, 1.6, thickness)` 加波峰项，再乘两个交叉正弦
   噪声；泡沫同时抬高 alpha。
 - **混合**：`alpha = mix(0.18, 0.92, depthFactor) + fresnel * 0.55`，上限 0.985；
@@ -100,7 +127,9 @@ cullMode: NONE
 
 - 只绑 Set0 全局描述符，不需要材质 Set；
 - push constant 32 字节：`params=(time, level, waveStrength, waveSpeed)`、
-  `params2=(farRadius, foamStrength, 0, 0)`；
+  `params2=(farRadius, foamStrength, fogStart, fogDensity)`；雾关闭时密度写 0；
+- `GlobalUbo` 尾部新增 `fogParams=(fogStart, fogDensity, 0, enabled)`，光照/水面/玻璃共用；
+  `lighting.frag`、`glass.frag` 的参数分别来自 UBO 与 32 字节的 glass push constant；
 - `timeSeconds` 由 Pass 自己按 `min(max(frameTime, 0), 0.1)` 累加，暂停或断点后不会跳变；
 - 每次 draw 累加 telemetry 的 `drawCalls / triangles / vertices / descriptorBinds`。
 
@@ -111,12 +140,14 @@ cullMode: NONE
 
 | 入口 | 行为 |
 |---|---|
-| 编辑器 Render 面板 / 运行时 ImGui | `Water` 分组：Enabled、Level、Wave Strength、Wave Speed |
+| 编辑器 Render 面板 / 运行时 ImGui | `Water` 分组：Enabled、Level、Wave Strength、Wave Speed；另有 `距离雾` / `Atmosphere / Fog` 分组：Enabled、Start、Density |
 | `--no-water` | 关闭水面；Pass 不注册，打印一次 `[Water] disabled` |
-| `config/engine.json` | `water: { enabled, level, waveStrength, waveSpeed }` |
+| `config/engine.json` | `water: { enabled, level, waveStrength, waveSpeed }`、`fog: { enabled, start, density }` |
 
 默认值：`waterEnabled=true`、`waterLevel=2.0`、`waterWaveStrength=1.0`、
-`waterWaveSpeed=1.0`。
+`waterWaveSpeed=1.0`；`fogEnabled=true`、`fogStart=80m`、`fogDensity=0.00045`
+（约 1km 处 34%、4km 处 83%）。雾是全局设置，地形/水面/玻璃共用；没有单独的
+`--no-fog`，通过配置或 UI 关闭。
 
 ## 7. 可观测与回归
 
@@ -140,16 +171,23 @@ cullMode: NONE
 | `f3v-water-off` | `--selftest 10 --voxel-world 1 --no-water --hidden` | `[Water] disabled`、验证层 0/0 |
 
 截图可以用 `--screenshot build/water_test.png --screenshot-frame 20` 目检水体颜色、
-反射与岸边泡沫。
+反射与岸边泡沫；把相机转向开阔水面、拉远到 1~4km，可对比 `fog.enabled` 开关前后的
+地平线过渡与远处高光。
 
 ## 8. 已知边界
 
 - 水面是水平面，不支持任意朝向的水体；
-- 没有折射、没有 SSR、没有水下后处理；
+- 没有折射、没有 SSR、没有水下后处理；远水反射仍只来自环境图，C 阶段（平面反射/SSR）
+  之前不会出现对岸或山体倒影；
+- 距离雾是均匀指数雾，没有高度衰减、体积光/太阳散射，也没有时间变化；雾色固定取
+  环境图地平线 LOD3，天空本身不参与雾；
+- footprint 过滤只修法线和高光，不改变几何；外圈网格段长约 132m，5.5m 波仍有几何
+  欠采样，远水细节依赖法线过滤而不是真实位移；
 - 没有交互（角色入水、涟漪、溅射），也没有流场/泡沫贴图；
 - 只在有地形/体素块时启用，不能单独给任意场景加水；
 - 反射来自全局环境图，近处物体不会出现在水面倒影里；
-- `--no-water` 时 Pass 完全不注册，没有"着色器短路"路径。
+- TAA 只有相机重投影、没有运动向量，水面动画和物体自身运动不会被单独补偿；
+- `--no-water` 时 Pass 完全不注册，没有"着色器短路"路径；雾没有命令行开关。
 
 ## 9. 关键文件
 
@@ -158,8 +196,11 @@ cullMode: NONE
 | `src/Render/WaterPass.h` | 接口、push constant、径向网格常量 |
 | `src/Render/WaterPass.cpp` | 网格/缓冲、管线、Pass 注册、均匀量与统计 |
 | `shaders/water.vert` | 径向网格跟随相机、4 个大波位移 |
-| `shaders/water.frag` | 解析法线、Fresnel、环境反射、厚度吸收、泡沫 |
-| `src/Core/FrameInfo.h` | `EngineSettings` 的 4 个 water 字段 |
-| `src/Core/EngineConfig.cpp` | `water` 节点读写 |
-| `src/Editor/panels/RenderSettingsPanel.cpp` | 编辑器 Render 面板 |
-| `src/Core/ImGuiSystem.cpp` | 运行时 `Water` 面板 |
+| `shaders/water.frag` | footprint 波浪过滤、粗糙度反射、Fresnel、厚度吸收、泡沫、距离雾 |
+| `shaders/lighting.frag` | 不透明几何的距离雾；天空提前返回 |
+| `shaders/glass.frag` | 玻璃距离雾（只淡出颜色，alpha 不变） |
+| `src/Core/FrameInfo.h` | `EngineSettings` 的 water/fog 字段、`GlobalUbo.fogParams` |
+| `src/Core/Application.cpp` | 每帧上传 `fogParams` |
+| `src/Core/EngineConfig.cpp` | `water` / `fog` 节点读写 |
+| `src/Editor/panels/RenderSettingsPanel.cpp` | 编辑器 Water / 距离雾面板 |
+| `src/Core/ImGuiSystem.cpp` | 运行时 Water / Atmosphere 面板 |

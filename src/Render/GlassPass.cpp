@@ -8,7 +8,7 @@
 #include <numeric>
 #include <stdexcept>
 
-static_assert(sizeof(GlassPushConstantData) == 8, "glass push constant must stay 8 bytes");
+static_assert(sizeof(GlassPushConstantData) == 32, "glass push constant must stay 32 bytes");
 
 namespace
 {
@@ -361,9 +361,13 @@ void GlassPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         VkDescriptorSet sets[] = { globalSet, descriptorManager->getMaterialSet() };
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 2, sets, 0, nullptr);
 
+        const EngineSettings& settings = frameInfo.settings;
         GlassPushConstantData push{};
         push.materialId = materialId;
         push.alpha = 0.45f;
+        push.fogParams = glm::vec4(std::max(settings.fogStart, 0.0f),
+            std::max(settings.fogDensity, 0.0f), 0.0f,
+            settings.fogEnabled ? 1.0f : 0.0f);
         vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(GlassPushConstantData), &push);
 

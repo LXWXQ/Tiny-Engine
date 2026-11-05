@@ -293,7 +293,9 @@ void WaterPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         WaterPushConstantData push{};
         push.params = glm::vec4(timeSeconds, settings.waterLevel,
                                 settings.waterWaveStrength, settings.waterWaveSpeed);
-        push.params2 = glm::vec4(kFarRadius, 1.0f, 0.0f, 0.0f);
+        push.params2 = glm::vec4(kFarRadius, 1.0f,
+                                 settings.fogEnabled ? std::max(settings.fogStart, 0.0f) : 0.0f,
+                                 settings.fogEnabled ? std::max(settings.fogDensity, 0.0f) : 0.0f);
         vkCmdPushConstants(cmd, pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(WaterPushConstantData), &push);

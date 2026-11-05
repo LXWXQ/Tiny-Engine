@@ -46,6 +46,10 @@ struct GlobalUbo
 	alignas(16) glm::vec4 shadowCascadeSplits{ 0.f, 0.f, 0.f, 3.f };
 	// x = 1/分辨率（纹素尺寸）, y = 强度, z = PCF 半径（纹素）, w = 是否启用
 	alignas(16) glm::vec4 shadowParams{ 1.f / 2048.f, 0.65f, 1.5f, 1.f };
+
+	// B：全场景距离雾。x = 起始距离(m), y = 密度(1/m), z = 保留,
+	// w = 是否启用。放在 UBO 尾部而不是新开 uniform，避免多一次绑定。
+	alignas(16) glm::vec4 fogParams{ 80.f, 0.00045f, 0.f, 1.f };
 };
 
 // ---------------------------------------------------------------------------
@@ -73,8 +77,11 @@ static_assert(offsetof(GlobalUbo, shadowCascadeSplits) ==
 static_assert(offsetof(GlobalUbo, shadowParams) ==
 		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) + sizeof(glm::vec4),
 	"GlobalUbo.shadowParams offset mismatch");
+static_assert(offsetof(GlobalUbo, fogParams) ==
+		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) + 2 * sizeof(glm::vec4),
+	"GlobalUbo.fogParams offset mismatch");
 static_assert(sizeof(GlobalUbo) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) +
-		2 * sizeof(glm::vec4),
+		3 * sizeof(glm::vec4),
 	"GlobalUbo size mismatch");
 
 struct SimplePushConstantData
@@ -269,6 +276,13 @@ struct EngineSettings
 	float waterLevel = 2.0f;
 	float waterWaveStrength = 1.0f;
 	float waterWaveSpeed = 1.0f;
+
+	// B：全场景距离雾（空气透视）。远处地形/水面/玻璃一起淡出到环境图
+	// 的地平线颜色，解决 4km 水面只剩一块硬切镜面、远山边界过锐的问题。
+	// density 是 1/m：0.00045 在 1km 处约 34%，4km 约 83%。
+	bool  fogEnabled = true;
+	float fogStart = 80.0f;
+	float fogDensity = 0.00045f;
 };
 
 struct RenderTelemetry

@@ -23,6 +23,7 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 shadowMatrices[3];
     vec4 shadowCascadeSplits;   // xyz = 每级最远视深度，w = 级联数
     vec4 shadowParams;          // x = 1/分辨率, y = 强度, z = PCF 半径, w = 启用
+    vec4 fogParams;             // x = 起始距离, y = 密度, z = 保留, w = 启用
 } ubo;
 
 layout(set = 0, binding = 1) uniform sampler2D environmentMap;
@@ -49,6 +50,13 @@ vec2 SampleSphericalMap(vec3 v) {
     uv *= invAtan;
     uv += 0.5;
     return uv;
+}
+
+// B：雾色取环境图地平线方向（而不是硬编码颜色），远山淡出后与天空一致。
+// 固定 LOD 3 做一次模糊，避免把太阳附近的细节拉成一条亮带。
+vec3 SampleFogColor(vec3 V) {
+    vec3 dir = normalize(vec3(-V.x, 0.035, -V.z));
+    return textureLod(environmentMap, SampleSphericalMap(dir), 3.0).rgb;
 }
 
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
@@ -229,6 +237,14 @@ void main() {
     ambient *= ssao;
 
     vec3 color = ambient + Lo;
+
+    // B：距离雾。只作用于有几何的法线像素；天空在下面提前返回，保持原样。
+    // 雾色来自同一张环境图，所以远处地形、水面、玻璃会一起淡出到地平线。
+    if (ubo.fogParams.w > 0.5) {
+        float fogDistance = length(ubo.cameraPos.xyz - fragPosWorld);
+        float fogAmount = 1.0 - exp(-ubo.fogParams.y * max(fogDistance - ubo.fogParams.x, 0.0));
+        color = mix(color, SampleFogColor(V), clamp(fogAmount, 0.0, 1.0));
+    }
 
     // =====================================================================
     // D-2：这里只输出「线性 HDR 辐照度」，不再做曝光 / ACES 色调映射 / gamma。

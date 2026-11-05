@@ -22,6 +22,8 @@ layout(set = 0, binding = 0) uniform GlobalUbo
     vec4 cameraPos;
 } ubo;
 
+layout(set = 0, binding = 1) uniform sampler2D environmentMap;
+
 layout(set = 0, binding = 10) readonly buffer MaterialFactorBlock
 {
     vec4 factors[];
@@ -29,12 +31,21 @@ layout(set = 0, binding = 10) readonly buffer MaterialFactorBlock
 
 layout(set = 1, binding = 0) uniform sampler2D albedoMaps[];
 
-// 与 C++ 侧 GlassPushConstantData 精确对应（8 字节）。
+// 与 C++ 侧 GlassPushConstantData 精确对应（32 字节）。
 layout(push_constant) uniform GlassPushConstant
 {
     uint materialId;
     float alpha;
+    vec4 fogParams;   // x = 起始距离, y = 密度, z = 保留, w = 启用
 } push;
+
+const vec2 kInvAtan = vec2(0.1591, 0.3183);
+
+vec2 sampleSphericalMap(vec3 v)
+{
+    return vec2(atan(v.z, v.x) * kInvAtan.x + 0.5,
+                0.5 - asin(clamp(v.y, -1.0, 1.0)) * kInvAtan.y);
+}
 
 void main()
 {
@@ -84,7 +95,18 @@ void main()
     // 不能指望它；给一个很小的人工环境项，保证背光面不会纯黑。
     const vec3 ambient = vec3(0.14, 0.17, 0.20);
 
-    const vec3 color = albedo * (ambient + radiance * NdotL * 0.6) + radiance * specular;
+    vec3 color = albedo * (ambient + radiance * NdotL * 0.6) + radiance * specular;
+
+    // B：和地形/水面一致的距离雾。玻璃本身是半透明，这里只淡出它的
+    // 着色颜色；alpha 不改，避免远处玻璃突然变成一块实心雾墙。
+    if (push.fogParams.w > 0.5)
+    {
+        float fogDistance = length(ubo.cameraPos.xyz - fragPosWorld);
+        float fogAmount = 1.0 - exp(-push.fogParams.y * max(fogDistance - push.fogParams.x, 0.0));
+        vec3 fogColor = textureLod(environmentMap,
+            sampleSphericalMap(normalize(vec3(-V.x, 0.035, -V.z))), 3.0).rgb;
+        color = mix(color, fogColor, clamp(fogAmount, 0.0, 1.0));
+    }
 
     // 菲涅尔：正对时更透（能看到后面的东西），掠射角更实（玻璃边缘发亮）。
     const float fresnel = pow(1.0 - NdotV, 3.0);

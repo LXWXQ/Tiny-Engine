@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~840 行
+size: ~860 行
 updated: 2026-11-05
 ---
 
@@ -823,3 +823,25 @@ updated: 2026-11-05
 **回归**：`f3v-water`（断言 initialized/first draw + `[Validation] errors=0 warnings=0`）与 `f3v-water-off`（断言 `[Water] disabled`）；全套 **69 项引擎 + 2 项工具 = 71 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-162911`；DocCheck PASS（documents=67）。
 
 **已知边界**：水面是无限水平面，不跟随地形起伏；反射只来自环境图，没有 SSR，近处物体不会出现在倒影里；没有折射和水下后处理，镜头进入水下后不会切换色调；没有交互（涟漪/尾迹）。
+
+## 远水 A+B：footprint 波浪滤波 + 距离雾（2026-11-05）
+
+**问题**：站在 6.4m 视高看 100m~4km 外的水面，Fresnel 在掠射角接近 1，水面几乎只剩环境图天空反射；4 个大波和 3 个 ripple 没有按像素足迹过滤，远处波峰在 1km 外不足 1 像素，被 Fresnel 和 `pow(NdotH, 900)` 高光放大成条带/闪烁；同时全场景没有空气透视，远水与地平线是硬切边。
+
+**A：波浪 footprint 滤波**（`shaders/water.frag`）：
+- 每个波用 `dFdx(p)/dFdy(p)` 求世界 XZ 像素足迹，`resolve = 1 - smoothstep(0.5, 1.5, k*footprint)`；未解析波不再参与法线。
+- 淡出的斜率能量累加成 `slopeVariance`，转成 `roughness = clamp(sqrt(variance)*7 + smoothstep(120,3000,distance)*0.30, 0.02, 0.65)`。
+- 环境反射的 `textureGrad` 导数乘 `1 + roughness*12`；太阳高光指数从 900 按 `roughNorm` 展宽到 24、峰值 3.0 -> 0.55，宽层 120 -> 8、0.10 -> 0.18（specular AA）。
+- 近处保持原来的锐利反射/窄高光；远处变成略模糊的反射和宽高光，不再出现随机条带与点状闪烁。
+
+**B：全场景距离雾**：
+- `GlobalUbo` 尾部新增 `fogParams=(start, density, 0, enabled)`，`Application` 每帧上传；默认 `enabled=true`、`start=80m`、`density=0.00045`（1km 约 34%、4km 约 83%）。
+- 雾色取环境图地平线方向 `normalize(vec3(-V.x, 0.035, -V.z))` 的 LOD3，和天空同源；`lighting.frag` 对不透明几何混合，天空在法线为空时提前返回、不二次染色。
+- `water.frag` 用真实视线距离 `waterDistance` 做指数雾；`glass.frag` 通过 32 字节 push constant 拿到同一组参数，只淡出玻璃颜色，alpha 不变，避免远处玻璃变成实心雾墙。
+- 编辑器 Render 面板新增“距离雾”分组，运行时 ImGui 新增 `Atmosphere / Fog`；`config/engine.json` 持久化 `fog` 节点；没有 `--no-fog` 命令行开关。
+
+**可观测/证据**：`build/water_after.png` 为近景湖面；把相机转向开阔水面后，同机位 `build/farwater_fog.png` 与 `build/farwater_nofog.png` 几乎逐像素一致（mean 0.047）——因为远水 Fresnel 已接近天空，而雾色正是环境图地平线色，这是设计上的无缝淡出。临时把密度调到 0.01 拍 `build/water_fogheavy.png`，与默认雾图全画面 mean 13.5、底部水体约 +9 级，证明 Water/Lighting/Glass 的雾参数确实生效；默认密度在 100m 水体只约 0.6 级，近景几乎不可见。
+
+**回归**：全套 **69 项引擎 + 2 项工具 = 71 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-172117`；DocCheck PASS（documents=67）。
+
+**已知边界**：远水反射仍只来自环境图，没有对岸/山体倒影（C 阶段再做平面反射/SSR）；雾是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；footprint 滤波只修法线与高光，不改变几何，外圈网格 132m 段长的几何欠采样仍在。

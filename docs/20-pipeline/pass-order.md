@@ -4,7 +4,7 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~180 行
+size: ~125 行
 updated: 2026-11-05
 ---
 
@@ -29,7 +29,7 @@ LightingPass      读 G-Buffer + SSAO + IBL 三件套 + 环境图 -> 写 R16G16B
    |
 GlassPass         V-01：体素玻璃前向混合；LOAD HDR + 深度，写深度关，按面质心远->近，只画 Glass
    |
-WaterPass         水面前向混合：LOAD HDR + 深度，写深度关；相机中心径向网格铺到约 4km
+WaterPass         水面前向混合：LOAD HDR + 深度，写深度关；径向网格铺到约 4km，逐像素 footprint 过滤波浪 + 距离雾
    |
 TAAPass           时域抗锯齿：读 HDR / G-Buffer.Position / 上一帧 history，写 taaOutput + 新 history
    |
@@ -68,7 +68,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 |---|---|
 | SSAO 在 Lighting **之前** | SSAO 调制环境光项（`ambient *= ssao`），是光照的输入 |
 | Glass 在 Lighting **之后**、Bloom **之前** | 玻璃必须混合在已经着色好的 HDR 上（延迟着色只存一个表面，玻璃进 G-Buffer 会把后面的层盖掉）；放在 Bloom 前，玻璃高光也参与辉光。深度 `LOAD` 但 `depthWrite = FALSE`、`compare = LESS_OR_EQUAL`：不透明几何仍挡住玻璃，玻璃之间由 CPU 排序（远->近）决定顺序 |
-| Water 在 Glass **之后**、TAA **之前** | 水面要混合进已经着色的 HDR；先于 TAA 才能让水边缘参与时域抗锯齿；先于 Bloom 才能让太阳高光参与辉光。深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，不透明几何与玻璃都能挡住它；相机中心径向网格跟随相机，铺到约 4km |
+| Water 在 Glass **之后**、TAA **之前** | 水面要混合进已经着色的 HDR；先于 TAA 才能让水边缘参与时域抗锯齿；先于 Bloom 才能让太阳高光参与辉光。深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，不透明几何与玻璃都能挡住它；相机中心径向网格跟随相机，铺到约 4km。片元用 `dFdx/dFdy` 足迹逐波过滤，未解析能量转成粗糙度/高光展宽；距离雾在 Lighting、Water、Glass 内共用 `fogParams` |
 | TAA 在 Water **之后**、Bloom **之前** | 先把玻璃和水面混合进 HDR 再做时域解析，透明边缘也能被抗锯齿；Bloom 读到的是已收敛的 HDR，不会把抖动噪声放大成辉光。TAA 用未抖动 VP 把 G-Buffer 世界坐标反投影到上一帧，不需要运动向量（当前只有相机运动）；ImGui 在 Present 内叠加，不参与历史混合 |
 | Bloom 在 tonemap **之前** | ACES 最后一步是 `clamp(0,1)`，高光被压到 1.0 后 Bloom 只能"把白涂白" |
 | 曝光在 Bloom **之后** | 曝光是 tonemap 的输入缩放；若写在光照里，Bloom 阈值会随曝光漂移，拖滑块时辉光乱跳 |
@@ -82,6 +82,13 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | `--no-bloom` | **真的跳过 7 个 Bloom pass**；Present 走 `present_no_bloom.frag` 单输入管线 |
 | `--no-taa` | TAA Pass 仍执行，但 `historyWeight = 0`、jitter = 0，着色器直接输出当前帧；窗口/渲染目标 resize 与重新开启时 `historyValid = false`，首帧不吃旧历史 |
 | `--no-water` | Water Pass **完全不注册**，只打印一次 `[Water] disabled`；有地形/体素块时才可能注册 |
+| 距离雾 | 没有命令行开关；只能通过 `config/engine.json` 的 `fog.enabled` 或编辑器/运行时 UI 关闭。它不是 Pass，关闭时着色器按密度 0 跳过混合 |
+
+距离雾不是独立 Pass：`GlobalUbo.fogParams`（x=起始距离、y=密度、z=保留、w=启用）由
+`Application` 每帧上传，`lighting.frag` 对不透明几何、`water.frag` 对水面各自在
+输出前混合；`glass.frag` 通过自己的 push constant 拿到同一组参数，只淡出颜色而
+不改 alpha。雾色统一采样环境图地平线方向（LOD3），所以远景和天空无缝衔接。天空像素
+在 `lighting.frag` 提前返回，不会被雾二次染色。
 
 为什么 SSAO 是"Pass 照跑 + 着色器短路"而不是跳过：`lighting.frag` 里 `ambient *= ssao` 是
 **无条件**执行的，跳过会让它乘上未定义内容。这是真实踩过的 bug（见

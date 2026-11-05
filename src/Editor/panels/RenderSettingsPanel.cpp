@@ -145,6 +145,17 @@ void RenderSettingsPanel::draw(EditorState& state)
         ImGui::TextDisabled("Fresnel + 环境反射 | 0 = 静止镜面");
     }
 
+    if (ImGui::CollapsingHeader("距离雾"))
+    {
+        ImGui::Checkbox("Enabled##fog", &settings->fogEnabled);
+        ImGui::SetItemTooltip("远处地形/水面/玻璃向地平线颜色淡出，减少硬切边界与镜面条带");
+        ImGui::SliderFloat("Start", &settings->fogStart, 0.0f, 500.0f, "%.0f m");
+        ImGui::SetItemTooltip("雾开始出现的距离；近处保持完全清晰");
+        ImGui::SliderFloat("Density", &settings->fogDensity, 0.0f, 0.003f, "%.5f");
+        ImGui::SetItemTooltip("1/m。0.00045 约 1km 处 34%、4km 处 83%；调到 0 等于关闭");
+        ImGui::TextDisabled("空气透视 | 使用环境图地平线颜色");
+    }
+
     // F6：阴影（3 级 CSM）。strength 是"阴影方向的衰减比例"，
     // 0 = 完全无阴影，1 = 全黑；默认 0.65 是有意留一点环境光，纯黑看着像贴纸。
     if (ImGui::CollapsingHeader("阴影", ImGuiTreeNodeFlags_DefaultOpen))

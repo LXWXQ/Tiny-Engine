@@ -30,6 +30,9 @@ struct GlassPushConstantData
 {
     uint32_t materialId = 0xFFFFFFFFu;
     float alpha = 0.45f;
+    // B：距离雾参数（x=起始距离, y=密度, z=保留, w=启用）。
+    // GLSL 侧 vec4 需要 16 字节对齐，结构体会补到 32 字节。
+    alignas(16) glm::vec4 fogParams{ 80.0f, 0.00045f, 0.0f, 1.0f };
 };
 
 class GlassPass : public IRenderPass

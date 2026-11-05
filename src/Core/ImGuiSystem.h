@@ -42,6 +42,7 @@ private:
 	void renderMotionBlurPanel(EngineSettings& settings);
 	void renderTAAPanel(EngineSettings& settings);
 	void renderWaterPanel(EngineSettings& settings);
+	void renderFogPanel(EngineSettings& settings);
 	void renderConfigPanel(FrameInfo& frameInfo);
 	void renderCameraPanel(TransformComponent& cameraTransform, class CameraController* controller);
 

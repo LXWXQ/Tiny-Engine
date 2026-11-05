@@ -120,6 +120,13 @@ namespace
 		water["waveSpeed"] = s.waterWaveSpeed;
 		j["water"] = std::move(water);
 
+		// B：距离雾。独立节点而不是塞进 water，地形/玻璃也吃同一份参数。
+		json fog;
+		fog["enabled"] = s.fogEnabled;
+		fog["start"] = s.fogStart;
+		fog["density"] = s.fogDensity;
+		j["fog"] = std::move(fog);
+
 		json light;
 		writeVec(light, "direction", s.directionalLightDir);
 		writeVec(light, "color", s.directionalLightColor);
@@ -187,6 +194,14 @@ namespace
 			out.waterLevel = read(n, "level", out.waterLevel, warnings);
 			out.waterWaveStrength = read(n, "waveStrength", out.waterWaveStrength, warnings);
 			out.waterWaveSpeed = read(n, "waveSpeed", out.waterWaveSpeed, warnings);
+		}
+
+		if (j.contains("fog") && j["fog"].is_object())
+		{
+			const json& n = j["fog"];
+			out.fogEnabled = read(n, "enabled", out.fogEnabled, warnings);
+			out.fogStart = read(n, "start", out.fogStart, warnings);
+			out.fogDensity = read(n, "density", out.fogDensity, warnings);
 		}
 
 		if (j.contains("lighting") && j["lighting"].is_object())
