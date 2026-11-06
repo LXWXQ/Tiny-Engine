@@ -1405,7 +1405,7 @@ bool Scene::selfTest()
         scene.getRegistry();
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
-        if (componentCount != 2 || systemCount != 2)
+        if (componentCount != 7 || systemCount != 7)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;
@@ -1486,6 +1486,134 @@ bool Scene::selfTest()
             scene.hasComponent(testEntity, "effects.spin"))
         {
             std::cerr << "[Scene] selfTest FAIL: removeComponent semantics mismatch\n";
+            ok = false;
+        }
+
+        // 第一批效果组件：每个系统跑一个完整周期，验证动作发生且能回到原位。
+        const auto makeEffectEntity = [&testRegistry]()
+        {
+            const entt::entity entity = testRegistry.create();
+            testRegistry.emplace<TransformComponent>(entity);
+            return entity;
+        };
+
+        const entt::entity bobEntity = makeEffectEntity();
+        if (!scene.addComponent(bobEntity, "effects.bob"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: Bob addComponent failed\n";
+            ok = false;
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 0.25f);
+        const float bobY =
+            testRegistry.get<TransformComponent>(bobEntity).getTranslation().y;
+        if (std::abs(bobY - 0.25f) > 1e-3f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Bob displacement mismatch\n";
+            ok = false;
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 0.75f);
+        if (std::abs(testRegistry.get<TransformComponent>(bobEntity).getTranslation().y) > 2e-3f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Bob did not return to origin\n";
+            ok = false;
+        }
+
+        const entt::entity pulseEntity = makeEffectEntity();
+        if (!scene.addComponent(pulseEntity, "effects.pulse"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: Pulse addComponent failed\n";
+            ok = false;
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 0.25f);
+        const float pulseScale =
+            testRegistry.get<TransformComponent>(pulseEntity).getScale().x;
+        if (std::abs(pulseScale - 1.15f) > 1e-3f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Pulse scale mismatch\n";
+            ok = false;
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 0.75f);
+        if (std::abs(testRegistry.get<TransformComponent>(pulseEntity).getScale().x - 1.0f) > 2e-3f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Pulse did not return to unit scale\n";
+            ok = false;
+        }
+
+        const entt::entity swayEntity = makeEffectEntity();
+        if (!scene.addComponent(swayEntity, "effects.sway"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: Sway addComponent failed\n";
+            ok = false;
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 0.25f);
+        const float swayMidDot = std::abs(glm::dot(
+            glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+            testRegistry.get<TransformComponent>(swayEntity).getOrientation()));
+        if (swayMidDot > 0.99999f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Sway did not rotate\n";
+            ok = false;
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 0.75f);
+        const float swayEndDot = std::abs(glm::dot(
+            glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+            testRegistry.get<TransformComponent>(swayEntity).getOrientation()));
+        if (swayEndDot < 0.9999f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Sway did not return to identity\n";
+            ok = false;
+        }
+
+        const entt::entity lookAtEntity = makeEffectEntity();
+        if (!scene.addComponent(lookAtEntity, "effects.lookAt"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: Look At addComponent failed\n";
+            ok = false;
+        }
+        auto lookAtRecord = scene.readComponent(lookAtEntity, "effects.lookAt");
+        if (lookAtRecord)
+        {
+            if (scene::NamedProperty* target = lookAtRecord->find("target"))
+                target->value = scene::PropertyValue::fromVec3(glm::vec3(10.0f, 0.0f, 0.0f));
+            scene.applyComponentRecord(lookAtEntity, *lookAtRecord);
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 0.016f);
+        const glm::vec3 lookDirection =
+            glm::mat3_cast(testRegistry.get<TransformComponent>(lookAtEntity).getOrientation()) *
+            glm::vec3(0.0f, 0.0f, -1.0f);
+        if (lookDirection.x < 0.99f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Look At forward axis mismatch\n";
+            ok = false;
+        }
+
+        const entt::entity followEntity = makeEffectEntity();
+        if (!scene.addComponent(followEntity, "effects.follow"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: Follow addComponent failed\n";
+            ok = false;
+        }
+        auto followRecord = scene.readComponent(followEntity, "effects.follow");
+        if (followRecord)
+        {
+            if (scene::NamedProperty* target = followRecord->find("target"))
+                target->value = scene::PropertyValue::fromVec3(glm::vec3(10.0f, 0.0f, 0.0f));
+            if (scene::NamedProperty* speed = followRecord->find("speed"))
+                speed->value = scene::PropertyValue::fromFloat(2.0f);
+            scene.applyComponentRecord(followEntity, *followRecord);
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 1.0f);
+        if (std::abs(testRegistry.get<TransformComponent>(followEntity).getTranslation().x - 2.0f) >
+            1e-3f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Follow speed mismatch\n";
+            ok = false;
+        }
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 4.0f);
+        if (std::abs(testRegistry.get<TransformComponent>(followEntity).getTranslation().x - 9.9f) >
+            2e-3f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Follow stop distance mismatch\n";
             ok = false;
         }
 

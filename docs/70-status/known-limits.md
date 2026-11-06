@@ -73,10 +73,13 @@ updated: 2026-11-06
 - **预制体只支持单根子树**：没有嵌套预制体、变体/参数覆盖、实例与源资产联动；
   不保存体素世界差分、地形、相机与流送状态。每次实例化重新分配材质槽位，
   根固定挂在场景根下（之后可手动拖拽），redo 会换新实体 ID。见 [prefabs](../90-editor/prefabs.md)。
-- **系统在编辑模式也推进**：`Scene::update()` 不区分 Play/Edit，Spin/Orbit 在编辑模式
-  也会随时间变化；暂停播放不会冻结系统。
+- **系统在编辑模式也推进**：`Scene::update()` 不区分 Play/Edit，`effects.*`（Spin/Orbit/
+  Bob/Sway/Pulse/LookAt/Follow）在编辑模式也会随时间变化；暂停播放不会冻结系统。
 - **元数据组件只有 6 种属性类型**：Bool/Int/Float/Vec3/Color/String；没有曲线、
   资产引用或嵌套组件。
+- **内置元数据组件只有 7 个 `effects.*`**：原生 17 个组件（Transform/Character/Terrain/
+  Mesh/Material 等）仍走固定 Inspector 与专用序列化，没有统一 Add Component；第二批计划
+  把它们接入。
 
 ## 角色与动画（E9）
 

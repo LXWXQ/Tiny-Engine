@@ -64,15 +64,21 @@ EnTT 只提供存储。F5-01 在它上面加了两件事：**组件描述表**�
 Simulation systems -> updateWorldTransforms() -> PostTransform systems -> refreshSpatialIndex()
 ```
 
-**内置示例（`FeatureComponents.h`）**
+**内置组件（第一批，`FeatureComponents.h`）**
 
-| 组件 id | 属性 | 系统行为 |
-|---|---|---|
-| `effects.spin` | `axis` / `degreesPerSecond` / `enabled` | 每帧绕本地轴累乘四元数 |
-| `effects.orbit` | `center` / `radius` / `degreesPerSecond` / `angle` / `enabled` | 累加角度并写世界平移 |
+| 组件 id | 分类 | 属性 | 系统行为 |
+|---|---|---|---|
+| `effects.spin` | Effects | `axis` / `degreesPerSecond` / `enabled` | 每帧绕本地轴累乘四元数 |
+| `effects.orbit` | Effects | `center` / `radius` / `degreesPerSecond` / `angle` / `enabled` | 累加角度并写世界平移 |
+| `effects.bob` | Effects | `axis` / `amplitude` / `frequency` / `phase` / `enabled` | 沿轴正弦浮动，增量写平移以保留手动拖动 |
+| `effects.sway` | Effects | `axis` / `amplitudeDegrees` / `frequency` / `phase` / `enabled` | 绕轴正弦摆动，增量乘四元数 |
+| `effects.pulse` | Effects | `amplitude` / `frequency` / `phase` / `enabled` | 缩放脉冲，增量乘缩放以保留手动缩放 |
+| `effects.lookAt` | Motion | `target` / `up` / `turnSpeed` / `enabled` | 朝向 target；`turnSpeed=0` 瞬时，否则 slerp |
+| `effects.follow` | Motion | `target` / `speed` / `stopDistance` / `enabled` | 向 target 匀速靠近并在 stopDistance 停下 |
 
-它们是可用的效果，也是新组件的模板：注册组件 +（可选）注册系统，不需要改 Inspector、
-SceneSerializer 或 Commands。
+系统顺序为 Spin 100、Orbit 110、Bob 120、Sway 130、Pulse 140、Follow 150、Look At 160。
+Look At/Follow 的 target/up 是父空间坐标；顶层实体即世界坐标。它们都是可用的效果/运动，
+也是新组件的模板：注册组件 +（可选）注册系统，不需要改 Inspector、SceneSerializer 或 Commands。
 
 **Scene 公开 API**
 
@@ -234,12 +240,13 @@ Scene::selfTest();
 
 覆盖：父子/孙节点的世界变换传播、dirty 子树计数、空间网格查询与增量 upsert/remove、
 XZ region 重建/范围查询/移除；以及元数据组件注册表（add/read/write/remove/default）、
-`ComponentRecord` 值往返、`SpinComponent` 在 Simulation 阶段实际推进四元数。
+`ComponentRecord` 值往返、7 个系统各跑一个完整周期（Spin 转 45°、Bob 到 0.25 再回 0、
+Pulse 到 1.15 再回 1、Sway 摆动后回正、Look At 朝 +X、Follow 按 speed 靠近并在 stopDistance 停）。
 输出标记：
 
 ```
 [Scene] ECS/spatial selfTest PASS | hierarchy=T*Ry*Rx*Rz*S | grid cells=8
-[Scene] ECS component selfTest PASS | components=2 | systems=2
+[Scene] ECS component selfTest PASS | components=7 | systems=7
 ```
 
 ## 7. 改动注意

@@ -970,3 +970,22 @@ updated: 2026-11-06
 **回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-124323`；DocCheck PASS（documents=68 lines=11711）。
 
 **边界**：单根子树；没有嵌套预制体、变体/参数覆盖、实例与源资产联动；不保存体素世界、地形、相机与流送状态；每次实例化重新分配材质槽位；实例化根固定在场景根下；redo 后实体 ID 变化。说明见 [prefabs](../90-editor/prefabs.md)。
+
+## F5-03：内置效果/运动组件第一批（2026-11-06）
+
+**问题**：F5-01 只注册了 Spin/Orbit 两个示例，`+ Add Component` 菜单只有两项；常见效果（浮动、脉冲、摆动、朝向、跟随）仍要写代码或手工逐帧改 Transform。
+
+**实现**：
+- `src/Scene/FeatureComponents.h` 新增 `BobComponent` / `PulseComponent` / `SwayComponent` / `LookAtComponent` / `FollowComponent`；运行期 `time`、`lastOffset`、`lastFactor`、`lastAngle` 不暴露给 Inspector。
+- `src/Scene/FeatureComponents.cpp` 新增 5 个系统：Bob 120、Sway 130、Pulse 140、Follow 150、LookAt 160；Bob/Sway/Pulse 用“本帧 - 上帧”增量写 Transform，保留用户手动平移/缩放，LookAt/Follow 直接按目标计算。
+- LookAt 用 `glm::lookAt` 矩阵转四元数，`turnSpeed>0` 时 slerp，视线与 up 平行时换 up 兜底；Follow 按 `speed*dt` 步进，停在 `stopDistance`。
+- 属性 clamp：Bob amp 0..100 / freq 0..100 / phase ±720；Pulse amp -0.95..10；Sway amp 0..180；LookAt turnSpeed 0..3600；Follow speed/stop 0..1000。
+- 分类：Spin/Orbit/Bob/Sway/Pulse 为 Effects，LookAt/Follow 为 Motion；组件 id 统一 `effects.*`。
+
+**测试**：
+- `[Scene] ECS component selfTest PASS | components=7 | systems=7`：注册表/调度器数量、Spin 45°/0.5s、Bob 0.25s 到 0.25 再回 0、Pulse 0.25s 到 1.15 再回 1、Sway 中段旋转且整周期回正、LookAt target=(10,0,0) 时局部 -Z 朝 +X、Follow speed=2 一秒 x=2、再四秒停在 9.9。
+- 编辑器 `TinyEditor.exe --selftest 5 --empty-scene` 通过，`[Validation] errors=0 warnings=0`。
+
+**回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-142427`；DocCheck PASS（documents=68 lines=11782）。
+
+**边界**：效果只在实体本地空间；LookAt/Follow 的 target/up 是父空间坐标，顶层即世界；没有碰撞/寻路/曲线/缓动，Follow 直线移动会穿墙；系统在编辑模式也推进，暂停不冻结；属性仍只有 6 种基础类型，不能做曲线或数组。
