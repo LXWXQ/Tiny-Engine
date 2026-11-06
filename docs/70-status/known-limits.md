@@ -77,9 +77,13 @@ updated: 2026-11-06
   Bob/Sway/Pulse/LookAt/Follow）在编辑模式也会随时间变化；暂停播放不会冻结系统。
 - **元数据组件只有 6 种属性类型**：Bool/Int/Float/Vec3/Color/String；没有曲线、
   资产引用或嵌套组件。
-- **内置元数据组件只有 7 个 `effects.*`**：原生 17 个组件（Transform/Character/Terrain/
-  Mesh/Material 等）仍走固定 Inspector 与专用序列化，没有统一 Add Component；第二批计划
-  把它们接入。
+- **原生组件只接入两个可添加项**：F5-04 注册了 9 个 `native.*` 描述符，但 `+ Add Component`
+  里只有 Character Controller 与 Render Tag 可增删；Name/Transform/Hierarchy 必需只读，
+  Camera/Terrain/Streaming/Voxel 是创建菜单托管、菜单中置灰。Mesh/Material/Terrain chunk
+  等仍走固定面板或专用创建流程。
+- **原生组件不进 v3 `components`**：Character、Render Tag、Terrain、Streaming、Voxel、Camera
+  仍由 `EntityDescription` 专用字段存盘；`native.*` 描述符 `serialized=false`，只服务
+  Inspector/增删校验。加载时文件里伪造的 native 记录会被忽略，不会覆盖专用字段。
 
 ## 角色与动画（E9）
 

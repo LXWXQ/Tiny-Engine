@@ -2,7 +2,7 @@
 id: systems/scene-ecs
 title: 场景、ECS、Transform 层级与空间索引
 type: system
-scope: src/Scene/Scene.h, src/Scene/Scene.cpp, src/Scene/Components.h, src/Scene/ComponentTypes.h, src/Scene/ComponentRegistry.h, src/Scene/SystemScheduler.h, src/Scene/FeatureComponents.h, src/Scene/SpatialIndex.h, src/Scene/GLTFLoader.cpp, src/Scene/Model.cpp
+scope: src/Scene/Scene.h, src/Scene/Scene.cpp, src/Scene/Components.h, src/Scene/ComponentTypes.h, src/Scene/ComponentRegistry.h, src/Scene/SystemScheduler.h, src/Scene/FeatureComponents.h, src/Scene/NativeComponents.h, src/Scene/SpatialIndex.h, src/Scene/GLTFLoader.cpp, src/Scene/Model.cpp
 read-when: 修改场景结构、增删组件、注册新组件/系统、改变换传播或剔除逻辑
 size: ~360 行
 updated: 2026-11-06
@@ -33,7 +33,7 @@ updated: 2026-11-06
 以上是**引擎内置、有专用代码路径**的组件。除此之外还有一层
 **元数据注册的扩展组件**，见 §1.1；它不需要改 `Components.h` 或 Inspector。
 
-### 1.1 元数据组件与系统调度（F5-01）
+### 1.1 元数据组件与系统调度（F5-01 / F5-04）
 
 EnTT 只提供存储。F5-01 在它上面加了两件事：**组件描述表**和**按阶段运行的系统**，
 让“把某个特性挂到实体上”变成数据操作，而不是每个特性复制一遍编辑器/序列化代码。
@@ -64,7 +64,7 @@ EnTT 只提供存储。F5-01 在它上面加了两件事：**组件描述表**�
 Simulation systems -> updateWorldTransforms() -> PostTransform systems -> refreshSpatialIndex()
 ```
 
-**内置组件（第一批，`FeatureComponents.h`）**
+**扩展组件（第一批，`FeatureComponents.h`）**
 
 | 组件 id | 分类 | 属性 | 系统行为 |
 |---|---|---|---|
@@ -80,31 +80,63 @@ Simulation systems -> updateWorldTransforms() -> PostTransform systems -> refres
 Look At/Follow 的 target/up 是父空间坐标；顶层实体即世界坐标。它们都是可用的效果/运动，
 也是新组件的模板：注册组件 +（可选）注册系统，不需要改 Inspector、SceneSerializer 或 Commands。
 
+**原生组件接入（第二批，F5-04）**
+
+F5-04 把已有原生组件也纳入同一张描述表，但**不复制它们的序列化路径**。
+`src/Scene/NativeComponents.cpp` 注册 9 个 `native.*` 描述符：
+
+| 描述符 | 分类 | 可添加 | 说明 |
+|---|---|---|---|
+| `native.name` / `native.transform` / `native.hierarchy` | Core | 否 | 必需组件，始终存在，只读；`required=true` |
+| `native.characterController` | Scene | 是 | 8 个 Float 属性（radius/height/moveSpeed/jumpSpeed/gravity/maxSlopeAngle/stepHeight/groundSnapDistance），固定 Inspector 面板绘制 |
+| `native.renderTag` | Scene | 是 | `skybox` / `grid` 两个 Bool；`isTerrain` 是派生只读，地形实体禁止移除 |
+| `native.camera` | Managed | 否 | 唯一相机，随场景创建；菜单中置灰并说明原因 |
+| `native.terrain` | Managed | 否 | 用 创建 → 地形 创建；裸加组件无法生成网格 |
+| `native.terrainStreaming` | Managed | 否 | 用 创建 → 流送地形 创建 |
+| `native.voxelWorld` | Managed | 否 | 用 创建 → 体素世界 创建 |
+
+描述符新增五个标志，含义是：
+
+- `addable` / `removable`：控制 `+ Add Component` 与右键移除；不可添加项仍显示为禁用菜单项，悬停给出 `unavailableReason`。
+- `drawProperties`：`false` 表示属性由固定 Inspector 面板绘制，通用组件列表只显示标题，避免重复控件。
+- `serialized`：`false` 表示不进入 v3 `components`；原生状态仍走 `EntityDescription` 的专用字段。
+- `required`：Name/Transform/Hierarchy 不可增删。
+- `canRemove`：按实体状态否决删除（Render Tag 在地形实体上返回 false）。
+
+因此 `+ Add Component` 的可选项是 7 个 `effects.*` + Character Controller + Render Tag；
+Camera/Terrain/Streaming/Voxel 以置灰项出现。Character 面板的 8 个参数与 Render Tag 的移除按钮
+都走 `SetComponentRecordCommand`，可撤销。`DeleteEntityCommand` 为 Character 增加显式快照，
+因为 `native.*` 不会进入通用 `components` 数组；Render Tag 原本就有专用快照。
+
 **Scene 公开 API**
 
 | API | 语义 |
 |---|---|
 | `getComponentRegistry()` / `getSystemScheduler()` | 注册表与调度器 |
-| `addComponent(e, type)` / `removeComponent` / `hasComponent` | 按注册 id 增删查 |
+| `addComponent(e, type)` / `removeComponent` / `hasComponent` | 按注册 id 增删查；`addComponent` 检查 `addable`，`removeComponent` 检查 `removable`/`required`/`canRemove` |
 | `readComponent(e, type)` | 取当前值快照；未挂载返回 `nullopt` |
 | `defaultComponentRecord(type)` | 新建组件时的默认 record |
 | `applyComponentRecord(e, record)` | 写入快照；缺组件时按默认值新建 |
-| `captureComponentRecords(e)` | 收集实体上所有已注册组件 |
+| `captureComponentRecords(e)` | 收集实体上所有已注册且 `serialized` 的组件；原生组件走专用字段，不在此列 |
 
 **编辑器与持久化**
 
-- Inspector 在固定内置面板之后显示所有已挂载的注册组件；`+ Add Component` 按分类列出
-  未挂载且 `exposed` 的组件。所有增删改都走 `SetComponentRecordCommand`，可撤销。
+- Inspector 先画固定原生面板（Transform/Character/Terrain/Streaming/Mesh/Material/Render Tag），
+  再显示已挂载且 `drawProperties` 的注册组件；`+ Add Component` 按分类列出未挂载且 `exposed`
+  的组件，不可添加的托管项置灰并显示原因。所有增删改都走 `SetComponentRecordCommand`，可撤销。
 - `SceneSerializer` 从 **version 3** 起把 `components` 写进每个实体（格式见
   [serialization](../90-editor/serialization.md)）。`Scene::captureDescription()` 只捕获
-  已注册组件；`buildFromDescription()` 逐条 apply，未注册的类型安全跳过。
+  已注册且 `serialized` 的组件；`buildFromDescription()` 逐条 apply，未注册的类型安全跳过，
+  文件里伪造的 `native.*` 记录会被忽略。原生组件仍由专用字段存盘，不会重复写入。
   预制体复用同一套描述：`captureDescription(root)` 收子树、`instantiatePrefab()` 追加恢复，
   见 [prefabs](../90-editor/prefabs.md)。
 - `DeleteEntityCommand` 的快照与 `DuplicateEntityCommand` 都会带上注册组件 record，
-  所以删除撤销/复制不会丢效果。
+  所以删除撤销/复制不会丢效果；Character 另由显式原生快照覆盖。
 
 **边界**：组件和系统仍在 C++ 编译期注册，没有脚本/热重载/属性数组；
 系统在编辑模式也会随 `Scene::update()` 推进，撤销删除后实体 ID 会变。
+原生组件只把 Character/Render Tag 接进统一增删；Mesh/Material/Terrain chunk 等仍由
+专用创建流程或固定面板管理。
 
 ## 2. Transform 层级
 
@@ -241,12 +273,13 @@ Scene::selfTest();
 覆盖：父子/孙节点的世界变换传播、dirty 子树计数、空间网格查询与增量 upsert/remove、
 XZ region 重建/范围查询/移除；以及元数据组件注册表（add/read/write/remove/default）、
 `ComponentRecord` 值往返、7 个系统各跑一个完整周期（Spin 转 45°、Bob 到 0.25 再回 0、
-Pulse 到 1.15 再回 1、Sway 摆动后回正、Look At 朝 +X、Follow 按 speed 靠近并在 stopDistance 停）。
+Pulse 到 1.15 再回 1、Sway 摆动后回正、Look At 朝 +X、Follow 按 speed 靠近并在 stopDistance 停），
+以及原生组件描述符（Character/Render Tag 增删、必需组件拒删、`captureComponentRecords` 不含 `native.*`）。
 输出标记：
 
 ```
 [Scene] ECS/spatial selfTest PASS | hierarchy=T*Ry*Rx*Rz*S | grid cells=8
-[Scene] ECS component selfTest PASS | components=7 | systems=7
+[Scene] ECS component selfTest PASS | components=16 | systems=7
 ```
 
 ## 7. 改动注意
@@ -256,6 +289,9 @@ Pulse 到 1.15 再回 1、Sway 摆动后回正、Look At 朝 +X、Follow 按 spe
   序列化或命令栈。
 - 加**内置组件**（有专用渲染/物理路径）仍要改 `Components.h`、场景捕获/重建、序列化和
   对应 Inspector 面板，并在 `Scene::selfTest()` 补校验。
+- 往统一菜单接入内置组件：在 `NativeComponents.cpp` 注册描述符，并设
+  `serialized=false`、`drawProperties=false`（由固定面板绘制），不要让它重复写进 v3
+  `components`；必需/托管项用 `required`、`addable`、`removable`、`unavailableReason` 标注。
 - 改变换顺序要同步 `CameraController` 与配置里存的欧拉角约定；
   旋转矩阵由 `TransformComponent::orientation` 生成，欧拉角只做显示/序列化。
 - 改剔除逻辑后确认 Sponza `draw calls` 仍是 104（少了说明误剔除）。

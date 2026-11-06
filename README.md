@@ -64,7 +64,7 @@ cmake --build build --config Debug
 | **水面** | 相机中心径向网格（160 圈 × 192 段，约 4km）跟随相机；4 个大波做顶点位移，近景细节用 1024x1024 无缝 FFT 法线贴图两层滚动（18m/42m，`tileableMips`），大波按像素 footprint 逐波过滤，未解析能量转粗糙度/高光展宽；Fresnel + 半分辨率平面反射（镜像相机重画 960x540 G-Buffer 与延迟光照）+ 近场半分辨率 SSR（读 HDR/位置，48 步屏幕空间追踪，屏幕外/远处回退平面反射或 IBL）+ 用 G-Buffer 深度算厚度吸收/岸边泡沫；Lighting 后、TAA 前混合；只在有地形/体素块时启用，`--no-water` / `--no-ssr` 关闭 | [water](docs/30-systems/water.md) |
 | **距离雾** | 指数距离雾（默认 80m 起、密度 0.00045，约 1km 处 34%、4km 处 83%）；雾色取环境图地平线 LOD3，地形/水面/玻璃共用，天空不参与；`config/engine.json` 的 `fog` 节点 + 编辑器/运行时 UI，无命令行开关 | [water](docs/30-systems/water.md) |
 | IBL split-sum | irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙 | [ibl](docs/20-pipeline/ibl.md) |
-| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 7 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow）；预制体保存/实例化走同一描述层 | [scene-ecs](docs/30-systems/scene-ecs.md) |
+| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 7 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow）+ 9 个原生组件描述（Name/Transform/Hierarchy 必需，Character/Render Tag 可添加，Camera/Terrain/Streaming/Voxel 为创建菜单托管）；预制体保存/实例化走同一描述层 | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | 空间索引 + 视锥剔除 | 均匀网格 broad phase + Transform/Bounds 私有字段/dirty + 增量 AABB upsert + XZ region bucket + frustum-AABB | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | CPU JobSystem | worker pool + `submit()`/`parallelFor()` + 异常传播 | [jobsystem](docs/30-systems/jobsystem.md) |
 | 窗口缩放 + 动态分辨率 | swapchain 原地重建；中间目标按 renderScale 缩放 | [synchronization](docs/10-architecture/synchronization.md) |

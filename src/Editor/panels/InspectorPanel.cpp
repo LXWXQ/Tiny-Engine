@@ -71,6 +71,122 @@ void drawTerrainBrushControls(EditorState& state)
                         state.terrainBrush.center.z);
     ImGui::TextDisabled("Ctrl+left click terrain in the viewport to apply.");
 }
+
+// 通用属性控件。drawComponents 与原生 Character 面板共用，避免两套 switch。
+bool drawPropertyWidgets(scene::ComponentRecord& record,
+                         const scene::ComponentDescriptor& descriptor)
+{
+    bool changed = false;
+    for (const scene::PropertyDescriptor& property : descriptor.properties)
+    {
+        scene::NamedProperty* value = record.find(property.name);
+        if (value == nullptr)
+            continue;
+
+        switch (property.type)
+        {
+        case scene::PropertyType::Bool:
+        {
+            bool v = value->value.asBool();
+            if (ImGui::Checkbox(property.label.c_str(), &v))
+            {
+                value->value = scene::PropertyValue::fromBool(v);
+                changed = true;
+            }
+            break;
+        }
+        case scene::PropertyType::Int:
+        {
+            int v = value->value.asInt();
+            if (ImGui::DragInt(property.label.c_str(), &v, 0.1f))
+            {
+                value->value = scene::PropertyValue::fromInt(v);
+                changed = true;
+            }
+            break;
+        }
+        case scene::PropertyType::Float:
+        {
+            float v = value->value.asFloat();
+            if (ImGui::DragFloat(property.label.c_str(), &v, 0.01f, 0.0f, 0.0f, "%.3f"))
+            {
+                value->value = scene::PropertyValue::fromFloat(v);
+                changed = true;
+            }
+            break;
+        }
+        case scene::PropertyType::Vec3:
+        {
+            glm::vec3 v = value->value.asVec3();
+            if (ImGui::DragFloat3(property.label.c_str(), glm::value_ptr(v),
+                                  0.01f, 0.0f, 0.0f, "%.3f"))
+            {
+                value->value = scene::PropertyValue::fromVec3(v);
+                changed = true;
+            }
+            break;
+        }
+        case scene::PropertyType::Color:
+        {
+            glm::vec4 v = value->value.asColor();
+            if (ImGui::ColorEdit4(property.label.c_str(), glm::value_ptr(v)))
+            {
+                value->value = scene::PropertyValue::fromColor(v);
+                changed = true;
+            }
+            break;
+        }
+        case scene::PropertyType::String:
+        {
+            char buffer[256] = {};
+            std::snprintf(buffer, sizeof(buffer), "%s", value->value.asString().c_str());
+            if (ImGui::InputText(property.label.c_str(), buffer, sizeof(buffer),
+                                 ImGuiInputTextFlags_EnterReturnsTrue))
+            {
+                value->value = scene::PropertyValue::fromString(buffer);
+                changed = true;
+            }
+            break;
+        }
+        }
+    }
+    return changed;
+}
+
+// 原生组件由固定面板绘制，这里补一个统一的移除入口（同样走命令栈）。
+void drawNativeRemoveFooter(EditorState& state, entt::entity entity, const char* type,
+                            const char* label)
+{
+    Scene* scene = state.services.scene;
+    if (scene == nullptr || state.services.registry == nullptr)
+        return;
+
+    entt::registry& registry = *state.services.registry;
+    const scene::ComponentDescriptor* descriptor = scene->getComponentRegistry().find(type);
+    if (descriptor == nullptr || !descriptor->removable)
+        return;
+
+    if (descriptor->canRemove && !descriptor->canRemove(registry, entity))
+    {
+        ImGui::TextDisabled("%s is managed by its creation flow.", label);
+        return;
+    }
+
+    ImGui::Separator();
+    ImGui::PushID(type);
+    if (ImGui::Button("Remove Component"))
+    {
+        std::optional<scene::ComponentRecord> before = scene->readComponent(entity, type);
+        if (before)
+        {
+            state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                *scene, entity, type, std::move(before), std::nullopt,
+                "Remove Component"));
+            state.markDirty();
+        }
+    }
+    ImGui::PopID();
+}
 } // namespace
 
 void InspectorPanel::draw(EditorState& state)
@@ -213,6 +329,10 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
     {
         if (!descriptor.has(registry, entity))
             continue;
+        // 原生组件由固定面板绘制（Transform / Character / Render Tag…），
+        // 这里只负责元数据扩展组件，避免同一份字段出现两次。
+        if (!descriptor.drawProperties)
+            continue;
 
         ImGui::PushID(descriptor.type.c_str());
         const bool open = ImGui::CollapsingHeader(descriptor.label.c_str());
@@ -221,7 +341,9 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
         // before 有值、after 为空就是删除，撤销时把整份属性写回去。
         if (ImGui::BeginPopupContextItem("##component_menu"))
         {
-            if (ImGui::MenuItem("移除组件"))
+            const bool canRemove = descriptor.removable &&
+                (!descriptor.canRemove || descriptor.canRemove(registry, entity));
+            if (canRemove && ImGui::MenuItem("移除组件"))
             {
                 std::optional<scene::ComponentRecord> before =
                     scene->readComponent(entity, descriptor.type);
@@ -248,80 +370,7 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
                 scene::ComponentRecord afterRecord = *beforeRecord;
                 bool changed = false;
 
-                for (const scene::PropertyDescriptor& property : descriptor.properties)
-                {
-                    scene::NamedProperty* value = afterRecord.find(property.name);
-                    if (value == nullptr)
-                        continue;
-
-                    switch (property.type)
-                    {
-                    case scene::PropertyType::Bool:
-                    {
-                        bool v = value->value.asBool();
-                        if (ImGui::Checkbox(property.label.c_str(), &v))
-                        {
-                            value->value = scene::PropertyValue::fromBool(v);
-                            changed = true;
-                        }
-                        break;
-                    }
-                    case scene::PropertyType::Int:
-                    {
-                        int v = value->value.asInt();
-                        if (ImGui::DragInt(property.label.c_str(), &v, 0.1f))
-                        {
-                            value->value = scene::PropertyValue::fromInt(v);
-                            changed = true;
-                        }
-                        break;
-                    }
-                    case scene::PropertyType::Float:
-                    {
-                        float v = value->value.asFloat();
-                        if (ImGui::DragFloat(property.label.c_str(), &v, 0.01f, 0.0f, 0.0f, "%.3f"))
-                        {
-                            value->value = scene::PropertyValue::fromFloat(v);
-                            changed = true;
-                        }
-                        break;
-                    }
-                    case scene::PropertyType::Vec3:
-                    {
-                        glm::vec3 v = value->value.asVec3();
-                        if (ImGui::DragFloat3(property.label.c_str(), glm::value_ptr(v),
-                                              0.01f, 0.0f, 0.0f, "%.3f"))
-                        {
-                            value->value = scene::PropertyValue::fromVec3(v);
-                            changed = true;
-                        }
-                        break;
-                    }
-                    case scene::PropertyType::Color:
-                    {
-                        glm::vec4 v = value->value.asColor();
-                        if (ImGui::ColorEdit4(property.label.c_str(), glm::value_ptr(v)))
-                        {
-                            value->value = scene::PropertyValue::fromColor(v);
-                            changed = true;
-                        }
-                        break;
-                    }
-                    case scene::PropertyType::String:
-                    {
-                        char buffer[256] = {};
-                        std::snprintf(buffer, sizeof(buffer), "%s",
-                                      value->value.asString().c_str());
-                        if (ImGui::InputText(property.label.c_str(), buffer, sizeof(buffer),
-                                             ImGuiInputTextFlags_EnterReturnsTrue))
-                        {
-                            value->value = scene::PropertyValue::fromString(buffer);
-                            changed = true;
-                        }
-                        break;
-                    }
-                    }
-                }
+                changed = drawPropertyWidgets(afterRecord, descriptor);
 
                 if (changed && !afterRecord.equivalentTo(*beforeRecord))
                 {
@@ -361,7 +410,8 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
                 first = false;
             }
 
-            if (ImGui::MenuItem(descriptor.label.c_str()))
+            const bool addable = descriptor.addable;
+            if (ImGui::MenuItem(descriptor.label.c_str(), nullptr, false, addable))
             {
                 std::optional<scene::ComponentRecord> after =
                     scene->defaultComponentRecord(descriptor.type);
@@ -373,6 +423,8 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
                     state.markDirty();
                 }
             }
+            if (!addable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", descriptor.unavailableReason.c_str());
             any = true;
         }
 
@@ -455,7 +507,10 @@ void InspectorPanel::drawTransform(EditorState& state, entt::entity entity)
 
 void InspectorPanel::drawCharacter(EditorState& state, entt::entity entity)
 {
-    (void)state;
+    Scene* scene = state.services.scene;
+    if (scene == nullptr)
+        return;
+
     entt::registry& registry = *state.services.registry;
     const auto* controller = registry.try_get<CharacterControllerComponent>(entity);
     if (!controller)
@@ -465,15 +520,32 @@ void InspectorPanel::drawCharacter(EditorState& state, entt::entity entity)
         return;
 
     ImGui::TextDisabled("Kinematic heightfield controller");
-    ImGui::Text("Radius %.2f | Height %.2f | Speed %.2f",
-                controller->radius, controller->height, controller->moveSpeed);
-    ImGui::Text("Gravity %.2f | Jump %.2f | Slope %.1f deg",
-                controller->gravity, controller->jumpSpeed, controller->maxSlopeAngle);
+
+    const scene::ComponentDescriptor* descriptor =
+        scene->getComponentRegistry().find("native.characterController");
+    if (descriptor != nullptr)
+    {
+        std::optional<scene::ComponentRecord> before =
+            scene->readComponent(entity, "native.characterController");
+        if (before)
+        {
+            scene::ComponentRecord after = *before;
+            if (drawPropertyWidgets(after, *descriptor) && !after.equivalentTo(*before))
+            {
+                state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                    *scene, entity, "native.characterController", std::move(before),
+                    std::move(after), "Modify Character"));
+                state.markDirty();
+            }
+        }
+    }
+
     ImGui::TextColored(ImVec4(0.55f, 0.9f, 0.55f, 1.0f),
                        "%s | ground %s",
                        controller->grounded ? "Grounded" : "Airborne",
                        controller->groundEntity == entt::null ? "none" : "yes");
     ImGui::TextDisabled("Play mode: WASD move, Space jump.");
+    drawNativeRemoveFooter(state, entity, "native.characterController", "Character Controller");
 }
 
 void InspectorPanel::drawTerrain(EditorState& state, entt::entity entity)
@@ -962,6 +1034,8 @@ void InspectorPanel::drawRenderTag(EditorState& state, entt::entity entity)
             registry, entity, tag->isSkybox, tag->isGrid, skybox, grid));
         state.markDirty();
     }
+
+    drawNativeRemoveFooter(state, entity, "native.renderTag", "Render Tag");
 }
 
 } // namespace editor

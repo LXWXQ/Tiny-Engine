@@ -109,8 +109,11 @@ stack.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(ch
 - `DeleteEntityCommand` 快照也带 `components`，覆盖删除后撤销；`DuplicateEntityCommand`
   在 `copyDataComponents()` 之后逐条 apply record，覆盖复制。
 
-Inspector 的 `+ Add Component` 菜单只列 `descriptor.exposed` 且当前未挂载的类型；
-移除走组件标题右键菜单。两条路径都 `state.markDirty()` 并经过命令栈。
+Inspector 的 `+ Add Component` 菜单列出 `descriptor.exposed` 且当前未挂载的类型：
+`addable` 的项可点击；`addable == false` 的托管项（Camera/Terrain/Streaming/Voxel）
+仍显示但置灰，悬停给出 `unavailableReason` 指向创建菜单。移除走组件标题右键菜单，
+或原生组件固定面板底部的 `Remove Component`；两者都受 `removable` / `canRemove` 约束
+（例如地形实体的 Render Tag 不可移除）。这些路径都 `state.markDirty()` 并经过命令栈。
 
 ## 删除实体的撤销（最容易写错的地方）
 

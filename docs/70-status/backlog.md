@@ -273,6 +273,7 @@ updated: 2026-11-06
 | F5-01 | 已完成 | 元数据驱动 ECS：组件注册表 + SystemScheduler + Inspector Add Component + 序列化 v3 | — | 实体可加/删/改 Spin/Orbit，Inspector 编辑并撤销；场景存读保留 components；`selftest-default` 断言 ECS component selfTest |
 | F5-02 | 已完成 | 预制体资产：保存选中子树为 .prefab.json、实例化、撤销/重做 | F5-01 | 含 effects.spin 的 cube 父子树可保存/读取/实例化；undo 消失、redo 换新 ID 恢复；e1 断言 prefab selfTest |
 | F5-03 | 已完成 | 内置效果/运动组件第一批：Bob、Pulse、Sway、LookAt、Follow | F5-01 | `+ Add Component` 列出 7 个 `effects.*`；场景存读/预制体/撤销自动生效；`selftest-default` 断言 `components=7 systems=7` |
+| F5-04 | 已完成 | 原生组件接入统一 Add Component：Character/Render Tag 可增删，Managed 组件置灰说明；v3 序列化去重 | F5-01 | 16 个描述符（7 effects + 9 native）；Character/Render Tag 经 Inspector 增删改并撤销；原生组件不写入 v3 `components`；`components=16 systems=7` |
 
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
@@ -305,6 +306,8 @@ updated: 2026-11-06
 > F5-02 预制体资产已完成（2026-11-06）：复用 v3 `SceneDescription` 作为 `.prefab.json`，`Scene::captureDescription(root)` 只捕获选中子树、`Scene::instantiatePrefab()` 追加实例化并在失败时逆序回滚；`editor::prefab` 负责校验/读写，`InstantiatePrefabCommand` 提供 undo/redo（redo 新 ID）。文件菜单“保存选中为预制体...”、创建菜单“实例化预制体...”。编辑器自检 `[Editor] prefab selfTest PASS`，`e1-batch-commands` 断言该行；全套 75 项 ALL PASS，验证日志 `build/validation/20261106-124323`。详见 [milestones](milestones.md#f5-02预制体资产2026-11-06) 与 [prefabs](../90-editor/prefabs.md)。
 >
 > F5-03 第一批效果/运动组件已完成（2026-11-06）：新增 `effects.bob`（沿轴浮动）、`effects.pulse`（缩放脉冲）、`effects.sway`（绕轴摆动）、`effects.lookAt`（朝向目标，可限速）、`effects.follow`（匀速靠近并停在 stopDistance）。全部走 `ComponentRegistry` 元数据注册，Inspector、场景存读、预制体与撤销/重做自动生效；系统增量改变换，保留用户手动拖动/缩放。`[Scene] ECS component selfTest PASS | components=7 | systems=7` 覆盖七个系统完整周期。详见 [milestones](milestones.md#f5-03内置效果运动组件第一批2026-11-06)。
+
+> F5-04 原生组件接入已完成（2026-11-06）：`ComponentRegistry` 描述符新增 `addable`/`removable`/`drawProperties`/`serialized`/`required`/`canRemove` 与 `unavailableReason`；新增 `src/Scene/NativeComponents.*` 注册 9 个 `native.*`（Name/Transform/Hierarchy 必需只读，Character Controller 8 个 Float 与 Render Tag 可增删，Camera/Terrain/Streaming/VoxelWorld 为创建菜单托管、菜单置灰）。`captureComponentRecords` 与加载循环按 `serialized` 过滤，原生组件仍走专用字段，不重复写 v3。Inspector 的 Character 参数与 Character/Render Tag 移除均走 `SetComponentRecordCommand`；`DeleteEntityCommand` 增加 Character 显式快照。`[Scene] ECS component selfTest PASS | components=16 | systems=7` 覆盖 native 增删与去重；`[Editor] prefab selfTest PASS` 断言 capture 只含 effects.spin 且 Character radius 保留。全套 75 项 ALL PASS（日志 `build/validation/20261106-150438`），DocCheck PASS（documents=68 lines=11864）。详见 [milestones](milestones.md#f5-04原生组件接入统一-add-component2026-11-06)。
 
 ## 更新方式
 

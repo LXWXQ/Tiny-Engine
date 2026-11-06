@@ -4,6 +4,7 @@
 #include "RHI/CommandUtils.h"
 #include "Scene/GLTFLoader.h"
 #include "Scene/FeatureComponents.h"
+#include "Scene/NativeComponents.h"
 #include "Render/TerrainMaterial.h"
 #include "Render/TerrainComputeGenerator.h"
 #include "Render/SubMeshCulling.h"
@@ -523,6 +524,7 @@ Scene::Scene()
 {
     // 纯 CPU 注册，不依赖设备；selfTest 直接构造 Scene 也能拿到同样的类型表。
     scene::registerFeatureComponents(componentRegistry);
+    scene::registerNativeComponents(componentRegistry);
     scene::registerFeatureSystems(systemScheduler);
 }
 
@@ -531,7 +533,7 @@ bool Scene::addComponent(entt::entity entity, const std::string& type)
     if (!registry.valid(entity))
         return false;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
-    if (!descriptor)
+    if (!descriptor || !descriptor->addable)
         return false;
     descriptor->addDefault(registry, entity);
     return descriptor->has(registry, entity);
@@ -543,6 +545,10 @@ bool Scene::removeComponent(entt::entity entity, const std::string& type)
         return false;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
     if (!descriptor || !descriptor->has(registry, entity))
+        return false;
+    if (descriptor->required || !descriptor->removable)
+        return false;
+    if (descriptor->canRemove && !descriptor->canRemove(registry, entity))
         return false;
     descriptor->remove(registry, entity);
     return true;
@@ -599,6 +605,10 @@ std::vector<scene::ComponentRecord> Scene::captureComponentRecords(entt::entity 
         return records;
     for (const scene::ComponentDescriptor& descriptor : componentRegistry.descriptors())
     {
+        // 原生组件的字段已经由 EntityDescription 的专用字段保存，不再重复
+        // 写进 v3 的通用 components 数组。
+        if (!descriptor.serialized)
+            continue;
         if (!descriptor.has(registry, entity))
             continue;
         scene::ComponentRecord record = descriptor.read(registry, entity);
@@ -1405,7 +1415,7 @@ bool Scene::selfTest()
         scene.getRegistry();
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
-        if (componentCount != 7 || systemCount != 7)
+        if (componentCount != 16 || systemCount != 7)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;
@@ -1614,6 +1624,82 @@ bool Scene::selfTest()
             2e-3f)
         {
             std::cerr << "[Scene] selfTest FAIL: Follow stop distance mismatch\n";
+            ok = false;
+        }
+
+        // 第二批原生组件：可添加/移除的 Character / RenderTag 与必需组件守卫。
+        if (!scene.addComponent(testEntity, "native.characterController") ||
+            !scene.hasComponent(testEntity, "native.characterController"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: native Character Controller add failed\n";
+            ok = false;
+        }
+        auto characterRecord = scene.readComponent(testEntity, "native.characterController");
+        if (!characterRecord)
+        {
+            std::cerr << "[Scene] selfTest FAIL: native Character Controller read failed\n";
+            ok = false;
+        }
+        else
+        {
+            const scene::NamedProperty* radius = characterRecord->find("radius");
+            if (radius == nullptr || std::abs(radius->value.asFloat() - 0.35f) > 1e-4f)
+            {
+                std::cerr << "[Scene] selfTest FAIL: native Character default radius mismatch\n";
+                ok = false;
+            }
+            else
+            {
+                scene::NamedProperty* editable = characterRecord->find("radius");
+                editable->value = scene::PropertyValue::fromFloat(0.42f);
+                if (!scene.applyComponentRecord(testEntity, *characterRecord))
+                {
+                    std::cerr << "[Scene] selfTest FAIL: native Character apply failed\n";
+                    ok = false;
+                }
+                const auto updated = scene.readComponent(testEntity, "native.characterController");
+                const scene::NamedProperty* updatedRadius =
+                    updated ? updated->find("radius") : nullptr;
+                if (updatedRadius == nullptr ||
+                    std::abs(updatedRadius->value.asFloat() - 0.42f) > 1e-4f)
+                {
+                    std::cerr << "[Scene] selfTest FAIL: native Character round trip mismatch\n";
+                    ok = false;
+                }
+            }
+        }
+        if (!scene.addComponent(testEntity, "native.renderTag") ||
+            !scene.removeComponent(testEntity, "native.renderTag"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: native Render Tag add/remove failed\n";
+            ok = false;
+        }
+
+        // 原生组件不进通用 components 数组（序列化去重）。
+        const std::vector<scene::ComponentRecord> nativeCapture =
+            scene.captureComponentRecords(testEntity);
+        if (std::any_of(nativeCapture.begin(), nativeCapture.end(),
+                        [](const scene::ComponentRecord& record)
+                        {
+                            return record.type.rfind("native.", 0) == 0;
+                        }))
+        {
+            std::cerr << "[Scene] selfTest FAIL: native component leaked into v3 components\n";
+            ok = false;
+        }
+
+        // 必需组件不能被加/删。
+        if (scene.addComponent(testEntity, "native.transform") ||
+            scene.removeComponent(testEntity, "native.transform"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: required component guard failed\n";
+            ok = false;
+        }
+
+        if (!scene.removeComponent(testEntity, "native.characterController") ||
+            scene.hasComponent(testEntity, "native.characterController"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: native Character remove failed\n";
             ok = false;
         }
 
@@ -2315,6 +2401,11 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
         const scene::EntityDescription& e = description.entities[i];
         for (const scene::ComponentDescriptor& descriptor : componentRegistry.descriptors())
         {
+            // 原生组件由专用字段重建（角色/渲染标签/地形……），不参与这段
+            // “文件里没有就移除”的通用清理，否则会误删复用相机上的组件。
+            if (!descriptor.serialized)
+                continue;
+
             const bool inDescription = std::any_of(
                 e.components.begin(), e.components.end(),
                 [&descriptor](const scene::ComponentRecord& record)
@@ -2327,6 +2418,14 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
 
         for (const scene::ComponentRecord& record : e.components)
         {
+            const scene::ComponentDescriptor* descriptor =
+                componentRegistry.find(record.type);
+            if (descriptor != nullptr && !descriptor->serialized)
+            {
+                std::cerr << "[Scene] ignoring non-serialized component '" << record.type
+                          << "' while loading scene\n";
+                continue;
+            }
             if (!applyComponentRecord(entity, record))
             {
                 std::cerr << "[Scene] failed to apply component '" << record.type

@@ -36,6 +36,19 @@ struct PropertyDescriptor
     std::function<void(void*, const PropertyValue&)> set;
 };
 
+// 注册选项。原生组件要同时满足两件事：既出现在统一的 + Add Component
+// 菜单里，又不能重复写进 v3 场景的通用 components 数组。
+struct ComponentOptions
+{
+    bool exposed = true;
+    bool addable = true;
+    bool removable = true;
+    bool drawProperties = true;
+    bool serialized = true;
+    bool required = false;
+    std::string unavailableReason;
+};
+
 struct ComponentDescriptor
 {
     std::string type;
@@ -43,6 +56,16 @@ struct ComponentDescriptor
     std::string category;
     // false 表示不在 + Add Component 菜单里出现（仍可显示已挂载实例）。
     bool exposed = true;
+    // false 时菜单里仍显示该项，但置灰并提示 unavailableReason。
+    bool addable = true;
+    bool removable = true;
+    // false 表示由固定 Inspector 面板绘制，通用列表不再重复画一遍。
+    bool drawProperties = true;
+    // 是否进入 v3 EntityDescription.components。原生组件走专用字段，必须为 false。
+    bool serialized = true;
+    // Name / Transform / Hierarchy 这类场景必需组件：不可加、不可删。
+    bool required = false;
+    std::string unavailableReason;
 
     std::vector<PropertyDescriptor> properties;
 
@@ -52,6 +75,8 @@ struct ComponentDescriptor
     std::function<ComponentRecord(const entt::registry&, entt::entity)> read;
     std::function<void(entt::registry&, entt::entity, const ComponentRecord&)> write;
     std::function<ComponentRecord()> defaults;
+    // 额外的移除条件（例如地形的 RenderTag 不允许被摘掉）。可空。
+    std::function<bool(const entt::registry&, entt::entity)> canRemove;
 };
 
 class ComponentRegistry
@@ -125,13 +150,19 @@ ComponentDescriptor makeComponentDescriptor(std::string type,
                                              std::string label,
                                              std::string category,
                                              std::vector<PropertyDescriptor> properties,
-                                             bool exposed = true)
+                                             ComponentOptions options = {})
 {
     ComponentDescriptor descriptor;
     descriptor.type = std::move(type);
     descriptor.label = std::move(label);
     descriptor.category = std::move(category);
-    descriptor.exposed = exposed;
+    descriptor.exposed = options.exposed;
+    descriptor.addable = options.addable;
+    descriptor.removable = options.removable;
+    descriptor.drawProperties = options.drawProperties;
+    descriptor.serialized = options.serialized;
+    descriptor.required = options.required;
+    descriptor.unavailableReason = std::move(options.unavailableReason);
     descriptor.properties = std::move(properties);
 
     const std::string recordType = descriptor.type;
@@ -174,6 +205,10 @@ ComponentDescriptor makeComponentDescriptor(std::string type,
     descriptor.defaults = [recordType, recordProperties]()
     {
         return detail::readRecord(recordType, recordProperties, T{});
+    };
+    descriptor.canRemove = [](const entt::registry&, entt::entity)
+    {
+        return true;
     };
 
     return descriptor;

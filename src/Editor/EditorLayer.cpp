@@ -4531,11 +4531,33 @@ bool EditorLayer::selfTestWithScene()
             return false;
         }
 
+        // 原生组件：走专用字段（isCharacter/characterRadius），不能重复进 components。
+        if (!scene->addComponent(child, "native.characterController"))
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: could not attach native character" << std::endl;
+            return false;
+        }
+        auto characterRecord = scene->readComponent(child, "native.characterController");
+        if (!characterRecord)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: native character record missing" << std::endl;
+            return false;
+        }
+        if (scene::NamedProperty* radius = characterRecord->find("radius"))
+            radius->value = scene::PropertyValue::fromFloat(0.42f);
+        if (!scene->applyComponentRecord(child, *characterRecord))
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: native character apply failed" << std::endl;
+            return false;
+        }
+
         const scene::SceneDescription captured = scene->captureDescription(parent);
         if (captured.entities.size() != 2 || captured.entities[0].parentIndex != -1 ||
-            captured.entities[1].parentIndex != 0)
+            captured.entities[1].parentIndex != 0 || !captured.entities[1].isCharacter ||
+            captured.entities[1].components.size() != 1)
         {
-            std::cerr << "[Editor] prefab selfTest FAIL: capture ordering/parent index" << std::endl;
+            std::cerr << "[Editor] prefab selfTest FAIL: capture ordering/parent index/native dedupe"
+                      << std::endl;
             return false;
         }
 
@@ -4554,7 +4576,10 @@ bool EditorLayer::selfTestWithScene()
         }
         if (loaded.entities.size() != 2 ||
             std::abs(loaded.entities[1].translation.x - 1.0f) > 1e-4f ||
-            loaded.entities[1].components.empty())
+            !loaded.entities[1].isCharacter ||
+            std::abs(loaded.entities[1].characterRadius - 0.42f) > 1e-4f ||
+            loaded.entities[1].components.size() != 1 ||
+            loaded.entities[1].components[0].type != "effects.spin")
         {
             std::cerr << "[Editor] prefab selfTest FAIL: loaded data changed" << std::endl;
             return false;
@@ -4580,9 +4605,18 @@ bool EditorLayer::selfTestWithScene()
             if (const auto* property = instanceSpin->find("degreesPerSecond"))
                 spinDegrees = &property->value.floatValue;
         }
+        const auto instanceCharacter =
+            scene->readComponent(instanceChild, "native.characterController");
+        const float* instanceRadius = nullptr;
+        if (instanceCharacter)
+        {
+            if (const auto* property = instanceCharacter->find("radius"))
+                instanceRadius = &property->value.floatValue;
+        }
         if (hierarchy == nullptr || hierarchy->parent != instanceRoot ||
             !scene->hasComponent(instanceChild, "effects.spin") ||
             spinDegrees == nullptr || std::abs(*spinDegrees - 90.0f) > 1e-4f ||
+            instanceRadius == nullptr || std::abs(*instanceRadius - 0.42f) > 1e-4f ||
             registry->view<MeshComponent>().size() != baselineMeshes + 4)
         {
             std::cerr << "[Editor] prefab selfTest FAIL: instance hierarchy/component/mesh mismatch" << std::endl;

@@ -989,3 +989,23 @@ updated: 2026-11-06
 **回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-142427`；DocCheck PASS（documents=68 lines=11782）。
 
 **边界**：效果只在实体本地空间；LookAt/Follow 的 target/up 是父空间坐标，顶层即世界；没有碰撞/寻路/曲线/缓动，Follow 直线移动会穿墙；系统在编辑模式也推进，暂停不冻结；属性仍只有 6 种基础类型，不能做曲线或数组。
+
+## F5-04：原生组件接入统一 Add Component（2026-11-06）
+
+**问题**：F5-01/F5-03 的 `+ Add Component` 只覆盖 7 个 `effects.*`；Character、Render Tag 等已有原生组件只能在代码里挂载，Inspector 没有入口。同时原生组件已有专用序列化字段，若直接进注册表会被写入 v3 `components`，并在加载时被“文件里没有就移除”的逻辑误删。
+
+**实现**：
+- `ComponentDescriptor` 增加 `addable` / `removable` / `drawProperties` / `serialized` / `required` / `canRemove` / `unavailableReason`；`makeComponentDescriptor<T>` 改用 `ComponentOptions`。默认值保持旧行为，7 个 `effects.*` 不受影响。
+- 新增 `src/Scene/NativeComponents.*`，注册 9 个 `native.*` 描述：Name/Transform/Hierarchy 为必需只读；Character Controller（8 个 Float）与 Render Tag（skybox/grid）可增删；Camera/Terrain/Terrain Streaming/Voxel World 为创建菜单托管，菜单置灰并显示原因。Camera 是空 tag，描述符手写。
+- `Scene::addComponent` / `removeComponent` 检查 `addable` / `removable` / `required` / `canRemove`；Render Tag 在地形实体上不可移除。
+- `captureComponentRecords` 只收集 `serialized` 的组件；场景加载的“移除缺失组件”和 apply 循环跳过 `serialized=false`，文件里伪造的 `native.*` 记录打印警告后忽略。原生组件继续走专用字段，不重复写 v3。
+- Inspector：固定面板跳过通用属性绘制；Character 的 8 个参数改为可编辑并走 `SetComponentRecordCommand`；Character/Render Tag 面板底部提供移除按钮；Add 菜单对不可添加项置灰并显示 tooltip。
+- `DeleteEntityCommand` 增加 `CharacterControllerComponent` 显式快照，删除撤销不会丢角色参数。
+
+**测试**：
+- `[Scene] ECS component selfTest PASS | components=16 | systems=7`：7 个 `effects.*` 的完整周期，加上 native Character 的 add/read/apply/remove（radius 0.35→0.42）、Render Tag 增删、必需组件拒删、`captureComponentRecords` 不含 `native.*`。
+- `[Editor] prefab selfTest PASS`：capture 的实体 `isCharacter=true` 且 `components.size()==1`（只有 `effects.spin`），读回 radius≈0.42，实例化后 Character 记录仍在，undo/redo 通过。
+
+**回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-150438`；DocCheck PASS（documents=68 lines=11864）。
+
+**边界**：只接入 Character Controller 与 Render Tag 两个可添加原生组件；Mesh/Material 及 Terrain/Voxel/Streaming/Camera 仍由固定面板或创建菜单管理；原生组件不进 v3 `components`，跨版本仍依赖专用字段。

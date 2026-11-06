@@ -495,6 +495,7 @@ DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity 
             std::optional<MaterialComponent>    material;
             std::optional<RenderTagComponent>   tag;
             std::optional<BoundsComponent>      bounds;
+            std::optional<CharacterControllerComponent> character;
             std::optional<TerrainComponent>    terrain;
             std::optional<TerrainStreamingComponent> streaming;
             bool hasCamera = false;
@@ -506,6 +507,7 @@ DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity 
         if (const auto* p = registry.try_get<MaterialComponent>(current))   snap.material = *p;
         if (const auto* p = registry.try_get<RenderTagComponent>(current))  snap.tag = *p;
         if (const auto* p = registry.try_get<BoundsComponent>(current))     snap.bounds = *p;
+        if (const auto* p = registry.try_get<CharacterControllerComponent>(current)) snap.character = *p;
         if (const auto* p = registry.try_get<TerrainComponent>(current))    snap.terrain = *p;
         if (const auto* p = registry.try_get<TerrainStreamingComponent>(current)) snap.streaming = *p;
         // CameraComponent 是空 tag：查存在性要用 any_of，不能 try_get 取指针。
@@ -528,6 +530,7 @@ DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity 
             if (snap.material)  registry.emplace<MaterialComponent>(created, *snap.material);
             if (snap.tag)       registry.emplace<RenderTagComponent>(created, *snap.tag);
             if (snap.bounds)    registry.emplace<BoundsComponent>(created, restorableBounds(*snap.bounds));
+            if (snap.character) registry.emplace<CharacterControllerComponent>(created, *snap.character);
             if (snap.terrain)   registry.emplace<TerrainComponent>(created, restorableTerrain(*snap.terrain));
             if (snap.streaming) registry.emplace<TerrainStreamingComponent>(created, *snap.streaming);
             if (snap.hasCamera) registry.emplace<CameraComponent>(created);

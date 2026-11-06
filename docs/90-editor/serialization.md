@@ -32,7 +32,7 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 | 材质名字 + PBR 参数 + 贴图路径 | 材质**槽位下标** | 槽位是 `DescriptorManager` 运行期分发的 |
 | 渲染标签（skybox/grid/terrain） | `SpatialIndex` / `indexedBounds` | 可增量刷新的派生数据，不存盘 |
 | 地形参数对象 | 地形顶点/索引/GPU 句柄/纹理 | 加载时按相同 seed/算法重新生成；16 张地形纹理由启动代码确定性生成 |
-| 元数据注册的扩展组件（v3 `components`） | 未注册的运行期组件 | 只有注册过的类型能稳定读写；运行期临时组件没有稳定的磁盘语义 |
+| 元数据注册的扩展组件（v3 `components`；`native.*` 不写入） | 未注册的运行期组件 | 只有注册过的类型能稳定读写；运行期临时组件没有稳定的磁盘语义 |
 
 父子关系用**数组下标**表示（`parent: 2`），不用实体 ID。
 加载时按顺序重建即可。
@@ -83,7 +83,7 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 |---|---|---|
 | 1 | 实体、变换、父子、网格、材质 | — |
 | 2 | 新增可选 `voxelWorlds`（seed + 差分） | 旧文件缺省为空 |
-| 3 | 每个实体新增可选 `components`（元数据注册组件） | 旧文件缺省为空；未知组件/属性跳过 |
+| 3 | 每个实体新增可选 `components`（元数据注册组件；`native.*` 不写入） | 旧文件缺省为空；未知组件/属性跳过 |
 
 `terrain` / `terrainWorld` / `character` / `components` 都是**可选字段**，所以旧场景
 不需要迁移；读取端不按版本号拒绝，只有写入端跟 `kCurrentVersion` 升版本。
@@ -194,6 +194,21 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 比较组件数量与 `equivalentTo()`。删除撤销、复制实体也会带走这些 record，见
 [commands](commands.md)。
 
+### 原生组件与 v3 去重（F5-04）
+
+`src/Scene/NativeComponents.cpp` 注册的 `native.*` 描述符只用于 Inspector 元数据与增删校验，
+不进入 v3 `components`：
+
+- 描述符带 `serialized=false`；`Scene::captureComponentRecords()` 跳过它们，
+  `SceneSerializer` 不会把 Character/Render Tag 等写成通用组件。
+- 原生状态仍走 `EntityDescription` 的专用字段：`character`、`skybox/grid/isTerrain`、
+  `terrain`、`terrainWorld`、`camera`、`voxelWorlds`、mesh/material 等。
+- 加载时"文件里没有的已注册组件就移除"的循环只处理 `serialized` 描述符，
+  所以复用相机或实体上的 Character/Render Tag 不会被误删；文件里伪造的 `native.*`
+  记录会打印警告并跳过。
+- 因此同一个 Character 不会既写 `character` 又写 `components`；Render Tag 也不会重复。
+  删除/撤销对 Character 的原生快照在 `DeleteEntityCommand` 单独维护。
+
 ## 路径处理
 
 存盘写**相对 `Resources/` 的路径**，读回时拼回绝对路径。
@@ -218,7 +233,8 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 4. 不需要改 `SceneSerializer`、`SceneDescription`、Commands 或 Inspector
 5. 在 `Scene::selfTest()` / `EditorLayer::selfTest()` 的 roundTrip 用例里加断言
 
-只有**已注册**的类型会进 `captureDescription()`；未注册组件会在存盘时被过滤。
+只有**已注册且 `serialized=true`** 的类型会进 `captureDescription()`；未注册组件和
+`native.*` 会在存盘时被过滤。原生组件的专用字段仍按 B 路径维护。
 
 **B. 内置专用组件（有专用渲染/物理路径）**
 

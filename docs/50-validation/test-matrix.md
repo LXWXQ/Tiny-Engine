@@ -31,7 +31,7 @@ updated: 2026-11-06
 |---|---|---|---|---|
 | 1 | `jobtest` | `--jobtest` | `[JobSystem] selfTest PASS` | worker pool、parallelFor、嵌套、异常传播 |
 | 2 | `td09-config-migration` | `--config-test` | `[Config] selfTest PASS` | v0->v2 迁移、备份、损坏/未来版本保护 |
-| 3 | `selftest-default` | `--selftest 120` | `[Scene] ECS/spatial selfTest PASS`、`[Scene] ECS component selfTest PASS`、`[TD07] ComputeProbe disabled...`、`[RenderGraph] setPassEnabled selfTest PASS` | 主路径 + setter 自动 Transform/Bounds dirty 通知 + 增量 AABB + 元数据组件/系统调度自检 |
+| 3 | `selftest-default` | `--selftest 120` | `[Scene] ECS/spatial selfTest PASS`、`[Scene] ECS component selfTest PASS`、`[TD07] ComputeProbe disabled...`、`[RenderGraph] setPassEnabled selfTest PASS` | 主路径 + setter 自动 Transform/Bounds dirty 通知 + 增量 AABB + 元数据组件/系统调度 + 原生组件增删/序列化过滤自检 |
 | 4 | `selftest-no-bloom` | `--no-bloom` | `[TD06] Bloom disabled: skipping Bright + Down + Up passes` | Bloom 关闭分支真跳过 |
 | 5 | `selftest-no-ssao` | `--no-ssao` | `[TD07] ...` | SSAO 关闭分支 |
 | 6 | `selftest-no-bloom-no-ssao` | 两者 | 同上两者 | 组合分支 |
@@ -65,7 +65,7 @@ updated: 2026-11-06
 | 34 | `f2e-terrain-picking` | 地形拾取走高度场（编辑器自检） | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] streamed terrain PASS`、`picking=OK`、`[Editor] selfTest PASS` |
 | 35 | `f2f-arena-slots` | `--selftest 180 --streaming-world 8` | `[Terrain] mesh arena ready | vertexMB=`、`arenaAllocs=`、`[Validation] errors=0 warnings=0` | arena 归 `Scene` 所有，chunk 落地即 `acquire()` + `copyInto()` + `Model::releaseGpuBuffers()`；容量按实际尺寸分配，`arenaAllocs` 随 chunk 生灭回落（飞行 600 帧 305~323） |
 | 36 | `f2h-large-radius` | `--selftest 400 --streaming-world 16` | `mesh arena resized | radius=16`、`[Streaming] chunks=1089`、`[Validation] errors=0 warnings=0` | chunk 坐标 int64 + 采样锚点 double，半径上限 24；arena 按整环容量原地重建（`reconfigure()`，渲染侧只持 `this` 指针） |
-| 37 | `e1-batch-commands` | 编辑器批量命令（Composite / Duplicate）与预制体 | `TinyEditor.exe --selftest 5 --empty-scene` | `batch delete/duplicate`、`[Editor] prefab selfTest PASS`、`[Editor] selfTest PASS` | 多选删除是一条撤销、复制含子树且名字追加 `" Copy"`、`revert()` 清空副本；预制体保存/读取/实例化/undo/redo 全通过 |
+| 37 | `e1-batch-commands` | 编辑器批量命令（Composite / Duplicate）、预制体与原生组件 | `TinyEditor.exe --selftest 5 --empty-scene` | `batch delete/duplicate`、`[Editor] prefab selfTest PASS`、`components=16`、`[Editor] selfTest PASS` | 多选删除是一条撤销、复制含子树且名字追加 `" Copy"`、`revert()` 清空副本；预制体保存/读取/实例化/undo/redo 全通过；原生 Character 不重复写入 v3 components |
 | 38 | `e2-multi-transform` | 编辑器多对象变换（一条命令） | `TinyEditor.exe --selftest 5 --empty-scene` | `multi transform`、`[Editor] selfTest PASS` | 多选拖拽只压一条命令、`mergeWith` 只接受同一选择 |
 | 39 | `e3-material-undo` | 材质参数与 Render Tag 的撤销 | `TinyEditor.exe --selftest 5 --empty-scene` | `material/render tag`、`[Editor] selfTest PASS` | 滑杆与复选框各压一条命令；undo 时同时把 GPU factor 写回去 |
 | 40 | `e3-play-doc-lock` | 播放期间文档只读 | `TinyEditor.exe --selftest 5 --empty-scene` | `play document lock selfTest PASS` | Playing 下 save/new/open 全被拒绝并留日志 |
