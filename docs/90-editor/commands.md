@@ -66,6 +66,10 @@ stack.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(ch
 地形 / 流送 chunk / 相机拒绝复制（`canDuplicate()`）。撤销 = 销毁这次新建的副本，重做会重建一遍
 （新 ID，和 `DeleteEntityCommand` 的恢复语义一致）。
 
+`InstantiatePrefabCommand` 走同一个模式，但首次实例化发生在构造函数里（成功才入栈，
+因为 `execute()` 没有失败返回值）；undo 逆序销毁创建的实体，redo 重新实例化并产生新 ID。
+详见 [prefabs](prefabs.md)。
+
 批量删除前先 `selectionRoots()` 过滤：父节点被同时选中时跳过子节点，否则同一棵子树会被删两次。
 
 ## SetTransformsCommand：多对象一条命令

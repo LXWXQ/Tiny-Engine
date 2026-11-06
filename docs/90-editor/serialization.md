@@ -21,7 +21,7 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 
 - `SceneDescription` 是**纯数据**，不含任何 Vulkan / EnTT 类型
 - 序列化逻辑可以脱离 Vulkan 设备单独测试（自检里的 `roundTrip` 就是这样）
-- 将来加 Prefab、场景 diff、整场景撤销，都以它为单位
+- 预制体（Prefab）、场景 diff、整场景撤销，都以它为单位
 
 ## 什么存，什么不存
 
@@ -87,7 +87,30 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 
 `terrain` / `terrainWorld` / `character` / `components` 都是**可选字段**，所以旧场景
 不需要迁移；读取端不按版本号拒绝，只有写入端跟 `kCurrentVersion` 升版本。
+
+## 预制体文件（`.prefab.json`）
+
+预制体复用同一个 v3 `SceneDescription`，不引入新版本号，只是**约束文件内容**：
+
+- 只保存一棵子树；根实体 `parent: -1`，其余下标都指向子树内部。
+- 变换是**相对父节点**的局部值，与场景文件一致。
+- 不写顶层 `voxelWorlds`；保存时拒绝体素世界、地形/流送地形、相机、天空盒、Grid 与体素 chunk。
+- 仍是普通场景 JSON，可以直接当场景打开查看；编辑器里的“实例化预制体”会把它追加到当前场景，而不是替换场景。
+
+```json
+{
+  "version": 3,
+  "entities": [
+    { "name": "Root", "parent": -1, "mesh": "Models/debug_cube.obj" },
+    { "name": "Spinner", "parent": 0, "translation": [1, 2, 0],
+      "components": [ { "type": "effects.spin", "properties": [
+        { "name": "degreesPerSecond", "type": "float", "value": 90 } ] } ] }
+  ]
+}
 ```
+
+读写与校验在 `src/Editor/Prefab.*`，实例化在 `Scene::instantiatePrefab()`；
+使用说明与限制见 [prefabs](prefabs.md)。
 
 ## 地形字段（可选）
 

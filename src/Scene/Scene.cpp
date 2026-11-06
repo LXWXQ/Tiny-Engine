@@ -1515,19 +1515,48 @@ bool Scene::selfTest()
 // ---------------------------------------------------------------------------
 scene::SceneDescription Scene::captureDescription() const
 {
+    return captureDescription(entt::null);
+}
+
+scene::SceneDescription Scene::captureDescription(entt::entity root) const
+{
     scene::SceneDescription description;
     description.version = 1;
+
+    if (root != entt::null && !registry.valid(root))
+        return description;
 
     // Streamed chunk entities are runtime derivatives of the manager; only the
     // manager template is serialized so load can reconstruct the active set.
     std::vector<entt::entity> serializableEntities;
-    for (entt::entity entity : registry.view<TransformComponent>())
+    if (root == entt::null)
     {
-        // 体素 chunk 与地形 chunk 一样是运行期派生物，由世界管理器重建，
-        // 不能当普通实体写进场景（否则载入后会多出一堆空实体）。
-        if (!registry.any_of<TerrainChunkComponent>(entity) &&
-            !registry.any_of<VoxelChunkComponent>(entity))
-            serializableEntities.push_back(entity);
+        for (entt::entity entity : registry.view<TransformComponent>())
+        {
+            // 体素 chunk 与地形 chunk 一样是运行期派生物，由世界管理器重建，
+            // 不能当普通实体写进场景（否则载入后会多出一堆空实体）。
+            if (!registry.any_of<TerrainChunkComponent>(entity) &&
+                !registry.any_of<VoxelChunkComponent>(entity))
+                serializableEntities.push_back(entity);
+        }
+    }
+    else
+    {
+        // 预制体只导出选中实体及其后代。DFS 保证父一定排在子之前，
+        // 这样 parentIndex 可以继续用“已导出数组下标”表达。
+        std::unordered_set<entt::entity> visited;
+        std::function<void(entt::entity)> collect = [&](entt::entity entity)
+        {
+            if (entity == entt::null || !registry.valid(entity) || !visited.insert(entity).second)
+                return;
+            if (!registry.any_of<TerrainChunkComponent>(entity) &&
+                !registry.any_of<VoxelChunkComponent>(entity))
+                serializableEntities.push_back(entity);
+            if (const auto* hierarchy = registry.try_get<HierarchyComponent>(entity))
+                for (entt::entity child : hierarchy->children)
+                    collect(child);
+        };
+        collect(root);
     }
 
     // 建立 "实体 -> 下标" 映射。父子关系用下标表示，因为实体 ID 跨进程不稳定。
@@ -1631,43 +1660,316 @@ scene::SceneDescription Scene::captureDescription() const
 
     // F3：体素世界按 seed + 差分存盘。差分用"按同一 seed 重新生成一份"对比得到，
     // 不用维护第二套 dirty 记录，也不会漏掉任何改动路径（挖、放、撤销、脚本）。
-    for (entt::entity worldEntity : registry.view<VoxelWorldComponent>())
+    // 预制体是子树，不能携带世界级差分，否则实例化会把整个体素世界重播一遍。
+    if (root == entt::null)
     {
-        const VoxelWorldComponent& world = registry.get<VoxelWorldComponent>(worldEntity);
-        scene::VoxelWorldDescription worldDesc;
-        worldDesc.seed = world.seed;
-        worldDesc.radiusChunks = world.radiusChunks;
-        worldDesc.baseY = world.baseY;
-
-        for (auto [chunkEntity, chunkComp] : registry.view<VoxelChunkComponent>().each())
+        for (entt::entity worldEntity : registry.view<VoxelWorldComponent>())
         {
-            (void)chunkEntity;
-            if (chunkComp.world != worldEntity || !chunkComp.chunk)
-                continue;
+            const VoxelWorldComponent& world = registry.get<VoxelWorldComponent>(worldEntity);
+            scene::VoxelWorldDescription worldDesc;
+            worldDesc.seed = world.seed;
+            worldDesc.radiusChunks = world.radiusChunks;
+            worldDesc.baseY = world.baseY;
 
-            voxel::Chunk reference;
-            reference.generate(world.seed, chunkComp.chunkX, chunkComp.chunkZ, world.baseY);
+            for (auto [chunkEntity, chunkComp] : registry.view<VoxelChunkComponent>().each())
+            {
+                (void)chunkEntity;
+                if (chunkComp.world != worldEntity || !chunkComp.chunk)
+                    continue;
 
-            scene::VoxelChunkDescription chunkDesc;
-            chunkDesc.chunkX = chunkComp.chunkX;
-            chunkDesc.chunkZ = chunkComp.chunkZ;
-            for (int32_t y = 0; y < voxel::Chunk::kSize; ++y)
-                for (int32_t z = 0; z < voxel::Chunk::kSize; ++z)
-                    for (int32_t x = 0; x < voxel::Chunk::kSize; ++x)
-                    {
-                        const uint8_t current = chunkComp.chunk->get(x, y, z);
-                        if (current != reference.get(x, y, z))
-                            chunkDesc.edits.push_back(scene::VoxelBlockEdit{ x, y, z, current });
-                    }
+                voxel::Chunk reference;
+                reference.generate(world.seed, chunkComp.chunkX, chunkComp.chunkZ, world.baseY);
 
-            if (!chunkDesc.edits.empty())
-                worldDesc.chunks.push_back(std::move(chunkDesc));
+                scene::VoxelChunkDescription chunkDesc;
+                chunkDesc.chunkX = chunkComp.chunkX;
+                chunkDesc.chunkZ = chunkComp.chunkZ;
+                for (int32_t y = 0; y < voxel::Chunk::kSize; ++y)
+                    for (int32_t z = 0; z < voxel::Chunk::kSize; ++z)
+                        for (int32_t x = 0; x < voxel::Chunk::kSize; ++x)
+                        {
+                            const uint8_t current = chunkComp.chunk->get(x, y, z);
+                            if (current != reference.get(x, y, z))
+                                chunkDesc.edits.push_back(scene::VoxelBlockEdit{ x, y, z, current });
+                        }
+
+                if (!chunkDesc.edits.empty())
+                    worldDesc.chunks.push_back(std::move(chunkDesc));
+            }
+
+            description.voxelWorlds.push_back(std::move(worldDesc));
         }
-
-        description.voxelWorlds.push_back(std::move(worldDesc));
     }
 
     return description;
+}
+
+bool Scene::applyMeshAndMaterialFromDescription(const scene::EntityDescription& e,
+                                                      entt::entity entity,
+                                                      std::string& errorMessage)
+{
+    if (entity == entt::null || !registry.valid(entity))
+    {
+        errorMessage = "invalid entity while applying prefab mesh";
+        return false;
+    }
+
+    // 地形网格由 buildFromDescription 自己生成（需要 heightfield / GPU 构建器），
+    // 这里不能重复加载，也不能给地形分配普通材质槽位。
+    if (e.isTerrain)
+        return true;
+
+    if (!e.meshPath.empty())
+    {
+        std::shared_ptr<Model> model;
+        try
+        {
+            model = Model::createModelFromFile(*device, commandPool, e.meshPath);
+        }
+        catch (const std::exception& ex)
+        {
+            errorMessage = std::string("failed to load mesh '") + e.meshPath + "': " + ex.what();
+            return false;
+        }
+        if (!model)
+        {
+            errorMessage = "mesh loader returned null for '" + e.meshPath + "'";
+            return false;
+        }
+
+        registry.emplace_or_replace<MeshComponent>(entity, MeshComponent{ model });
+        RenderTagComponent tag;
+        tag.isSkybox = e.isSkybox;
+        tag.isGrid = e.isGrid;
+        registry.emplace_or_replace<RenderTagComponent>(entity, tag);
+        setModelBounds(registry, entity, model, &dirtySpatialEntities);
+    }
+    else if (e.isSkybox || e.isGrid)
+    {
+        // 天空盒/网格辅助实体只有 tag，没有 MeshComponent。
+        RenderTagComponent tag;
+        tag.isSkybox = e.isSkybox;
+        tag.isGrid = e.isGrid;
+        registry.emplace_or_replace<RenderTagComponent>(entity, tag);
+    }
+
+    if (registry.try_get<MeshComponent>(entity))
+    {
+        MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(entity);
+        materialComp.material = materialSystem.getOrCreateMaterial(
+            e.material.present ? e.material.name : std::string("scene_default"));
+        if (!materialComp.material)
+        {
+            errorMessage = "material system returned null for '" + e.material.name + "'";
+            return false;
+        }
+
+        materialComp.material->baseColorFactor = e.material.baseColorFactor;
+        materialComp.material->metallicFactor = e.material.metallicFactor;
+        materialComp.material->roughnessFactor = e.material.roughnessFactor;
+        materialComp.material->alphaCutoff = e.material.alphaCutoff;
+        materialComp.material->alphaMode = static_cast<AlphaMode>(e.material.alphaMode);
+
+        auto loadIfAny = [&](const std::string& path, bool srgb) -> std::shared_ptr<Texture>
+        {
+            if (path.empty())
+                return nullptr;
+            return materialSystem.loadTexture(path, *device, commandPool, srgb);
+        };
+        if (!e.material.albedoMap.empty())
+            materialComp.material->albedoMap = loadIfAny(e.material.albedoMap, true);
+        if (!e.material.normalMap.empty())
+            materialComp.material->normalMap = loadIfAny(e.material.normalMap, false);
+        if (!e.material.metallicRoughnessMap.empty())
+            materialComp.material->metallicRoughnessMap = loadIfAny(e.material.metallicRoughnessMap, false);
+
+        // 槽位是运行期分发的，序列化不存；每次实例化都要重新分配。
+        materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*materialComp.material);
+    }
+
+    return true;
+}
+
+entt::entity Scene::instantiatePrefab(const scene::SceneDescription& description,
+                                      entt::entity parent,
+                                      std::vector<entt::entity>& createdEntities,
+                                      std::string& errorMessage)
+{
+    createdEntities.clear();
+    errorMessage.clear();
+
+    if (!device || !descriptorManager)
+    {
+        errorMessage = "scene is not initialized";
+        return entt::null;
+    }
+    if (description.entities.empty())
+    {
+        errorMessage = "prefab has no entities";
+        return entt::null;
+    }
+    if (!description.voxelWorlds.empty())
+    {
+        errorMessage = "prefabs cannot contain voxel world descriptions";
+        return entt::null;
+    }
+    if (parent != entt::null && !registry.valid(parent))
+    {
+        errorMessage = "prefab parent entity is invalid";
+        return entt::null;
+    }
+
+    const size_t count = description.entities.size();
+    int rootIndex = -1;
+    std::vector<int> parentIndices(count, -1);
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const scene::EntityDescription& e = description.entities[i];
+        if (e.isCamera || e.isTerrain || e.isTerrainWorld || e.isSkybox || e.isGrid)
+        {
+            errorMessage = "prefab contains a runtime-only entity";
+            return entt::null;
+        }
+
+        const int parentIndex = e.parentIndex;
+        if (parentIndex < -1 || parentIndex >= static_cast<int>(count))
+        {
+            errorMessage = "prefab has an out-of-range parent index";
+            return entt::null;
+        }
+        if (parentIndex == static_cast<int>(i))
+        {
+            errorMessage = "prefab entity cannot parent itself";
+            return entt::null;
+        }
+        if (parentIndex < 0)
+        {
+            if (rootIndex >= 0)
+            {
+                errorMessage = "prefab must have exactly one root entity";
+                return entt::null;
+            }
+            rootIndex = static_cast<int>(i);
+        }
+        parentIndices[i] = parentIndex;
+    }
+
+    if (rootIndex < 0)
+    {
+        errorMessage = "prefab has no root entity";
+        return entt::null;
+    }
+
+    // 防止手改 JSON 造成的环（A→B→A）。每个实体最多走 count 步。
+    for (size_t i = 0; i < count; ++i)
+    {
+        int cursor = parentIndices[i];
+        size_t steps = 0;
+        while (cursor >= 0)
+        {
+            if (++steps > count)
+            {
+                errorMessage = "prefab hierarchy contains a cycle";
+                return entt::null;
+            }
+            cursor = parentIndices[static_cast<size_t>(cursor)];
+        }
+    }
+
+    const entt::entity nullEntity = entt::null;
+    std::vector<entt::entity> created(count, nullEntity);
+
+    auto cleanup = [&]()
+    {
+        // 逆序销毁：子节点先走，destroyEntity 不会递归整棵子树。
+        for (auto it = createdEntities.rbegin(); it != createdEntities.rend(); ++it)
+        {
+            if (registry.valid(*it))
+                destroyEntity(*it);
+        }
+        createdEntities.clear();
+    };
+
+    try
+    {
+        for (size_t i = 0; i < count; ++i)
+        {
+            const scene::EntityDescription& e = description.entities[i];
+            const entt::entity entity = registry.create();
+            created[i] = entity;
+            createdEntities.push_back(entity);
+
+            TransformComponent transform;
+            transform.setTranslation(e.translation);
+            transform.setEuler(e.rotation);
+            transform.setScale(e.scale);
+            registry.emplace<TransformComponent>(entity, transform);
+            registry.emplace<HierarchyComponent>(entity);
+            registry.emplace<NameComponent>(entity, NameComponent{ e.name });
+
+            if (e.isCharacter)
+            {
+                CharacterControllerComponent character;
+                character.radius = e.characterRadius;
+                character.height = e.characterHeight;
+                character.moveSpeed = e.characterMoveSpeed;
+                character.jumpSpeed = e.characterJumpSpeed;
+                character.gravity = e.characterGravity;
+                character.maxSlopeAngle = e.characterMaxSlopeAngle;
+                character.stepHeight = e.characterStepHeight;
+                character.groundSnapDistance = e.characterGroundSnapDistance;
+                registry.emplace<CharacterControllerComponent>(entity, character);
+            }
+
+            // 角色与网格可以同时存在：这里不再用 else if，修掉了旧载入路径里
+            // “角色带 meshPath 时网格被吞掉”的问题。
+            if (!applyMeshAndMaterialFromDescription(e, entity, errorMessage))
+            {
+                cleanup();
+                return entt::null;
+            }
+        }
+
+        for (entt::entity entity : created)
+            attachDirtyTracking(entity);
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            const scene::EntityDescription& e = description.entities[i];
+            for (const scene::ComponentRecord& record : e.components)
+            {
+                if (!applyComponentRecord(created[i], record))
+                {
+                    errorMessage = "failed to apply component '" + record.type + "'";
+                    cleanup();
+                    return entt::null;
+                }
+            }
+        }
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (parentIndices[i] >= 0)
+                setParent(created[i], created[static_cast<size_t>(parentIndices[i])]);
+        }
+
+        const entt::entity root = created[static_cast<size_t>(rootIndex)];
+        if (parent != entt::null)
+            setParent(root, parent);
+
+        markAllTransformsDirty();
+        updateWorldTransforms();
+        markAllSpatialDirty();
+        refreshSpatialIndex();
+        updateVisibility(camera.getProjection() * camera.getView());
+        return root;
+    }
+    catch (const std::exception& ex)
+    {
+        errorMessage = std::string("prefab instantiation failed: ") + ex.what();
+        cleanup();
+        return entt::null;
+    }
 }
 
 void Scene::clearEntities()
@@ -1847,6 +2149,7 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
             registry.emplace<TerrainComponent>(target, std::move(terrainComponent));
             setModelBounds(registry, target, terrainModel, &dirtySpatialEntities);
         }
+        // 角色组件与网格/材质是两条独立的路径：角色也可以带 meshPath。
         if (e.isCharacter)
         {
             CharacterControllerComponent character;
@@ -1860,75 +2163,13 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
             character.groundSnapDistance = e.characterGroundSnapDistance;
             registry.emplace<CharacterControllerComponent>(created[i], character);
         }
-        else if (!e.meshPath.empty())
-        {
-            const entt::entity target = created[i];
-            std::shared_ptr<Model> model;
-            try
-            {
-                model = Model::createModelFromFile(*device, commandPool, e.meshPath);
-            }
-            catch (const std::exception& ex)
-            {
-                errorMessage = std::string("failed to load mesh '") + e.meshPath + "': " + ex.what();
-                clearEntities();
-                return false;
-            }
-            if (model)
-            {
-                registry.emplace<MeshComponent>(target, MeshComponent{ model });
-                RenderTagComponent tag;
-                tag.isSkybox = e.isSkybox;
-                tag.isGrid = e.isGrid;
-                registry.emplace<RenderTagComponent>(target, tag);
-                setModelBounds(registry, target, model, &dirtySpatialEntities);
-            }
-            else
-            {
-                errorMessage = "mesh loader returned null for '" + e.meshPath + "'";
-                clearEntities();
-                return false;
-            }
-        }
-        else if (e.isSkybox || e.isGrid)
-        {
-            RenderTagComponent tag;
-            tag.isSkybox = e.isSkybox;
-            tag.isGrid = e.isGrid;
-            registry.emplace<RenderTagComponent>(created[i], tag);
-        }
 
-        // 材质：默认用 defaultMat（MaterialSystem 已建好的），有描述则覆盖参数
-        if (created[i] != entt::null && registry.valid(created[i]))
+        // 网格 / RenderTag / Bounds / 材质统一走与预制体相同的 helper。
+        if (created[i] != entt::null && registry.valid(created[i]) &&
+            !applyMeshAndMaterialFromDescription(e, created[i], errorMessage))
         {
-            if (!e.isTerrain && registry.try_get<MeshComponent>(created[i]))
-            {
-                MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(created[i]);
-                materialComp.material = materialSystem.getOrCreateMaterial(
-                    e.material.present ? e.material.name : std::string("scene_default"));
-                materialComp.material->baseColorFactor = e.material.baseColorFactor;
-                materialComp.material->metallicFactor = e.material.metallicFactor;
-                materialComp.material->roughnessFactor = e.material.roughnessFactor;
-                materialComp.material->alphaCutoff = e.material.alphaCutoff;
-                materialComp.material->alphaMode = static_cast<AlphaMode>(e.material.alphaMode);
-
-                // 贴图按需加载（走 MaterialSystem 的缓存）
-                auto loadIfAny = [&](const std::string& path, bool srgb) -> std::shared_ptr<Texture>
-                {
-                    if (path.empty()) return nullptr;
-                    return materialSystem.loadTexture(path, *device, commandPool, srgb);
-                };
-                if (!e.material.albedoMap.empty())
-                    materialComp.material->albedoMap = loadIfAny(e.material.albedoMap, true);
-                if (!e.material.normalMap.empty())
-                    materialComp.material->normalMap = loadIfAny(e.material.normalMap, false);
-                if (!e.material.metallicRoughnessMap.empty())
-                    materialComp.material->metallicRoughnessMap = loadIfAny(e.material.metallicRoughnessMap, false);
-
-                // 重新分配 bindless 槽位（序列化不存槽位号，因为它是运行期分发的）。
-                // 槽位归实体所有，和 createMeshEntity 保持同一套规则。
-                materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*materialComp.material);
-            }
+            clearEntities();
+            return false;
         }
     }
 

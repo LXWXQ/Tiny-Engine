@@ -142,6 +142,9 @@ private:
     bool saveScene();
     bool saveSceneAs();
     bool openSceneDialog();
+    // F5-02：预制体（保存选中子树 / 实例化到当前场景）。
+    bool savePrefabFromSelection();
+    bool instantiatePrefabDialog();
     bool loadSceneFromPath(const std::string& path, std::string& errorMessage, bool recordRecent = true);
 
     void setEditorMode(EditorState::EditorMode mode);

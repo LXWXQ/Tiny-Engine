@@ -238,7 +238,7 @@ $tests = @(
     @{ Name = "f2h-large-radius"; Args = @("--selftest", "400", "--streaming-world", "16");
        MustContain = @("mesh arena resized | radius=16", "[Streaming] chunks=1089", "[Validation] errors=0 warnings=0") },
     @{ Name = "e1-batch-commands"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
-       MustContain = @("batch delete/duplicate", "[Editor] selfTest PASS") },
+       MustContain = @("batch delete/duplicate", "[Editor] prefab selfTest PASS", "[Editor] selfTest PASS") },
     @{ Name = "e2-multi-transform"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("multi transform", "[Editor] selfTest PASS") },
     @{ Name = "e3-material-undo"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

@@ -92,10 +92,12 @@ SceneSerializer 或 Commands。
 - `SceneSerializer` 从 **version 3** 起把 `components` 写进每个实体（格式见
   [serialization](../90-editor/serialization.md)）。`Scene::captureDescription()` 只捕获
   已注册组件；`buildFromDescription()` 逐条 apply，未注册的类型安全跳过。
+  预制体复用同一套描述：`captureDescription(root)` 收子树、`instantiatePrefab()` 追加恢复，
+  见 [prefabs](../90-editor/prefabs.md)。
 - `DeleteEntityCommand` 的快照与 `DuplicateEntityCommand` 都会带上注册组件 record，
   所以删除撤销/复制不会丢效果。
 
-**边界**：组件和系统仍在 C++ 编译期注册，没有脚本/热重载/属性数组/预制体；
+**边界**：组件和系统仍在 C++ 编译期注册，没有脚本/热重载/属性数组；
 系统在编辑模式也会随 `Scene::update()` 推进，撤销删除后实体 ID 会变。
 
 ## 2. Transform 层级

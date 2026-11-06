@@ -3,9 +3,9 @@ id: editor/milestones
 title: 编辑器里程碑（E1 起）
 type: status
 scope: 空
-size: ~110 行
+size: ~250 行
 read-when: 想知道编辑器做过哪些轮次与每轮的验证基线
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # 编辑器里程碑
@@ -237,4 +237,14 @@ Shift 跑，状态机 `Idle/Walk/Run/Jump/Jump_Idle/Jump_Land`，并修掉纯色
 **可观测**：`[Editor] example presets selfTest PASS | glass faces=879`、`[Editor] example presets selfTest PASS | voxel-world meshes=9 bounds=9`。
 
 **回归**：`e8-editor-mode` 增加两行断言（含异步 chunk 的 `WorldBoundsComponent`）；全套仍 67 项。
+
+## E11：预制体保存与实例化（F5-02）
+
+**问题**：做好的实体组合只能整场景存盘，无法复用；重建同一套层级、网格、材质与元数据组件全靠手工。
+
+**实现**：菜单 文件 → 保存选中为预制体...（`captureDescription(root)` 只收子树）与 创建 → 实例化预制体...（`Scene::instantiatePrefab()` 追加，`InstantiatePrefabCommand` 撤销/重做）。文件为单根子树的 `*.prefab.json`，复用 v3 场景格式；筛选器只列 `.prefab.json` 但保留“所有文件”。播放中两个菜单都禁用。
+
+**可观测**：`[Editor] prefab selfTest PASS | save/load/instantiate/undo/redo`。
+
+**回归**：`e1-batch-commands` 增加该行断言；全套 75 项。细节见 [prefabs](prefabs.md)。
 

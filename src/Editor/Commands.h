@@ -11,6 +11,7 @@
 #include "Editor/CommandStack.h"
 #include "Scene/Components.h"   // MeshComponent / MaterialComponent 快照需要完整定义
 #include "Scene/ComponentTypes.h"
+#include "Scene/SceneDescription.h"
 
 #include <entt/entt.hpp>
 #include <optional>
@@ -500,6 +501,37 @@ private:
     entt::entity source;
     entt::entity createdRoot = entt::null;
     std::vector<entt::entity> createdEntities;
+};
+
+// F5-02：实例化预制体（一棵子树）到当前场景。
+//
+// 失败语义：CommandStack::execute 没有返回值，所以构造函数里先完成一次实例化；
+// 成功才 adopted=true，第一次 apply() 只负责“接管”这次结果。撤销逆序销毁，
+// 重做重新实例化（新 ID，和 DuplicateEntityCommand 一致）。
+class InstantiatePrefabCommand : public Command
+{
+public:
+    InstantiatePrefabCommand(Scene& scene,
+                             const scene::SceneDescription& description,
+                             entt::entity parent);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Instantiate Prefab"; }
+
+    bool succeeded() const { return error.empty(); }
+    const std::string& errorMessage() const { return error; }
+    entt::entity currentRoot() const { return createdRoot; }
+    const std::vector<entt::entity>& createdEntities() const { return created; }
+
+private:
+    Scene* scene;
+    scene::SceneDescription description;
+    entt::entity parent;
+    entt::entity createdRoot = entt::null;
+    std::vector<entt::entity> created;
+    std::string error;
+    bool adopted = false;
 };
 
 // UI helper shared by the Create menu and the Hierarchy button. Returns the

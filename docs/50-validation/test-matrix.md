@@ -65,7 +65,7 @@ updated: 2026-11-06
 | 34 | `f2e-terrain-picking` | 地形拾取走高度场（编辑器自检） | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] streamed terrain PASS`、`picking=OK`、`[Editor] selfTest PASS` |
 | 35 | `f2f-arena-slots` | `--selftest 180 --streaming-world 8` | `[Terrain] mesh arena ready | vertexMB=`、`arenaAllocs=`、`[Validation] errors=0 warnings=0` | arena 归 `Scene` 所有，chunk 落地即 `acquire()` + `copyInto()` + `Model::releaseGpuBuffers()`；容量按实际尺寸分配，`arenaAllocs` 随 chunk 生灭回落（飞行 600 帧 305~323） |
 | 36 | `f2h-large-radius` | `--selftest 400 --streaming-world 16` | `mesh arena resized | radius=16`、`[Streaming] chunks=1089`、`[Validation] errors=0 warnings=0` | chunk 坐标 int64 + 采样锚点 double，半径上限 24；arena 按整环容量原地重建（`reconfigure()`，渲染侧只持 `this` 指针） |
-| 37 | `e1-batch-commands` | 编辑器批量命令（Composite / Duplicate） | `TinyEditor.exe --selftest 5 --empty-scene` | `batch delete/duplicate`、`[Editor] selfTest PASS` | 多选删除是一条撤销、复制含子树且名字追加 `" Copy"`、`revert()` 清空副本 |
+| 37 | `e1-batch-commands` | 编辑器批量命令（Composite / Duplicate）与预制体 | `TinyEditor.exe --selftest 5 --empty-scene` | `batch delete/duplicate`、`[Editor] prefab selfTest PASS`、`[Editor] selfTest PASS` | 多选删除是一条撤销、复制含子树且名字追加 `" Copy"`、`revert()` 清空副本；预制体保存/读取/实例化/undo/redo 全通过 |
 | 38 | `e2-multi-transform` | 编辑器多对象变换（一条命令） | `TinyEditor.exe --selftest 5 --empty-scene` | `multi transform`、`[Editor] selfTest PASS` | 多选拖拽只压一条命令、`mergeWith` 只接受同一选择 |
 | 39 | `e3-material-undo` | 材质参数与 Render Tag 的撤销 | `TinyEditor.exe --selftest 5 --empty-scene` | `material/render tag`、`[Editor] selfTest PASS` | 滑杆与复选框各压一条命令；undo 时同时把 GPU factor 写回去 |
 | 40 | `e3-play-doc-lock` | 播放期间文档只读 | `TinyEditor.exe --selftest 5 --empty-scene` | `play document lock selfTest PASS` | Playing 下 save/new/open 全被拒绝并留日志 |

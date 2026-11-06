@@ -1094,6 +1094,39 @@ void DuplicateEntityCommand::revert()
     createdRoot = entt::null;
 }
 
+InstantiatePrefabCommand::InstantiatePrefabCommand(Scene& sceneArg,
+                                                             const scene::SceneDescription& descriptionArg,
+                                                             entt::entity parentArg)
+    : scene(&sceneArg), description(descriptionArg), parent(parentArg)
+{
+    createdRoot = scene->instantiatePrefab(description, parent, created, error);
+    adopted = (createdRoot != entt::null);
+}
+
+void InstantiatePrefabCommand::apply()
+{
+    if (adopted)
+    {
+        // 构造函数已经实例化过了；execute() 这次 apply 只接管结果。
+        adopted = false;
+        return;
+    }
+
+    created.clear();
+    createdRoot = scene->instantiatePrefab(description, parent, created, error);
+}
+
+void InstantiatePrefabCommand::revert()
+{
+    createdRoot = entt::null;
+    for (auto it = created.rbegin(); it != created.rend(); ++it)
+    {
+        if (*it != entt::null && scene->getRegistry().valid(*it))
+            scene->destroyEntity(*it);
+    }
+    created.clear();
+}
+
 entt::entity createTerrainThroughCommand(entt::registry& registry,
                                          Scene& scene,
                                          CommandStack& commands,

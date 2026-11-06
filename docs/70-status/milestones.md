@@ -949,4 +949,24 @@ updated: 2026-11-06
 
 **回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-120327`；DocCheck PASS（documents=67 lines=11595）。
 
-**边界**：组件/系统仍是 C++ 编译期注册，没有脚本、热重载、属性数组/结构体、预制体；系统在编辑模式也随 `Scene::update()` 推进；属性只有 6 种基础类型。
+**边界**：组件/系统仍是 C++ 编译期注册，没有脚本、热重载、属性数组/结构体；系统在编辑模式也随 `Scene::update()` 推进；属性只有 6 种基础类型。
+
+## F5-02：预制体资产（2026-11-06）
+
+**问题**：编辑器只能整场景保存/打开，做好的实体组合无法复用；每个场景都要手工重建同一套层级、网格、材质与元数据组件。场景描述已经是纯数据，但缺少“只捕获一棵子树”和“追加到现有场景”的入口。
+
+**实现**：
+- `Scene::captureDescription(entt::entity root)`：按 `HierarchyComponent::children` DFS 收子树，父先子后；跳过体素/地形 chunk；子树不写 `voxelWorlds`。无参版本保持整场景捕获。
+- `Scene::instantiatePrefab()`：不清场景，追加一组实体；校验单根、父下标、环与运行期实体；逐实体恢复 Transform/层级/Name、角色、网格与材质、元数据组件，最后把根挂到 parent。失败按 created 逆序销毁，不触碰已有场景。
+- 抽出 `Scene::applyMeshAndMaterialFromDescription()` 供场景加载与预制体实例化共用；同时修掉“角色带 `meshPath` 时被 `else if` 吞掉、网格不加载”的旧路径。
+- `src/Editor/Prefab.*`：`validate` / `save` / `load`，复用 v3 `SceneSerializer`；保存前先拒绝子树里的 `VoxelWorldComponent`，避免实例化时体素世界静默丢失。
+- `InstantiatePrefabCommand`：构造时先实例化（adopted），首次 `apply()` 只接管；undo 逆序销毁，redo 重新实例化并产生新 ID。
+- 菜单：文件 → 保存选中为预制体...；创建 → 实例化预制体...；播放中文档只读时拒绝。文件过滤器 `*.prefab.json`。
+
+**测试**：
+- 编辑器自检 `[Editor] prefab selfTest PASS | save/load/instantiate/undo/redo`：cube 父子树 + `effects.spin` 90°，覆盖子树捕获、单根下标、存读、父子关系、组件值、mesh 计数、undo 后消失、redo 换新 ID 恢复。
+- `tools/Validate.ps1` 的 `e1-batch-commands` 增加 `[Editor] prefab selfTest PASS` 断言，不新增用例编号。
+
+**回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-124323`；DocCheck PASS（documents=68 lines=11711）。
+
+**边界**：单根子树；没有嵌套预制体、变体/参数覆盖、实例与源资产联动；不保存体素世界、地形、相机与流送状态；每次实例化重新分配材质槽位；实例化根固定在场景根下；redo 后实体 ID 变化。说明见 [prefabs](../90-editor/prefabs.md)。

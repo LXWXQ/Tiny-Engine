@@ -136,10 +136,17 @@ public:
 
     // ---- 场景描述（编辑器 / 序列化用）----
     // captureDescription: 把当前 registry 导出成纯数据（不含任何 GPU 句柄）。
+    // 无参版本导出整个场景；传 root 时只导出该实体的子树（用于预制体）。
     // buildFromDescription: 清空当前场景并按描述重建（会重新加载网格、重新分配材质槽位）。
-    // 两者都不抛异常，失败时通过 errorMessage 返回原因。
+    // instantiatePrefab: 不清场景，把描述里的单根子树追加到 parent 下。
+    // 这些接口都不抛异常，失败时通过 errorMessage 返回原因。
     scene::SceneDescription captureDescription() const;
+    scene::SceneDescription captureDescription(entt::entity root) const;
     bool buildFromDescription(const scene::SceneDescription& description, std::string& errorMessage);
+    entt::entity instantiatePrefab(const scene::SceneDescription& description,
+                                   entt::entity parent,
+                                   std::vector<entt::entity>& createdEntities,
+                                   std::string& errorMessage);
 
     // 清空场景（保留相机实体）。编辑器的"新建场景"走这里。
     void clearEntities();
@@ -435,6 +442,11 @@ private:
         uint64_t releaseFrame = 0;
     };
 
+    // 场景载入与预制体实例化共用：按描述建 Mesh/RenderTag/Bounds/Material。
+    // 地形实体由 buildFromDescription 自己生成网格，这里对 e.isTerrain 直接跳过。
+    bool applyMeshAndMaterialFromDescription(const scene::EntityDescription& e,
+                                             entt::entity entity,
+                                             std::string& errorMessage);
     void markAllTransformsDirty();
     void markAllSpatialDirty();
     void updateWorldTransforms();

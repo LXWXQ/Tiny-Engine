@@ -31,6 +31,7 @@ updated: 2026-11-04
 | [architecture](architecture.md) | 加新面板 / 改编辑器与引擎的接缝 |
 | [commands](commands.md) | 加可撤销操作 / 调试撤销不对 |
 | [serialization](serialization.md) | 改场景文件格式 / 加组件要存盘 |
+| [prefabs](prefabs.md) | 改预制体保存/实例化 / 子树层级或材质不对 |
 | [panels](panels.md) | 写新面板 / 改布局 |
 | [viewport](viewport.md) | 改视口尺寸/格式 / 画面拉伸或发暗 |
 | [gizmo](gizmo.md) | 点不中物体 / 拖拽方向不对 / 加新手柄 |
@@ -48,6 +49,7 @@ updated: 2026-11-04
 - 菜单栏：File / Edit / Play / View / Help，状态条显示脏标记与撤销深度
 - 播放状态机：Editing / Playing / Paused，Stop 时恢复快照
 - 场景存读：`*.scene.json`
+- 预制体：选中子树保存为 `*.prefab.json`、实例化到当前场景、撤销/重做（[prefabs](prefabs.md)）
 - 离屏视口：3D 画面渲染到纹理，作为 ImGui 图片嵌在面板里（面板环绕而非覆盖）
 - 视口点选：AABB 粗筛 + 三角形精确求交，点空白处取消选中
 - 选中包围盒：局部 AABB × 世界矩阵的 **OBB**，3D 线段绘制，**带深度测试**（被墙挡住就看不见）

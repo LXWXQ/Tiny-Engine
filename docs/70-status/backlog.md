@@ -271,6 +271,7 @@ updated: 2026-11-06
 | F1-R1 | 未开始 | 粒子真实接入（`ExternalInstance` 入口已就位，还没有生产方） | F6 | 粒子与 ECS 实例共用分组/合批/剔除 |
 | E-P1 | 已完成 | 启动失败的原生 MessageBox（UX-04） | — | 双击启动失败时用户能看到可读提示 |
 | F5-01 | 已完成 | 元数据驱动 ECS：组件注册表 + SystemScheduler + Inspector Add Component + 序列化 v3 | — | 实体可加/删/改 Spin/Orbit，Inspector 编辑并撤销；场景存读保留 components；`selftest-default` 断言 ECS component selfTest |
+| F5-02 | 已完成 | 预制体资产：保存选中子树为 .prefab.json、实例化、撤销/重做 | F5-01 | 含 effects.spin 的 cube 父子树可保存/读取/实例化；undo 消失、redo 换新 ID 恢复；e1 断言 prefab selfTest |
 
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
@@ -299,6 +300,8 @@ updated: 2026-11-06
 > V-04 已完成（2026-11-06）：体素不透明几何在 `applyVoxelChunkMesh()` 里先临时上传 `Model`，再 `TerrainMeshArena::acquire/copyInto` 并 `releaseGpuBuffers()`，`Model` 只留 CPU 几何；`GeometrySystem` 按可见集合写专用 224B 实例表与 `VkDrawIndexedIndirectCommand`，整批一条 indirect。半径 12 实测 `chunks=625 arena=625 vertices=725888 indices=1088832`，可见 535 块整批 `commands=535`，材质槽池 256→1024；`f3-voxel-arena-625` 覆盖。详见 [milestones](milestones.md#v-04体素-arena-间接合批2026-11-06)。
 >
 > F5-01 元数据驱动 ECS 已完成（2026-11-06）：`ComponentRegistry` 用模板描述符注册组件（Bool/Int/Float/Vec3/Color/String 六种属性），`SystemScheduler` 在 `updateWorldTransforms()` 前后跑 Simulation/PostTransform；内置 `effects.spin`、`effects.orbit`。Inspector 增加 + Add Component / 属性编辑 / 移除，统一走 `SetComponentRecordCommand`；`SceneSerializer` v3 把 components 作为可选数组，未知组件跳过。`selftest-default` 断言 `[Scene] ECS component selfTest PASS`，编辑器自检覆盖 capture → JSON → build → undo/redo。全套 75 项 ALL PASS（日志 `build/validation/20261106-120327`）。详见 [milestones](milestones.md#f5-01元数据驱动-ecs2026-11-06)。
+>
+> F5-02 预制体资产已完成（2026-11-06）：复用 v3 `SceneDescription` 作为 `.prefab.json`，`Scene::captureDescription(root)` 只捕获选中子树、`Scene::instantiatePrefab()` 追加实例化并在失败时逆序回滚；`editor::prefab` 负责校验/读写，`InstantiatePrefabCommand` 提供 undo/redo（redo 新 ID）。文件菜单“保存选中为预制体...”、创建菜单“实例化预制体...”。编辑器自检 `[Editor] prefab selfTest PASS`，`e1-batch-commands` 断言该行；全套 75 项 ALL PASS，验证日志 `build/validation/20261106-124323`。详见 [milestones](milestones.md#f5-02预制体资产2026-11-06) 与 [prefabs](../90-editor/prefabs.md)。
 
 ## 更新方式
 

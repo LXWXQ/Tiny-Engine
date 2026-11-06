@@ -1,6 +1,7 @@
 #include "Editor/EditorLayer.h"
 #include "Editor/SceneSerializer.h"
 #include "Editor/Commands.h"
+#include "Editor/Prefab.h"
 
 #include "Editor/panels/HierarchyPanel.h"
 #include "Editor/panels/InspectorPanel.h"
@@ -664,6 +665,9 @@ void EditorLayer::drawMenuBar()
         ImGui::Separator();
         if (ImGui::MenuItem("保存", "Ctrl+S", false, writable)) saveScene();
         if (ImGui::MenuItem("另存为...", nullptr, false, writable)) saveSceneAs();
+        if (ImGui::MenuItem("保存选中为预制体...", nullptr, false,
+                            writable && state.services.scene != nullptr && !state.selection.empty()))
+            savePrefabFromSelection();
         ImGui::Separator();
         if (ImGui::MenuItem("重新加载配置") && state.services.reloadConfig)
             state.services.reloadConfig();
@@ -721,6 +725,10 @@ void EditorLayer::drawMenuBar()
             requestTerrainCreate();
         if (ImGui::MenuItem("角色"))
             createCharacterFromUi();
+        ImGui::Separator();
+        if (ImGui::MenuItem("实例化预制体...", nullptr, false,
+                            state.documentWritable() && state.services.scene != nullptr))
+            instantiatePrefabDialog();
         if (ImGui::MenuItem("体素世界", nullptr, false, state.services.scene != nullptr))
         {
             const entt::entity world = state.services.scene->createVoxelWorld(20251104ull, 1, 0);
@@ -1690,6 +1698,81 @@ bool EditorLayer::openSceneDialog()
         return false;
 
     return openScene(path);
+}
+
+bool EditorLayer::savePrefabFromSelection()
+{
+    if (!state.documentWritable())
+    {
+        state.notify(LogEntry::Level::Warning, "播放中不写入预制体：先按 F7 停止");
+        return false;
+    }
+    if (!state.services.scene || !state.services.saveFileDialog)
+        return false;
+
+    const entt::entity root = state.selection.primary();
+    if (root == entt::null)
+    {
+        state.notify(LogEntry::Level::Warning, "先选中一个实体，再保存为预制体");
+        return false;
+    }
+
+    const std::string path = state.services.saveFileDialog(
+        "Tiny Engine Prefab (*.prefab.json)\0*.prefab.json\0All Files (*.*)\0*.*\0",
+        "Save Prefab As");
+    if (path.empty())
+        return false;
+
+    std::string error;
+    if (!prefab::save(*state.services.scene, root, path, error))
+    {
+        state.notify(LogEntry::Level::Error, "保存预制体失败：" + error);
+        return false;
+    }
+
+    state.notifySuccess("已保存预制体 " + std::filesystem::path(path).filename().string());
+    return true;
+}
+
+bool EditorLayer::instantiatePrefabDialog()
+{
+    if (!state.documentWritable())
+    {
+        state.notify(LogEntry::Level::Warning, "播放中不能实例化预制体：先按 F7 停止");
+        return false;
+    }
+    if (!state.services.scene || !state.services.openFileDialog)
+        return false;
+
+    const std::string path = state.services.openFileDialog(
+        "Tiny Engine Prefab (*.prefab.json)\0*.prefab.json\0All Files (*.*)\0*.*\0",
+        "Instantiate Prefab");
+    if (path.empty())
+        return false;
+
+    scene::SceneDescription description;
+    std::string error;
+    if (!prefab::load(path, description, error))
+    {
+        state.notify(LogEntry::Level::Error, "读取预制体失败：" + error);
+        return false;
+    }
+
+    auto command = std::make_unique<InstantiatePrefabCommand>(
+        *state.services.scene, description, entt::null);
+    InstantiatePrefabCommand* raw = command.get();
+    if (!raw->succeeded())
+    {
+        state.notify(LogEntry::Level::Error, "实例化失败：" + raw->errorMessage());
+        return false;
+    }
+
+    const entt::entity root = raw->currentRoot();
+    state.commands.execute(std::move(command));
+    state.selection.select(root);
+    state.markDirty();
+    state.notifySuccess("已实例化预制体 " + std::filesystem::path(path).filename().string());
+    return true;
 }
 
 bool EditorLayer::openScene(const std::string& path)
@@ -4409,6 +4492,135 @@ bool EditorLayer::selfTestWithScene()
                   << " | skinned=" << (skinned ? 1 : 0) << " animations=" << animations
                   << " clips=Idle/Walk/Run/Jump/Jump_Idle/Jump_Land active=Idle"
                   << std::endl;
+    }
+
+    // ---- 2h) F5-02：预制体保存 / 载入 / 实例化 / 撤销重做 ----
+    {
+        Scene* scene = state.services.scene;
+        entt::registry* registry = state.services.registry;
+        if (scene == nullptr || registry == nullptr)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: no scene bound" << std::endl;
+            return false;
+        }
+
+        std::error_code code;
+        std::filesystem::create_directories(".tmp", code);
+        const std::string prefabPath = ".tmp/prefab-selftest.prefab.json";
+        std::filesystem::remove(prefabPath, code);
+
+        const size_t baselineMeshes = registry->view<MeshComponent>().size();
+        const entt::entity parent = scene->createMeshEntity(cubePath, "PrefabSelfTestParent");
+        const entt::entity child = scene->createMeshEntity(cubePath, "PrefabSelfTestChild");
+        if (parent == entt::null || child == entt::null)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: could not create source entities" << std::endl;
+            return false;
+        }
+
+        scene->setParent(child, parent);
+        registry->get<TransformComponent>(child).setTranslation(glm::vec3(1.0f, 2.0f, 0.0f));
+        scene->refreshTransformsAndVisibility();
+
+        scene::ComponentRecord spin = scene->defaultComponentRecord("effects.spin").value_or(scene::ComponentRecord{});
+        if (auto* degrees = spin.find("degreesPerSecond"))
+            degrees->value = scene::PropertyValue::fromFloat(90.0f);
+        if (!scene->applyComponentRecord(child, spin))
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: could not attach effects.spin" << std::endl;
+            return false;
+        }
+
+        const scene::SceneDescription captured = scene->captureDescription(parent);
+        if (captured.entities.size() != 2 || captured.entities[0].parentIndex != -1 ||
+            captured.entities[1].parentIndex != 0)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: capture ordering/parent index" << std::endl;
+            return false;
+        }
+
+        std::string error;
+        if (!prefab::save(*scene, parent, prefabPath, error))
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: save: " << error << std::endl;
+            return false;
+        }
+
+        scene::SceneDescription loaded;
+        if (!prefab::load(prefabPath, loaded, error))
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: load: " << error << std::endl;
+            return false;
+        }
+        if (loaded.entities.size() != 2 ||
+            std::abs(loaded.entities[1].translation.x - 1.0f) > 1e-4f ||
+            loaded.entities[1].components.empty())
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: loaded data changed" << std::endl;
+            return false;
+        }
+
+        auto command = std::make_unique<InstantiatePrefabCommand>(*scene, loaded, entt::null);
+        InstantiatePrefabCommand* raw = command.get();
+        if (!raw->succeeded() || raw->createdEntities().size() != 2)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: instantiate: " << raw->errorMessage() << std::endl;
+            return false;
+        }
+
+        const entt::entity instanceRoot = raw->currentRoot();
+        const entt::entity instanceChild = raw->createdEntities()[1];
+        state.commands.execute(std::move(command));
+
+        const auto* hierarchy = registry->try_get<HierarchyComponent>(instanceChild);
+        const auto instanceSpin = scene->readComponent(instanceChild, "effects.spin");
+        const float* spinDegrees = nullptr;
+        if (instanceSpin)
+        {
+            if (const auto* property = instanceSpin->find("degreesPerSecond"))
+                spinDegrees = &property->value.floatValue;
+        }
+        if (hierarchy == nullptr || hierarchy->parent != instanceRoot ||
+            !scene->hasComponent(instanceChild, "effects.spin") ||
+            spinDegrees == nullptr || std::abs(*spinDegrees - 90.0f) > 1e-4f ||
+            registry->view<MeshComponent>().size() != baselineMeshes + 4)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: instance hierarchy/component/mesh mismatch" << std::endl;
+            return false;
+        }
+
+        state.commands.undo();
+        if (registry->valid(instanceRoot) || registry->view<MeshComponent>().size() != baselineMeshes + 2)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: undo left instance entities" << std::endl;
+            return false;
+        }
+
+        state.commands.redo();
+        // 重做是重新实例化（新实体 ID），不能拿撤销前的旧 ID 判定。
+        const entt::entity redoRoot = raw->currentRoot();
+        if (!registry->valid(redoRoot) ||
+            registry->view<MeshComponent>().size() != baselineMeshes + 4)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: redo did not recreate instance" << std::endl;
+            return false;
+        }
+
+        state.commands.undo();
+        scene->destroyEntity(child);
+        scene->destroyEntity(parent);
+        scene->refreshTransformsAndVisibility();
+        state.commands.clear();
+        state.selection.clear();
+        std::filesystem::remove(prefabPath, code);
+
+        if (registry->view<MeshComponent>().size() != baselineMeshes)
+        {
+            std::cerr << "[Editor] prefab selfTest FAIL: cleanup did not restore mesh count" << std::endl;
+            return false;
+        }
+
+        std::cout << "[Editor] prefab selfTest PASS | save/load/instantiate/undo/redo" << std::endl;
     }
 
     // ---- 2h) 帮助 → 示例：预设场景能替换世界并自动取景 ----

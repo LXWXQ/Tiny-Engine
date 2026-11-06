@@ -121,7 +121,7 @@ Amanatides-Woo DDA 拾取、挖/放 + 逐格撤销、`queryGroundAtWorld` 叠加
 - **保留 glTF 内部 node 层级**：不再把几何永久烘焙成世界空间
 - 每个 primitive instance 可独立变换（门、机械部件、植被）
 - 资产引用计数 + 异步加载 + 材质流送
-- Prefab / 场景描述格式（供未来编辑器读写）
+- Prefab 资产格式（复用场景描述，单根子树；F5-02 已完成）
 
 **当前阻塞**：`GLTFLoader.cpp` 把 node 变换直接烘焙进顶点位置
 （[decisions](../10-architecture/decisions.md) 决策 13）。
@@ -134,7 +134,7 @@ Amanatides-Woo DDA 拾取、挖/放 + 逐格撤销、`queryGroundAtWorld` 叠加
 ## F5：运行时架构
 
 - JobSystem：work stealing、任务依赖图、取消、优先级
-- ECS systems：元数据组件注册表 + SystemScheduler（Simulation / updateWorldTransforms / PostTransform）已完成（F5-01）；剩余更细阶段与热重载
+- ECS systems：元数据组件注册表 + SystemScheduler（Simulation / updateWorldTransforms / PostTransform）已完成（F5-01）；预制体保存/实例化已完成（F5-02）；剩余更细阶段与热重载
 - SpatialIndex：dirty flag / 增量更新 / 分块索引
 - 场景序列化与热重载
 
