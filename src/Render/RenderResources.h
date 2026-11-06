@@ -35,6 +35,10 @@ struct RenderResources
     // 光照终点：每帧一份线性 HDR 中间目标。
     std::array<RenderGraph::TextureHandle, kFramesInFlight> hdrScene;
 
+    // F6-01：水面屏幕空间反射结果（半分辨率，rgb=反射颜色，a=置信度）。
+    // WaterPass 采样后与平面反射/IBL 混合；SSR 关闭时不写也不被读。
+    std::array<RenderGraph::TextureHandle, kFramesInFlight> ssrColor;
+
     // TAA：每帧解析后的抗锯齿 HDR 输出。Bloom 与 Present 固定读它，
     // 因此即使 taaEnabled=false，TAA Pass 也要照常运行并写这张图。
     std::array<RenderGraph::TextureHandle, kFramesInFlight> taaOutput;

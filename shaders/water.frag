@@ -20,12 +20,13 @@ layout(set = 0, binding = 0) uniform GlobalUbo
 layout(set = 0, binding = 1) uniform sampler2D environmentMap;
 layout(set = 0, binding = 2) uniform sampler2D inPosition;
 layout(set = 0, binding = 12) uniform sampler2D reflectionMap;
+layout(set = 0, binding = 13) uniform sampler2D ssrMap;
 
 layout(push_constant) uniform WaterPush
 {
     vec4 params;   // time, level, waveStrength, waveSpeed
     vec4 params2;  // farRadius, foamStrength, fogStart, fogDensity
-    vec4 params3;  // x = planar reflection enabled
+    vec4 params3;  // x = planar reflection enabled, y = SSR enabled
 } push;
 
 const vec4 WAVES[4] = vec4[4](
@@ -165,15 +166,25 @@ void main()
     // 于是"没有底"的地方自动变成深海。
     vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(inPosition, 0));
 
+    // 半分辨率的反射纹理都沿用屏幕坐标，按法线做轻微扰动。
+    vec2 reflectionUV = clamp(screenUV + N.xz * (0.0015 + roughness * 0.006),
+                              vec2(0.001), vec2(0.999));
+
     // C1：半分辨率平面反射。镜像相机把水面以上的真实几何重画一遍，
     // 远水因此能反射对岸/山体，而不是只剩天空环境贴图。
-    // 反射纹理是半分辨率，UV 直接沿用屏幕坐标并按法线做轻微扰动；
     // 关掉开关时 params3.x = 0，保持原来的环境贴图反射。
     if (push.params3.x > 0.5)
-    {
-        vec2 reflectionUV = clamp(screenUV + N.xz * (0.0015 + roughness * 0.006),
-                                  vec2(0.001), vec2(0.999));
         reflection = texture(reflectionMap, reflectionUV).rgb;
+
+    // F6-01：近场屏幕空间反射。alpha 是 SSR 自己的置信度（没命中=0），
+    // 再用粗糙度和距离衰减：粗糙水面本来就看不清镜像，远处交给平面反射/IBL。
+    if (push.params3.y > 0.5)
+    {
+        vec4 ssr = texture(ssrMap, reflectionUV);
+        float ssrWeight = ssr.a
+            * (1.0 - smoothstep(0.20, 0.55, roughness))
+            * (1.0 - smoothstep(120.0, 220.0, distanceToCamera));
+        reflection = mix(reflection, ssr.rgb, clamp(ssrWeight, 0.0, 1.0));
     }
 
     vec3 scenePos = texture(inPosition, screenUV).xyz;

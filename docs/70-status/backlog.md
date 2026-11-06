@@ -261,7 +261,7 @@ updated: 2026-11-06
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
 | V-04 | 已完成 | 体素几何走 `TerrainMeshArena` / 间接合批（每 chunk 一份 `Model` + 一次 bind -> 共享 arena + 专用实例表） | F1 合批路径 | 625 块整批只占 1 条 `vkCmdDrawIndexedIndirect`；半径 12 的 arena 725888 顶点 / 1088832 索引不溢出，验证 0/0（日志 `build/validation/20261106-102034`） |
 | V-05 | 未开始 | 体素世界分页/无限世界（当前半径上限 12，`Scene::kMaxVoxelRadius`） | V-04 | 半径 24 显存与实体数可控 |
-| F6-01 | 未开始 | SSR（屏幕空间反射，读 HDR + depth） | F6 | 反射可见、与 IBL 结果有明显差异且无严重噪点 |
+| F6-01 | 已完成 | 水面近场 SSR（半分辨率 48 步屏幕空间追踪，读 HDR + depth，与平面反射/IBL 混合） | F6 | 反射可见、与 IBL/平面反射结果有明显差异且无严重噪点；关平面反射+关波浪时 SSR 开/关差异 91918 像素；`f3v-ssr`/`f3v-ssr-off` 通过（日志 `build/validation/20261106-105750`） |
 | F6-02 | 未开始 | 自动曝光（compute 直方图 + 曝光纹理） | F6 | 室内外切换后 2 秒内亮度收敛 |
 | F6-03 | 未开始 | Compute Bloom（金字塔迁到 compute） | F6 | 输出与当前 bloom 视觉一致、GPU 时间下降 |
 | F6-04 | 未开始 | 切线空间法线贴图（启用 `getNormalFromMap()`，先补切线或 TBN） | F4 | 法线贴图生效；`normalMaps` 不再白绑（tech-debt #3） |
@@ -288,7 +288,9 @@ updated: 2026-11-06
 >
 > E-P1 已完成（2026-11-05）：交互式启动失败先弹原生 `MessageBoxW`，正文含阶段、原因、`startup-error.log` 路径、`--help` 与 Vulkan 下一步；`--hidden` / `--selftest` / 截图等无人值守路径保持静默。详见 [milestones](milestones.md#e-p1启动失败原生-messagebox2026-11-05)。
 >
-> C1 半分辨率平面反射已完成（2026-11-05）：`ReflectionPass` 用镜像相机重画 960x540 的 G-Buffer 与延迟光照，`WaterPass` 从 Set0 binding12 采样；开关为 `water.planarReflection`，默认开启。它替代了“远水只能反射环境图”的旧边界，但 F6-01 的 SSR 仍未开始。详见 [milestones](milestones.md#c1-半分辨率平面反射2026-11-05)。
+> C1 半分辨率平面反射已完成（2026-11-05）：`ReflectionPass` 用镜像相机重画 960x540 的 G-Buffer 与延迟光照，`WaterPass` 从 Set0 binding12 采样；开关为 `water.planarReflection`，默认开启。
+>
+> F6-01 水面近场 SSR 已完成（2026-11-06）：`SSRPass` 读 HDR + G-Buffer 位置/法线，在半分辨率 960x540 上做 48 步屏幕空间 DDA，结果写 `ssrColor` 并从 Set0 binding13 进入 `water.frag`；命中置信度再乘粗糙度与距离衰减，与平面反射/IBL 混合。屏幕外/超过 `ssrMaxDistance`（默认 200m）回退。开关 `ssr.enabled` 与 `--no-ssr`，关平面反射+关波浪时开/关差异 91918 像素。详见 [milestones](milestones.md#f6-01水面近场-ssr2026-11-06)，验证日志 `build/validation/20261106-105750`。
 >
 > V-04 已完成（2026-11-06）：体素不透明几何在 `applyVoxelChunkMesh()` 里先临时上传 `Model`，再 `TerrainMeshArena::acquire/copyInto` 并 `releaseGpuBuffers()`，`Model` 只留 CPU 几何；`GeometrySystem` 按可见集合写专用 224B 实例表与 `VkDrawIndexedIndirectCommand`，整批一条 indirect。半径 12 实测 `chunks=625 arena=625 vertices=725888 indices=1088832`，可见 535 块整批 `commands=535`，材质槽池 256→1024；`f3-voxel-arena-625` 覆盖。详见 [milestones](milestones.md#v-04体素-arena-间接合批2026-11-06)。
 

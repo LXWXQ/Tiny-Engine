@@ -121,6 +121,12 @@ namespace
 		water["planarReflection"] = s.waterPlanarReflection;
 		j["water"] = std::move(water);
 
+		// F6-01：SSR 从 planned 正式升级为真实功能。
+		json ssr;
+		ssr["enabled"] = s.ssrEnabled;
+		ssr["maxDistance"] = s.ssrMaxDistance;
+		j["ssr"] = std::move(ssr);
+
 		// B：距离雾。独立节点而不是塞进 water，地形/玻璃也吃同一份参数。
 		json fog;
 		fog["enabled"] = s.fogEnabled;
@@ -141,9 +147,7 @@ namespace
 		light["shadows"] = std::move(shadows);
 		j["lighting"] = std::move(light);
 
-		json planned;
-		planned["ssrEnabled"] = s.ssrEnabled;
-		j["planned"] = std::move(planned);
+		// planned 节点只保留历史兼容用途；新配置不往里面写任何开关。
 
 		return j;
 	}
@@ -214,10 +218,27 @@ namespace
 			out.exposure = read(n, "exposure", out.exposure, warnings);
 		}
 
+		const bool hasSsrNode = j.contains("ssr") && j["ssr"].is_object();
+		if (hasSsrNode)
+		{
+			const json& n = j["ssr"];
+			out.ssrEnabled = read(n, "enabled", out.ssrEnabled, warnings);
+			out.ssrMaxDistance = read(n, "maxDistance", out.ssrMaxDistance, warnings);
+		}
+
 		if (j.contains("planned") && j["planned"].is_object())
 		{
 			const json& n = j["planned"];
-			out.ssrEnabled = read(n, "ssrEnabled", out.ssrEnabled, warnings);
+			// 旧配置把 ssrEnabled 放在 planned 里；顶层 ssr 存在时以它为准。
+			// 旧版本只在 planned 里写过占位 false（当时 SSR 还没实现），
+			// 不能拿它来关掉新功能；只有历史配置真的写了 true 才继承。
+			if (!hasSsrNode)
+			{
+				bool legacySsr = false;
+				legacySsr = read(n, "ssrEnabled", legacySsr, warnings);
+				if (legacySsr)
+					out.ssrEnabled = true;
+			}
 			// 旧配置把 shadowEnabled 放在 planned 里；新配置在 lighting.shadows。
 			// 先读这里当兜底，下面 lighting.shadows 有值时再覆盖。
 			out.shadowEnabled = read(n, "shadowEnabled", out.shadowEnabled, warnings);

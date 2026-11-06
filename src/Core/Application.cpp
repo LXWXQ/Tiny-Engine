@@ -29,6 +29,7 @@
 #include "Render/GlassPass.h"
 #include "Render/WaterPass.h"
 #include "Render/ReflectionPass.h"
+#include "Render/SSRPass.h"
 #include "Core/Material.h"
 #include "Render/TAAPass.h"
 #include "Render/ShadowPass.h"
@@ -806,6 +807,10 @@ streamingConfig.skirtsEnabled = false;
 	auto reflectionPass = std::make_unique<ReflectionPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager.get(), descriptorManager->getGlobalSetLayout(),
 		gBuffers[0]->getDepth().format);
+	// F6-01：水面近场 SSR。必须在 Water 之前注册（Water 读它的结果），
+	// 在读 Lighting 产物时它已经写完 hdrScene，所以排在 Lighting/Reflection 之后。
+	auto ssrPass = std::make_unique<SSRPass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	// D-2 的两个新成员：Bloom 只负责在 HDR 图上生成辉光，
 	// PresentPass 负责把 HDR + 辉光变成最终显示值并叠加 ImGui。
 	auto bloomPass = std::make_unique<BloomPass>(*vulkanDevice, *renderGraph, *renderResources,
@@ -821,6 +826,7 @@ streamingConfig.skirtsEnabled = false;
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
 		gBuffers[0]->getDepth().format);
 	waterPass->setReflectionPass(reflectionPass.get());
+	waterPass->setSSRPass(ssrPass.get());
 	// TAA：必须在 Glass/Water 之后（要拿混合后的 HDR）、Bloom 之前（辉光作用在
 	// 抗锯齿后的画面上）。每帧都注册 —— 否则 Bloom/Present 会读到没人写的
 	// taaOutput，渲染图的写覆盖校验会直接报错。
@@ -847,6 +853,7 @@ streamingConfig.skirtsEnabled = false;
 	taaPassPtr = taaPass.get();
 	ssaoPassPtr = ssaoPass.get();
 	reflectionPassPtr = reflectionPass.get();
+	ssrPassPtr = ssrPass.get();
 	geometryPassPtr = geoPass.get();
 	computeProbePassPtr = computeProbePass.get();
 	crossQueueProbePassPtr = crossQueueProbePass.get();
@@ -857,6 +864,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
 	renderPipeline.addPass(std::move(reflectionPass));
+	renderPipeline.addPass(std::move(ssrPass));
 	renderPipeline.addPass(std::move(glassPass));
 	renderPipeline.addPass(std::move(waterPass));
 	renderPipeline.addPass(std::move(taaPass));
@@ -1275,10 +1283,30 @@ void FirstApp::rebuildGlobalDescriptors()
 		}
 	}
 
+	// F6-01：binding13 是 SSR 结果。SSR 关闭时同样绑定环境图作为占位，
+	// 水面 shader 由 params3.y 分支决定是否采样，描述符必须始终有效。
+	VkSampler ssrSampler = environmentTex->getSampler();
+	std::array<VkImageView, kFramesInFlight> ssrViews{};
+	const bool ssrRuns = reflectionSettings.ssrEnabled && reflectionSettings.waterEnabled &&
+		(scene->getRegistry().view<TerrainComponent>().size() > 0 ||
+		 scene->getRegistry().view<VoxelChunkComponent>().size() > 0);
+	ssrDescriptorsEnabled = ssrRuns;
+	for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+	{
+		ssrViews[frame] = environmentTex->getView();
+		if (ssrRuns && ssrPassPtr != nullptr)
+		{
+			VkImageView view = ssrPassPtr->getColorView(frame);
+			if (view != VK_NULL_HANDLE)
+				ssrViews[frame] = view;
+		}
+	}
+
 	descriptorManager->buildGlobalSet(globalUboBuffers, envInfo, constGBufferPtrs,
 		ssaoPassPtr->getOutputSampler(), ssaoViews,
 		irradianceInfo, prefilteredInfo, brdfLutInfo,
-		shadowSampler, shadowViews, reflectionSampler, reflectionViews);
+		shadowSampler, shadowViews, reflectionSampler, reflectionViews,
+		ssrSampler, ssrViews);
 
 	if (reflectionPassPtr != nullptr)
 	{
@@ -1578,6 +1606,12 @@ void FirstApp::setTAAEnabled(bool enabled)
 void FirstApp::setWaterEnabled(bool enabled)
 {
 	scene->getSettings().waterEnabled = enabled;
+}
+
+void FirstApp::setSSREnabled(bool enabled)
+{
+	// SSR 只在水面存在时有意义；描述符重建由帧循环里的 ssrWanted 检查负责。
+	scene->getSettings().ssrEnabled = enabled;
 }
 
 void FirstApp::setGpuSceneEnabled(bool enabled)
@@ -2417,7 +2451,13 @@ void FirstApp::render(float dt)
 		const bool reflectionWanted = settings.waterEnabled && settings.waterPlanarReflection &&
 			(scene->getRegistry().view<TerrainComponent>().size() > 0 ||
 			 scene->getRegistry().view<VoxelChunkComponent>().size() > 0);
-		if (reflectionWanted != reflectionDescriptorsEnabled)
+		// F6-01：SSR 同理 —— 关闭后若还绑着上一帧的 SSR 纹理，那张图本帧没有
+		// Pass 写入，布局停在 COLOR_ATTACHMENT，验证层会直接报错。
+		const bool ssrWanted = settings.ssrEnabled && settings.waterEnabled &&
+			(scene->getRegistry().view<TerrainComponent>().size() > 0 ||
+			 scene->getRegistry().view<VoxelChunkComponent>().size() > 0);
+		if (reflectionWanted != reflectionDescriptorsEnabled ||
+			ssrWanted != ssrDescriptorsEnabled)
 			rebuildGlobalDescriptors();
 
 		// C1：反射相机由未抖动的投影 + 镜像 view 推导，避免 TAA 抖动被放大成

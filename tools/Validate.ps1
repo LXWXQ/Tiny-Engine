@@ -304,6 +304,12 @@ $tests = @(
        MustContain = @("[Reflection] planar reflection initialized |", "[Reflection] first draw |", "planarReflection=1", "[Validation] errors=0 warnings=0") },
     @{ Name = "f3v-water-off"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1", "--no-water");
        MustContain = @("[Water] disabled", "[Validation] errors=0 warnings=0") },
+    # F6-01：水面近场屏幕空间反射。半分辨率追踪 pass 注册在水之前，
+    # 命中结果通过 binding13 混进水面反射；关掉后水面回落到平面反射/IBL。
+    @{ Name = "f3v-ssr"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
+       MustContain = @("[SSR] initialized |", "[SSR] first draw |", "[Water] first draw |", "ssr=1", "[Validation] errors=0 warnings=0") },
+    @{ Name = "f3v-ssr-off"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1", "--no-ssr");
+       MustContain = @("[SSR] disabled", "[Water] first draw |", "ssr=0", "[Validation] errors=0 warnings=0") },
   @{ Name = "f3-voxel-persist"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");
        MustContain = @("capture + json round trip", "[Editor] voxel edit selfTest PASS") },
   @{ Name = "e8-editor-mode"; Exe = "editor"; Args = @("--selftest", "5", "--empty-scene");

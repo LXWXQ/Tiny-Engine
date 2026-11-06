@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 判断某个需求现在能不能做
 size: ~100 行
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # 已知边界
@@ -19,12 +19,12 @@ updated: 2026-11-05
 
 ## 2. 渲染特性缺失
 
-无：SSR、折射、水下后处理、自动曝光、超分、通用动画/骨骼系统、粒子（`ExternalInstance` 入口已就位，无生产方）、
+无：折射、水下后处理、自动曝光、超分、通用动画/骨骼系统、粒子（`ExternalInstance` 入口已就位，无生产方）、
 点光源阴影（方向光 CSM 已做，只支持单方向光、级联固定 3 级）、体积光、通用透明排序（仅体素玻璃有独立 pass）、通用 GPU LOD/网格组装。
 后处理抗锯齿已有 TAA，但只有相机重投影、没有运动向量，物体自身运动不会被单独补偿。
 骨骼动画目前只服务运行模式的单角色（CPU 蒙皮，见 [character](../30-systems/character.md)），不是通用动画系统。
-地形单 chunk 子集已接 GPU culling、indirect count 与 GPU 顶点/索引组装；体素走独立 `Model` 路径（无合批、无 LOD）。
-体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。水面（`Water`）是独立的水平前向混合 Pass，只在有地形/体素块时注册；反射由半分辨率平面反射（`ReflectionPass`，镜像相机重画不透明几何）提供，玻璃/水面/粒子不进入倒影，无折射/SSR/水下后处理。距离雾（`fog`）是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；雾色固定取环境图地平线 LOD3，天空本身不参与。
+地形单 chunk 子集已接 GPU culling、indirect count 与 GPU 顶点/索引组装；体素与地形共用 `TerrainMeshArena`，可见 chunk 合并成一条 `vkCmdDrawIndexedIndirect`（无 LOD）。
+体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。水面（`Water`）是独立的水平前向混合 Pass，只在有地形/体素块时注册；反射由半分辨率屏幕空间 SSR（只服务水面近场，默认 200m）与半分辨率平面反射（`ReflectionPass`，镜像相机重画不透明几何）共同提供：SSR 屏幕外/远水回退平面反射，再到环境图；玻璃/水面/粒子不进入平面反射倒影，仍无折射/水下后处理。距离雾（`fog`）是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；雾色固定取环境图地平线 LOD3，天空本身不参与。
 
 ## 3. 架构限制
 
@@ -34,7 +34,7 @@ updated: 2026-11-05
 | glTF 几何烘焙到世界空间 | Sponza 内部节点不是独立 entity，不能局部动 | 决策 13 |
 | SpatialIndex 仅 streamed chunk 有 XZ region bucket | 非 chunk 实体仍走统一 3D 网格；大世界仍需分块剔除 | [scene-ecs](../30-systems/scene-ecs.md) §3 |
 | 线性渲染图 | 无自动重排/别名化/死代码剔除 | 决策 2 |
-| 材质槽位只增不减 | 反复换场景会吃满 256 槽 | [tech-debt](tech-debt.md) #3 |
+| 材质槽位只增不减 | 反复换场景会吃满 1024 槽 | [tech-debt](tech-debt.md) #3 |
 | 单场景单相机 | 无多视口 / 分屏 | — |
 
 ## 4. 可观测性限制

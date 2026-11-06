@@ -99,6 +99,7 @@ N = normalize(vec3(-gradient.x, 1.0, -gradient.y))
   扰动后采样，替代环境图反射；关闭时 binding12 回退到环境图。反射通道用镜像相机
   重画不透明几何并做第二套延迟光照，水面以下几何被 `clipY` 裁掉；玻璃、水面和
   调试网格不进入倒影。半分辨率结果直接按屏幕 UV 上采样，边缘比全分辨率软。
+- **屏幕空间反射（F6-01）**：`ssr.frag` 在半分辨率 960x540 上从水面像素沿反射方向做 48 步 DDA（水面用解析平面 y = waterLevel 求交，只读本帧 HDR 与 G-Buffer 世界坐标，不读 Normal/Depth），把射线步进点投影回屏幕后采样 G-Buffer 位置，点到射线的垂直距离超过厚度（默认 0.5m，按步长自适应放大）的命中会被丢弃；命中的 alpha 是置信度，屏幕外/超过 `ssrMaxDistance`（默认 200m）返回 0。Water 用同一个扰动后的 `reflectionUV` 采样绑定 13 的 SSR 结果，权重为 `ssr.a * (1 - smoothstep(0.20, 0.55, roughness)) * (1 - smoothstep(120, 220, distanceToCamera))`，再与平面反射/环境图混合：粗糙水面和远水仍交给平面反射/IBL，近场平静水面才吃屏幕空间结果。SSR 只服务水面，不写深度，不影响不透明几何。
 - **厚度吸收**：读 G-Buffer `inPosition`（不透明场景的世界坐标），沿视线算
   `thickness = sceneDistance - waterDistance`；`depthFactor = 1 - exp(-thickness * 0.22)`，
   水薄处偏浅、厚处偏深。天空的 10000m 让远处自动变成深海。
@@ -118,8 +119,9 @@ N = normalize(vec3(-gradient.x, 1.0, -gradient.y))
 - **混合**：`alpha = mix(0.18, 0.92, depthFactor) + fresnel * 0.55`，上限 0.985；
   管线用 `SRC_ALPHA / ONE_MINUS_SRC_ALPHA`，alpha 通道写 1。
 
-第一版**不做折射**：RenderGraph 没有 image copy，折射需要先把 `hdrScene` 复制成可采样
-纹理。也不做 SSR，反射只来自环境图。
+**不做折射**：RenderGraph 没有 image copy，折射需要先把 `hdrScene` 复制成可采样
+纹理，这部分仍未做。反射现在有三层来源：屏幕空间 SSR（近场、平静水面）、
+半分辨率平面反射（屏幕外/远水）、环境图（最终回退）。
 
 ## 5. Pass 合同
 
@@ -131,11 +133,12 @@ depthTest: on, depthWrite: off, compare: LESS_OR_EQUAL
 cullMode: NONE
 ```
 
-- 只绑 Set0 全局描述符，不需要材质 Set；binding12 是反射纹理，平面反射关闭时
-  由 `Application` 回退绑定环境图；
+- 只绑 Set0 全局描述符，不需要材质 Set；binding12 是平面反射纹理，binding13 是
+  SSR 结果；对应开关关闭时由 `Application` 回退绑定环境图（描述符必须始终有效，
+  水面 shader 用 `params3.x/y` 分支决定是否采样）；
 - push constant 48 字节：`params=(time, level, waveStrength, waveSpeed)`、
   `params2=(farRadius, foamStrength, fogStart, fogDensity)`、
-  `params3=(planarReflection, 0, 0, 0)`；雾关闭时密度写 0；
+  `params3=(planarReflection, ssrEnabled, 0, 0)`；雾关闭时密度写 0；
 - `GlobalUbo` 尾部新增 `fogParams=(fogStart, fogDensity, 0, enabled)`，光照/水面/玻璃共用；
   `lighting.frag`、`glass.frag` 的参数分别来自 UBO 与 32 字节的 glass push constant；
 - `timeSeconds` 由 Pass 自己按 `min(max(frameTime, 0), 0.1)` 累加，暂停或断点后不会跳变；
@@ -148,12 +151,13 @@ cullMode: NONE
 
 | 入口 | 行为 |
 |---|---|
-| 编辑器 Render 面板 / 运行时 ImGui | `Water` 分组：Enabled、Level、Wave Strength、Wave Speed、Planar Reflection；另有 `距离雾` / `Atmosphere / Fog` 分组：Enabled、Start、Density |
-| `--no-water` | 关闭水面；Pass 不注册，打印一次 `[Water] disabled` |
-| `config/engine.json` | `water: { enabled, level, waveStrength, waveSpeed, planarReflection }`、`fog: { enabled, start, density }` |
+| 编辑器 Render 面板 / 运行时 ImGui | `Water` 分组：Enabled、Level、Wave Strength、Wave Speed、Planar Reflection、Screen Space Reflection、SSR Max Distance；另有 `距离雾` / `Atmosphere / Fog` 分组：Enabled、Start、Density |
+| `--no-water` | 关闭水面；Water/PlanarReflection/SSR 都不注册，打印一次 `[Water] disabled` |
+| `--no-ssr` | 关闭屏幕空间反射；SSR 不注册，打印一次 `[SSR] disabled`，水面 `ssr=0` |
+| `config/engine.json` | `water: { enabled, level, waveStrength, waveSpeed, planarReflection }`、`ssr: { enabled, maxDistance }`、`fog: { enabled, start, density }` |
 
 默认值：`waterEnabled=true`、`waterLevel=2.0`、`waterWaveStrength=1.0`、
-`waterWaveSpeed=1.0`、`waterPlanarReflection=true`；`fogEnabled=true`、`fogStart=80m`、`fogDensity=0.00045`
+`waterWaveSpeed=1.0`、`waterPlanarReflection=true`、`ssrEnabled=true`、`ssrMaxDistance=200m`；`fogEnabled=true`、`fogStart=80m`、`fogDensity=0.00045`
 （约 1km 处 34%、4km 处 83%）。雾是全局设置，地形/水面/玻璃共用；没有单独的
 `--no-fog`，通过配置或 UI 关闭。
 
@@ -163,6 +167,7 @@ cullMode: NONE
 
 ```
 [Reflection] planar reflection initialized | extent=960x540
+[SSR] initialized | extent=960x540 steps=48
 [Water] initialized | rings=160 segments=192 vertices=30721 indices=183744 radius=4032m
 ```
 
@@ -170,10 +175,12 @@ cullMode: NONE
 
 ```
 [Reflection] first draw | level=2 mirrorY=-6.8105 extent=960x540
-[Water] first draw | level=2 waveStrength=1 waveSpeed=1 cameraY=46 planarReflection=1
+[SSR] first draw | extent=960x540 waterLevel=2 maxDistance=200 planarReflection=1
+[Water] first draw | level=2 waveStrength=1 waveSpeed=1 cameraY=46 planarReflection=1 ssr=1
 ```
 
-平面反射关闭时没有 `[Reflection] first draw`，水面日志为 `planarReflection=0`。
+平面反射关闭时没有 `[Reflection] first draw`，水面日志为 `planarReflection=0`；
+SSR 关闭时没有 `[SSR] first draw`，水面日志为 `ssr=0`。
 
 回归用例：
 
@@ -182,6 +189,8 @@ cullMode: NONE
 | `f3v-water` | `--selftest 20 --voxel-world 1` | `[Water] initialized \|`、`[Water] first draw \|`、`[Validation] errors=0 warnings=0` |
 | `f3v-water-reflection` | `--selftest 20 --voxel-world 1` | `[Reflection] planar reflection initialized \|`、`[Reflection] first draw \|`、`planarReflection=1`、验证层 0/0 |
 | `f3v-water-off` | `--selftest 20 --voxel-world 1 --no-water` | `[Water] disabled`、验证层 0/0 |
+| `f3v-ssr` | `--selftest 20 --voxel-world 1` | `[SSR] initialized`、`[SSR] first draw`、`[Water] first draw`、`ssr=1`、验证层 0/0 |
+| `f3v-ssr-off` | `--selftest 20 --voxel-world 1 --no-ssr` | `[SSR] disabled`、`[Water] first draw`、`ssr=0`、验证层 0/0 |
 
 截图可以用 `--screenshot build/water_test.png --screenshot-frame 20` 目检水体颜色、
 反射与岸边泡沫；把相机转向开阔水面、拉远到 1~4km，可对比 `fog.enabled` 开关前后的
@@ -190,8 +199,8 @@ cullMode: NONE
 ## 8. 已知边界
 
 - 水面是水平面，不支持任意朝向的水体；
-- 没有折射、没有 SSR、没有水下后处理；反射是镜像相机的半分辨率重画，不是屏幕空间
-  追踪，屏幕外的物体不会出现在倒影里；
+- 没有折射、没有水下后处理；SSR 只做水面近场（半分辨率、屏幕空间、默认 200m），
+  屏幕外的物体不会出现在 SSR 里，靠平面反射/环境图回退；
 - 距离雾是均匀指数雾，没有高度衰减、体积光/太阳散射，也没有时间变化；雾色固定取
   环境图地平线 LOD3，天空本身不参与雾；
 - footprint 过滤只修法线和高光，不改变几何；外圈网格段长约 132m，5.5m 波仍有几何
@@ -202,8 +211,10 @@ cullMode: NONE
 - 反射用主相机的阴影级联，镜像视角下的阴影/SSAO 不精确；半分辨率且没有独立时域
   累积，快速移动相机时倒影边缘会偏软或有轻微抖动；
 - TAA 只有相机重投影、没有运动向量，水面动画和物体自身运动不会被单独补偿；
-- `--no-water` 时 Pass 与 PlanarReflection 都完全不注册，没有"着色器短路"路径；
-  雾没有命令行开关，平面反射只有 UI/配置开关。
+- `--no-water` 时 Pass 与 PlanarReflection/SSR 都完全不注册，没有"着色器短路"路径；
+  `--no-ssr` 只关闭 SSR。雾没有命令行开关，平面反射只有 UI/配置开关；
+- SSR 是半分辨率、单帧、无时域累积的屏幕空间追踪：水面动画和薄几何会产生轻微
+  抖动/漏光，快速移动相机时近场倒影可能断续；这是屏幕空间方法的固有限制。
 
 ## 9. 关键文件
 
@@ -212,8 +223,10 @@ cullMode: NONE
 | `src/Render/WaterPass.h` | 接口、push constant、径向网格常量 |
 | `src/Render/WaterPass.cpp` | 网格/缓冲、管线、Pass 注册、均匀量与统计 |
 | `src/Render/ReflectionPass.{h,cpp}` | 镜像相机、半分辨率 G-Buffer/光照、反射纹理与开关 |
+| `src/Render/SSRPass.{h,cpp}` | 半分辨率 SSR 目标、描述符、48 步追踪 Pass、开关与日志 |
 | `shaders/water.vert` | 径向网格跟随相机、4 个大波位移 |
-| `shaders/water.frag` | footprint 波浪过滤、粗糙度反射、Fresnel、厚度吸收、泡沫、距离雾 |
+| `shaders/water.frag` | footprint 波浪过滤、粗糙度反射、Fresnel、SSR/平面反射混合、厚度吸收、泡沫、距离雾 |
+| `shaders/ssr.frag` | 半分辨率屏幕空间 DDA、G-Buffer 世界位置/射线厚度校验、置信度输出 |
 | `shaders/lighting.frag` | 不透明几何的距离雾；天空提前返回 |
 | `shaders/glass.frag` | 玻璃距离雾（只淡出颜色，alpha 不变） |
 | `src/Core/FrameInfo.h` | `EngineSettings` 的 water/fog 字段、`GlobalUbo.fogParams` |

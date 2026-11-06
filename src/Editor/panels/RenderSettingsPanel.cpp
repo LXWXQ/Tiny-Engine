@@ -144,6 +144,9 @@ void RenderSettingsPanel::draw(EditorState& state)
         ImGui::SliderFloat("Wave Speed", &settings->waterWaveSpeed, 0.0f, 2.0f, "%.2f");
         ImGui::Checkbox("Planar Reflection##water", &settings->waterPlanarReflection);
         ImGui::SetItemTooltip("半分辨率镜像反射，远水能映出对岸；关闭后只用环境贴图");
+        ImGui::Checkbox("屏幕空间反射##water", &settings->ssrEnabled);
+        ImGui::SetItemTooltip("近场 SSR：屏幕内的岸线/桥墩会映在水面上；屏幕外仍交给平面反射");
+        ImGui::SliderFloat("SSR Max Distance##water", &settings->ssrMaxDistance, 50.0f, 500.0f, "%.0f m");
         ImGui::TextDisabled("Fresnel + 环境反射 | 0 = 静止镜面");
     }
 

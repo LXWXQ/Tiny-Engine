@@ -225,7 +225,11 @@ struct EngineSettings
 	float ssaoBias = 0.025f;
 	int ssaoKernelSize = 16;
 
-	bool ssrEnabled = false;
+	// F6-01：水面近场屏幕空间反射。默认开 —— 没有它时近岸只反射环境贴图，
+	// 岸线/桥墩这类屏幕内几何完全不会出现在水面上。
+	bool ssrEnabled = true;
+	// SSR 射线最远距离（米）。超过这个距离/屏幕外的内容回退到平面反射/IBL。
+	float ssrMaxDistance = 200.0f;
 	// F6：方向光级联阴影（3 级 / 2048²）。默认开 —— 阴影是「画面像不像真的」里
 	// 性价比最高的一项，关掉只是排查用。
 	bool shadowEnabled = true;

@@ -1,6 +1,7 @@
 #include "WaterPass.h"
 
 #include "Render/ReflectionPass.h"
+#include "Render/SSRPass.h"
 #include "Scene/Components.h"
 #include "AssetPaths.h"
 
@@ -271,13 +272,21 @@ void WaterPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         reflectionPass->isActive() &&
         reflectionPass->getColorHandle(frame).valid();
 
+    // F6-01：SSR 只覆盖平面反射看不到的近场。关闭开关/没有 SSR 输出时，
+    // 水面行为和之前完全一致（IBL + 可选平面反射），不会多读一张图。
+    const bool ssrReflection =
+        frameInfo.settings.ssrEnabled && ssrPass != nullptr && ssrPass->isActive() &&
+        resources.ssrColor[frame].valid();
+
     auto& pass = graph.addGraphicsPass("Water");
     pass.writeColor(resources.hdrScene[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
     pass.writeDepth(resources.gbDepth[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
     if (planarReflection)
         pass.read(reflectionPass->getColorHandle(frame));
+    if (ssrReflection)
+        pass.read(resources.ssrColor[frame]);
 
-    pass.execute([this, &frameInfo, frame, planarReflection](VkCommandBuffer cmd)
+    pass.execute([this, &frameInfo, frame, planarReflection, ssrReflection](VkCommandBuffer cmd)
     {
         if (indexCount == 0u || waterPipeline == nullptr)
             return;
@@ -304,7 +313,8 @@ void WaterPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         push.params2 = glm::vec4(kFarRadius, 1.0f,
                                  settings.fogEnabled ? std::max(settings.fogStart, 0.0f) : 0.0f,
                                  settings.fogEnabled ? std::max(settings.fogDensity, 0.0f) : 0.0f);
-        push.params3 = glm::vec4(planarReflection ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+        push.params3 = glm::vec4(planarReflection ? 1.0f : 0.0f,
+                                 ssrReflection ? 1.0f : 0.0f, 0.0f, 0.0f);
         vkCmdPushConstants(cmd, pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(WaterPushConstantData), &push);
@@ -326,7 +336,8 @@ void WaterPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
                       << " waveStrength=" << settings.waterWaveStrength
                       << " waveSpeed=" << settings.waterWaveSpeed
                       << " cameraY=" << cameraPosition.y
-                      << " planarReflection=" << (planarReflection ? 1 : 0) << "\n";
+                      << " planarReflection=" << (planarReflection ? 1 : 0)
+                      << " ssr=" << (ssrReflection ? 1 : 0) << "\n";
             loggedFirstDraw = true;
         }
     });

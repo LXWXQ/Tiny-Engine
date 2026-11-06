@@ -33,6 +33,7 @@ class TAAPass;
 class SubresourceProbePass;
 class GeometryPass;
 class ReflectionPass;
+class SSRPass;
 
 class FirstApp
 {
@@ -62,6 +63,7 @@ public:
 	// TAA：无人值守自检里对比开关效果。
 	void setTAAEnabled(bool enabled);
 	void setWaterEnabled(bool enabled);
+	void setSSREnabled(bool enabled);
 	void setTerrainBatchEnabled(bool enabled);
 	void setGpuSceneMinScreenPixels(float pixels);
 	void setGpuSceneExternalDebugCount(uint32_t count);
@@ -141,8 +143,11 @@ private:
 	TAAPass* taaPassPtr = nullptr;
 	// C1：半分辨率平面反射（Lighting 之后、Glass/Water 之前）。
 	ReflectionPass* reflectionPassPtr = nullptr;
+	// F6-01：水面近场 SSR（Lighting/Reflection 之后、Water 之前）。
+	SSRPass* ssrPassPtr = nullptr;
 	GeometryPass* geometryPassPtr = nullptr;
 	bool reflectionDescriptorsEnabled = false;
+	bool ssrDescriptorsEnabled = false;
 
 
 	RenderPipeline renderPipeline;

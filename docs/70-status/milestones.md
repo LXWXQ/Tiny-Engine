@@ -888,3 +888,24 @@ updated: 2026-11-06
 **测试稳定性**：`terrain-render` 在用户相机 `[0,42,90]` 下暴露既有 flaky（`git stash` 掉 V-04 源码后仍复现）：CPU/GPU 最近点距离差 1 ULP，正好落在 LOD 阈值两侧，旧断言按整数逐位比较就失败。现改为 distance/extent 在 1e-4 相对误差内时允许 `lodA/lodB/stableLod` 差 1 级；调试契约统一为 8 word：`visible/lodA/lodB/blend/commandCount/distance/extent/stableLod`。这不是 V-04 数据错误，也没有放宽画面验收。
 
 **已知边界**：arena 仍是两块不可增长的大缓冲，超出容量时该 chunk 退回自有 buffer；体素批次上限 1024 chunk / 2048 命令，超限时打印一次 `[Voxel] arena batch capacity exceeded` 并退回逐块 arena draw；反射仍是逐块 draw，没有做镜像视图的间接批；625 块落地仍受每帧最多 4 块的限制（V-02）。
+
+## F6-01：水面近场 SSR（2026-11-06）
+
+**问题**：C1 的平面反射解决了“远水只反射天空”，但倒影只来自镜像相机重画的不透明几何：屏幕外物体、被主视角遮挡的细节和近场薄几何没有屏幕空间校验；同时平面反射是另一套完整 G-Buffer + Lighting，近场精度受半分辨率镜像相机限制。F6-01 要给水面补一层近场屏幕空间反射，并保留平面反射/IBL 作为回退。
+
+**实现**：
+- 新增 `src/Render/SSRPass.{h,cpp}` 与 `shaders/ssr.frag`：半分辨率（1920x1080 -> 960x540）`ssrColor`，每帧在飞 2 槽；Pass 读 `hdrScene`、G-Buffer 世界位置与全局 UBO，输出 RGBA16F，alpha 是命中置信度。
+- 片元用解析平面 y = waterLevel 求视线与水面交点，再沿 `reflect(viewDir, up)` 做固定 48 步 DDA；每步把射线点用未抖动投影投回屏幕，采样 G-Buffer 世界坐标，命中条件为“在射线上、沿射线距离落在 [0, t]、点到射线垂直距离小于厚度”（默认厚度 0.5m，按步长自适应放大）；命中后采样 HDR 颜色，并按距离淡出置信度。屏幕外、超过 `ssrMaxDistance`（默认 200m）无命中时 alpha=0。
+- `WaterPass` 的 Set0 binding13 绑定 SSR 结果；`water.frag` 用与平面反射相同的扰动 `reflectionUV` 采样，权重为 `ssr.a * (1 - smoothstep(0.20, 0.55, roughness)) * (1 - smoothstep(120, 220, distanceToCamera))`，再与平面反射/环境图混合。粗糙水面和远水仍交给平面反射/IBL。
+- 注册条件与水面一致：`ssrEnabled && waterEnabled && (Terrain || VoxelChunk)`，Pass 排在 `PlanarReflection.Lighting` 之后、`Glass` 之前；关闭时 binding13 回退环境图，避免指向未转换布局的纹理。
+- 开关：`ssr.enabled`（默认 true）、`ssr.maxDistance`（默认 200m）、`--no-ssr`；编辑器和运行时 ImGui 的 Water 分组都有 Screen Space Reflection / SSR Max Distance。
+- 旧配置兼容：旧版本只在 `planned.ssrEnabled` 写占位 false，读取时若没有顶层 `ssr` 节点，仅在旧值为 true 时继承，否则保留新默认 true，避免升级后被静默关闭。
+
+**实测（Debug / RTX 2070）**：
+- 体素世界：`[SSR] initialized | extent=960x540 steps=48`、`[SSR] first draw | extent=960x540 waterLevel=2 maxDistance=200 planarReflection=1`、Water 日志末尾 `ssr=1`；Validation 0/0。
+- 默认配置（平面反射开）下 SSR 开/关截图差异很小（925 像素），因为平面反射已经覆盖大部分反射；关平面反射 + 关波浪后，同机位开/关差异 **91918 像素**，水面出现浮空岛底面的深色倒置轮廓，无 speckle 噪点。证据图 `build/Debug/ssr_vstill.png`（开）、`build/Debug/ssr_vstill_off.png`（关）、`build/Debug/ssr_vstill_crop.png`（上下对比）。
+- 流送地形：可见水面基本在 220m 外，SSR 距离权重已降到 0，画面与关闭一致；这不是 SSR 失效，是近场限定。
+- 已知视觉边界：浮空岛底面本来无光照，SSR 倒影呈深色是几何结果；SSR 是半分辨率、单帧、无时域累积的屏幕空间方法，水面动画和薄几何会有轻微抖动/漏光。
+
+**回归**：新增 `f3v-ssr`（断言 initialized / first draw / Water first draw / `ssr=1` / 0/0）与 `f3v-ssr-off`（`--no-ssr`，断言 `[SSR] disabled` / `ssr=0` / 0/0）。全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-105750`；DocCheck PASS。
+

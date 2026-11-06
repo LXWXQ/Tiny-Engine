@@ -3,8 +3,8 @@
 一个面向**学习与工程验证**的 Vulkan 1.3 渲染器（Windows x64 / C++17 / MSVC）。
 重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
 
-- 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> PlanarReflection -> Glass -> Water -> TAA -> Bloom -> Present(ACES+gamma+ImGui)`
-- 一条命令完成：依赖准备 -> 全新 configure/build -> 72 项回归
+- 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> PlanarReflection -> SSR -> Glass -> Water -> TAA -> Bloom -> Present(ACES+gamma+ImGui)`
+- 一条命令完成：依赖准备 -> 全新 configure/build -> 75 项回归
 - 验收基线：**退出码 0** + **stderr 0 字节** + `[Validation] errors=0 warnings=0`
 
 > 本文件是仓库根目录**唯一**的文档。所有细节在 [`docs/`](docs/README.md) 下，按类型分层。
@@ -61,7 +61,7 @@ cmake --build build --config Debug
 | Bindless 材质 | 1 个 set 4 个纹理数组 + push constant 索引；`desc binds` 104 -> 1 | [descriptors](docs/10-architecture/descriptors.md) |
 | HDR + Bloom + ACES | 光照输出线性 HDR，tonemap 独立成 PresentPass；Bloom 关闭时真跳过 7 个 pass | [pass-order](docs/20-pipeline/pass-order.md) |
 | TAA 时域抗锯齿 | Halton(2,3) 抖动 + 未抖动 VP 反投影 + 3x3 邻域 AABB clamp；`--no-taa` 关闭，窗口 resize 重置历史 | [pass-order](docs/20-pipeline/pass-order.md) |
-| **水面** | 相机中心径向网格（160 圈 × 192 段，约 4km）跟随相机；4 个大波 + 3 个近距 ripple，片元按像素 footprint 逐波过滤，未解析能量转粗糙度/高光展宽；Fresnel + 半分辨率平面反射（镜像相机重画 960x540 G-Buffer 与延迟光照）+ 用 G-Buffer 深度算厚度吸收/岸边泡沫；Lighting 后、TAA 前混合；只在有地形/体素块时启用，`--no-water` 关闭 | [water](docs/30-systems/water.md) |
+| **水面** | 相机中心径向网格（160 圈 × 192 段，约 4km）跟随相机；4 个大波 + 3 个近距 ripple，片元按像素 footprint 逐波过滤，未解析能量转粗糙度/高光展宽；Fresnel + 半分辨率平面反射（镜像相机重画 960x540 G-Buffer 与延迟光照）+ 近场半分辨率 SSR（读 HDR/位置，48 步屏幕空间追踪，屏幕外/远处回退平面反射或 IBL）+ 用 G-Buffer 深度算厚度吸收/岸边泡沫；Lighting 后、TAA 前混合；只在有地形/体素块时启用，`--no-water` / `--no-ssr` 关闭 | [water](docs/30-systems/water.md) |
 | **距离雾** | 指数距离雾（默认 80m 起、密度 0.00045，约 1km 处 34%、4km 处 83%）；雾色取环境图地平线 LOD3，地形/水面/玻璃共用，天空不参与；`config/engine.json` 的 `fog` 节点 + 编辑器/运行时 UI，无命令行开关 | [water](docs/30-systems/water.md) |
 | IBL split-sum | irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙 | [ibl](docs/20-pipeline/ibl.md) |
 | EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播 | [scene-ecs](docs/30-systems/scene-ecs.md) |
@@ -79,7 +79,7 @@ cmake --build build --config Debug
 | **方块体素** | 32³ chunk、面剔除 + 贪心合并 + 顶点 AO、程序化 512 图集（每格 64px 内容 + 32px edge-clamp gutter，UV 编码图块 id）、Amanatides-Woo DDA 拾取、挖/放（Alt 挖 / Alt+Shift 放；Ctrl+左键仍是多选）与逐格撤销、`queryGroundAtWorld` 叠加体素分支让角色站上方块（运行模式接管角色：`WASD` 走、`Space` 跳、中键拖动看）；`--voxel-world [r]` 启动世界（半径 1..12，几何在 JobSystem 后台生成、逐帧上传；不透明几何拷进与地形共用的 `TerrainMeshArena`，可见 chunk 用专用实例表 + 一条 `vkCmdDrawIndexedIndirect` 提交）；编辑/运行模式分离（`F8`，运行模式左键挖、右键放）；场景存档只记 seed + 差分区（改动格）；玻璃走独立 `GlassPass`（Lighting 后、Bloom 前，按面质心排序混合，glass-only chunk 免 Model），`--voxel-glass-demo` 摆叠放场景 | [voxel](docs/30-systems/voxel.md) |
 | 调试剖析基础设施 | `--build-info` / `--gpu-timing` / `--screenshot` / 验证层增强 / RenderDoc / Tracy | [debug](docs/60-debug-profiling/README.md) |
 
-**已知边界**：无 SSR / 折射 / 水下后处理 / 自动曝光 / 点光源阴影 / 音频；水面有半分辨率平面反射（只含不透明几何，玻璃/水面/粒子不进倒影），且只在有地形/体素块时启用；距离雾是均匀指数雾，没有高度衰减/体积光/太阳散射，天空不参与；角色动画是单角色 CPU 蒙皮，无动画混合、动画事件、IK 或动画编辑器；TAA 只有相机重投影、没有运动向量（物体运动不会单独补偿）；体素存档只记 seed + 差分区（改动格），无 LOD（面剔除已升级为贪心合并 + 顶点 AO，贴图集为程序化生成）；跨队列资源走 `CONCURRENT` sharing；
+**已知边界**：SSR 只服务水面近场（半分辨率、屏幕空间）；折射 / 水下后处理 / 自动曝光 / 点光源阴影 / 音频未做；水面有半分辨率平面反射（只含不透明几何，玻璃/水面/粒子不进倒影）与半分辨率 SSR（屏幕外/超过 200m 回退），且只在有地形/体素块时启用；距离雾是均匀指数雾，没有高度衰减/体积光/太阳散射，天空不参与；角色动画是单角色 CPU 蒙皮，无动画混合、动画事件、IK 或动画编辑器；TAA 只有相机重投影、没有运动向量（物体运动不会单独补偿）；体素存档只记 seed + 差分区（改动格），无 LOD（面剔除已升级为贪心合并 + 顶点 AO，贴图集为程序化生成）；跨队列资源走 `CONCURRENT` sharing；
 glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`docs/70-status/known-limits.md`](docs/70-status/known-limits.md)。
 
 ---

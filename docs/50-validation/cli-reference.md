@@ -35,7 +35,8 @@ updated: 2026-11-05
 | `--no-bloom` | 关闭 Bloom（自检与普通运行均可） |
 | `--no-ssao` | 关闭 SSAO |
 | `--no-shadows` | 关闭方向光级联阴影（排查 / 对比用；默认开，强度见 `lighting.shadows.strength`） |
-| `--no-water` | 关闭水面；Water Pass 不注册（只在场景有地形/体素块时才可能注册） |
+| `--no-water` | 关闭水面；Water / PlanarReflection / SSR Pass 都不注册（只在场景有地形/体素块时才可能注册） |
+| `--no-ssr` | 关闭水面近场屏幕空间反射；SSR Pass 不注册，水面回退平面反射/环境图，日志 `ssr=0` |
 | `--voxel-world [r]` | 启动时生成方块体素世界（32³ chunk，半径 r = 1..12，默认 1（异步构建，逐帧上传）），相机自动摆到上方 |
 | `--voxel-glass-demo` | 配合 `--voxel-world`：在体素世界里摆交叉玻璃墙 + 近景相机（V-01 透明排序目测/回归）；单独使用会被忽略并打印提示 |
 | `--gpu-scene` | 忽略实例阈值，强制走 GPU 驱动提交（配合 `gpuSceneMinInstances` 默认 256） |

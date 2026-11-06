@@ -86,7 +86,7 @@ const UsageLine kUsageLines[] = {
     { "截图", "--screenshot-viewport", "截图只拍编辑器离屏视口（纯 3D，不含 UI）" },
     { "截图", "--capture-frame <n>", "RenderDoc 在第 n 帧抓帧（需注入 RenderDoc）" },
     { "截图", "--render-scale <f>", "动态分辨率初始倍率 0.25..1.0" },
-    { "渲染", "--no-bloom / --no-ssao / --no-taa / --no-water", "关掉 Bloom / SSAO / TAA / 水面（同 UI 复选框）" },
+    { "渲染", "--no-bloom / --no-ssao / --no-taa / --no-water / --no-ssr", "关掉 Bloom / SSAO / TAA / 水面 / 水面 SSR（同 UI 复选框）" },
     { "渲染", "--gpu-scene / --no-gpu-scene", "强制开 / 关 GPU 驱动提交" },
     { "渲染", "--gpu-scene-min-px <px>", "GPU 提交的屏幕空间剔除阈值（像素）" },
     { "渲染", "--gpu-scene-external <n>", "外部实例数（粒子/体素共用的提交入口）" },
@@ -155,6 +155,7 @@ int main(int argc, char** argv)
     bool noTAA = false;
     bool noSSAO = false;
     bool noWater = false;
+    bool noSSR = false;
     bool noGpuScene = false;
     bool forceGpuScene = false;
     float gpuSceneMinPixels = 0.0f;
@@ -232,6 +233,7 @@ int main(int argc, char** argv)
         else if (arg == "--no-ssao")  noSSAO = true;
         else if (arg == "--no-taa")   noTAA = true;
         else if (arg == "--no-water") noWater = true;
+        else if (arg == "--no-ssr")   noSSR = true;
         else if (arg == "--no-gpu-scene") noGpuScene = true;
         else if (arg == "--gpu-scene") forceGpuScene = true;
         else if (arg == "--no-merged-buffers") noMergedBuffers = true;
@@ -463,6 +465,7 @@ int main(int argc, char** argv)
         if (noSSAO) app.setSSAOEnabled(false);
         if (noTAA) app.setTAAEnabled(false);
         if (noWater) app.setWaterEnabled(false);
+        if (noSSR) app.setSSREnabled(false);
         if (noGpuScene) app.setGpuSceneEnabled(false);
         if (forceGpuScene) app.setGpuSceneForced(true);
         if (noMergedBuffers) app.setGpuMergedBuffers(false);

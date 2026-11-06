@@ -64,7 +64,10 @@ public:
 		VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews,
 		// C1：binding 12 = 平面反射颜色（水面片元用它替换环境贴图反射）。
 		// 关闭平面反射时传环境贴图作为占位，水面着色器不会采样。
-		VkSampler reflectionSampler, const std::array<VkImageView, kFramesInFlight>& reflectionViews);
+		VkSampler reflectionSampler, const std::array<VkImageView, kFramesInFlight>& reflectionViews,
+		// F6-01：binding 13 = 水面屏幕空间反射（半分辨率，a=置信度）。
+		// SSR 关闭时传环境贴图作为占位，水面着色器不会采样。
+		VkSampler ssrSampler, const std::array<VkImageView, kFramesInFlight>& ssrViews);
 	VkDescriptorSet getGlobalSet(uint32_t frameInFlightIndex) const
 	{
 		return globalSets[frameInFlightIndex];

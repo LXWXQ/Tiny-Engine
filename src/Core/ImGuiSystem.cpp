@@ -288,6 +288,10 @@ void ImGuiSystem::renderWaterPanel(EngineSettings& settings)
 		ImGui::SliderFloat("Wave Speed", &settings.waterWaveSpeed, 0.0f, 2.0f, "%.2f");
 		ImGui::Checkbox("Planar Reflection", &settings.waterPlanarReflection);
 		ImGui::SetItemTooltip("半分辨率镜像反射：远水能映出对岸/山体；关闭则退回环境贴图");
+		ImGui::Checkbox("Screen Space Reflection", &settings.ssrEnabled);
+		ImGui::SetItemTooltip("近场屏幕空间反射：岸线/桥墩等屏幕内几何会映在水面上；屏幕外仍靠平面反射");
+		if (settings.ssrEnabled)
+			ImGui::SliderFloat("SSR Max Distance", &settings.ssrMaxDistance, 50.0f, 500.0f, "%.0f m");
 		ImGui::TextDisabled("Fresnel reflection + depth absorption");
 		ImGui::Unindent();
 	}
