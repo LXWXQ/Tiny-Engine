@@ -2,19 +2,19 @@
 id: architecture/descriptors
 title: 描述符布局与 bindless 材质
 type: architecture
-scope: src/Core/DescriptorManager.*, src/Render/TerrainMaterial.*, src/Terrain/TerrainTextureGenerator.*, src/Render/GeometrySystem.cpp, shaders/mrt.frag
+scope: src/Core/DescriptorManager.*, src/Render/TerrainMaterial.*, src/Terrain/TerrainTextureGenerator.*, src/Render/GeometrySystem.cpp, shaders/mrt.frag, shaders/water.frag
 read-when: 修改材质/地形纹理系统、描述符布局、材质槽位分配或回收
-size: ~330 行
-updated: 2026-11-01
+size: ~175 行
+updated: 2026-11-06
 ---
 
 # 描述符布局与 bindless 材质
 
 `DescriptorManager` 管理**三个主描述符布局**（Set 0 全局、Set 1 bindless 材质、Set 2 地形纹理），其余 Pass 用自己的局部布局。
 
-## 1. Set 0 —— 全局（10 个 binding）
+## 1. Set 0 —— 全局（15 个 binding）
 
-一次性构建（`Application` 构造函数里 `buildGlobalSet`），之后所有 Pass 只读。
+启动时构建（`Application::buildGlobalSet`），反射/SSR 开关变化时重建；之后所有 Pass 只读。
 
 | binding | 类型 | 内容 | stage |
 |---|---|---|---|
@@ -28,6 +28,11 @@ updated: 2026-11-01
 | 7 | 同上 | `irradianceMap`（samplerCube） | FRAGMENT |
 | 8 | 同上 | `prefilteredMap`（samplerCube，5 级 mip） | FRAGMENT |
 | 9 | 同上 | `brdfLut` | FRAGMENT |
+| 10 | `STORAGE_BUFFER` | 材质 factor 表（按材质槽位索引） | FRAGMENT |
+| 11 | `COMBINED_IMAGE_SAMPLER` | 3 级联方向光阴影图（`sampler2DArray`） | FRAGMENT |
+| 12 | 同上 | 半分辨率平面反射颜色，关闭时回退环境图 | FRAGMENT |
+| 13 | 同上 | 半分辨率水面 SSR 结果，关闭时回退环境图 | FRAGMENT |
+| 14 | 同上 | 1024x1024 无缝水面法线，世界 XZ 两层平铺 | FRAGMENT |
 
 > 采样器不由渲染图管理（图只管图像）。`ssaoSampler` 来自 `SSAOPass`，
 > IBL 三个来自 `IBLBaker` / `CubemapTexture`，G-Buffer 采样器来自 `GBuffer`。
@@ -80,7 +85,7 @@ updated: 2026-11-01
 
 ## 4. 变长数组的规矩
 
-容量 256 槽（`descriptorManager->init(*vulkanDevice, 256)`），长度在**分配时**用
+容量 1024 槽（`descriptorManager->init(*vulkanDevice, 1024)`），长度在**分配时**用
 `VkDescriptorSetVariableDescriptorCountAllocateInfo` 指定，布局不用改。
 
 启用 `descriptorIndexing` 需要 Vulkan 1.2 的 5 个次特性，且有 3 条硬性要求

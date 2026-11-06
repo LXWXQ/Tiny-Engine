@@ -153,7 +153,8 @@ void DescriptorManager::createGlobalLayout()
 	// F6：binding 11 = 3 级联阴影图（sampler2DArray）。
 	// C1：binding 12 = 平面反射颜色（半分辨率）。
 	// F6-01：binding 13 = 水面 SSR 结果（半分辨率）。
-	std::vector<VkDescriptorSetLayoutBinding> bindings(14);
+	// R-06：binding 14 = 水面法线贴图（世界 XZ 平铺）。
+	std::vector<VkDescriptorSetLayoutBinding> bindings(15);
 
 	bindings[0].binding = 0;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -180,6 +181,11 @@ void DescriptorManager::createGlobalLayout()
 	bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	bindings[13].descriptorCount = 1;
 	bindings[13].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	bindings[14].binding = 14;
+	bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	bindings[14].descriptorCount = 1;
+	bindings[14].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	for (uint32_t i = 1; i <= 9; i++)
 	{
@@ -351,7 +357,8 @@ void DescriptorManager::buildGlobalSet(
 	const VkDescriptorImageInfo& brdfLutInfo,
 	VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews,
 	VkSampler reflectionSampler, const std::array<VkImageView, kFramesInFlight>& reflectionViews,
-	VkSampler ssrSampler, const std::array<VkImageView, kFramesInFlight>& ssrViews)
+	VkSampler ssrSampler, const std::array<VkImageView, kFramesInFlight>& ssrViews,
+	const VkDescriptorImageInfo& waterNormalInfo)
 {
 	// TD-03: rebuild in place so repeated resizes do not exhaust the descriptor pool.
 	if (globalSets.size() != kFramesInFlight)
@@ -384,7 +391,7 @@ void DescriptorManager::buildGlobalSet(
 			irradianceCopy, prefilteredCopy, brdfLutCopy
 		};
 
-		std::array<VkWriteDescriptorSet, 14> writes{};
+		std::array<VkWriteDescriptorSet, 15> writes{};
 
 		VkDescriptorImageInfo shadowInfo{ shadowSampler, shadowViews[frame],
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -419,6 +426,14 @@ void DescriptorManager::buildGlobalSet(
 		writes[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		writes[13].descriptorCount = 1;
 		writes[13].pImageInfo = &ssrInfo;
+
+		VkDescriptorImageInfo waterNormalCopy = waterNormalInfo;
+		writes[14].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[14].dstSet = globalSets[frame];
+		writes[14].dstBinding = 14;
+		writes[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		writes[14].descriptorCount = 1;
+		writes[14].pImageInfo = &waterNormalCopy;
 
 		VkDescriptorBufferInfo factorBufferInfo{ materialFactorBuffer, 0, VK_WHOLE_SIZE };
 		writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

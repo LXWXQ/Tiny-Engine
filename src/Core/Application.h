@@ -171,6 +171,10 @@ private:
 
 	std::unique_ptr<Texture> environmentTex;
 
+	// R-06：水面法线贴图。世界 XZ 平铺，必须用 wrapped mip 链，
+	// 否则 mip 各层边缘 clamp 会在水面重复边界上形成色带。
+	std::unique_ptr<Texture> waterNormalTex;
+
 	// Last successfully rendered camera view-projection. PresentPass uses it
 	// to compute screen-space camera motion vectors.
 	glm::mat4 previousViewProjection{ 1.0f };

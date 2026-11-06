@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~860 行
+size: ~930 行
 updated: 2026-11-06
 ---
 
@@ -908,4 +908,23 @@ updated: 2026-11-06
 - 已知视觉边界：浮空岛底面本来无光照，SSR 倒影呈深色是几何结果；SSR 是半分辨率、单帧、无时域累积的屏幕空间方法，水面动画和薄几何会有轻微抖动/漏光。
 
 **回归**：新增 `f3v-ssr`（断言 initialized / first draw / Water first draw / `ssr=1` / 0/0）与 `f3v-ssr-off`（`--no-ssr`，断言 `[SSR] disabled` / `ssr=0` / 0/0）。全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-105750`；DocCheck PASS。
+
+## R-06：水面法线贴图替换高频正弦波（2026-11-06）
+
+**问题**：水面在默认视角下出现规则的**黑白菱形格**，关掉 `waveStrength` 后完全消失。根因不是棋盘格占位材质，也不是 SSR/平面反射：`shaders/water.frag` 原来除了 4 个大波，还在片元里叠了 3 个高频正弦 ripple（波长 1.7 / 1.1 / 0.75m），多组解析法线在 Fresnel 和 `pow(NdotH, 900)` 高光下发生规则干涉，远处采样不足时进一步走样成网格。
+
+**实现**：
+- 新增 1024x1024 无缝水波法线 `Resources/Texture/Water/water_normal.png`（1,903,139 bytes，CC0）：白噪声 FFT 乘 `k^-1.60` 风浪频谱、30 度主风向、方向性 0.55，逆变换得高度场，再求梯度编码为 `0.5 + 0.5 * normalize(-gx, -gy, 1)`。
+- 纹理用 `Texture::tileableMips=true`：CPU 2x2 box filter 按纹理尺寸取模生成完整 mip 链，整链一次 `vkCmdCopyBufferToImage`，平铺边缘不会因 clamp 偏色。
+- Set0 扩到 15 个 binding，新增 binding14 水面法线；`Application` 加载为 `R8G8B8A8_UNORM`，`rebuildGlobalDescriptors()` 每个 frame slot 写入，析构时在 `environmentTex.reset()` 后 `waterNormalTex.reset()`。
+- `shaders/water.frag` 删除 `RIPPLES` 与 `filteredRippleGradient`，改为两层滚动法线：18m 周期权重 0.55、流速 (0.020, 0.012)；42m 周期权重 0.35、流速 (-0.013, 0.017)。用 `textureGrad` 接收世界 XZ 像素足迹，150..700m 以外按 `detailFade = 1 - smoothstep(150, 700, distanceToCamera)` 淡出；LOD 超过 1 后用 `textureQueryLod` 估算 `slopeVariance = smoothstep(1, 6, lod)^2 * 0.008`，交给粗糙度展宽高光。
+- 首轮运行 exit 3：`waterNormalTex` 未在析构中释放，VMA 报 `Assertion failed: m_pMetadata->IsEmpty() && "Some allocations were not freed before destruction of this memory block!"`（`3rdParty/VulkanMemoryAllocator/vk_mem_alloc.h:10975`）。补 `reset()` 后 exit 0。
+
+**实测（Debug / RTX 2070）**：
+- 同机位截图 `build/Debug/water_check.png`（修复前）与 `build/Debug/water_normal_test.png`（修复后）对比，规则黑白菱形格消失；提亮 4 倍的近景裁切 `.tmp/water_after_bright.png` 可见连续波纹，未见平铺接缝。
+- 启动日志新增 `[Texture] ...water_normal.png (1024x1024)` 与 `[Tiny] Water normal map loaded | 1024x1024 UNORM wrapped mips.`；水面首绘仍为 `planarReflection=1 ssr=1`，Validation 0/0。
+
+**回归**：`f3v-water` 新增 `[Tiny] Water normal map loaded |` 断言；全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-113028`；DocCheck PASS。
+
+**已知边界**：水面细节来自单张重复法线贴图，18m/42m 两层滚动只能降低重复感，极近处仍可能看出周期；没有流场/交互涟漪/泡沫贴图。修复后水面不再有原先由正弦网格产生的高频闪点，整体比修复前更暗、更连续，这是去掉干涉伪影后的预期结果。
 

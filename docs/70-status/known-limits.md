@@ -24,7 +24,7 @@ updated: 2026-11-06
 后处理抗锯齿已有 TAA，但只有相机重投影、没有运动向量，物体自身运动不会被单独补偿。
 骨骼动画目前只服务运行模式的单角色（CPU 蒙皮，见 [character](../30-systems/character.md)），不是通用动画系统。
 地形单 chunk 子集已接 GPU culling、indirect count 与 GPU 顶点/索引组装；体素与地形共用 `TerrainMeshArena`，可见 chunk 合并成一条 `vkCmdDrawIndexedIndirect`（无 LOD）。
-体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。水面（`Water`）是独立的水平前向混合 Pass，只在有地形/体素块时注册；反射由半分辨率屏幕空间 SSR（只服务水面近场，默认 200m）与半分辨率平面反射（`ReflectionPass`，镜像相机重画不透明几何）共同提供：SSR 屏幕外/远水回退平面反射，再到环境图；玻璃/水面/粒子不进入平面反射倒影，仍无折射/水下后处理。距离雾（`fog`）是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；雾色固定取环境图地平线 LOD3，天空本身不参与。
+体素世界半径上限 12（`Scene::kMaxVoxelRadius`）；玻璃（`Glass`）走独立 `GlassPass` 按面排序混合，树叶（`Leaves`）仍在不透明 G-Buffer（图集无 alpha 通道）。水面（`Water`）是独立的水平前向混合 Pass，只在有地形/体素块时注册；反射由半分辨率屏幕空间 SSR（只服务水面近场，默认 200m）与半分辨率平面反射（`ReflectionPass`，镜像相机重画不透明几何）共同提供：SSR 屏幕外/远水回退平面反射，再到环境图；玻璃/水面/粒子不进入平面反射倒影，仍无折射/水下后处理；水面细节来自 18m/42m 两层重复法线贴图，极近处仍可能看出周期。距离雾（`fog`）是均匀指数雾，没有高度衰减、体积光/太阳散射或时间变化；雾色固定取环境图地平线 LOD3，天空本身不参与。
 
 ## 3. 架构限制
 
@@ -48,7 +48,7 @@ updated: 2026-11-06
 
 - `3rdParty/` 与 `Resources/` 的绝大部分 **不入库**，需 `SetupDependencies.ps1` + 手动准备；例外是运行模式角色 `Resources/Models/Character/`（CC0，随仓库提供）。
 - 当前场景固定为 Sponza + 一个测试球 + 天空盒，没有场景描述格式。
-- 材质只支持 4 张 PBR 贴图（albedo / normal / metallic / roughness），
+- 模型材质只支持 4 张 PBR 贴图（albedo / normal / metallic / roughness），
   无法线贴图实际采样、无 emissive / AO 的独立通道（emissive 贴在 albedo 里）。
 
 ## 6. 工程化限制

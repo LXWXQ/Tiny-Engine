@@ -257,6 +257,7 @@ updated: 2026-11-06
 | R-03 | 已完成 | 流送地形 chunk 边界材质断层（高度层权重改用全局 `baseHeight`/`heightScale`） | — | 合批与非合批截图均无矩形沙/雪色块；`f2b-terrain-batch`/`f2b-terrain-batch-off` 通过 |
 | R-04 | 已完成 | 场景树父子结构（体素 chunk 归入 Voxel World 子树，按坐标稳定排序并默认展开） | — | Hierarchy 中 chunk 缩进在世界节点下、树线正常；`e8-editor-mode` 断言 `parented=9` |
 | R-05 | 已完成 | 运行模式角色接入（真实模型 + 视线出生 + WASD/Shift 跑 + 6 段骨骼动画状态机） | B-07、R-01 | 示例体素世界可见角色、不坠出世界、无黑色/棋盘格；`e9-runtime-character` 断言 `skinned=1 animations=18` 与 6 个 clip；`--runtime-mode` 可直达 |
+| R-06 | 已完成 | 水面规则黑白格（删除 3 个高频正弦 ripple，改 1024x1024 无缝 FFT 法线贴图两层滚动，18m/42m） | — | 黑白菱形格消失；近景波纹连续、无平铺接缝；`f3v-water` 断言水波法线加载，75 项 ALL PASS（日志 `build/validation/20261106-113028`） |
 | V-02 | 未开始 | 体素网格化的每帧预算与取消（当前每块一个 job，`processVoxelChunkBuilds()` 每帧最多上传 4 块，但提交阶段没有总预算） | V-04、JobSystem | 半径 12 首帧提交仍有 7.9 ms（Release），要压到 <2 ms；取消后不再上传 |
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
 | V-04 | 已完成 | 体素几何走 `TerrainMeshArena` / 间接合批（每 chunk 一份 `Model` + 一次 bind -> 共享 arena + 专用实例表） | F1 合批路径 | 625 块整批只占 1 条 `vkCmdDrawIndexedIndirect`；半径 12 的 arena 725888 顶点 / 1088832 索引不溢出，验证 0/0（日志 `build/validation/20261106-102034`） |
@@ -291,6 +292,8 @@ updated: 2026-11-06
 > C1 半分辨率平面反射已完成（2026-11-05）：`ReflectionPass` 用镜像相机重画 960x540 的 G-Buffer 与延迟光照，`WaterPass` 从 Set0 binding12 采样；开关为 `water.planarReflection`，默认开启。
 >
 > F6-01 水面近场 SSR 已完成（2026-11-06）：`SSRPass` 读 HDR + G-Buffer 位置/法线，在半分辨率 960x540 上做 48 步屏幕空间 DDA，结果写 `ssrColor` 并从 Set0 binding13 进入 `water.frag`；命中置信度再乘粗糙度与距离衰减，与平面反射/IBL 混合。屏幕外/超过 `ssrMaxDistance`（默认 200m）回退。开关 `ssr.enabled` 与 `--no-ssr`，关平面反射+关波浪时开/关差异 91918 像素。详见 [milestones](milestones.md#f6-01水面近场-ssr2026-11-06)，验证日志 `build/validation/20261106-105750`。
+>
+> R-06 水面黑白格已完成（2026-11-06）：规则黑白菱形格来自 3 个高频正弦 ripple 的解析法线在 Fresnel/高光下的干涉，关 `waveStrength` 即消失；现改为 1024x1024 无缝 FFT 水波法线（`Resources/Texture/Water/water_normal.png`，CC0），片元按 18m/42m 两层滚动、`textureGrad` 足迹采样，Set0 binding14 常驻。截图 `build/Debug/water_normal_test.png` 与修复前 `build/Debug/water_check.png` 对比黑白格消失；`f3v-water` 新增 `[Tiny] Water normal map loaded` 断言。详见 [milestones](milestones.md#r-06水面法线贴图替换高频正弦波2026-11-06)，验证日志 `build/validation/20261106-113028`。
 >
 > V-04 已完成（2026-11-06）：体素不透明几何在 `applyVoxelChunkMesh()` 里先临时上传 `Model`，再 `TerrainMeshArena::acquire/copyInto` 并 `releaseGpuBuffers()`，`Model` 只留 CPU 几何；`GeometrySystem` 按可见集合写专用 224B 实例表与 `VkDrawIndexedIndirectCommand`，整批一条 indirect。半径 12 实测 `chunks=625 arena=625 vertices=725888 indices=1088832`，可见 535 块整批 `commands=535`，材质槽池 256→1024；`f3-voxel-arena-625` 覆盖。详见 [milestones](milestones.md#v-04体素-arena-间接合批2026-11-06)。
 

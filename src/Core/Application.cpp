@@ -1048,6 +1048,7 @@ FirstApp::~FirstApp()
 	scene->cleanup();
 
 	environmentTex.reset();
+	waterNormalTex.reset();
 	iblBaker.reset();
 	renderGraph.reset();          // 渲染图持有大量 image/view，必须在 Device 之前
 	renderResources.reset();
@@ -1244,6 +1245,10 @@ void FirstApp::rebuildGlobalDescriptors()
 	VkDescriptorImageInfo brdfLutInfo{ iblBaker->getBrdfLutSampler(), iblBaker->getBrdfLutView(),
 	VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
+	// R-06：水面法线贴图（静态资源，所有 frame slot 共用）。
+	VkDescriptorImageInfo waterNormalInfo{ waterNormalTex->getSampler(), waterNormalTex->getView(),
+	VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
 	std::array<VkImageView, kFramesInFlight> ssaoViews{};
 	std::array<const GBuffer*, kFramesInFlight> constGBufferPtrs{};
 	for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
@@ -1306,7 +1311,7 @@ void FirstApp::rebuildGlobalDescriptors()
 		ssaoPassPtr->getOutputSampler(), ssaoViews,
 		irradianceInfo, prefilteredInfo, brdfLutInfo,
 		shadowSampler, shadowViews, reflectionSampler, reflectionViews,
-		ssrSampler, ssrViews);
+		ssrSampler, ssrViews, waterNormalInfo);
 
 	if (reflectionPassPtr != nullptr)
 	{
@@ -1442,7 +1447,14 @@ environmentTex = std::make_unique<Texture>(*vulkanDevice,
 basePath + "Texture/environment.hdr",
 VK_FORMAT_R32G32B32A32_SFLOAT, renderer->getCommandPool(), true);
 
+// R-06：水面法线贴图是数据纹理（UNORM，不是 sRGB）；tileableMips=true
+// 让每一级 mip 都按纹理尺寸取模生成，世界 XZ 重复采样时不会出现接缝。
+waterNormalTex = std::make_unique<Texture>(*vulkanDevice,
+basePath + "Texture/Water/water_normal.png",
+VK_FORMAT_R8G8B8A8_UNORM, renderer->getCommandPool(), false, true);
+
 std::cout << "[Tiny] HDR environment loaded.\n";
+std::cout << "[Tiny] Water normal map loaded | 1024x1024 UNORM wrapped mips.\n";
 }
 
 void FirstApp::initMaterials()

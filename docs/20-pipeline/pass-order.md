@@ -75,7 +75,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | Glass 在 Lighting **之后**、Bloom **之前** | 玻璃必须混合在已经着色好的 HDR 上（延迟着色只存一个表面，玻璃进 G-Buffer 会把后面的层盖掉）；放在 Bloom 前，玻璃高光也参与辉光。深度 `LOAD` 但 `depthWrite = FALSE`、`compare = LESS_OR_EQUAL`：不透明几何仍挡住玻璃，玻璃之间由 CPU 排序（远->近）决定顺序 |
 | SSR 在 PlanarReflection **之后**、Glass/Water **之前** | 屏幕空间反射要读本帧已着色的 HDR 做颜色命中，并把结果留给 Water 混合；放在 Water 之前才能覆盖近场水面。只在水面启用、场景有地形/体素块、且 `ssrEnabled` 时注册；半分辨率 960x540，48 步 DDA 追踪，屏幕外/超过 200m 或无命中时返回 0，Water 再回退到平面反射/IBL。SSR 是纯屏幕空间效果，不写深度、不影响不透明几何 |
 | PlanarReflection 在 Lighting **之后**、Glass/Water **之前** | 反射必须用本帧 G-Buffer 和 IBL 重新着色；透明 Pass 之前写完，Water 才能把反射色当输入。只有水面启用、平面反射开启且场景有地形/体素块时才注册；镜像相机沿水面对称，用未抖动投影重画半分辨率 960x540 的 G-Buffer，再用第二套 Lighting 着色，开销约为全分辨率的一半 |
-| Water 在 Glass **之后**、TAA **之前** | 水面要混合进已经着色的 HDR；先于 TAA 才能让水边缘参与时域抗锯齿；先于 Bloom 才能让太阳高光参与辉光。深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，不透明几何与玻璃都能挡住它；相机中心径向网格跟随相机，铺到约 4km。片元用 `dFdx/dFdy` 足迹逐波过滤，未解析能量转成粗糙度/高光展宽；距离雾在 Lighting、Water、Glass 内共用 `fogParams`；Water 同时读平面反射（binding12）与 SSR（binding13），按 Fresnel/置信度混合 |
+| Water 在 Glass **之后**、TAA **之前** | 水面要混合进已经着色的 HDR；先于 TAA 才能让水边缘参与时域抗锯齿；先于 Bloom 才能让太阳高光参与辉光。深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，不透明几何与玻璃都能挡住它；相机中心径向网格跟随相机，铺到约 4km。片元用 `dFdx/dFdy` 足迹过滤大波，并用 binding14 的 1024x1024 无缝法线贴图两层滚动补细节，未解析能量转成粗糙度/高光展宽；距离雾在 Lighting、Water、Glass 内共用 `fogParams`；Water 同时读平面反射（binding12）、SSR（binding13）与水面法线（binding14），按 Fresnel/置信度混合 |
 | TAA 在 Water **之后**、Bloom **之前** | 先把玻璃和水面混合进 HDR 再做时域解析，透明边缘也能被抗锯齿；Bloom 读到的是已收敛的 HDR，不会把抖动噪声放大成辉光。TAA 用未抖动 VP 把 G-Buffer 世界坐标反投影到上一帧，不需要运动向量（当前只有相机运动）；ImGui 在 Present 内叠加，不参与历史混合 |
 | Bloom 在 tonemap **之前** | ACES 最后一步是 `clamp(0,1)`，高光被压到 1.0 后 Bloom 只能"把白涂白" |
 | 曝光在 Bloom **之后** | 曝光是 tonemap 的输入缩放；若写在光照里，Bloom 阈值会随曝光漂移，拖滑块时辉光乱跳 |

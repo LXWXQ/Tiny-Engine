@@ -2,17 +2,17 @@
 id: systems/water
 title: 水面
 type: system
-scope: src/Render/WaterPass.{h,cpp}, src/Render/ReflectionPass.{h,cpp}, shaders/water.vert, shaders/water.frag
+scope: src/Render/WaterPass.{h,cpp}, src/Render/ReflectionPass.{h,cpp}, shaders/water.vert, shaders/water.frag, Resources/Texture/Water/water_normal.png
 read-when: 改水面外观/波浪/反射、排查水面不出现或被地形裁掉
-size: ~205 行
-updated: 2026-11-05
+size: ~260 行
+updated: 2026-11-06
 ---
 
 # 水面
 
 水面是 **Lighting 之后、TAA 之前**的前向混合通道（`WaterPass`）：读已经着色好的
 线性 HDR 与 G-Buffer 深度，把水色、环境反射、泡沫按 alpha 叠上去。它不写 G-Buffer，
-也不写深度。片元阶段按像素足迹过滤波浪，避免远处条带/闪烁；同一套距离雾也作用于
+也不写深度。片元阶段按像素足迹过滤大波，并用两层滚动法线贴图补细节，避免远处条带/闪烁；同一套距离雾也作用于
 地形（`lighting.frag`）和玻璃（`glass.frag`）。开启平面反射时，水面从 `ReflectionPass`
 的半分辨率反射色采样，而不是只采样环境图。
 
@@ -40,9 +40,9 @@ updated: 2026-11-05
 半径二次增长是刻意的：近处格子密，顶点位移看得清；远处格子疏，省顶点。水面一直铺到
 地平线，天空在 G-Buffer 里的距离约 10000m，会被当成"没有底"的深海。
 
-## 3. 波浪
+## 3. 波浪与水面细节
 
-顶点只做 4 个方向波的高度位移，像素阶段解析求梯度得到法线。
+顶点只做 4 个方向波的高度位移，像素阶段解析求梯度得到大波法线。
 
 | 方向 (x,z) | 波长 (m) | 振幅 |
 |---|---|---|
@@ -60,10 +60,7 @@ phase = dot(dir, worldXZ) * k - time * omega + i * 1.7
 h    += amplitude * sin(phase)
 ```
 
-像素阶段再加 3 个高频 ripple（波长 1.7 / 1.1 / 0.75m，振幅 0.010 / 0.006 / 0.004），
-它们只贡献法线细节，不做顶点位移。
-
-**footprint 过滤**：远处/掠射角下，一个像素覆盖的世界 XZ 范围会迅速变大，解析法线
+**大波 footprint 过滤**：远处/掠射角下，一个像素覆盖的世界 XZ 范围会迅速变大，解析法线
 在相邻像素间跳相位，形成条带和闪烁。着色器用 `dFdx(p)` / `dFdy(p)` 得到像素足迹，
 对每个波判断相邻像素的相位跨度；超过约 1 rad 就淡出该波：
 
@@ -74,21 +71,45 @@ grad     += dir * (amplitude * strength) * k * cos(phase) * resolve
 variance += 0.5 * ((amplitude * strength) * k)^2 * (1 - resolve^2)
 ```
 
-淡出的斜率能量不会丢，而是累加成 `slopeVariance`，下一节转成粗糙度。ripple 仍保留
-距相机 60..220m 的距离淡出，与 footprint 过滤相乘。
+淡出的斜率能量不会丢，而是累加成 `slopeVariance`，下一节转成粗糙度。高频细节不再用
+正弦 ripple，全部交给下面的法线贴图。
+
+**法线贴图细节**：`Resources/Texture/Water/water_normal.png` 是 1024x1024、可无缝平铺的
+水波法线（FFT 频谱合成，RGB 编码 `0.5 + 0.5 * n`，CC0）。片元按世界 XZ 平铺两层：
+
+| 层 | 周期 | 流速 (UV/s) | 斜率权重 |
+|---|---|---|---|
+| A | 18m | (0.020, 0.012) | 0.55 |
+| B | 42m | (-0.013, 0.017) | 0.35 |
+
+两层都用 `textureGrad` 采样，显式传入 `dFdx(p)` / `dFdy(p)` 换算到各自 UV 的像素足迹，
+掠射角下由硬件选 mip 和各向异性过滤。纹理的 mip 链不是 `vkCmdBlitImage` 逐级 blit，
+而是 `Texture::tileableMips` 在 CPU 用 2x2 box filter 按尺寸取模生成，整条链一次
+`vkCmdCopyBufferToImage`，平铺边缘不会因 clamp 偏色。
+
+```
+uvA = p / 18 + t * (0.020, 0.012)
+uvB = p / 42 + t * (-0.013, 0.017)
+slope = -(nA.xy * 0.55 + nB.xy * 0.35) * strength * detailFade
+```
+
+`detailFade = 1 - smoothstep(150, 700, distanceToCamera)`，避免极远处只剩重复纹理。
+贴图 LOD 超过 1 后，用 `textureQueryLod` 的最大 LOD 估算被 mip 抹掉的斜率能量
+`slopeVariance = smoothstep(1, 6, lod)^2 * 0.008`，和 footprint 过滤的方差一起进入
+粗糙度，而不是让高光随机闪。
 
 法线：
 
 ```
-gradient = filteredBigWaveGradient + filteredRippleGradient
+gradient = filteredBigWaveGradient + waterDetailGradient
 N = normalize(vec3(-gradient.x, 1.0, -gradient.y))
 ```
 
 ## 4. 着色
 
 - **Fresnel**：`0.02 + 0.98 * pow(1 - NdotV, 5)`；从水下往上看时翻转法线。
-- **像素足迹 → 粗糙度**：把上一步的 `bigSlopeVariance + rippleSlopeVariance` 转成
-  `roughness = clamp(sqrt(variance) * 7.0 + distanceRoughness, 0.02, 0.65)`；
+- **像素足迹 → 粗糙度**：把上一步的 `bigSlopeVariance + detailSlopeVariance` 转成
+  `roughness = clamp(sqrt(bigSlopeVariance + detailSlopeVariance) * 7.0 + distanceRoughness, 0.02, 0.65)`；
   `distanceRoughness = smoothstep(120, 3000, distanceToCamera) * 0.30`。
   `roughNorm = smoothstep(0.03, 0.55, roughness)` 控制反射模糊与高光展宽。
 - **环境反射**：直接采样 Set0 binding 1 的等距柱状 HDR `environmentMap`，用
@@ -134,8 +155,8 @@ cullMode: NONE
 ```
 
 - 只绑 Set0 全局描述符，不需要材质 Set；binding12 是平面反射纹理，binding13 是
-  SSR 结果；对应开关关闭时由 `Application` 回退绑定环境图（描述符必须始终有效，
-  水面 shader 用 `params3.x/y` 分支决定是否采样）；
+  SSR 结果，binding14 是 1024x1024 无缝水波法线；对应开关关闭时由 `Application`
+  回退绑定环境图（描述符必须始终有效，水面 shader 用 `params3.x/y` 分支决定是否采样）；
 - push constant 48 字节：`params=(time, level, waveStrength, waveSpeed)`、
   `params2=(farRadius, foamStrength, fogStart, fogDensity)`、
   `params3=(planarReflection, ssrEnabled, 0, 0)`；雾关闭时密度写 0；
@@ -155,6 +176,7 @@ cullMode: NONE
 | `--no-water` | 关闭水面；Water/PlanarReflection/SSR 都不注册，打印一次 `[Water] disabled` |
 | `--no-ssr` | 关闭屏幕空间反射；SSR 不注册，打印一次 `[SSR] disabled`，水面 `ssr=0` |
 | `config/engine.json` | `water: { enabled, level, waveStrength, waveSpeed, planarReflection }`、`ssr: { enabled, maxDistance }`、`fog: { enabled, start, density }` |
+| 水波法线贴图 | Set0 binding14 常驻；没有独立开关，文件缺失会在启动加载时报错 |
 
 默认值：`waterEnabled=true`、`waterLevel=2.0`、`waterWaveStrength=1.0`、
 `waterWaveSpeed=1.0`、`waterPlanarReflection=true`、`ssrEnabled=true`、`ssrMaxDistance=200m`；`fogEnabled=true`、`fogStart=80m`、`fogDensity=0.00045`
@@ -166,6 +188,7 @@ cullMode: NONE
 启动：
 
 ```
+[Tiny] Water normal map loaded | 1024x1024 UNORM wrapped mips.
 [Reflection] planar reflection initialized | extent=960x540
 [SSR] initialized | extent=960x540 steps=48
 [Water] initialized | rings=160 segments=192 vertices=30721 indices=183744 radius=4032m
@@ -186,7 +209,7 @@ SSR 关闭时没有 `[SSR] first draw`，水面日志为 `ssr=0`。
 
 | 名称 | 命令 | 断言 |
 |---|---|---|
-| `f3v-water` | `--selftest 20 --voxel-world 1` | `[Water] initialized \|`、`[Water] first draw \|`、`[Validation] errors=0 warnings=0` |
+| `f3v-water` | `--selftest 20 --voxel-world 1` | `[Tiny] Water normal map loaded \|`、`[Water] initialized \|`、`[Water] first draw \|`、`[Validation] errors=0 warnings=0` |
 | `f3v-water-reflection` | `--selftest 20 --voxel-world 1` | `[Reflection] planar reflection initialized \|`、`[Reflection] first draw \|`、`planarReflection=1`、验证层 0/0 |
 | `f3v-water-off` | `--selftest 20 --voxel-world 1 --no-water` | `[Water] disabled`、验证层 0/0 |
 | `f3v-ssr` | `--selftest 20 --voxel-world 1` | `[SSR] initialized`、`[SSR] first draw`、`[Water] first draw`、`ssr=1`、验证层 0/0 |
@@ -205,7 +228,8 @@ SSR 关闭时没有 `[SSR] first draw`，水面日志为 `ssr=0`。
   环境图地平线 LOD3，天空本身不参与雾；
 - footprint 过滤只修法线和高光，不改变几何；外圈网格段长约 132m，5.5m 波仍有几何
   欠采样，远水细节依赖法线过滤而不是真实位移；
-- 没有交互（角色入水、涟漪、溅射），也没有流场/泡沫贴图；
+- 没有交互（角色入水、涟漪、溅射），也没有流场/泡沫贴图；水面细节来自单张法线贴图，
+  18m/42m 两层滚动只能降低重复感，极近处仍可能看出周期；
 - 只在有地形/体素块时启用，不能单独给任意场景加水；
 - 平面反射只渲染不透明几何：玻璃、水面、调试网格不进入倒影，粒子/透明材质也不会；
 - 反射用主相机的阴影级联，镜像视角下的阴影/SSAO 不精确；半分辨率且没有独立时域
@@ -225,12 +249,13 @@ SSR 关闭时没有 `[SSR] first draw`，水面日志为 `ssr=0`。
 | `src/Render/ReflectionPass.{h,cpp}` | 镜像相机、半分辨率 G-Buffer/光照、反射纹理与开关 |
 | `src/Render/SSRPass.{h,cpp}` | 半分辨率 SSR 目标、描述符、48 步追踪 Pass、开关与日志 |
 | `shaders/water.vert` | 径向网格跟随相机、4 个大波位移 |
-| `shaders/water.frag` | footprint 波浪过滤、粗糙度反射、Fresnel、SSR/平面反射混合、厚度吸收、泡沫、距离雾 |
+| `shaders/water.frag` | 大波 footprint 过滤、两层法线贴图细节、粗糙度反射、Fresnel、SSR/平面反射混合、厚度吸收、泡沫、距离雾 |
 | `shaders/ssr.frag` | 半分辨率屏幕空间 DDA、G-Buffer 世界位置/射线厚度校验、置信度输出 |
 | `shaders/lighting.frag` | 不透明几何的距离雾；天空提前返回 |
 | `shaders/glass.frag` | 玻璃距离雾（只淡出颜色，alpha 不变） |
 | `src/Core/FrameInfo.h` | `EngineSettings` 的 water/fog 字段、`GlobalUbo.fogParams` |
-| `src/Core/Application.cpp` | 每帧上传 `fogParams`；开关变化时重建全局描述符，binding12 在反射纹理/环境图之间切换 |
+| `Resources/Texture/Water/water_normal.png` | 1024x1024 无缝 FFT 水波法线，`tileableMips` 生成 wrapped mip 链 |
+| `src/Core/Application.cpp` | 加载水波法线；每帧上传 `fogParams`；开关变化时重建全局描述符，binding12 在反射纹理/环境图之间切换 |
 | `src/Core/EngineConfig.cpp` | `water` / `fog` 节点读写 |
 | `src/Editor/panels/RenderSettingsPanel.cpp` | 编辑器 Water / 距离雾面板 |
 | `src/Core/ImGuiSystem.cpp` | 运行时 Water / Atmosphere 面板 |

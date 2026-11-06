@@ -67,7 +67,9 @@ public:
 		VkSampler reflectionSampler, const std::array<VkImageView, kFramesInFlight>& reflectionViews,
 		// F6-01：binding 13 = 水面屏幕空间反射（半分辨率，a=置信度）。
 		// SSR 关闭时传环境贴图作为占位，水面着色器不会采样。
-		VkSampler ssrSampler, const std::array<VkImageView, kFramesInFlight>& ssrViews);
+		// R-06：binding 14 = 无缝水波法线贴图（世界 XZ 平铺，完整 mip 链）。
+		VkSampler ssrSampler, const std::array<VkImageView, kFramesInFlight>& ssrViews,
+		const VkDescriptorImageInfo& waterNormalInfo);
 	VkDescriptorSet getGlobalSet(uint32_t frameInFlightIndex) const
 	{
 		return globalSets[frameInFlightIndex];

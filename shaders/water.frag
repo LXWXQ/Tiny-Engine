@@ -1,6 +1,6 @@
 #version 450
 
-// 水面像素着色：解析波面法线 + Fresnel + 环境反射 + 厚度吸收 + 岸边泡沫。
+// 水面像素着色：大波解析轮廓 + 水波法线贴图细节 + Fresnel + 环境反射 + 厚度吸收 + 岸边泡沫。
 //
 // 不做折射（需要先把 hdrScene 复制成可采样纹理，RenderGraph 目前没有 image copy），
 // 但水后面不透明几何的世界坐标可以从 G-Buffer 的 inPosition 拿到，用它算
@@ -21,6 +21,9 @@ layout(set = 0, binding = 1) uniform sampler2D environmentMap;
 layout(set = 0, binding = 2) uniform sampler2D inPosition;
 layout(set = 0, binding = 12) uniform sampler2D reflectionMap;
 layout(set = 0, binding = 13) uniform sampler2D ssrMap;
+// R-06：无缝水波法线贴图。世界 XZ 平铺，两层不同尺度/流速叠加，
+// 替代原来 3 个高频正弦波 —— 后者在远距离采样不足时会形成规则黑白格。
+layout(set = 0, binding = 14) uniform sampler2D waterNormalMap;
 
 layout(push_constant) uniform WaterPush
 {
@@ -34,13 +37,6 @@ const vec4 WAVES[4] = vec4[4](
     vec4(-0.5736,  0.8192, 14.0, 0.100),
     vec4( 0.7071, -0.7071,  9.0, 0.055),
     vec4( 0.2588,  0.9659,  5.5, 0.025)
-);
-
-// 三个高频小波只贡献法线细节，不做顶点位移。波长 1.7 / 1.1 / 0.75m。
-const vec4 RIPPLES[3] = vec4[3](
-    vec4( 0.8660,  0.5000, 1.70, 0.010),
-    vec4(-0.5000,  0.8660, 1.10, 0.006),
-    vec4( 0.9659, -0.2588, 0.75, 0.004)
 );
 
 const vec2 kInvAtan = vec2(0.1591, 0.3183);
@@ -86,22 +82,31 @@ vec2 filteredBigWaveGradient(vec2 p, float t, float strength,
     return gradient;
 }
 
-vec2 filteredRippleGradient(vec2 p, float t, float fade,
-                            vec2 footprintX, vec2 footprintY, out float slopeVariance)
+// 两层法线贴图：一层约 18m 周期（细浪），一层约 42m 周期（较长波纹）。
+// 用 textureGrad 显式传入世界 XZ 的像素足迹，掠射角下才会正确选择 mip /
+// 各向异性过滤；这正是纯解析小波做不到、会在远处变成黑白格的地方。
+// 贴图法线是 (nx, ny, nz)，高度梯度 gx = -nx, gy = -ny。
+vec2 waterDetailGradient(vec2 p, float t, float strength, float fade,
+                         vec2 footprintX, vec2 footprintY, out float slopeVariance)
 {
-    vec2 gradient = vec2(0.0);
-    slopeVariance = 0.0;
-    for (int i = 0; i < 3; ++i)
-    {
-        float k = 6.28318530718 / RIPPLES[i].z;
-        float omega = sqrt(9.81 * k) * 1.35;
-        float phase = dot(RIPPLES[i].xy, p) * k - t * omega * 1.3 + float(i) * 2.1;
-        float resolve = waveResolve(RIPPLES[i].xy, RIPPLES[i].z, footprintX, footprintY);
-        float slope = RIPPLES[i].w * fade * k;
-        gradient += RIPPLES[i].xy * slope * cos(phase) * resolve;
-        slopeVariance += 0.5 * slope * slope * (1.0 - resolve * resolve);
-    }
-    return gradient;
+    const float kScaleA = 1.0 / 18.0;
+    const float kScaleB = 1.0 / 42.0;
+    vec2 uvA = p * kScaleA + t * vec2( 0.020,  0.012);
+    vec2 uvB = p * kScaleB + t * vec2(-0.013,  0.017);
+
+    vec3 nA = textureGrad(waterNormalMap, uvA, footprintX * kScaleA, footprintY * kScaleA).xyz * 2.0 - 1.0;
+    vec3 nB = textureGrad(waterNormalMap, uvB, footprintX * kScaleB, footprintY * kScaleB).xyz * 2.0 - 1.0;
+
+    // 两层斜率直接相加；0.55 / 0.35 是相对幅度，保持大波轮廓仍占主导。
+    vec2 slope = -(nA.xy * 0.55 + nB.xy * 0.35) * (strength * fade);
+
+    // 贴图 mip 过滤会抹掉未解析的高频斜率，但能量不能凭空消失：
+    // 按最高 LOD 估一个很小的方差，交给粗糙度把高光展宽。
+    float lodA = textureQueryLod(waterNormalMap, uvA).y;
+    float lodB = textureQueryLod(waterNormalMap, uvB).y;
+    float lost = smoothstep(1.0, 6.0, max(lodA, lodB));
+    slopeVariance = lost * lost * 0.008;
+    return slope;
 }
 
 vec2 sampleSphericalMap(vec3 v)
@@ -116,20 +121,20 @@ void main()
     const float strength = max(push.params.z, 0.0);
     const vec2 p = fragWorldPos.xz;
 
-    // 大波决定轮廓，小波只在大约 220m 内贡献法线细节；远处直接淡出，
-    // 否则细密波纹在低采样率下会变成闪烁的点阵。
+    // 大波决定轮廓，法线贴图补充细浪。贴图自带完整 mip 链，远处按 LOD
+    // 自然淡出；额外再按距离做一次淡出，避免极远处只剩纹理重复。
     const float distanceToCamera = length(p - ubo.cameraPos.xz);
-    const float rippleFade = 1.0 - smoothstep(60.0, 220.0, distanceToCamera);
+    const float detailFade = 1.0 - smoothstep(150.0, 700.0, distanceToCamera);
 
-    // 像素足迹：dFdx/dFdy 给出世界 XZ 每像素的跨度。用它逐波判断是否
-    // 还能被当前采样率解析，而不是只看相机距离 —— 掠射角下远处的足迹
-    // 会急剧变大，这正是之前条带/闪烁最明显的地方。
+    // 像素足迹：dFdx/dFdy 给出世界 XZ 每像素的跨度。大波逐波判断是否
+    // 还能被当前采样率解析；法线贴图则把同一足迹交给 textureGrad。
     vec2 footprintX = dFdx(p);
     vec2 footprintY = dFdy(p);
     float bigSlopeVariance = 0.0;
-    float rippleSlopeVariance = 0.0;
+    float detailSlopeVariance = 0.0;
     vec2 gradient = filteredBigWaveGradient(p, t, strength, footprintX, footprintY, bigSlopeVariance);
-    gradient += filteredRippleGradient(p, t, rippleFade, footprintX, footprintY, rippleSlopeVariance);
+    gradient += waterDetailGradient(p, t, strength, detailFade,
+                                    footprintX, footprintY, detailSlopeVariance);
 
     vec3 N = normalize(vec3(-gradient.x, 1.0, -gradient.y));
     vec3 V = normalize(ubo.cameraPos.xyz - fragWorldPos);
@@ -148,7 +153,7 @@ void main()
     // 未被解析的波能量 -> 像素级粗糙度。远处水面因此从「锐利镜面」变成
     // 略微模糊的反射；高光也随之变宽，不会在一条线上闪。
     float distanceRoughness = smoothstep(120.0, 3000.0, distanceToCamera) * 0.30;
-    float roughness = clamp(sqrt(bigSlopeVariance + rippleSlopeVariance) * 7.0 +
+    float roughness = clamp(sqrt(bigSlopeVariance + detailSlopeVariance) * 7.0 +
                             distanceRoughness, 0.02, 0.65);
     float roughNorm = smoothstep(0.03, 0.55, roughness);
 
