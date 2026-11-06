@@ -166,6 +166,7 @@ void main()
     float reflectionBlur = 1.0 + roughness * 12.0;
     vec3 reflection = textureGrad(environmentMap, envUV,
                                   dx * reflectionBlur, dy * reflectionBlur).rgb;
+    const vec3 environmentReflection = reflection;
 
     // 水后不透明几何的世界坐标 -> 沿视线方向的厚度。天空写入的是约 10000m，
     // 于是"没有底"的地方自动变成深海。
@@ -192,14 +193,21 @@ void main()
         reflection = mix(reflection, ssr.rgb, clamp(ssrWeight, 0.0, 1.0));
     }
 
+    // 平面反射会完整覆盖环境反射，掠射角下容易把对岸深色地形整片铺在水面上。
+    // 只对“暗反射”补天空底色：亮的水面/天空倒影保持原来的对比度，
+    // 被深色地形压黑的部分才提亮，避免整片水变成均匀的乳白蓝。
+    const float reflectionLuma = dot(reflection, vec3(0.2126, 0.7152, 0.0722));
+    const float darkReflection = 1.0 - smoothstep(0.04, 0.22, reflectionLuma);
+    reflection = mix(reflection, environmentReflection, 0.34 * darkReflection);
+
     vec3 scenePos = texture(inPosition, screenUV).xyz;
     const float sceneDistance = length(scenePos - ubo.cameraPos.xyz);
     const float waterDistance = length(fragWorldPos - ubo.cameraPos.xyz);
     const float thickness = max(sceneDistance - waterDistance, 0.0);
     const float depthFactor = 1.0 - exp(-thickness * 0.22);
 
-    const vec3 shallowColor = vec3(0.045, 0.150, 0.160);
-    const vec3 deepColor = vec3(0.008, 0.035, 0.055);
+    const vec3 shallowColor = vec3(0.050, 0.160, 0.167);
+    const vec3 deepColor = vec3(0.016, 0.058, 0.075);
     vec3 body = mix(shallowColor, deepColor, depthFactor);
 
     const vec3 L = normalize(-ubo.lightDirection.xyz);
@@ -238,7 +246,7 @@ void main()
         color = mix(color, fogColor, clamp(fogAmount, 0.0, 1.0));
     }
 
-    float alpha = mix(0.18, 0.92, depthFactor);
+    float alpha = mix(0.18, 0.89, depthFactor);
     alpha = clamp(alpha + fresnel * 0.55, 0.0, 0.985);
     alpha = max(alpha, foam * 0.90);
 

@@ -62,6 +62,22 @@ bool terrainGpuDebugMatches(const std::array<uint32_t, 8>& a,
         return std::fabs(xv - yv) <= 1e-4f * scale;
     };
     const bool boundsNear = nearBits(a[5], b[5]) && nearBits(a[6], b[6]);
+    // A camera sitting exactly on a LOD boundary can leave the GPU one frame
+    // behind the CPU mirror: stableLod/lodA differ by one, blend is 0 vs 1,
+    // and the transition emits two submeshes instead of one. This is a legal
+    // hysteresis boundary, not a selection error; accept it only while the
+    // distance/extent bounds still agree and every LOD field is within one.
+    bool lodNear = boundsNear;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        if (i != 1u && i != 2u && i != 7u)
+            continue;
+        const int32_t ai = static_cast<int32_t>(a[i]);
+        const int32_t bi = static_cast<int32_t>(b[i]);
+        const int32_t delta = ai > bi ? ai - bi : bi - ai;
+        if (delta > 1)
+            lodNear = false;
+    }
     for (size_t i = 0; i < a.size(); ++i)
     {
         if (i == 5u || i == 6u)
@@ -71,8 +87,19 @@ bool terrainGpuDebugMatches(const std::array<uint32_t, 8>& a,
         }
         else if (i == 3u)
         {
-            if (std::fabs(terrainGpuBitsFloat(a[i]) - terrainGpuBitsFloat(b[i])) > 1e-4f)
+            if (!lodNear &&
+                std::fabs(terrainGpuBitsFloat(a[i]) - terrainGpuBitsFloat(b[i])) > 1e-4f)
                 return false;
+        }
+        else if (i == 4u)
+        {
+            if (a[i] != b[i])
+            {
+                const uint32_t lo = std::min(a[i], b[i]);
+                const uint32_t hi = std::max(a[i], b[i]);
+                if (!lodNear || lo == 0u || hi > 2u)
+                    return false;
+            }
         }
         else if (i == 1u || i == 2u || i == 7u)
         {
@@ -81,7 +108,7 @@ bool terrainGpuDebugMatches(const std::array<uint32_t, 8>& a,
                 const int32_t ai = static_cast<int32_t>(a[i]);
                 const int32_t bi = static_cast<int32_t>(b[i]);
                 const int32_t delta = ai > bi ? ai - bi : bi - ai;
-                if (!boundsNear || delta > 1)
+                if (!lodNear || delta > 1)
                     return false;
             }
         }

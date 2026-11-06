@@ -1009,3 +1009,26 @@ updated: 2026-11-06
 **回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-150438`；DocCheck PASS（documents=68 lines=11864）。
 
 **边界**：只接入 Character Controller 与 Render Tag 两个可添加原生组件；Mesh/Material 及 Terrain/Voxel/Streaming/Camera 仍由固定面板或创建菜单管理；原生组件不进 v3 `components`，跨版本仍依赖专用字段。
+
+## R-08：水面暗反射补天空底色（2026-11-06）
+
+**问题**：用户标注的远水区域整体发暗、偏绿，像一块没有细节的暗色平板（水面区域 mean RGB≈(100,117,117)，天空≈(133,143,154)）。先怀疑平面反射没有写天空 alpha，做了“反射 G-Buffer 天空 alpha=0 + 水面按 alpha 混合”的修复；但在 streaming 高机位、voxel 低机位和“反射跳过 skybox”三组对照下，开/关都只有 UI 区域差异（最多 2537 像素，水面 0 像素），说明反射 G-Buffer 里天空并不是黑的，这条路径是 no-op，已完整回退。
+
+真正来源是三个观感参数叠加：
+- 天空处 G-Buffer 距离≈10000m，`depthFactor≈1`，`body` 取 `deepColor=(0.008,0.035,0.055)`，本身接近黑色；
+- 远水 `alpha=mix(0.18,0.92,depthFactor)` 再叠加 Fresnel，几乎不透明，背后亮天空透不出来；
+- 平面反射在该角度主要采到对岸深色地形，且会完整覆盖环境图反射，于是暗地形铺满水面。
+
+**实现（`shaders/water.frag`）**：
+- 保存平面反射/SSR 之前的环境图反射 `environmentReflection`，之后按反射亮度只提亮暗部：`luma = dot(reflection, vec3(0.2126,0.7152,0.0722))`、`dark = 1 - smoothstep(0.04, 0.22, luma)`、`reflection = mix(reflection, environmentReflection, 0.34 * dark)`。亮的水面/天空倒影保持原对比度，避免整片水变成均匀乳白蓝。
+- 深水色 `(0.008,0.035,0.055)`→`(0.016,0.058,0.075)`，浅水色 `(0.045,0.150,0.160)`→`(0.050,0.160,0.167)`；`0.55+0.45*sunDiffuse` 的方向光调制不变。
+- 远水 alpha 上限 `0.92`→`0.89`，保留少量背景透出。
+
+**实测（Debug / RTX 2070，体素世界，临时低机位 [16,8,140]、pitch 0.16、yaw 180，waveStrength=0、waveSpeed=0、平面反射/SSR 开）**：
+- 修改前 `build/voxel_water_before2.png`，修改后 `build/voxel_water_v2.png`；同机位裁切对比 `build/water_tune_compare_v2.png`（上=修改前，下=修改后）。
+- 水面区域（y600..1000、x100..1800）mean RGB `(62.5,78.5,94.2)`→`(66.4,84.5,99.6)`，luma `76.2`→`81.8`；全画面 diff>2 共 **840553** 像素，diff>8 共 543093。
+- 岛体倒影仍可见，但暗部被抬起；没有新增噪点/条带，Validation 0/0。
+
+**回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-164734`；DocCheck 通过。
+
+**边界**：这是观感调参，不是物理吸收/散射模型；只提升暗反射，不改变反射几何与 SSR/平面反射的取舍；仍无折射/水下后处理。用户原始截图机位未保存，本条用体素低机位复现同类“远水暗色平板”，不代表该截图逐像素一致。

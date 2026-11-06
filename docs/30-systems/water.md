@@ -117,15 +117,22 @@ N = normalize(vec3(-gradient.x, 1.0, -gradient.y))
   `1 + roughness * 12`，让远处未解析的波变成略模糊的反射，而不是随机镜面点。
 - **平面反射**：开启 `waterPlanarReflection` 时，Set0 binding12 绑定 `ReflectionPass`
   输出的 960x540 反射色，片元按 `screenUV + N.xz * (0.0015 + roughness * 0.006)`
-  扰动后采样，替代环境图反射；关闭时 binding12 回退到环境图。反射通道用镜像相机
+  扰动后采样，覆盖环境图反射；关闭时 binding12 回退到环境图。反射通道用镜像相机
   重画不透明几何并做第二套延迟光照，水面以下几何被 `clipY` 裁掉；玻璃、水面和
   调试网格不进入倒影。半分辨率结果直接按屏幕 UV 上采样，边缘比全分辨率软。
+- **环境反射底色**：平面反射/SSR 之后，按反射亮度补天空底色：
+  `luma = dot(reflection, (0.2126,0.7152,0.0722))`、
+  `dark = 1 - smoothstep(0.04, 0.22, luma)`、
+  `reflection = mix(reflection, environmentReflection, 0.34 * dark)`。掠射角下平面反射
+  往往整片采到对岸深色地形，若完全覆盖环境图，远水会变成一块暗色平板；只提亮
+  暗反射，亮的水面/天空倒影保持原对比度，岸线倒影也仍然可见。
 - **屏幕空间反射（F6-01）**：`ssr.frag` 在半分辨率 960x540 上从水面像素沿反射方向做 48 步 DDA（水面用解析平面 y = waterLevel 求交，只读本帧 HDR 与 G-Buffer 世界坐标，不读 Normal/Depth），把射线步进点投影回屏幕后采样 G-Buffer 位置，点到射线的垂直距离超过厚度（默认 0.5m，按步长自适应放大）的命中会被丢弃；命中的 alpha 是置信度，屏幕外/超过 `ssrMaxDistance`（默认 200m）返回 0。Water 用同一个扰动后的 `reflectionUV` 采样绑定 13 的 SSR 结果，权重为 `ssr.a * (1 - smoothstep(0.20, 0.55, roughness)) * (1 - smoothstep(120, 220, distanceToCamera))`，再与平面反射/环境图混合：粗糙水面和远水仍交给平面反射/IBL，近场平静水面才吃屏幕空间结果。SSR 只服务水面，不写深度，不影响不透明几何。
 - **厚度吸收**：读 G-Buffer `inPosition`（不透明场景的世界坐标），沿视线算
   `thickness = sceneDistance - waterDistance`；`depthFactor = 1 - exp(-thickness * 0.22)`，
   水薄处偏浅、厚处偏深。天空的 10000m 让远处自动变成深海。
-- **水体颜色**：`mix(shallow(0.045,0.150,0.160), deep(0.008,0.035,0.055), depthFactor)`；
-  再乘 `0.55 + 0.45 * max(dot(N, L), 0)` 接方向光。
+- **水体颜色**：`mix(shallow(0.050,0.160,0.167), deep(0.016,0.058,0.075), depthFactor)`；
+  再乘 `0.55 + 0.45 * max(dot(N, L), 0)` 接方向光。深水色比旧值提亮约 2 倍，
+  避免没有几何底的海面显示成近黑色。
 - **太阳高光**：高光指数从近处的 900 按 `roughNorm` 展宽到 24，峰值从 3.0 降到 0.55；
   宽层从 120 展宽到 8、强度从 0.10 提到 0.18。这是 specular AA：远处高光变宽变暗，
   不会在一条线上闪。
@@ -137,8 +144,9 @@ N = normalize(vec3(-gradient.x, 1.0, -gradient.y))
   （天空提前返回、不参与）；`glass.frag` 只淡出玻璃颜色，alpha 不变。
 - **岸边泡沫**：`shore = 1 - smoothstep(0, 1.6, thickness)` 加波峰项，再乘两个交叉正弦
   噪声；泡沫同时抬高 alpha。
-- **混合**：`alpha = mix(0.18, 0.92, depthFactor) + fresnel * 0.55`，上限 0.985；
-  管线用 `SRC_ALPHA / ONE_MINUS_SRC_ALPHA`，alpha 通道写 1。
+- **混合**：`alpha = mix(0.18, 0.89, depthFactor) + fresnel * 0.55`，上限 0.985；
+  管线用 `SRC_ALPHA / ONE_MINUS_SRC_ALPHA`，alpha 通道写 1。远水上限从 0.92
+  降到 0.89，保留少量背景透出，避免整片水变成不透明深色板。
 
 **不做折射**：RenderGraph 没有 image copy，折射需要先把 `hdrScene` 复制成可采样
 纹理，这部分仍未做。反射现在有三层来源：屏幕空间 SSR（近场、平静水面）、
