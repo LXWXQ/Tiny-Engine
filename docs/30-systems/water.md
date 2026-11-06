@@ -75,12 +75,21 @@ variance += 0.5 * ((amplitude * strength) * k)^2 * (1 - resolve^2)
 正弦 ripple，全部交给下面的法线贴图。
 
 **法线贴图细节**：`Resources/Texture/Water/water_normal.png` 是 1024x1024、可无缝平铺的
-水波法线（FFT 频谱合成，RGB 编码 `0.5 + 0.5 * n`，CC0）。片元按世界 XZ 平铺两层：
+水波法线（高通 FFT 频谱合成，保留 K>=32 的斜率频段，RGB 编码 `0.5 + 0.5 * n`，CC0）。片元按世界 XZ 平铺两层：
 
 | 层 | 周期 | 流速 (UV/s) | 斜率权重 |
 |---|---|---|---|
 | A | 18m | (0.020, 0.012) | 0.55 |
 | B | 42m | (-0.013, 0.017) | 0.35 |
+
+低频（K<32）被刻意去掉：18m 这一层在低渲染倍率下（编辑器视口约 0.37x、710px 宽）
+每个平铺块只占约 43px，低频脊线会随平铺重复成规则的亮暗格；去掉后只留下 18m 块内
+约 0.56m 以下的细纹，mip 过滤能把它平均掉。低频形状由 4 个解析大波负责，不靠贴图。
+生成命令（numpy + Pillow，默认参数即当前资产）：
+
+```bash
+python tools/GenerateWaterNormal.py --out Resources/Texture/Water/water_normal.png
+```
 
 两层都用 `textureGrad` 采样，显式传入 `dFdx(p)` / `dFdy(p)` 换算到各自 UV 的像素足迹，
 掠射角下由硬件选 mip 和各向异性过滤。纹理的 mip 链不是 `vkCmdBlitImage` 逐级 blit，
@@ -236,8 +245,9 @@ SSR 关闭时没有 `[SSR] first draw`，水面日志为 `ssr=0`。
   环境图地平线 LOD3，天空本身不参与雾；
 - footprint 过滤只修法线和高光，不改变几何；外圈网格段长约 132m，5.5m 波仍有几何
   欠采样，远水细节依赖法线过滤而不是真实位移；
-- 没有交互（角色入水、涟漪、溅射），也没有流场/泡沫贴图；水面细节来自单张法线贴图，
-  18m/42m 两层滚动只能降低重复感，极近处仍可能看出周期；
+- 没有交互（角色入水、涟漪、溅射），也没有流场/泡沫贴图；水面细节来自单张高通法线贴图，
+  18m/42m 两层滚动只能降低重复感，极近处仍可能看出周期；低渲染倍率下的平铺亮暗格已
+  通过去掉 K<32 低频解决，但这不是通用的反走样方案；
 - 只在有地形/体素块时启用，不能单独给任意场景加水；
 - 平面反射只渲染不透明几何：玻璃、水面、调试网格不进入倒影，粒子/透明材质也不会；
 - 反射用主相机的阴影级联，镜像视角下的阴影/SSAO 不精确；半分辨率且没有独立时域
@@ -262,7 +272,8 @@ SSR 关闭时没有 `[SSR] first draw`，水面日志为 `ssr=0`。
 | `shaders/lighting.frag` | 不透明几何的距离雾；天空提前返回 |
 | `shaders/glass.frag` | 玻璃距离雾（只淡出颜色，alpha 不变） |
 | `src/Core/FrameInfo.h` | `EngineSettings` 的 water/fog 字段、`GlobalUbo.fogParams` |
-| `Resources/Texture/Water/water_normal.png` | 1024x1024 无缝 FFT 水波法线，`tileableMips` 生成 wrapped mip 链 |
+| `Resources/Texture/Water/water_normal.png` | 1024x1024 高通无缝 FFT 水波法线（K>=32），`tileableMips` 生成 wrapped mip 链 |
+| `tools/GenerateWaterNormal.py` | 可复现生成上述法线贴图（cutoff=32、seed=44） |
 | `src/Core/Application.cpp` | 加载水波法线；每帧上传 `fogParams`；开关变化时重建全局描述符，binding12 在反射纹理/环境图之间切换 |
 | `src/Core/EngineConfig.cpp` | `water` / `fog` 节点读写 |
 | `src/Editor/panels/RenderSettingsPanel.cpp` | 编辑器 Water / 距离雾面板 |

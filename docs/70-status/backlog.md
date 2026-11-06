@@ -259,6 +259,7 @@ updated: 2026-11-06
 | R-05 | 已完成 | 运行模式角色接入（真实模型 + 视线出生 + WASD/Shift 跑 + 6 段骨骼动画状态机） | B-07、R-01 | 示例体素世界可见角色、不坠出世界、无黑色/棋盘格；`e9-runtime-character` 断言 `skinned=1 animations=18` 与 6 个 clip；`--runtime-mode` 可直达 |
 | R-06 | 已完成 | 水面规则黑白格（删除 3 个高频正弦 ripple，改 1024x1024 无缝 FFT 法线贴图两层滚动，18m/42m） | — | 黑白菱形格消失；近景波纹连续、无平铺接缝；`f3v-water` 断言水波法线加载，75 项 ALL PASS（日志 `build/validation/20261106-113028`） |
 | R-08 | 已完成 | 水面发暗/发绿观感（平面反射暗部最多补 34% 天空环境底色；深水色提亮约 2 倍；远水 alpha 0.92→0.89） | — | 低机位同机位暗水区域 luma 76.2→81.8、蓝色 94.2→99.6，岛影仍可见；diff>2 共 840553 像素；75 项 ALL PASS（日志 `build/validation/20261106-164734`） |
+| R-09 | 已完成 | 低渲染倍率水面平铺亮暗格（18m 法线低频；改为高通 K>=32 法线贴图） | — | 0.37x 同机位网格消失、全 1920 正常；对比 `build/water_grid_fix_compare.png`；75 项 ALL PASS（日志 `build/validation/20261106-173309`） |
 | V-02 | 未开始 | 体素网格化的每帧预算与取消（当前每块一个 job，`processVoxelChunkBuilds()` 每帧最多上传 4 块，但提交阶段没有总预算） | V-04、JobSystem | 半径 12 首帧提交仍有 7.9 ms（Release），要压到 <2 ms；取消后不再上传 |
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
 | V-04 | 已完成 | 体素几何走 `TerrainMeshArena` / 间接合批（每 chunk 一份 `Model` + 一次 bind -> 共享 arena + 专用实例表） | F1 合批路径 | 625 块整批只占 1 条 `vkCmdDrawIndexedIndirect`；半径 12 的 arena 725888 顶点 / 1088832 索引不溢出，验证 0/0（日志 `build/validation/20261106-102034`） |
@@ -311,6 +312,8 @@ updated: 2026-11-06
 > F5-04 原生组件接入已完成（2026-11-06）：`ComponentRegistry` 描述符新增 `addable`/`removable`/`drawProperties`/`serialized`/`required`/`canRemove` 与 `unavailableReason`；新增 `src/Scene/NativeComponents.*` 注册 9 个 `native.*`（Name/Transform/Hierarchy 必需只读，Character Controller 8 个 Float 与 Render Tag 可增删，Camera/Terrain/Streaming/VoxelWorld 为创建菜单托管、菜单置灰）。`captureComponentRecords` 与加载循环按 `serialized` 过滤，原生组件仍走专用字段，不重复写 v3。Inspector 的 Character 参数与 Character/Render Tag 移除均走 `SetComponentRecordCommand`；`DeleteEntityCommand` 增加 Character 显式快照。`[Scene] ECS component selfTest PASS | components=16 | systems=7` 覆盖 native 增删与去重；`[Editor] prefab selfTest PASS` 断言 capture 只含 effects.spin 且 Character radius 保留。全套 75 项 ALL PASS（日志 `build/validation/20261106-150438`），DocCheck PASS（documents=68 lines=11864）。详见 [milestones](milestones.md#f5-04原生组件接入统一-add-component2026-11-06)。
 >
 > R-08 水面暗反射补天空底色已完成（2026-11-06）：用户标注的远水发暗不是“黑天空反射”，旧 R-07 alpha 覆盖率在三种机位下都只有 UI 像素差（≤2537），已完整回退。`shaders/water.frag` 改为按反射亮度只提亮暗部（`0.34 * (1-smoothstep(0.04,0.22,luma))`），并把 `shallow/deep` 提到 `(0.050,0.160,0.167)`、`(0.016,0.058,0.075)`，远水 alpha 上限 0.92→0.89；亮水面/天空倒影保持原对比度。低机位 [16,8,140] 同机位 before/after 见 `build/water_tune_compare_v2.png`，水面区域 luma 76.2→81.8、蓝色 94.2→99.6。详见 [milestones](milestones.md#r-08水面暗反射补天空底色2026-11-06)，验证日志 `build/validation/20261106-164734`。
+
+> R-09 低渲染倍率水面平铺亮暗格已完成（2026-11-06）：根因是 18m 法线贴图的低频脊线（K<32）在 `--render-scale 0.37`（用户 1536x864 窗口、约 710px 宽的 3D 视口）下每块只占约 43px，随平铺重复成规则的斜向亮暗格；1920 全分辨率看不出来，也不是 SSR/平面反射/TAA 缺陷。修复是把 `Resources/Texture/Water/water_normal.png` 换成高通 FFT 法线（K>=32，1024²、cutoff=32、exponent=1.9、slope_rms=0.22、seed=44），只保留 18m 平铺里约 0.56m 以下的细纹，低频形状交给 4 个解析大波；`shaders/water.frag` 未改。新增 `tools/GenerateWaterNormal.py` 可复现（重新生成与仓库内文件逐字节一致）。0.37x 前后图 `build/grid_before_lowres.png` / `build/grid_hp32_head_lowres.png`，全 1920 `build/grid_hp32_head_full.png`，对比 `build/water_grid_fix_compare.png`。详见 [milestones](milestones.md#r-09低渲染倍率水面平铺亮暗格2026-11-06)，验证日志 `build/validation/20261106-173309`。
 
 ## 更新方式
 

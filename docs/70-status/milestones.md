@@ -1032,3 +1032,21 @@ updated: 2026-11-06
 **回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-164734`；DocCheck 通过。
 
 **边界**：这是观感调参，不是物理吸收/散射模型；只提升暗反射，不改变反射几何与 SSR/平面反射的取舍；仍无折射/水下后处理。用户原始截图机位未保存，本条用体素低机位复现同类“远水暗色平板”，不代表该截图逐像素一致。
+
+## R-09：低渲染倍率水面平铺亮暗格（2026-11-06）
+
+**问题**：用户 m16832 在 1536x864 窗口（3D 视口约 710x570）看到水面有规则的斜向亮暗格/菱形条带，移动视角时更明显；同一相机在 1920 全分辨率渲染却几乎看不到。
+
+**根因**：`Resources/Texture/Water/water_normal.png` 是 18m 平铺的低频 FFT 法线，低频脊线在每个平铺块里重复。低渲染倍率（`--render-scale 0.37`，约等于用户 710px 宽视口）下，每个 18m 块只占约 43px，重复的脊线被放大成规则亮暗格；不是 SSR、平面反射或 TAA 的缺陷。对照：`waveStrength=0` 时网格完全消失，说明来源在水波法线/波浪，不在反射。
+
+**实现**：把法线贴图换成**高通 FFT 法线**，清掉 K<32 的频段，只保留 18m 平铺里约 0.56m 以下的细纹；低频形状交给 4 个解析大波。`shaders/water.frag`、两层 18m/42m、`textureGrad`、`tileableMips` 全部保持 HEAD 不变，所以这是单文件资产替换。新增 `tools/GenerateWaterNormal.py`（1024²、cutoff=32、exponent=1.9、slope_rms=0.22、seed=44，默认输出该资产；重新生成与仓库内文件逐字节一致）。
+
+**实测（Debug / RTX 2070，体素世界，相机 [16,8,140]、pitch 0.16、yaw 180，waveStrength=0.83，平面反射/SSR 开，TAA 关）**：
+- `--render-scale 0.37`：修改前 `build/grid_before_lowres.png` 有明显斜向亮暗格；修改后 `build/grid_hp32_head_lowres.png` 为细碎自然波纹，无规则格。
+- 全 1920：`build/grid_hp32_head_full.png` 正常，和原 HEAD 水面观感一致。
+- 对比图 `build/water_grid_fix_compare.png`（上=HEAD 低频法线，下=高通法线）。
+- 排除项：三层 18/23/37m + 旋转、各向同性法线、高通 K<8/16 在 0.37x 下仍残留重复亮斑；只有 K>=32 的高通彻底消除。
+
+**回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-173309`；DocCheck PASS（documents=68 lines=11930）。
+
+**边界**：这是针对“18m 法线低频在低渲染倍率下重复”的资产级修复，不是通用反走样；极近处仍可能看出 18m 周期；高通后太阳细碎高光仍在，但不再按平铺成块；大波轮廓、反射与 Fresnel 不变。
