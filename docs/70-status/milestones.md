@@ -1050,3 +1050,39 @@ updated: 2026-11-06
 **回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-173309`；DocCheck PASS（documents=68 lines=11930）。
 
 **边界**：这是针对“18m 法线低频在低渲染倍率下重复”的资产级修复，不是通用反走样；极近处仍可能看出 18m 周期；高通后太阳细碎高光仍在，但不再按平铺成块；大波轮廓、反射与 Fresnel 不变。
+
+## R-10：高角度水面泡沫规则菱格（2026-11-06）
+
+**问题**：用户 m17600 从高角度俯视水面时仍能看到规则的亮暗菱形/棋盘格，低角度近处的水面在 R-09 之后已经正常。红框里是水面上成排的白色小菱形簇，不是反射里的物体，也不是用户手绘的红色标注本身。
+
+**根因（逐项禁用确认）**：在同一机位分别关掉 SSAO、TAA、平面反射、SSR、环境反射、太阳高光，并把水面 alpha 强制为 1，菱形格都还在；只注释掉泡沫混合 `color = mix(color, vec3(0.82,0.90,0.94), foam*0.55)`，水面立刻完全平滑。旧泡沫有两个问题：
+- `crest`（波峰项）没有乘 `shore`，白浪会铺满整个水面，不只在岸边；
+- 噪声是 `sin(p.x * 1.7 + t * 0.6) * sin(p.y * 2.1 - t * 0.45)` 的乘积，俯视时形成规则菱形棋盘格。
+
+旧代码（`shaders/water.frag` 约 229-236 行）：
+
+```glsl
+const float shore = 1.0 - smoothstep(0.0, 1.6, thickness);
+const float crest = smoothstep(0.08, 0.26, bigWaveHeight(p, t, strength));
+const float foamPattern = 0.55 + 0.45 * sin(p.x * 1.7 + t * 0.6)
+                                      * sin(p.y * 2.1 - t * 0.45);
+const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
+```
+
+**实现**：
+- `shore = 1 - smoothstep(0, 1.8, thickness)`，泡沫只在水陆交界 1.8m 内出现；
+- `crest = smoothstep(0.10, 0.30, bigWaveHeight)`，波峰项也乘 `shore`，深水不再有泡沫；
+- 噪声改采已有的 `waterNormalMap` 低频（`textureLod(waterNormalMap, p/7 + t*(0.011,-0.008), 1.5).x`），`foamMask = smoothstep(0.34, 0.74, foamNoise)`；非周期纹理打散泡沫，不新增资产；
+- `foam = clamp(shore * foamMask * (0.75 + 0.25 * crest), 0, 1)`，颜色混合量与 alpha 抬高逻辑不变。
+
+**实测（Debug / RTX 2070，1920x1080，--streaming-world 1 --selftest 40 --screenshot-frame 30 --hidden）**：
+- 相机 `[-11.84165, 59.89929, 60.03920]`、rotation `[0.66149, -6.29172, 0]`，`waveStrength=0.83`、`waveSpeed=0.95`，平面反射/SSR 开，TAA/Bloom 关；
+- 修复前 `build/highgrid_C_before_samecamera.png`：水面铺满约 4x4 白点的规则菱形簇；
+- 修复后 `build/highgrid_C_after_samecamera.png`：同机位/参数，菱形簇消失，只剩连续波纹与云影反射；
+- 关平面反射/SSR 的对照 `build/highgrid_C_none.png` 也平滑，`[Validation] errors=0 warnings=0`；
+- 对比图 `build/foam_grid_compare.png`（上=修复前，下=修复后，已裁掉左侧 UI）；
+- 低角度相机 y=14、pitch=0.30 的检查图 `build/foam_lowshore.png`：水面同样没有菱形格；该机位岸线白边很弱，因为泡沫只在 1.8m 岸带内且受噪声门控，不保证每条岸线都有明显白沫。
+
+**回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-180307`；DocCheck PASS。
+
+**边界**：泡沫仍是观感模型，不是白浪频谱/破碎波模拟；没有独立的泡沫贴图，只借用 18m 水波法线的低频；泡沫只覆盖岸边，湖心/深海不会出现白浪。用户原始截图机位来自当时的 `config/engine.json`，本条用同一相机复现高角度水面，不代表该截图逐像素一致。

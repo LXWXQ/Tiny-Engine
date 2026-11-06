@@ -226,13 +226,16 @@ void main()
                    + pow(NdotH, mix(120.0, 8.0, roughNorm)) * mix(0.10, 0.18, roughNorm);
     color += radiance * specular;
 
-    // 岸边泡沫：水薄 + 波峰 + 两点交叉的正弦噪声。不做纹理采样，
-    // 第一版保持无资源依赖；以后要更细可以换成图集里的泡沫 tile。
-    const float shore = 1.0 - smoothstep(0.0, 1.6, thickness);
-    const float crest = smoothstep(0.08, 0.26, bigWaveHeight(p, t, strength));
-    const float foamPattern = 0.55 + 0.45 * sin(p.x * 1.7 + t * 0.6)
-                                          * sin(p.y * 2.1 - t * 0.45);
-    const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
+    // 岸边泡沫：只贴着水陆交界出现。旧版把波峰项铺满整个水面，并且用
+    // sin(x)*sin(y) 生成泡沫，俯视时整片水会出现规则菱形棋盘格。
+    // 现在泡沫由水波法线贴图的低频噪声打散，且波峰项也乘 shore，
+    // 远离岸边的深水不再产生任何泡沫。
+    const float shore = 1.0 - smoothstep(0.0, 1.8, thickness);
+    const float crest = smoothstep(0.10, 0.30, bigWaveHeight(p, t, strength));
+    const vec2 foamUV = p * (1.0 / 7.0) + t * vec2(0.011, -0.008);
+    const float foamNoise = textureLod(waterNormalMap, foamUV, 1.5).x;
+    const float foamMask = smoothstep(0.34, 0.74, foamNoise);
+    const float foam = clamp(shore * foamMask * (0.75 + 0.25 * crest), 0.0, 1.0);
     color = mix(color, vec3(0.82, 0.90, 0.94), foam * 0.55);
 
     // 全场景距离雾（B）。水体用真实的视线距离，而不是相机 XZ 距离；

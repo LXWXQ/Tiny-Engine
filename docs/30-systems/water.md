@@ -151,8 +151,13 @@ N = normalize(vec3(-gradient.x, 1.0, -gradient.y))
   雾色取环境图地平线方向 `normalize(vec3(-V.x, 0.035, -V.z))` 的 LOD3，和天空同源，
   远水与地平线无缝淡出而不是一条硬切边。`lighting.frag` 对不透明地形做同一套雾
   （天空提前返回、不参与）；`glass.frag` 只淡出玻璃颜色，alpha 不变。
-- **岸边泡沫**：`shore = 1 - smoothstep(0, 1.6, thickness)` 加波峰项，再乘两个交叉正弦
-  噪声；泡沫同时抬高 alpha。
+- **岸边泡沫**：`shore = 1 - smoothstep(0, 1.8, thickness)`、`crest = smoothstep(0.10, 0.30, bigWaveHeight)`；
+  泡沫噪声取 `textureLod(waterNormalMap, p / 7 + t * (0.011, -0.008), 1.5).x`，
+  `foamMask = smoothstep(0.34, 0.74, foamNoise)`，
+  `foam = clamp(shore * foamMask * (0.75 + 0.25 * crest), 0, 1)`。旧版把波峰项铺满整个水面，
+  并用 `sin(x) * sin(y)` 生成泡沫，高角度俯视时会形成规则的菱形棋盘格；现在泡沫只贴着
+  岸边出现、由法线贴图的非周期噪声打散，深水不再产生泡沫；噪声门控也让部分岸线的白边
+  很弱，不保证每条水陆交界都有明显白沫。泡沫同时抬高 alpha。
 - **混合**：`alpha = mix(0.18, 0.89, depthFactor) + fresnel * 0.55`，上限 0.985；
   管线用 `SRC_ALPHA / ONE_MINUS_SRC_ALPHA`，alpha 通道写 1。远水上限从 0.92
   降到 0.89，保留少量背景透出，避免整片水变成不透明深色板。
