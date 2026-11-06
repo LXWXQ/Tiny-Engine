@@ -195,17 +195,19 @@ uint packedLodPayload(float blend, uint mode)
 }
 
 void writeDebug(uint recordIndex, bool visible, uint lodA, uint lodB,
-                float blend, uint commandCount, int stableLod, int fromLod, int toLod)
+                float blend, uint commandCount, float distance, float extent,
+                int stableLod)
 {
+    // Parity contract: visible/lodA/lodB/blend/commandCount/distance/extent/stableLod.
     uint base = recordIndex * 8u;
     debugValues[base + 0u] = visible ? 1u : 0u;
     debugValues[base + 1u] = lodA;
     debugValues[base + 2u] = lodB;
     debugValues[base + 3u] = floatBitsToUint(blend);
     debugValues[base + 4u] = commandCount;
-    debugValues[base + 5u] = uint(max(stableLod, 0));
-    debugValues[base + 6u] = uint(max(fromLod, 0));
-    debugValues[base + 7u] = uint(max(toLod, 0));
+    debugValues[base + 5u] = floatBitsToUint(distance);
+    debugValues[base + 6u] = floatBitsToUint(extent);
+    debugValues[base + 7u] = uint(max(stableLod, 0));
 }
 
 void main()
@@ -246,8 +248,7 @@ void main()
         stateValues[stateBase + 2u] = toLod;
         stateValues[stateBase + 3u] = int(floatBitsToUint(elapsed));
         atomicAdd(stats[STAT_CULLED_CHUNKS], 1u);
-        writeDebug(recordIndex, false, 0u, 0u, 1.0, 0u,
-                   stableLod, fromLod, toLod);
+        writeDebug(recordIndex, false, 0u, 0u, 1.0, 0u, 0.0, 0.0, stableLod);
         return;
     }
 
@@ -322,7 +323,7 @@ void main()
 
     uint commandCount = blending ? 2u : 1u;
     writeDebug(recordIndex, true, lodA, lodB, blend, commandCount,
-               stableLod, fromLod, toLod);
+               distanceToBounds, extent, stableLod);
 
     atomicAdd(stats[STAT_LOD0 + uint(clamp(stableLod, 0, 2))], 1u);
     if (blending)

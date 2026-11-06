@@ -288,6 +288,12 @@ struct VoxelChunkComponent
     // 前向排序绘制。没有玻璃时 glassMesh 为空、glassFaceCount 为 0。
     uint32_t glassFaceCount = 0;
     std::shared_ptr<terrain::TerrainMeshData> glassMesh;
+    // V-04：不透明几何进共享 TerrainMeshArena 后的切片。kInvalidOffset 表示
+    // 仍由 Model 自己的 GPU 缓冲绘制（arena 分配失败时的回退路径）。
+    uint32_t arenaVertexBase = 0xFFFFFFFFu;
+    uint32_t arenaIndexBase = 0xFFFFFFFFu;
+    uint32_t arenaVertexCount = 0;
+    uint32_t arenaIndexCount = 0;
 };
 
 // F3：体素世界管理器。chunk 实体由它按半径惰性创建，坐标是 chunk 网格坐标。

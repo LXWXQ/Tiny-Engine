@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
 size: ~120 行
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # 后续任务台账
@@ -259,7 +259,7 @@ updated: 2026-11-05
 | R-05 | 已完成 | 运行模式角色接入（真实模型 + 视线出生 + WASD/Shift 跑 + 6 段骨骼动画状态机） | B-07、R-01 | 示例体素世界可见角色、不坠出世界、无黑色/棋盘格；`e9-runtime-character` 断言 `skinned=1 animations=18` 与 6 个 clip；`--runtime-mode` 可直达 |
 | V-02 | 未开始 | 体素网格化的每帧预算与取消（当前每块一个 job，`processVoxelChunkBuilds()` 每帧最多上传 4 块，但提交阶段没有总预算） | V-04、JobSystem | 半径 12 首帧提交仍有 7.9 ms（Release），要压到 <2 ms；取消后不再上传 |
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
-| V-04 | 未开始 | 体素几何走 `TerrainMeshArena` / 间接合批（当前每 chunk 一份 `Model` + 一次 bind） | F1 合批路径 | 625 块的 draw calls 从数百降到个位数 |
+| V-04 | 已完成 | 体素几何走 `TerrainMeshArena` / 间接合批（每 chunk 一份 `Model` + 一次 bind -> 共享 arena + 专用实例表） | F1 合批路径 | 625 块整批只占 1 条 `vkCmdDrawIndexedIndirect`；半径 12 的 arena 725888 顶点 / 1088832 索引不溢出，验证 0/0（日志 `build/validation/20261106-102034`） |
 | V-05 | 未开始 | 体素世界分页/无限世界（当前半径上限 12，`Scene::kMaxVoxelRadius`） | V-04 | 半径 24 显存与实体数可控 |
 | F6-01 | 未开始 | SSR（屏幕空间反射，读 HDR + depth） | F6 | 反射可见、与 IBL 结果有明显差异且无严重噪点 |
 | F6-02 | 未开始 | 自动曝光（compute 直方图 + 曝光纹理） | F6 | 室内外切换后 2 秒内亮度收敛 |
@@ -289,6 +289,8 @@ updated: 2026-11-05
 > E-P1 已完成（2026-11-05）：交互式启动失败先弹原生 `MessageBoxW`，正文含阶段、原因、`startup-error.log` 路径、`--help` 与 Vulkan 下一步；`--hidden` / `--selftest` / 截图等无人值守路径保持静默。详见 [milestones](milestones.md#e-p1启动失败原生-messagebox2026-11-05)。
 >
 > C1 半分辨率平面反射已完成（2026-11-05）：`ReflectionPass` 用镜像相机重画 960x540 的 G-Buffer 与延迟光照，`WaterPass` 从 Set0 binding12 采样；开关为 `water.planarReflection`，默认开启。它替代了“远水只能反射环境图”的旧边界，但 F6-01 的 SSR 仍未开始。详见 [milestones](milestones.md#c1-半分辨率平面反射2026-11-05)。
+>
+> V-04 已完成（2026-11-06）：体素不透明几何在 `applyVoxelChunkMesh()` 里先临时上传 `Model`，再 `TerrainMeshArena::acquire/copyInto` 并 `releaseGpuBuffers()`，`Model` 只留 CPU 几何；`GeometrySystem` 按可见集合写专用 224B 实例表与 `VkDrawIndexedIndirectCommand`，整批一条 indirect。半径 12 实测 `chunks=625 arena=625 vertices=725888 indices=1088832`，可见 535 块整批 `commands=535`，材质槽池 256→1024；`f3-voxel-arena-625` 覆盖。详见 [milestones](milestones.md#v-04体素-arena-间接合批2026-11-06)。
 
 ## 更新方式
 

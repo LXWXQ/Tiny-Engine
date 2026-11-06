@@ -725,6 +725,24 @@ void Scene::destroyEntity(entt::entity entity)
         terrain->arenaIndexCount = 0u;
     }
 
+    // V-04：体素不透明几何也走共享 arena，销毁实体时必须交还切片。
+    if (auto* voxel = registry.try_get<VoxelChunkComponent>(entity))
+    {
+        if (terrainMeshArena && voxel->arenaIndexBase != TerrainMeshArena::kInvalidOffset)
+        {
+            TerrainMeshArena::Slice slice{};
+            slice.vertexOffset = voxel->arenaVertexBase;
+            slice.vertexCount = voxel->arenaVertexCount;
+            slice.indexOffset = voxel->arenaIndexBase;
+            slice.indexCount = voxel->arenaIndexCount;
+            terrainMeshArena->release(slice);
+        }
+        voxel->arenaVertexBase = TerrainMeshArena::kInvalidOffset;
+        voxel->arenaIndexBase = TerrainMeshArena::kInvalidOffset;
+        voxel->arenaVertexCount = 0u;
+        voxel->arenaIndexCount = 0u;
+    }
+
     if (const auto* mesh = registry.try_get<MeshComponent>(entity))
         retireModel(mesh->model);
 
@@ -1811,12 +1829,14 @@ bool Scene::applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshD
 
 	const bool hasOpaque = !mesh.vertices.empty();
 	const bool hasGlass = glassMesh && !glassMesh->vertices.empty();
-	if (!hasOpaque && !hasGlass)
-		return false;
 
 	// V-01：只有玻璃的 chunk 也是合法状态 —— 不建不透明 Model，只把玻璃网格
 	// 挂在组件上；等 GlassPass 接上后直接消费，不透明管线完全不碰它。
 	std::shared_ptr<Model> model;
+	uint32_t arenaVertexBase = TerrainMeshArena::kInvalidOffset;
+	uint32_t arenaIndexBase = TerrainMeshArena::kInvalidOffset;
+	uint32_t arenaVertexCount = 0u;
+	uint32_t arenaIndexCount = 0u;
 	if (hasOpaque)
 	{
 		try
@@ -1846,10 +1866,67 @@ bool Scene::applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshD
 		}
 		if (!model)
 			return false;
+
+		// V-04：不透明几何优先拷进共享 arena，Model 只保留 CPU 几何给拾取/编辑。
+		// 失败时保留 Model 自己的 GPU 缓冲，下面仍走逐实体绘制，不会丢画面。
+		if (terrainMeshArena && terrainMeshArena->isAvailable() && model->hasGpuBuffers())
+		{
+			TerrainMeshArena::Slice slice{};
+			if (terrainMeshArena->acquire(static_cast<uint32_t>(mesh.vertices.size()),
+			                              static_cast<uint32_t>(mesh.indices.size()), slice))
+			{
+				const VkCommandBuffer arenaCmd =
+					cmdBeginSingleTime(device->getDevice(), commandPool);
+				if (arenaCmd != VK_NULL_HANDLE)
+				{
+					terrainMeshArena->copyInto(arenaCmd, slice,
+					                           model->getVertexBufferHandle(),
+					                           model->getIndexBufferHandle());
+					cmdEndSingleTime(device->getDevice(), device->getGraphicsQueue(),
+					                 commandPool, arenaCmd);
+					arenaVertexBase = slice.vertexOffset;
+					arenaIndexBase = slice.indexOffset;
+					arenaVertexCount = slice.vertexCount;
+					arenaIndexCount = slice.indexCount;
+					model->releaseGpuBuffers();
+				}
+				else
+				{
+					terrainMeshArena->release(slice);
+				}
+			}
+		}
+	}
+
+	// 重建前归还旧切片；否则编辑体素会把 arena 一点点吃满。
+	if (auto* previous = registry.try_get<VoxelChunkComponent>(entity))
+	{
+		if (terrainMeshArena && previous->arenaIndexBase != TerrainMeshArena::kInvalidOffset)
+		{
+			TerrainMeshArena::Slice slice{};
+			slice.vertexOffset = previous->arenaVertexBase;
+			slice.vertexCount = previous->arenaVertexCount;
+			slice.indexOffset = previous->arenaIndexBase;
+			slice.indexCount = previous->arenaIndexCount;
+			terrainMeshArena->release(slice);
+		}
+		previous->arenaVertexBase = TerrainMeshArena::kInvalidOffset;
+		previous->arenaIndexBase = TerrainMeshArena::kInvalidOffset;
+		previous->arenaVertexCount = 0u;
+		previous->arenaIndexCount = 0u;
 	}
 
 	if (model)
+	{
 		registry.emplace_or_replace<MeshComponent>(entity, MeshComponent{ model });
+	}
+	else if (const auto* oldMesh = registry.try_get<MeshComponent>(entity))
+	{
+		// V-01/V-04：块内不透明方块全被挖掉后只剩玻璃，旧的不透明网格必须移除，
+		// 否则它会继续画着已经不存在的地形。
+		retireModel(oldMesh->model);
+		registry.remove<MeshComponent>(entity);
+	}
 	// V-01：玻璃也必须有材质槽 —— GlassPass 从 materialSetIndex 取图集/因子。
 	// 只有玻璃的 chunk 没有 MeshComponent，但材质照旧要分配（否则没有槽位可采样）。
 	if (model || hasGlass)
@@ -1865,6 +1942,10 @@ bool Scene::applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshD
 		chunkComp->faceCount = stats.faces;
 		chunkComp->glassFaceCount = glassStats.faces;
 		chunkComp->glassMesh = hasGlass ? glassMesh : nullptr;
+		chunkComp->arenaVertexBase = arenaVertexBase;
+		chunkComp->arenaIndexBase = arenaIndexBase;
+		chunkComp->arenaVertexCount = arenaVertexCount;
+		chunkComp->arenaIndexCount = arenaIndexCount;
 	}
 	if (model)
 	{
@@ -2025,6 +2106,29 @@ void Scene::processVoxelChunkBuilds()
 					{
 						worldComp->building = false;
 						finishedAny = true;
+						// V-04：整世界落地后统计 arena 覆盖率；容量不够时一眼能看到
+						// 有多少块回退成独立 GPU 缓冲，而不是等 draw call 数偏高才猜。
+						uint32_t totalChunks = 0u;
+						uint32_t arenaChunks = 0u;
+						uint64_t arenaVertices = 0u;
+						uint64_t arenaIndices = 0u;
+						for (auto [chunkEntity, stats] :
+						     registry.view<VoxelChunkComponent>().each())
+						{
+							(void)chunkEntity;
+							if (stats.world != chunkComp->world)
+								continue;
+							totalChunks += 1u;
+							if (stats.arenaIndexBase != TerrainMeshArena::kInvalidOffset)
+							{
+								arenaChunks += 1u;
+								arenaVertices += stats.arenaVertexCount;
+								arenaIndices += stats.arenaIndexCount;
+							}
+						}
+						std::cout << "[Voxel] world build complete | chunks=" << totalChunks
+						          << " arena=" << arenaChunks << " vertices=" << arenaVertices
+						          << " indices=" << arenaIndices << std::endl;
 					}
 				}
 			}
@@ -2466,6 +2570,19 @@ bool Scene::voxelSelfTest()
         return false;
     }
 
+    // V-04：编辑必须重建 arena 切片。早期 rebuildVoxelChunk() 自己建 Model、
+    // 不归还旧切片，arenaIndexBase 仍指向旧几何，画面会停在编辑前。
+    const int32_t editChunkX = static_cast<int32_t>(hitBlock.x >> voxel::Chunk::kSizeShift);
+    const int32_t editChunkZ = static_cast<int32_t>(hitBlock.z >> voxel::Chunk::kSizeShift);
+    const entt::entity editedChunk = findVoxelChunk(world, editChunkX, editChunkZ);
+    uint32_t arenaIndexBefore = TerrainMeshArena::kInvalidOffset;
+    if (editedChunk != entt::null)
+    {
+        if (const VoxelChunkComponent* edited = registry.try_get<VoxelChunkComponent>(editedChunk))
+            arenaIndexBefore = edited->arenaIndexBase;
+    }
+    const bool hadArenaSlice = arenaIndexBefore != TerrainMeshArena::kInvalidOffset;
+
     // 挖掉这块之后同一射线必须打到更低的方块（深度必须变大）。
     if (!setVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z,
                        static_cast<uint8_t>(voxel::BlockId::Air)))
@@ -2483,6 +2600,22 @@ bool Scene::voxelSelfTest()
     const bool dugDeeper = hitAfterDig &&
                            (dugBlock.y < hitBlock.y) &&
                            (dugDistance > hitDistance);
+    bool arenaRebuilt = false;
+    if (editedChunk != entt::null)
+    {
+        if (const VoxelChunkComponent* edited = registry.try_get<VoxelChunkComponent>(editedChunk))
+        {
+            arenaRebuilt = hadArenaSlice &&
+                           edited->arenaIndexBase != TerrainMeshArena::kInvalidOffset &&
+                           edited->arenaIndexBase != arenaIndexBefore;
+        }
+    }
+    if (!arenaRebuilt)
+    {
+        std::cerr << "[Voxel] selfTest: edited chunk arena slice not rebuilt (before="
+                  << arenaIndexBefore << " hadSlice=" << (hadArenaSlice ? 1 : 0)
+                  << " chunk=" << static_cast<uint32_t>(editedChunk) << ")" << std::endl;
+    }
 
     // 放回去（模拟"建造"），同一位置必须恢复成原来的方块。
     if (!setVoxelBlock(world, hitBlock.x, hitBlock.y, hitBlock.z, original))
@@ -2615,11 +2748,13 @@ bool Scene::voxelSelfTest()
     const bool groundOk = groundIsVoxel || terrainPresent;
     const bool characterOk = characterLanded || (terrainPresent && characterGrounded);
     if (!dugDeeper || !restored || !groundMatches || !groundOk ||
-        !characterOk || !placedOnFace || !persistCapture || !persistRestore)
+        !characterOk || !placedOnFace || !persistCapture || !persistRestore ||
+        !arenaRebuilt)
     {
         std::cerr << "[Voxel] selfTest: dig/place/ground mismatch (groundIsVoxel="
                   << groundIsVoxel << " characterLanded=" << characterLanded
-                  << " placedOnFace=" << placedOnFace << ")" << std::endl;
+                  << " placedOnFace=" << placedOnFace
+                  << " arenaRebuilt=" << (arenaRebuilt ? 1 : 0) << ")" << std::endl;
         return false;
     }
 
@@ -2630,6 +2765,7 @@ bool Scene::voxelSelfTest()
               << " groundY=" << groundY
               << " characterLanded=" << (characterLanded ? 1 : 0)
               << " placedOnFace=" << (placedOnFace ? 1 : 0)
+              << " arenaRebuilt=" << (arenaRebuilt ? 1 : 0)
               << " persistCapture=" << (persistCapture ? 1 : 0)
               << " persistRestore=" << (persistRestore ? 1 : 0) << std::endl;
     return true;
@@ -2642,7 +2778,6 @@ bool Scene::rebuildVoxelChunk(entt::entity chunkEntity)
 
     VoxelChunkComponent* chunkComp = registry.try_get<VoxelChunkComponent>(chunkEntity);
     // V-01：glass-only chunk 没有不透明 Model，所以 MeshComponent 是可选的。
-    MeshComponent* meshComp = registry.try_get<MeshComponent>(chunkEntity);
     if (chunkComp == nullptr || !chunkComp->chunk)
         return false;
 
@@ -2656,59 +2791,19 @@ bool Scene::rebuildVoxelChunk(entt::entity chunkEntity)
     if (!voxel::buildGlassMesh(*chunkComp->chunk, *glassMesh, &glassStats))
         return false;
 
-    std::shared_ptr<Model> model;
-    if (!mesh.vertices.empty())
-    {
-        try
-        {
-            Model::Builder builder;
-            builder.vertices.reserve(mesh.vertices.size());
-            for (const terrain::TerrainVertex& vertex : mesh.vertices)
-                builder.vertices.push_back(Vertex{ vertex.position, vertex.color, vertex.normal, vertex.uv });
-            builder.indices = mesh.indices;
-            builder.subMeshes.reserve(mesh.subMeshes.size());
-            for (const terrain::TerrainSubMesh& source : mesh.subMeshes)
-            {
-                SubMesh subMesh;
-                subMesh.firstIndex = source.firstIndex;
-                subMesh.indexCount = source.indexCount;
-                subMesh.hasBounds = true;
-                subMesh.boundsMin = source.boundsMin;
-                subMesh.boundsMax = source.boundsMax;
-                builder.subMeshes.push_back(subMesh);
-            }
-            model = std::make_shared<Model>(*device, commandPool, builder);
-        }
-        catch (const std::exception& ex)
-        {
-            std::cerr << "[Voxel] chunk rebuild failed: " << ex.what() << std::endl;
-            return false;
-        }
-    }
+    // 编辑后的重建也必须走 applyVoxelChunkMesh()：它负责归还旧 arena 切片、
+    // 把临时 Model 拷进共享 arena 并释放 GPU 缓冲、复用已有材质槽。
+    // 早期这里自己建 Model 并直接替换 MeshComponent，结果旧切片没归还、
+    // arena 基址仍指向旧几何，编辑过的 chunk 会继续画编辑前的网格。
+    std::shared_ptr<Material> material;
+    if (const MaterialComponent* materialComp = registry.try_get<MaterialComponent>(chunkEntity))
+        material = materialComp->material;
+    if (!material)
+        material = materialSystem.getOrCreateMaterial("voxel");
 
-    if (meshComp)
-    {
-        if (meshComp->model)
-            retireModel(meshComp->model);
-        meshComp->model = model;
-    }
-    else if (model)
-    {
-        // 往全玻璃 chunk 里放了不透明方块：补上 MeshComponent 与 voxel 材质槽。
-        // 玻璃阶段可能已经分配过材质槽，这里不能重复分配（会泄漏旧槽位）。
-        registry.emplace<MeshComponent>(chunkEntity, MeshComponent{ model });
-        MaterialComponent& materialComp = registry.get_or_emplace<MaterialComponent>(chunkEntity);
-        if (!materialComp.material)
-            materialComp.material = materialSystem.getOrCreateMaterial("voxel");
-        if (materialComp.materialSetIndex == kInvalidMaterialSlot)
-            materialComp.materialSetIndex = descriptorManager->allocateMaterialSet(*materialComp.material);
-    }
-    chunkComp->faceCount = stats.faces;
-    chunkComp->glassFaceCount = glassStats.faces;
-    chunkComp->glassMesh = glassMesh->vertices.empty() ? nullptr : glassMesh;
-    ++chunkComp->revision;
-    if (model)
-        setModelBounds(registry, chunkEntity, model, &dirtySpatialEntities);
+    if (!applyVoxelChunkMesh(chunkEntity, mesh, stats, glassMesh, glassStats, material))
+        return false;
+
     refreshTransformsAndVisibility();
     return true;
 }

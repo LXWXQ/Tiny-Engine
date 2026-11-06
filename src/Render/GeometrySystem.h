@@ -194,4 +194,21 @@ private:
     bool ensureTerrainChunkInstances();
     void destroyTerrainChunkInstances();
     TerrainGpuRunContext currentTerrainGpuRun;
+
+    // -----------------------------------------------------------------------
+    // V-04：体素 chunk 专用间接批。几何和地形一样在 TerrainMeshArena 里，
+    // 每个 chunk 一条命令、实例表里一行。半径 12 的 625 块上限远低于容量。
+    // -----------------------------------------------------------------------
+    static constexpr uint32_t kVoxelBatchMaxChunks = 1024;
+    static constexpr uint32_t kVoxelBatchMaxCommands = 2048;
+    static constexpr uint32_t kVoxelBatchInstanceStride = 224u; // SceneGpuBatch::InstanceRecord
+    std::array<TerrainGpuBuffer, kFramesInFlight> voxelChunkInstances{};
+    std::array<VkDescriptorSet, kFramesInFlight> voxelChunkInstanceSets{};
+    VkDescriptorPool voxelChunkInstancePool = VK_NULL_HANDLE;
+    std::array<TerrainGpuBuffer, kFramesInFlight> voxelIndirectBuffers{};
+    bool voxelChunkInstancesReady = false;
+    bool voxelBatchWarned = false;
+    bool voxelBatchLogged = false;
+    bool ensureVoxelBatchResources();
+    void destroyVoxelBatchResources();
 };

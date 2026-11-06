@@ -5,7 +5,7 @@ type: system
 scope: src/Voxel/, Scene 体素接口, 编辑器 Voxel Brush, src/Render/GlassPass, shaders/glass.*, shaders/mrt.frag（顶点色路径）
 read-when: 改体素数据模型、网格生成规则、挖放/重建、体素拾取或地面查询
 size: ~135 行
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # 方块体素世界
@@ -38,12 +38,13 @@ updated: 2026-11-04
 
 - 六个方向各做一次**贪心合并**：按 32 层切片建 mask（记录该格方块 id，邻格 `opaque` 的格不写），先在平面 u 方向扩展宽度、再在 v 方向扩展高度，同材质的矩形只输出 1 个 quad（4 顶点 6 索引）；
 - 每面 4 顶点 6 索引，顶点色 = 方块色 x 面明暗（+Y 1.00、-Y 0.55、+X 0.82、-X 0.74、+Z 0.68、-Z 0.90）x 顶点 AO；AO 看空气侧两条边与对角（`level = (s1 && s2) ? 0 : 3 - (s1 + s2 + cc)`，系数 `0.55 + 0.15 * level`），矩形四个角各取所在方块的 AO；
-- 顶点布局直接复用 `terrain::TerrainVertex`（44 字节，与 `Vertex` 同布局）→ `terrain::TerrainMeshData` → `Model::Builder` 的上传路径，无需新缓冲格式；
+- 顶点布局直接复用 `terrain::TerrainVertex`（44 字节，与 `Vertex` 同布局）→ `terrain::TerrainMeshData`；V-04 起先建临时 `Model` 上传，再拷进共享 arena 并释放它的 GPU 缓冲（见下条），`Model` 只留 CPU 几何给拾取/编辑；
 - **贴图集（F3-f + 2026-11-05 gutter 扩展）**：`MaterialSystem::fillVoxelAtlas()` 在启动时程序化生成 512x512 的 `VK_FORMAT_R8G8B8A8_SRGB` 图集（4x4 格、每格 64px 内容 + 32px edge-clamp gutter、128px 间距，格内 = `BlockId - 1`），九种方块各有噪点/石纹/木纹/砖缝/玻璃边框；未使用的 7 格填草绿色，gutter 复制最近内容边缘像素，避免高 mip 把整张图集/邻格平均成浅色线；启动日志 `[Voxel] atlas=512 tile=64 pitch=128 gutter=32`；
 - **UV 编码**：顶点 `uv.x = tile * 64 + 面内跨度 u`、`uv.y = 面内跨度 v`，跨度取贪心矩形的宽/高，因此一片大矩形在图块内平铺而不是拉伸；顶点色只保留 `面明暗 x AO` 的灰度；
 - **片元解码**：`materialFactors.factors[matId * 2u + 1u].z > 0.5`（材质 `shaderFlags = 1.0`）时，`kAtlasSize = 512`、`kPitch = 128`、`kPad = 32`、`kTile = 64`；`tileId = floor(uv.x / kTile)`、`local = fract(vec2(uv.x - tileId * kTile, uv.y))`、`cellOrigin = vec2(mod(tileId, 4), floor(tileId / 4)) * kPitch + kPad`、`atlasUV = (cellOrigin + clamp(local, 0.5 / kTile, 1.0 - 0.5 / kTile) * kTile) / kAtlasSize`；采样必须用 `textureGrad` + 显式梯度 `dFdx(fragUV) * kTile / kAtlasSize` / `dFdy(fragUV) * kTile / kAtlasSize` —— `fract()` 在每格边界产生导数跳变，隐式 LOD 会误选最粗 mip；32px edge-clamp gutter 让高 mip 只平均到本格边缘，不会把相邻格（草/土）混成浅色线；`shaders/glass.frag` 必须使用同一组常量和同一套映射；
 - 体素材质因此必须同时设 `albedoMap = getVoxelAtlasTexture()` 与 `shaderFlags = 1.0f`；普通模型走 `textureGrad(albedoMaps[matId], fragUV, dFdx(fragUV), dFdy(fragUV))`，与隐式导数等价，且避免在分支里依赖未定义的隐式 LOD。
 - **玻璃走独立网格（V-01）**：`buildMesh` 遇到 `isGlass` 直接跳过，玻璃不进贪心不透明网格（否则会先写进 G-Buffer 深度，`GlassPass` 里同一层玻璃被自己挡掉）；`buildGlassMesh` 逐面输出（不做贪心），只有邻格是空气才出面 —— 玻璃-玻璃、玻璃-不透明方块的贴面直接跳过，避免叠暗；UV/AO 编码与不透明网格一致，结果挂在 `VoxelChunkComponent::glassMesh / glassFaceCount`。
+- **共享 arena + 间接合批（V-04，2026-11-06）**：不透明网格上传后由 `TerrainMeshArena::acquire()` 取切片、`copyInto()` 拷进与地形共用的顶点/索引缓冲，再 `releaseGpuBuffers()`；切片基址与数量写进 `VoxelChunkComponent::arenaVertexBase/arenaIndexBase/arenaVertexCount/arenaIndexCount`。重建或删除前先 `release()` 旧切片，避免编辑把 arena 一点点吃满。`GeometrySystem` 每帧对可见 chunk 预扫描：每块一行 `SceneGpuBatch::InstanceRecord`（224 B）写进按帧轮转的 host-visible 实例表，每个子网格一条 `VkDrawIndexedIndirectCommand`（`firstIndex = 子网格基址 + arenaIndexBase`、`vertexOffset = arenaVertexBase`、`firstInstance = 实例行号`），最后一条 `vkCmdDrawIndexedIndirect` 提交；上限 1024 chunk / 2048 命令，超限打印一次 `[Voxel] arena batch capacity exceeded` 并退回逐块 arena draw。反射相机不覆盖主视角命令，走逐块 arena 路径。
 
 ## 3. 玻璃与透明排序（V-01）
 
@@ -60,7 +61,7 @@ updated: 2026-11-04
 
 | 接口 | 行为 |
 |---|---|
-| `Scene::createVoxelWorld(seed, radiusChunks, baseY)` | 建管理器 + `(2r+1)^2` 个 chunk 实体，半径夹到 1..8 |
+| `Scene::createVoxelWorld(seed, radiusChunks, baseY)` | 建管理器 + `(2r+1)^2` 个 chunk 实体，半径夹到 1..12 |
 | `Scene::setVoxelBlock(world, x, y, z, id)` | 写入并重建本块；格子在 chunk 边界（local 0/31）时连邻块（含对角）一起重建 |
 | `Scene::getVoxelBlock(world, x, y, z)` | 越界/无块返回 Air |
 | `Scene::raycastVoxelWorld(...)` | chunk AABB 粗筛 + Amanatides-Woo DDA，返回命中方块、命中面法线与距离 |
@@ -112,13 +113,15 @@ updated: 2026-11-04
   避免实体 id 被新场景复用后写到错误 chunk，或提前析构导致 UAF。
 - 半径上限从 8 提到 **12**（`Scene::kMaxVoxelRadius`），`--voxel-world [r]` 同步；日志
   `[Voxel] world created | seed= radius= chunks= baseY= async submitMs=`。
+- **V-04 arena 落地**：`applyVoxelChunkMesh()` 在主线程建临时 `Model`、`TerrainMeshArena::acquire/copyInto`，再把切片写进组件并 `releaseGpuBuffers()`；每帧仍最多回收 4 块，625 块世界分多帧落地。某个世界 `pendingChunks` 归零时打印
+  `[Voxel] world build complete | chunks=625 arena=625 vertices=725888 indices=1088832`；首帧合批打印
+  `[Voxel] arena batch | chunks=535 commands=535 vertices=619748 indices=929622 stride=224 mode=indirect`（数字随可见集合/雾变化）。材质槽按 chunk 分配，`DescriptorManager` 池在 V-04 从 256 提到 **1024**，625 块世界不再 `material slots exhausted`。
 
 ## 9. 已知限制
 
 - **体素世界不进存档**：`captureDescription()` / `buildFromDescription()` 只处理地形与普通实体，
   重建场景（打开新场景、流送序列化自检）会把体素世界清掉（见 tech-debt）。
-- chunk 网格生成仍在主线程同步完成（一块 32³ 约 1 ms 量级），没有并行 meshing；
-  chunk 网格生成目前在主线程同步完成（一块 32³ 约 1 ms 量级）。
+- chunk 生成已在 `JobSystem` 后台完成，但 `Model` 建立与 arena 拷贝仍在主线程、每帧最多 4 块；625 块世界需要多帧才全部落地，且还没有总预算/取消（V-02）。
 - 没有 LOD；AO 是逐顶点环境光遮蔽（不是烘焙贴图）。
 - 只有玻璃（`Glass`）走透明 pass 并按面排序；树叶（`Leaves`）仍留 G-Buffer（图集没有 alpha 通道，做混合会是半透明色块）。
 
@@ -129,5 +132,6 @@ updated: 2026-11-04
 | `[Voxel] selfTest PASS \| face culling + greedy 6/6/6/6, boundary continuous, solid=<n>` | 空块不出面、单块 6 面、相邻两块贪心合并成 6 面、2×2 平板仍是 6 面、挖掉后恢复、边界列高度与 `surfaceHeight` 一致 |
 | `[Voxel] scene selfTest PASS \| chunks=9 hit=.. dugDeeper=1 restored=1 groundY=.. characterLanded=1 placedOnFace=1` | 世界创建、DDA 命中、挖深、放回、地面高度、角色落地、面放置 |
 | `[Glass] sorted=<n> drawcalls=1` | 玻璃网格拆分、按面质心排序后一次 draw；`--voxel-glass-demo` 叠放场景（`f3-voxel-glass`） |
+| `[Voxel] world build complete \| chunks=625 arena=625 ...` / `[Voxel] arena batch \| chunks=.. commands=.. mode=indirect` | V-04：半径 12 的 625 块全量落地、共享 arena 切片，可见 chunk 一次间接提交（`f3-voxel-arena-625`） |
 
 相关：[scene-ecs](scene-ecs.md)、[terrain](terrain.md)、[编辑器面板](../90-editor/panels.md)。

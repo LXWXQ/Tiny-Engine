@@ -52,6 +52,15 @@ constexpr uint32_t kCommandWords = 5u;
 // Hi-Z 金字塔最多 32 级（8K 分辨率也只有 14 级），描述符池按上限预留。
 constexpr uint32_t kMaxHiZLevels = 32u;
 constexpr float kHiZOcclusionBias = 0.05f;   // 线性视深度的保守余量，单位是世界单位
+
+// V-04：体素 chunk 的几何已经在 TerrainMeshArena 里，由 GeometrySystem 的
+// 专用间接批提交。这里必须排除，否则合并缓冲会再拷一份 CPU 几何，而
+// Model 的 GPU 缓冲已被释放，逐模型绑定会拿到 VK_NULL_HANDLE。
+bool isArenaBackedVoxel(entt::registry& registry, entt::entity entity)
+{
+    const auto* voxel = registry.try_get<VoxelChunkComponent>(entity);
+    return voxel != nullptr && voxel->arenaIndexBase != 0xFFFFFFFFu;
+}
 } // namespace
 
 SceneGpuBatch::SceneGpuBatch(Device& device)
@@ -667,6 +676,8 @@ uint64_t SceneGpuBatch::computeStructureSignature(const FrameInfo& frameInfo) co
         const RenderTagComponent* tag = frameInfo.registry.try_get<RenderTagComponent>(entity);
         if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
             continue;
+        if (isArenaBackedVoxel(frameInfo.registry, entity))
+            continue;
 
         const MaterialComponent* materialComp = frameInfo.registry.try_get<MaterialComponent>(entity);
         const uint64_t materialSlot = materialComp
@@ -796,6 +807,8 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
             const RenderTagComponent* tag =
                 frameInfo.registry.try_get<RenderTagComponent>(entity);
             if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
+                continue;
+            if (isArenaBackedVoxel(frameInfo.registry, entity))
                 continue;
             entities.push_back(entity);
             if (seenModels.insert(mesh.model.get()).second)

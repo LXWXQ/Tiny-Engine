@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
 size: ~860 行
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # 里程碑与实测基线
@@ -865,3 +865,26 @@ updated: 2026-11-05
 **回归**：新增 `f3v-water-reflection`（`--selftest 20 --voxel-world 1`，断言 initialized / first draw / `planarReflection=1` / `[Validation] errors=0 warnings=0`）；全套 **70 项引擎 + 2 项工具 = 72 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261105-180749`；DocCheck PASS（documents=67）。
 
 **已知边界**：反射只有半分辨率，边缘有轻微软/锯齿；倒影只含不透明几何，玻璃、水面本身、粒子与编辑器 gizmo 不进倒影；没有 SSR、没有折射、没有独立于主视角的时域累积；反射相机使用主相机的阴影级联，远处倒影的阴影精度有限；`--no-water` 时反射 pass 不注册。
+
+## V-04：体素共享 arena + 间接合批（2026-11-06）
+
+**问题**：每个体素 chunk 都建一份独立 `Model`，半径 12 的 625 块就是 625 份顶点/索引缓冲和 625 次绑定，与 V-05 的无限世界目标直接冲突；同时 625 个 chunk 各占一个实体材质槽，首次跑半径 12 直接触发 `DescriptorManager: material slots exhausted! capacity = 256`。
+
+**实现**：
+- `Scene::applyVoxelChunkMesh()` 仍先建临时 `Model` 完成上传，但随后 `TerrainMeshArena::acquire()` 取切片、`copyInto()` 拷进与地形共用的 arena，再 `releaseGpuBuffers()`；`Model` 只保留 CPU 几何供拾取/编辑。切片基址与数量写进 `VoxelChunkComponent::arenaVertexBase/arenaIndexBase/arenaVertexCount/arenaIndexCount`（默认 `0xFFFFFFFF`）。
+- 重建、删除、清空 chunk 前先 `TerrainMeshArena::release()` 旧切片；全空 chunk 也会归还切片并移除 `MeshComponent`，避免编辑把 arena 一点点吃满。
+- `GeometrySystem` 每帧预扫描可见体素 chunk：每块一行 224 B 的 `SceneGpuBatch::InstanceRecord` 写进按帧轮转的 host-visible 实例表（上限 1024），每个子网格一条 `VkDrawIndexedIndirectCommand`（上限 2048）；`firstIndex = 子网格基址 + arenaIndexBase`、`vertexOffset = arenaVertexBase`、`firstInstance = 实例行号`，整批一条 `vkCmdDrawIndexedIndirect`。
+- 反射视图不复用主视角命令，退回逐块 arena draw；`SceneGpuBatch` 的 CPU 批跳过 arena-backed 体素；`ShadowPass` 也改走 arena 切片。
+- 材质槽池 `DescriptorManager::init(..., 256)` 提到 **1024**（bindless 4 个纹理数组只多约 3k 描述符，低于常见 sampled-image 上限），625 块世界不再耗尽槽位。
+
+**实测（Debug / RTX 2070）**：
+- 半径 1：`[Voxel] world build complete | chunks=9 arena=9 vertices=10364 indices=15546`；`[Voxel] arena batch | chunks=9 commands=9 ... stride=224 mode=indirect`。
+- 半径 12：`chunks=625 arena=625 vertices=725888 indices=1088832`，arena 容量 1100000/5900000 未溢出；主视角可见 535 块，`[Voxel] arena batch | chunks=535 commands=535 vertices=619748 indices=929622`，draw calls 106；Validation 0/0。200 帧 Debug 用时 8.63 s（23.17 FPS），只作功能记录，不作为性能结论（该配置 TAA 关闭）。
+- 玻璃：`--voxel-glass-demo --selftest 40` 仍为 `[Glass] sorted=879 drawcalls=1`，Validation 0/0。
+- 编辑器 `--selftest 5 --empty-scene`：体素世界 `meshes=9 bounds=9 parented=9`，两次世界 `arena=9`，Validation 0/0。
+
+**回归**：`f3-voxel` 增加 `arenaRebuilt=1`；新增 `f3-voxel-arena-625`（`--selftest 200 --voxel-world 12`，断言 `chunks=625 arena=625`、`[Voxel] arena batch`、Validation 0/0）。全套 **73 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-102034`；DocCheck 通过。
+
+**测试稳定性**：`terrain-render` 在用户相机 `[0,42,90]` 下暴露既有 flaky（`git stash` 掉 V-04 源码后仍复现）：CPU/GPU 最近点距离差 1 ULP，正好落在 LOD 阈值两侧，旧断言按整数逐位比较就失败。现改为 distance/extent 在 1e-4 相对误差内时允许 `lodA/lodB/stableLod` 差 1 级；调试契约统一为 8 word：`visible/lodA/lodB/blend/commandCount/distance/extent/stableLod`。这不是 V-04 数据错误，也没有放宽画面验收。
+
+**已知边界**：arena 仍是两块不可增长的大缓冲，超出容量时该 chunk 退回自有 buffer；体素批次上限 1024 chunk / 2048 命令，超限时打印一次 `[Voxel] arena batch capacity exceeded` 并退回逐块 arena draw；反射仍是逐块 draw，没有做镜像视图的间接批；625 块落地仍受每帧最多 4 块的限制（V-02）。

@@ -133,7 +133,10 @@ FirstApp::FirstApp(const diag::Options& options)
 	// 注意顺序：Scene::init 里要加载 glTF，而 glTF 材质需要立刻分配描述符槽位，
 	// 所以 DescriptorManager 必须先于 Scene 创建并初始化。
 	descriptorManager = std::make_unique<DescriptorManager>();
-	descriptorManager->init(*vulkanDevice, 256);
+	// V-04：材质槽位按实体持有，体素半径 12（625 块）就会超过旧的 256 上限。
+	// 材质数组是 bindless 的 4 个纹理数组，容量翻到 1024 只多 3k 个描述符，
+	// 远低于常见设备的 sampled-image 上限，换来的是一整块 625 chunk 世界能建起来。
+	descriptorManager->init(*vulkanDevice, 1024);
 	descriptorManager->setFrameTimelineCallbacks(
 		[this] { return renderer->getCompletedGraphicsFrame(); },
 		[this](uint64_t frame) { renderer->waitForGraphicsFrame(frame); },

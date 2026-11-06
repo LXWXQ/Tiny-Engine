@@ -278,7 +278,11 @@ $tests = @(
        MustContain = @("[Scene] async terrain create selfTest PASS") },
     @{ Name = "f6-shadows"; Exe = "engine"; Args = @("--selftest", "20"); MustContain = @("[Shadow] selfTest PASS", "[Shadow] first frame | cascades=3") },
     @{ Name = "f3-voxel"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1");
-       MustContain = @("[Voxel] atlas=512 tile=64 pitch=128 gutter=32", "[Voxel] selfTest PASS", "[Voxel] scene selfTest PASS", "async submitMs=") },
+       MustContain = @("[Voxel] atlas=512 tile=64 pitch=128 gutter=32", "[Voxel] selfTest PASS", "[Voxel] scene selfTest PASS", "arenaRebuilt=1", "async submitMs=", "[Voxel] world build complete | chunks=9 arena=9", "[Voxel] arena batch | chunks=9") },
+    # V-04：最大体素半径 12 = 625 块，必须整块进 arena 并由一条 indirect 提交；
+    # 这条同时守住 256 -> 1024 的材质槽位容量（625 块每块一个实体槽位）。
+    @{ Name = "f3-voxel-arena-625"; Exe = "engine"; Args = @("--selftest", "200", "--voxel-world", "12");
+       MustContain = @("[Voxel] world build complete | chunks=625 arena=625", "[Voxel] scene selfTest PASS", "arenaRebuilt=1", "[Voxel] arena batch |", "[Validation] errors=0 warnings=0") },
     # V-01：玻璃单独走 Lighting 之后的混合 pass。断言 glass 面确实被拆出来、
     # 排序后被一次 draw 画掉（drawcalls=1），且验证层仍为零消息。
     @{ Name = "f3-voxel-glass"; Exe = "engine"; Args = @("--selftest", "20", "--voxel-world", "1", "--voxel-glass-demo");

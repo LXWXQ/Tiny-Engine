@@ -496,7 +496,22 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
             continue;
         // 同上：阴影 pass 不做视锥剔除。
 
-        mesh.model->bind(cmd);
+        // V-04：体素几何在共享 arena 里，Model 的 GPU 缓冲已释放。
+        const auto* voxel = registry.try_get<VoxelChunkComponent>(entity);
+        const bool voxelArenaBacked = voxel != nullptr && arenaReady &&
+            voxel->arenaIndexBase != 0xFFFFFFFFu;
+        if (voxelArenaBacked)
+        {
+            VkBuffer vertexBuffers[] = { terrainMeshArena->getVertexBuffer() };
+            VkDeviceSize offsets[] = { 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+            vkCmdBindIndexBuffer(cmd, terrainMeshArena->getIndexBuffer(), 0,
+                                 VK_INDEX_TYPE_UINT32);
+        }
+        else
+        {
+            mesh.model->bind(cmd);
+        }
         PushData push{ world->matrix, cascade.viewProjection };
         vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
                            sizeof(PushData), &push);
@@ -505,7 +520,16 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
         {
             if (subMesh.indexCount == 0u)
                 continue;
-            mesh.model->drawSubMesh(cmd, subMesh);
+            if (voxelArenaBacked)
+            {
+                vkCmdDrawIndexed(cmd, subMesh.indexCount, 1,
+                                 subMesh.firstIndex + voxel->arenaIndexBase,
+                                 voxel->arenaVertexBase, 0);
+            }
+            else
+            {
+                mesh.model->drawSubMesh(cmd, subMesh);
+            }
             stats.drawCalls += 1;
             stats.triangles += subMesh.indexCount / 3;
         }

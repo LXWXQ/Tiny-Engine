@@ -42,21 +42,48 @@ bool terrainGpuDebugMatches(const std::array<uint32_t, 8>& a,
                             const std::array<uint32_t, 8>& b)
 {
     // Culled chunks emit no commands; their internal hysteresis bookkeeping does
-    // not affect the frame. Visible chunks must match the full rendered contract.
+    // not affect the frame. Visible chunks must match the rendered contract:
+    // visible/lodA/lodB/blend/commandCount/distance/extent/stableLod.
     if (a[0] == 0u && b[0] == 0u)
         return a[4] == 0u && b[4] == 0u;
 
+    // CPU and GPU compute the closest point in float; one ULP of difference can
+    // legitimately put them on opposite sides of a LOD threshold. Accept a
+    // one-level LOD difference only when distance and extent still agree.
+    const auto nearBits = [](uint32_t x, uint32_t y)
+    {
+        const float xv = terrainGpuBitsFloat(x);
+        const float yv = terrainGpuBitsFloat(y);
+        float scale = std::fabs(xv);
+        if (std::fabs(yv) > scale)
+            scale = std::fabs(yv);
+        if (scale < 1.0f)
+            scale = 1.0f;
+        return std::fabs(xv - yv) <= 1e-4f * scale;
+    };
+    const bool boundsNear = nearBits(a[5], b[5]) && nearBits(a[6], b[6]);
     for (size_t i = 0; i < a.size(); ++i)
     {
-        // transitionFrom is internal bookkeeping for culled chunks; GPU may
-        // complete a hidden transition while the CPU mirror never advanced it.
-        // The rendered contract is visible/lodA/lodB/blend/commandCount/stable/to.
-        if (i == 6u)
-            continue;
-        if (i == 3u)
+        if (i == 5u || i == 6u)
+        {
+            if (!nearBits(a[i], b[i]))
+                return false;
+        }
+        else if (i == 3u)
         {
             if (std::fabs(terrainGpuBitsFloat(a[i]) - terrainGpuBitsFloat(b[i])) > 1e-4f)
                 return false;
+        }
+        else if (i == 1u || i == 2u || i == 7u)
+        {
+            if (a[i] != b[i])
+            {
+                const int32_t ai = static_cast<int32_t>(a[i]);
+                const int32_t bi = static_cast<int32_t>(b[i]);
+                const int32_t delta = ai > bi ? ai - bi : bi - ai;
+                if (!boundsNear || delta > 1)
+                    return false;
+            }
         }
         else if (a[i] != b[i])
         {
@@ -461,10 +488,10 @@ void GeometrySystem::prepareTerrainGpuSelection(VkCommandBuffer commandBuffer,
                     expected[2] = selection.lodB;
                     expected[3] = terrainGpuFloatBits(selection.blend);
                     expected[4] = selection.blending ? 2u : 1u;
+                    expected[5] = terrainGpuFloatBits(distance);
+                    expected[6] = terrainGpuFloatBits(extent);
                 }
-                expected[5] = static_cast<uint32_t>(std::max(state.stableLod, 0));
-                expected[6] = static_cast<uint32_t>(std::max(state.transitionFrom, 0));
-                expected[7] = static_cast<uint32_t>(std::max(state.transitionTo, 0));
+                expected[7] = static_cast<uint32_t>(std::max(state.stableLod, 0));
                 parityExpected[recordIndex] = expected;
             }
         }

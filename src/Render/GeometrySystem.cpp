@@ -32,6 +32,7 @@ GeometrySystem::GeometrySystem(Device& device, VkFormat depthFormat,
 
 GeometrySystem::~GeometrySystem()
 {
+    destroyVoxelBatchResources();
     destroyTerrainChunkInstances();
     destroyTerrainGpuSelection();
     destroyTerrainIndirectBuffers();
@@ -334,6 +335,93 @@ void GeometrySystem::destroyTerrainChunkInstances()
     // F2-f：arena 归 Scene 所有，这里只清掉借用指针。
     terrainMeshArena = nullptr;
 }
+
+bool GeometrySystem::ensureVoxelBatchResources()
+{
+    if (voxelChunkInstancesReady)
+        return true;
+    if (sceneInstanceSetLayout == VK_NULL_HANDLE)
+        return false;
+
+    const VkDeviceSize instanceBytes =
+        static_cast<VkDeviceSize>(kVoxelBatchMaxChunks) * kVoxelBatchInstanceStride;
+    const VkDeviceSize indirectBytes =
+        static_cast<VkDeviceSize>(kVoxelBatchMaxCommands) *
+        sizeof(VkDrawIndexedIndirectCommand);
+
+    for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+    {
+        if (voxelChunkInstances[frame].buffer == VK_NULL_HANDLE)
+            createTerrainGpuBuffer(voxelChunkInstances[frame], instanceBytes,
+                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+        if (voxelChunkInstances[frame].mapped != nullptr)
+            std::memset(voxelChunkInstances[frame].mapped, 0, static_cast<size_t>(instanceBytes));
+        if (voxelIndirectBuffers[frame].buffer == VK_NULL_HANDLE)
+            createTerrainGpuBuffer(voxelIndirectBuffers[frame], indirectBytes,
+                                   VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, true);
+    }
+
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSize.descriptorCount = kFramesInFlight;
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = kFramesInFlight;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(vulkanDevice.getDevice(), &poolInfo, nullptr,
+                               &voxelChunkInstancePool) != VK_SUCCESS)
+    {
+        voxelChunkInstancePool = VK_NULL_HANDLE;
+        return false;
+    }
+
+    std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
+    layouts.fill(sceneInstanceSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = voxelChunkInstancePool;
+    allocInfo.descriptorSetCount = kFramesInFlight;
+    allocInfo.pSetLayouts = layouts.data();
+    if (vkAllocateDescriptorSets(vulkanDevice.getDevice(), &allocInfo,
+                                voxelChunkInstanceSets.data()) != VK_SUCCESS)
+    {
+        vkDestroyDescriptorPool(vulkanDevice.getDevice(), voxelChunkInstancePool, nullptr);
+        voxelChunkInstancePool = VK_NULL_HANDLE;
+        voxelChunkInstanceSets.fill(VK_NULL_HANDLE);
+        return false;
+    }
+
+    for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+    {
+        VkDescriptorBufferInfo bufferInfo{ voxelChunkInstances[frame].buffer, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = voxelChunkInstanceSets[frame];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &bufferInfo;
+        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 1, &write, 0, nullptr);
+    }
+
+    voxelChunkInstancesReady = true;
+    return true;
+}
+
+void GeometrySystem::destroyVoxelBatchResources()
+{
+    for (TerrainGpuBuffer& buffer : voxelChunkInstances)
+        destroyTerrainGpuBuffer(buffer);
+    for (TerrainGpuBuffer& buffer : voxelIndirectBuffers)
+        destroyTerrainGpuBuffer(buffer);
+    voxelChunkInstanceSets.fill(VK_NULL_HANDLE);
+    if (voxelChunkInstancePool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(vulkanDevice.getDevice(), voxelChunkInstancePool, nullptr);
+    voxelChunkInstancePool = VK_NULL_HANDLE;
+    voxelChunkInstancesReady = false;
+}
+
 void GeometrySystem::createTerrainIndirectBuffers()
 {
     const VkDeviceSize size = static_cast<VkDeviceSize>(kTerrainIndirectCapacity) *
@@ -537,6 +625,134 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
     // GPU compute selection was recorded in a pre-graphics graph pass.
     const TerrainGpuRunContext& gpuRun = currentTerrainGpuRun;
 
+    // V-04：先把本帧可见的 arena-backed 体素 chunk 收集成实例表 + 间接命令。
+    // 主循环随后跳过这些实体，整批只用一条 vkCmdDrawIndexedIndirect 提交。
+    // 反射相机复用同一份可见集合，但必须逐实体画（不能覆盖主视角的命令）。
+    bool voxelBatchActive = false;
+    uint32_t voxelBatchChunks = 0u;
+    uint32_t voxelBatchCommands = 0u;
+    uint64_t voxelBatchIndices = 0u;
+    uint64_t voxelBatchVertices = 0u;
+    if (!reflection)
+    {
+        if (ensureVoxelBatchResources())
+        {
+            auto* voxelInstances = static_cast<SceneGpuBatch::InstanceRecord*>(
+                voxelChunkInstances[frameInfo.frameInFlightIndex].mapped);
+            auto* voxelCommands = static_cast<VkDrawIndexedIndirectCommand*>(
+                voxelIndirectBuffers[frameInfo.frameInFlightIndex].mapped);
+            bool capacityExceeded = false;
+            for (entt::entity entity : frameInfo.visibleEntities)
+            {
+                const MeshComponent* mesh = frameInfo.registry.try_get<MeshComponent>(entity);
+                const WorldTransformComponent* world = frameInfo.registry.try_get<WorldTransformComponent>(entity);
+                const VoxelChunkComponent* voxel = frameInfo.registry.try_get<VoxelChunkComponent>(entity);
+                if (!mesh || !mesh->model || !world || !world->valid || !voxel ||
+                    voxel->arenaIndexBase == TerrainMeshArena::kInvalidOffset ||
+                    !terrainMeshArena || mesh->model->getIndexCount() == 0u)
+                    continue;
+
+                const std::vector<SubMesh>& subMeshes = mesh->model->getSubMeshes();
+                uint32_t drawableSubMeshes = 0u;
+                for (const SubMesh& subMesh : subMeshes)
+                    drawableSubMeshes += (subMesh.indexCount > 0u) ? 1u : 0u;
+                if (voxelBatchChunks >= kVoxelBatchMaxChunks ||
+                    voxelBatchCommands + drawableSubMeshes > kVoxelBatchMaxCommands)
+                {
+                    capacityExceeded = true;
+                    break;
+                }
+
+                const MaterialComponent* materialComp =
+                    frameInfo.registry.try_get<MaterialComponent>(entity);
+                uint32_t materialSlot = materialComp ? materialComp->materialSetIndex
+                                                    : kInvalidMaterialSlot;
+                const bool materialValid = materialSlot != kInvalidMaterialSlot;
+                if (!materialValid)
+                    materialSlot = fallbackMatId;
+
+                float checkerScale = 1.0f;
+                glm::vec3 localMin = mesh->model->getBoundsMin();
+                glm::vec3 localMax = mesh->model->getBoundsMax();
+                const BoundsComponent* boundsComp =
+                    frameInfo.registry.try_get<BoundsComponent>(entity);
+                if (boundsComp && boundsComp->getLocal().valid)
+                {
+                    const AABB& local = boundsComp->getLocal();
+                    localMin = local.min;
+                    localMax = local.max;
+                    const glm::vec3 extent = local.max - local.min;
+                    const float maxExtent = std::max({ extent.x, extent.y, extent.z });
+                    if (maxExtent > 1e-6f)
+                        checkerScale = 6.0f / maxExtent;
+                }
+
+                SceneGpuBatch::InstanceRecord& record = voxelInstances[voxelBatchChunks];
+                record = SceneGpuBatch::InstanceRecord{};
+                record.model = world->matrix;
+                record.normal = world->normalMatrix;
+                record.flags = glm::uvec4(materialSlot, materialValid ? 1u : 0u, 0u, 0u);
+                record.misc = glm::vec4(0.0f, checkerScale, 0.0f, 0.0f);
+                record.uvTransform = glm::vec4(0.0f);
+                record.boundsMin = glm::vec4(localMin, 1.0f);
+                record.boundsMax = glm::vec4(localMax, 0.0f);
+                record.draw = glm::uvec4(0u);
+
+                const uint32_t instanceIndex = voxelBatchChunks;
+                for (const SubMesh& subMesh : subMeshes)
+                {
+                    if (subMesh.indexCount == 0u || subMesh.isTerrainChunk)
+                        continue;
+                    VkDrawIndexedIndirectCommand& command =
+                        voxelCommands[voxelBatchCommands++];
+                    command.indexCount = subMesh.indexCount;
+                    command.instanceCount = 1u;
+                    command.firstIndex = subMesh.firstIndex + voxel->arenaIndexBase;
+                    command.vertexOffset = static_cast<int32_t>(voxel->arenaVertexBase);
+                    command.firstInstance = instanceIndex;
+                    voxelBatchIndices += subMesh.indexCount;
+                }
+                voxelBatchVertices += voxel->arenaVertexCount;
+                ++voxelBatchChunks;
+            }
+
+            if (!capacityExceeded && voxelBatchChunks > 0u)
+            {
+                voxelBatchActive = true;
+                vmaFlushAllocation(vulkanDevice.getVmaAllocator(),
+                                   voxelChunkInstances[frameInfo.frameInFlightIndex].allocation,
+                                   0, static_cast<VkDeviceSize>(voxelBatchChunks) *
+                                          kVoxelBatchInstanceStride);
+                vmaFlushAllocation(vulkanDevice.getVmaAllocator(),
+                                   voxelIndirectBuffers[frameInfo.frameInFlightIndex].allocation,
+                                   0, static_cast<VkDeviceSize>(voxelBatchCommands) *
+                                          sizeof(VkDrawIndexedIndirectCommand));
+                if (!voxelBatchLogged)
+                {
+                    voxelBatchLogged = true;
+                    std::cout << "[Voxel] arena batch | chunks=" << voxelBatchChunks
+                              << " commands=" << voxelBatchCommands
+                              << " vertices=" << voxelBatchVertices
+                              << " indices=" << voxelBatchIndices
+                              << " stride=" << kVoxelBatchInstanceStride
+                              << " mode=indirect" << std::endl;
+                }
+            }
+            else if (capacityExceeded && !voxelBatchWarned)
+            {
+                voxelBatchWarned = true;
+                std::cout << "[Voxel] arena batch capacity exceeded | chunks="
+                          << voxelBatchChunks << " commands=" << voxelBatchCommands
+                          << "; using per-chunk arena draws" << std::endl;
+            }
+        }
+        else if (!voxelBatchWarned)
+        {
+            voxelBatchWarned = true;
+            std::cout << "[Voxel] arena batch unavailable; using per-chunk arena draws" << std::endl;
+        }
+    }
+
     for (entt::entity entity : frameInfo.visibleEntities)
     {
         const MeshComponent* mesh = frameInfo.registry.try_get<MeshComponent>(entity);
@@ -558,6 +774,10 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
         if (reflection && isGrid)
             continue;
         const TerrainComponent* terrain = frameInfo.registry.try_get<TerrainComponent>(entity);
+        const VoxelChunkComponent* voxelChunk =
+            frameInfo.registry.try_get<VoxelChunkComponent>(entity);
+        const bool voxelArenaBacked = voxelChunk != nullptr && terrainMeshArena != nullptr &&
+            voxelChunk->arenaIndexBase != TerrainMeshArena::kInvalidOffset;
         const uint32_t entityId = static_cast<uint32_t>(entt::to_integral(entity));
         const auto gpuSlotIt = gpuRun.entitySlots.find(entityId);
         const bool terrainGpuEntity =
@@ -574,12 +794,16 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
         // F1：普通网格交给 SceneGpuBatch 的 GPU 驱动提交（实例缓冲 + compute 剔除 +
         // indirect draw）。天空盒、网格辅助线、地形仍然留在下面的 CPU 路径。
         if (!reflection && sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
-            !isSkybox && !isGrid && !isTerrain &&
+            !isSkybox && !isGrid && !isTerrain && !voxelArenaBacked &&
             !mesh->model->isDynamic() &&
             mesh->model->getIndexCount() > 0)
         {
             continue;
         }
+
+        // 体素专用间接批已经覆盖本实体时不再逐块提交。
+        if (!reflection && voxelArenaBacked && voxelBatchActive)
+            continue;
 
         if (isTerrain)
         {
@@ -793,16 +1017,26 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
         else if (isGrid) pipe = &gridPipeline;
 
         (*pipe)->bind(commandBuffer);
-        // F2-f：地形几何在共享 arena 里（Model 只剩元数据），其余实体仍绑自己的缓冲。
+        // F2-f / V-04：地形与体素几何都在共享 arena 里（Model 只剩元数据），
+        // 其余实体仍绑自己的缓冲。
         const bool terrainArenaBacked = isTerrain && terrain != nullptr &&
             terrainMeshArena != nullptr &&
             terrain->arenaIndexBase != TerrainMeshArena::kInvalidOffset;
-        uint32_t terrainArenaIndexBase = 0u;
-        uint32_t terrainArenaVertexBase = 0u;
+        const bool arenaBacked = terrainArenaBacked || voxelArenaBacked;
+        uint32_t arenaIndexBase = 0u;
+        uint32_t arenaVertexBase = 0u;
         if (terrainArenaBacked)
         {
-            terrainArenaIndexBase = terrain->arenaIndexBase;
-            terrainArenaVertexBase = terrain->arenaVertexBase;
+            arenaIndexBase = terrain->arenaIndexBase;
+            arenaVertexBase = terrain->arenaVertexBase;
+        }
+        else if (voxelArenaBacked)
+        {
+            arenaIndexBase = voxelChunk->arenaIndexBase;
+            arenaVertexBase = voxelChunk->arenaVertexBase;
+        }
+        if (arenaBacked)
+        {
             VkBuffer arenaVertexBuffer = terrainMeshArena->getVertexBuffer();
             VkDeviceSize arenaVertexOffset = 0;
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, &arenaVertexBuffer, &arenaVertexOffset);
@@ -917,12 +1151,12 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0, sizeof(SimplePushConstantData), &push);
 
-            if (terrainArenaBacked)
+            if (arenaBacked)
             {
-                // 地形几何在 arena，subMesh 的 firstIndex 是模型内偏移，要加上槽位基址。
+                // 几何在 arena，subMesh 的 firstIndex 是模型内偏移，要加上槽位基址。
                 vkCmdDrawIndexed(commandBuffer, subMesh.indexCount, 1,
-                                 subMesh.firstIndex + terrainArenaIndexBase,
-                                 terrainArenaVertexBase, 0);
+                                 subMesh.firstIndex + arenaIndexBase,
+                                 arenaVertexBase, 0);
             }
             else
             {
@@ -1062,6 +1296,42 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
                                 pipelineLayout, 3, 1, sceneSets, 0, nullptr);
         frameInfo.telemetry.descriptorBinds += 1u;
         sceneGpuBatch->recordDraw(commandBuffer, frameInfo);
+    }
+
+    // V-04：体素 chunk 合批。实例矩阵/材质在 set 3 的专用实例表里，
+    // 命令已在上面按 arena 切片写好；这里只需一次绑定 + 一条 indirect。
+    if (voxelBatchActive && terrainMeshArena != nullptr && voxelChunkInstancesReady)
+    {
+        SimplePushConstantData batchVoxelPush{};
+        batchVoxelPush.modelMatrix = glm::mat4(1.0f);
+        batchVoxelPush.normalMatrix = glm::mat4(1.0f);
+        batchVoxelPush.materialValid = 0u;
+        batchVoxelPush.materialId = fallbackMatId;
+        batchVoxelPush.gpuScene = 1u;
+        batchVoxelPush.clipY = viewOverride != nullptr ? viewOverride->clipY : 0.0f;
+        batchVoxelPush.clipMode = viewOverride != nullptr ? viewOverride->clipMode : 0u;
+
+        geometryPipeline->bind(commandBuffer);
+        VkBuffer arenaVertices = terrainMeshArena->getVertexBuffer();
+        VkBuffer arenaIndices = terrainMeshArena->getIndexBuffer();
+        VkDeviceSize arenaVertexOffset = 0;
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &arenaVertices, &arenaVertexOffset);
+        vkCmdBindIndexBuffer(commandBuffer, arenaIndices, 0, VK_INDEX_TYPE_UINT32);
+        VkDescriptorSet voxelSets[] =
+            { voxelChunkInstanceSets[frameInfo.frameInFlightIndex] };
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipelineLayout, 3, 1, voxelSets, 0, nullptr);
+        frameInfo.telemetry.descriptorBinds += 1u;
+        vkCmdPushConstants(commandBuffer, pipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(SimplePushConstantData), &batchVoxelPush);
+        vkCmdDrawIndexedIndirect(
+            commandBuffer, voxelIndirectBuffers[frameInfo.frameInFlightIndex].buffer, 0,
+            voxelBatchCommands, sizeof(VkDrawIndexedIndirectCommand));
+
+        frameInfo.telemetry.drawCalls += 1u;
+        frameInfo.telemetry.triangles += static_cast<uint32_t>(voxelBatchIndices / 3u);
+        frameInfo.telemetry.vertices += static_cast<uint32_t>(voxelBatchIndices);
     }
 
     if (terrainShadingCaptured)
