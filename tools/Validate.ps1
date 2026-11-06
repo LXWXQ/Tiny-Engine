@@ -164,7 +164,7 @@ $tests = @(
     @{ Name = "td09-config-migration"; Args = @("--config-test");
        MustContain = @("[Config] selfTest PASS") },
     @{ Name = "selftest-default"; Args = @("--selftest", "$Frames");
-       MustContain = @("[Scene] ECS/spatial selfTest PASS", "[TD07] ComputeProbe disabled: no probe dispatches or CPU readback", "[SelfTest]") },
+       MustContain = @("[Scene] ECS/spatial selfTest PASS", "[Scene] ECS component selfTest PASS", "[TD07] ComputeProbe disabled: no probe dispatches or CPU readback", "[SelfTest]") },
     @{ Name = "selftest-no-bloom"; Args = @("--selftest", "$Frames", "--no-bloom");
        MustContain = @("[TD06] Bloom disabled: skipping Bright + Down + Up passes", "[TD07] ComputeProbe disabled: no probe dispatches or CPU readback", "[SelfTest]") },
     @{ Name = "selftest-no-ssao"; Args = @("--selftest", "$Frames", "--no-ssao");

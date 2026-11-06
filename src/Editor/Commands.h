@@ -10,6 +10,7 @@
 
 #include "Editor/CommandStack.h"
 #include "Scene/Components.h"   // MeshComponent / MaterialComponent 快照需要完整定义
+#include "Scene/ComponentTypes.h"
 
 #include <entt/entt.hpp>
 #include <optional>
@@ -201,6 +202,32 @@ private:
     bool oldSkybox, oldGrid, newSkybox, newGrid;
 };
 
+// 通用组件的增 / 删 / 改。记录组件前后的完整 ComponentRecord，
+// 因此同一个命令既能处理“添加组件”（before 为空），也能处理“移除组件”
+// （after 为空）。拖拽属性时由 mergeWith/absorb 合并成一条。
+class SetComponentRecordCommand : public Command
+{
+public:
+    SetComponentRecordCommand(Scene& scene, entt::entity entity, std::string type,
+                               std::optional<scene::ComponentRecord> before,
+                               std::optional<scene::ComponentRecord> after,
+                               const char* action = "Modify Component");
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return commandName.c_str(); }
+    bool mergeWith(const Command& previous) const override;
+    void absorb(const Command& newer) override;
+
+private:
+    Scene& scene;
+    entt::entity entity;
+    std::string type;
+    std::optional<scene::ComponentRecord> before;
+    std::optional<scene::ComponentRecord> after;
+    std::string commandName;
+};
+
 // 删除实体（连同整棵子树），可撤销。
 //
 // 关键设计：撤销**不能**指望实体 ID 保持不变 —— EnTT 销毁后重建会拿到新 ID。
@@ -229,6 +256,8 @@ private:
         entt::entity original = entt::null;
         // 重建该实体的组件（值拷贝进闭包）
         std::function<void(entt::entity)> rebuild;
+        // 元数据注册的扩展组件（Spin / Orbit…），重建后逐条 apply。
+        std::vector<scene::ComponentRecord> components;
         // 父节点在 snapshot 里的下标；-1 表示它是子树根
         int parentIndex = -1;
     };

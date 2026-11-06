@@ -2911,6 +2911,17 @@ bool EditorLayer::selfTest()
         a.parentIndex = -1;
         a.meshPath = TINY_RESOURCE_DIR "Models/sphere.obj";
         a.isSkybox = false;
+        // v3：六种 PropertyType 都要能进 JSON 再原值回来。这里用未注册的
+        // 类型名，序列化层只负责语法往返；注册与否由 Scene 加载时决定。
+        scene::ComponentRecord probe;
+        probe.type = "test.sixTypes";
+        probe.properties.push_back({ "flag", "Flag", scene::PropertyValue::fromBool(true) });
+        probe.properties.push_back({ "count", "Count", scene::PropertyValue::fromInt(-7) });
+        probe.properties.push_back({ "speed", "Speed", scene::PropertyValue::fromFloat(1.25f) });
+        probe.properties.push_back({ "offset", "Offset", scene::PropertyValue::fromVec3(glm::vec3(0.5f, -2.0f, 3.25f)) });
+        probe.properties.push_back({ "tint", "Tint", scene::PropertyValue::fromColor(glm::vec4(0.25f, 0.5f, 0.75f, 1.0f)) });
+        probe.properties.push_back({ "note", "Note", scene::PropertyValue::fromString("ecs") });
+        a.components.push_back(std::move(probe));
         input.entities.push_back(a);
 
         scene::EntityDescription b;
@@ -2977,6 +2988,12 @@ bool EditorLayer::selfTest()
         if (output.entities[1].material.metallicFactor != 0.75f)
         {
             std::cerr << "[Editor] selfTest FAIL: material factor not preserved\n";
+            return false;
+        }
+        if (output.entities[0].components.size() != 1 ||
+            !output.entities[0].components[0].equivalentTo(input.entities[0].components[0]))
+        {
+            std::cerr << "[Editor] selfTest FAIL: component record not preserved in round trip\n";
             return false;
         }
         // 路径必须被还原成绝对路径（存盘时写相对，读回时拼回资源根）
@@ -3747,10 +3764,28 @@ bool EditorLayer::selfTestWithScene()
             return false;
         }
 
+        // F5-01：元数据组件必须走完整的 capture -> JSON -> build 链路。
+        // 这里用默认 record 而不是包含 FeatureComponents.h，验证的是公开 API。
+        std::optional<scene::ComponentRecord> spinBefore =
+            scene.defaultComponentRecord("effects.spin");
+        if (!spinBefore || !spinBefore->find("degreesPerSecond"))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: effects.spin not registered\n";
+            return false;
+        }
+        spinBefore->find("degreesPerSecond")->value = scene::PropertyValue::fromFloat(90.0f);
+        if (!scene.applyComponentRecord(serializedCharacter, *spinBefore) ||
+            !scene.hasComponent(serializedCharacter, "effects.spin"))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: could not attach metadata component\n";
+            return false;
+        }
+
         const scene::SceneDescription captured = scene.captureDescription();
         int worldManagers = 0;
         int serializedChunks = 0;
         int serializedCharacters = 0;
+        int capturedSpinComponents = 0;
         for (const scene::EntityDescription& entity : captured.entities)
         {
             if (entity.isTerrainWorld)
@@ -3767,6 +3802,23 @@ bool EditorLayer::selfTestWithScene()
                     return false;
                 }
             }
+            for (const scene::ComponentRecord& record : entity.components)
+            {
+                if (record.type != "effects.spin")
+                    continue;
+                const scene::NamedProperty* property = record.find("degreesPerSecond");
+                if (!property || std::abs(property->value.asFloat() - 90.0f) > 1e-5f)
+                {
+                    std::cerr << "[Editor] selfTestWithScene FAIL: metadata component value lost\n";
+                    return false;
+                }
+                ++capturedSpinComponents;
+            }
+        }
+        if (capturedSpinComponents != 1)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: metadata component not captured\n";
+            return false;
         }
         scene::SceneDescription serialized;
         std::string serializationError;
@@ -3833,6 +3885,23 @@ bool EditorLayer::selfTestWithScene()
                       << fileError << "\n";
             return false;
         }
+        bool loadedSpin = false;
+        for (const scene::EntityDescription& entity : fileDescription.entities)
+        {
+            for (const scene::ComponentRecord& record : entity.components)
+            {
+                if (record.type != "effects.spin")
+                    continue;
+                const scene::NamedProperty* property = record.find("degreesPerSecond");
+                if (property && std::abs(property->value.asFloat() - 90.0f) <= 1e-5f)
+                    loadedSpin = true;
+            }
+        }
+        if (!loadedSpin)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: metadata component missing after load\n";
+            return false;
+        }
         std::error_code removeError;
         std::filesystem::remove(scenePath, removeError);
 
@@ -3868,6 +3937,46 @@ bool EditorLayer::selfTestWithScene()
             std::cerr << "[Editor] selfTestWithScene FAIL: character fields changed after rebuild\n";
             return false;
         }
+        std::optional<scene::ComponentRecord> restoredSpin =
+            scene.readComponent(restoredCharacter, "effects.spin");
+        if (!restoredSpin || !restoredSpin->find("degreesPerSecond") ||
+            std::abs(restoredSpin->find("degreesPerSecond")->value.asFloat() - 90.0f) > 1e-5f)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: metadata component missing after rebuild\n";
+            return false;
+        }
+
+        // SetComponentRecordCommand 覆盖改值/撤销/重做；最后停在保存时的 90 度。
+        std::optional<scene::ComponentRecord> spinAfter = restoredSpin;
+        spinAfter->find("degreesPerSecond")->value = scene::PropertyValue::fromFloat(180.0f);
+        state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+            scene, restoredCharacter, "effects.spin", restoredSpin, spinAfter, "Modify Component"));
+        const auto spinEquals = [&scene, restoredCharacter](float expected) {
+            const auto record = scene.readComponent(restoredCharacter, "effects.spin");
+            if (!record)
+                return false;
+            const scene::NamedProperty* property = record->find("degreesPerSecond");
+            return property && std::abs(property->value.asFloat() - expected) <= 1e-5f;
+        };
+        if (!spinEquals(180.0f))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: component command apply\n";
+            return false;
+        }
+        state.commands.undo();
+        if (!spinEquals(90.0f))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: component command undo\n";
+            return false;
+        }
+        state.commands.redo();
+        if (!spinEquals(180.0f))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: component command redo\n";
+            return false;
+        }
+        state.commands.undo();
+        state.commands.clear();
         scene.destroyEntity(restoredCharacter);
         for (uint32_t frame = 0; frame < 20 && countLoadedChunks() < expectedChunks; ++frame)
         {

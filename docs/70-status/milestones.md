@@ -928,3 +928,25 @@ updated: 2026-11-06
 
 **已知边界**：水面细节来自单张重复法线贴图，18m/42m 两层滚动只能降低重复感，极近处仍可能看出周期；没有流场/交互涟漪/泡沫贴图。修复后水面不再有原先由正弦网格产生的高频闪点，整体比修复前更暗、更连续，这是去掉干涉伪影后的预期结果。
 
+## F5-01：元数据驱动 ECS（2026-11-06）
+
+**问题**：编辑器里的特性和特效没有统一挂载入口。Inspector 只绘制硬编码组件，新增一个效果要同时改 Scene、命令栈、序列化和删除/复制快照；`Scene::update()` 也没有明确的系统阶段，效果逻辑无处安放。
+
+**实现**：
+- `src/Scene/ComponentTypes.h`：`PropertyType`（Bool/Int/Float/Vec3/Color/String）、`PropertyValue`、`NamedProperty`、`ComponentRecord`；record 是纯数据，可比较、可存盘、可进命令栈。
+- `src/Scene/ComponentRegistry.h/.cpp`：`ComponentDescriptor`/`PropertyDescriptor` 做类型擦除；`makeComponentDescriptor<T>` 生成 addDefault/has/remove/read/write/defaults，Scene 构造时注册内置组件。
+- `src/Scene/SystemScheduler.h/.cpp`：Simulation / PostTransform 两阶段，按 order 稳定排序；`Scene::update()` 在 `updateWorldTransforms()` 前跑 Simulation、之后跑 PostTransform，profiling 与非 profiling 两条路径都接入。
+- `src/Scene/FeatureComponents.*`：`effects.spin`（axis/degreesPerSecond/enabled）与 `effects.orbit`（center/radius/degreesPerSecond/angle/enabled）作为“新特性一键挂载”的样板。
+- Scene 公开 API：`addComponent` / `removeComponent` / `hasComponent` / `readComponent` / `defaultComponentRecord` / `applyComponentRecord` / `captureComponentRecords`。
+- Inspector：`drawComponents()` 列出已挂组件，按属性类型绘制 Checkbox/DragInt/DragFloat/DragFloat3/ColorEdit4/InputText；改动走 `SetComponentRecordCommand`，右键移除，`+ Add Component` 按分类添加默认 record。
+- `SceneSerializer` v3：`components` 作为可选数组；未知组件/属性或坏值跳过，旧 v2 文件无 components 仍可读；roundTrip 逐实体比较组件。
+- 撤销/删除/复制：`SetComponentRecordCommand` 覆盖 add/remove/modify 并支持拖拽合并；`DeleteEntityCommand` 快照 components；`DuplicateEntityCommand` 复制已注册 record。
+
+**测试**：
+- `[Scene] ECS component selfTest PASS | components=2 | systems=2`：注册、增删、默认值、读写、自洽比较、Spin 系统旋转 45°/0.5s。
+- 编辑器 `selfTestWithScene`：给 B07 角色挂 `effects.spin` 90°，走 capture → JSON → load → build 后仍为 90°；再用 `SetComponentRecordCommand` 改 180°，验证 apply/undo/redo/undo。stderr 0。
+- `tools/Validate.ps1` 的 `selftest-default` 增加 `[Scene] ECS component selfTest PASS` 断言。
+
+**回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-120327`；DocCheck PASS（documents=67 lines=11595）。
+
+**边界**：组件/系统仍是 C++ 编译期注册，没有脚本、热重载、属性数组/结构体、预制体；系统在编辑模式也随 `Scene::update()` 推进；属性只有 6 种基础类型。

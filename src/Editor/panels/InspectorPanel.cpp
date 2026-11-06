@@ -190,8 +190,196 @@ void InspectorPanel::draw(EditorState& state)
     drawMesh(state, entity);
     drawMaterial(state, entity);
     drawRenderTag(state, entity);
+    drawComponents(state, entity);
 
     ImGui::End();
+}
+
+void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
+{
+    Scene* scene = state.services.scene;
+    if (scene == nullptr || state.services.registry == nullptr)
+        return;
+
+    entt::registry& registry = *state.services.registry;
+    scene::ComponentRegistry& components = scene->getComponentRegistry();
+    if (components.empty())
+        return;
+
+    ImGui::Separator();
+    ImGui::TextDisabled("ECS Components");
+
+    for (const scene::ComponentDescriptor& descriptor : components.descriptors())
+    {
+        if (!descriptor.has(registry, entity))
+            continue;
+
+        ImGui::PushID(descriptor.type.c_str());
+        const bool open = ImGui::CollapsingHeader(descriptor.label.c_str());
+
+        // 右键移除。移除和添加都走同一条 SetComponentRecordCommand：
+        // before 有值、after 为空就是删除，撤销时把整份属性写回去。
+        if (ImGui::BeginPopupContextItem("##component_menu"))
+        {
+            if (ImGui::MenuItem("移除组件"))
+            {
+                std::optional<scene::ComponentRecord> before =
+                    scene->readComponent(entity, descriptor.type);
+                if (before)
+                {
+                    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                        *scene, entity, descriptor.type, std::move(before), std::nullopt,
+                        "Remove Component"));
+                    state.markDirty();
+                }
+                ImGui::EndPopup();
+                ImGui::PopID();
+                continue;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (open)
+        {
+            std::optional<scene::ComponentRecord> beforeRecord =
+                scene->readComponent(entity, descriptor.type);
+            if (beforeRecord)
+            {
+                scene::ComponentRecord afterRecord = *beforeRecord;
+                bool changed = false;
+
+                for (const scene::PropertyDescriptor& property : descriptor.properties)
+                {
+                    scene::NamedProperty* value = afterRecord.find(property.name);
+                    if (value == nullptr)
+                        continue;
+
+                    switch (property.type)
+                    {
+                    case scene::PropertyType::Bool:
+                    {
+                        bool v = value->value.asBool();
+                        if (ImGui::Checkbox(property.label.c_str(), &v))
+                        {
+                            value->value = scene::PropertyValue::fromBool(v);
+                            changed = true;
+                        }
+                        break;
+                    }
+                    case scene::PropertyType::Int:
+                    {
+                        int v = value->value.asInt();
+                        if (ImGui::DragInt(property.label.c_str(), &v, 0.1f))
+                        {
+                            value->value = scene::PropertyValue::fromInt(v);
+                            changed = true;
+                        }
+                        break;
+                    }
+                    case scene::PropertyType::Float:
+                    {
+                        float v = value->value.asFloat();
+                        if (ImGui::DragFloat(property.label.c_str(), &v, 0.01f, 0.0f, 0.0f, "%.3f"))
+                        {
+                            value->value = scene::PropertyValue::fromFloat(v);
+                            changed = true;
+                        }
+                        break;
+                    }
+                    case scene::PropertyType::Vec3:
+                    {
+                        glm::vec3 v = value->value.asVec3();
+                        if (ImGui::DragFloat3(property.label.c_str(), glm::value_ptr(v),
+                                              0.01f, 0.0f, 0.0f, "%.3f"))
+                        {
+                            value->value = scene::PropertyValue::fromVec3(v);
+                            changed = true;
+                        }
+                        break;
+                    }
+                    case scene::PropertyType::Color:
+                    {
+                        glm::vec4 v = value->value.asColor();
+                        if (ImGui::ColorEdit4(property.label.c_str(), glm::value_ptr(v)))
+                        {
+                            value->value = scene::PropertyValue::fromColor(v);
+                            changed = true;
+                        }
+                        break;
+                    }
+                    case scene::PropertyType::String:
+                    {
+                        char buffer[256] = {};
+                        std::snprintf(buffer, sizeof(buffer), "%s",
+                                      value->value.asString().c_str());
+                        if (ImGui::InputText(property.label.c_str(), buffer, sizeof(buffer),
+                                             ImGuiInputTextFlags_EnterReturnsTrue))
+                        {
+                            value->value = scene::PropertyValue::fromString(buffer);
+                            changed = true;
+                        }
+                        break;
+                    }
+                    }
+                }
+
+                if (changed && !afterRecord.equivalentTo(*beforeRecord))
+                {
+                    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                        *scene, entity, descriptor.type, std::move(beforeRecord),
+                        std::move(afterRecord), "Modify Component"));
+                    state.markDirty();
+                }
+            }
+        }
+
+        ImGui::PopID();
+    }
+
+    // ---- + Add Component ----
+    // 只列 exposed 且当前实体未挂载的组件，按 category 分组。
+    if (ImGui::Button("+ Add Component"))
+        ImGui::OpenPopup("##add_component");
+
+    if (ImGui::BeginPopup("##add_component"))
+    {
+        std::string lastCategory;
+        bool first = true;
+        bool any = false;
+
+        for (const scene::ComponentDescriptor& descriptor : components.descriptors())
+        {
+            if (!descriptor.exposed || descriptor.has(registry, entity))
+                continue;
+
+            if (first || descriptor.category != lastCategory)
+            {
+                if (!first)
+                    ImGui::Separator();
+                ImGui::TextDisabled("%s", descriptor.category.c_str());
+                lastCategory = descriptor.category;
+                first = false;
+            }
+
+            if (ImGui::MenuItem(descriptor.label.c_str()))
+            {
+                std::optional<scene::ComponentRecord> after =
+                    scene->defaultComponentRecord(descriptor.type);
+                if (after)
+                {
+                    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                        *scene, entity, descriptor.type, std::nullopt, std::move(after),
+                        "Add Component"));
+                    state.markDirty();
+                }
+            }
+            any = true;
+        }
+
+        if (!any)
+            ImGui::TextDisabled("没有可添加的组件。");
+        ImGui::EndPopup();
+    }
 }
 
 void InspectorPanel::drawTransform(EditorState& state, entt::entity entity)

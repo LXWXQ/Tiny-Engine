@@ -399,6 +399,52 @@ void RenameEntityCommand::absorb(const Command& newer)
 }
 
 // ---------------------------------------------------------------------------
+// SetComponentRecordCommand
+// ---------------------------------------------------------------------------
+SetComponentRecordCommand::SetComponentRecordCommand(
+    Scene& scene, entt::entity entity, std::string type,
+    std::optional<scene::ComponentRecord> before,
+    std::optional<scene::ComponentRecord> after, const char* action)
+    : scene(scene), entity(entity), type(std::move(type)),
+      before(std::move(before)), after(std::move(after)),
+      commandName(action ? action : "Modify Component")
+{
+}
+
+void SetComponentRecordCommand::apply()
+{
+    if (after)
+        scene.applyComponentRecord(entity, *after);
+    else
+        scene.removeComponent(entity, type);
+}
+
+void SetComponentRecordCommand::revert()
+{
+    if (before)
+        scene.applyComponentRecord(entity, *before);
+    else
+        scene.removeComponent(entity, type);
+}
+
+bool SetComponentRecordCommand::mergeWith(const Command& previous) const
+{
+    const auto* other = dynamic_cast<const SetComponentRecordCommand*>(&previous);
+    return other && other->entity == entity && other->type == type &&
+           other->before.has_value() && other->after.has_value() &&
+           before.has_value() && after.has_value();
+}
+
+void SetComponentRecordCommand::absorb(const Command& newer)
+{
+    const auto* other = dynamic_cast<const SetComponentRecordCommand*>(&newer);
+    if (other == nullptr || other->entity != entity || other->type != type ||
+        !other->after.has_value())
+        return;
+    after = other->after;
+}
+
+// ---------------------------------------------------------------------------
 // DeleteEntityCommand
 // ---------------------------------------------------------------------------
 DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity entity,
@@ -465,10 +511,16 @@ DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity 
         // CameraComponent 是空 tag：查存在性要用 any_of，不能 try_get 取指针。
         snap.hasCamera = registry.any_of<CameraComponent>(current);
 
+        // 扩展组件也必须在构造期做值快照；闭包不能捕获 registry 里的指针。
+        std::vector<scene::ComponentRecord> componentSnapshot;
+        if (scene)
+            componentSnapshot = scene->captureComponentRecords(current);
+
         Node node;
         node.original = current;
         node.parentIndex = parentIndex;
-        node.rebuild = [&registry, snap, scene](entt::entity created)
+        node.components = componentSnapshot;
+        node.rebuild = [&registry, snap, scene, componentSnapshot](entt::entity created)
         {
             if (snap.transform) registry.emplace<TransformComponent>(created, restorableTransform(*snap.transform));
             if (snap.name)      registry.emplace<NameComponent>(created, *snap.name);
@@ -482,7 +534,11 @@ DeleteEntityCommand::DeleteEntityCommand(entt::registry& registry, entt::entity 
             // get_or_emplace 标了 [[nodiscard]]，这里只关心"组件存在"，显式丢弃返回值。
             (void)registry.get_or_emplace<HierarchyComponent>(created);
             if (scene)
+            {
                 scene->attachDirtyTracking(created);
+                for (const scene::ComponentRecord& record : componentSnapshot)
+                    scene->applyComponentRecord(created, record);
+            }
         };
         snapshot.push_back(std::move(node));
 
@@ -984,6 +1040,13 @@ void DuplicateEntityCommand::apply()
 
         const entt::entity dst = (scene != nullptr) ? scene->createEntity() : registry->create();
         copyDataComponents(*registry, src, *registry, dst);
+        // 元数据注册的扩展组件（Spin / Orbit…）走通用记录复制。未注册的
+        // 运行期组件不复制，避免把材质槽位、作业句柄这类东西带到副本上。
+        if (scene != nullptr)
+        {
+            for (const scene::ComponentRecord& record : scene->captureComponentRecords(src))
+                scene->applyComponentRecord(dst, record);
+        }
 
         if (pending[i].dst != entt::null)
         {

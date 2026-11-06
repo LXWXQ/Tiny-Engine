@@ -3,6 +3,7 @@
 #include "RHI/Texture.h"
 #include "RHI/CommandUtils.h"
 #include "Scene/GLTFLoader.h"
+#include "Scene/FeatureComponents.h"
 #include "Render/TerrainMaterial.h"
 #include "Render/TerrainComputeGenerator.h"
 #include "Render/SubMeshCulling.h"
@@ -518,6 +519,95 @@ size_t Scene::TerrainChunkCoordHash::operator()(const Scene::TerrainChunkCoord& 
 
 Scene::~Scene() = default;
 
+Scene::Scene()
+{
+    // 纯 CPU 注册，不依赖设备；selfTest 直接构造 Scene 也能拿到同样的类型表。
+    scene::registerFeatureComponents(componentRegistry);
+    scene::registerFeatureSystems(systemScheduler);
+}
+
+bool Scene::addComponent(entt::entity entity, const std::string& type)
+{
+    if (!registry.valid(entity))
+        return false;
+    const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
+    if (!descriptor)
+        return false;
+    descriptor->addDefault(registry, entity);
+    return descriptor->has(registry, entity);
+}
+
+bool Scene::removeComponent(entt::entity entity, const std::string& type)
+{
+    if (!registry.valid(entity))
+        return false;
+    const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
+    if (!descriptor || !descriptor->has(registry, entity))
+        return false;
+    descriptor->remove(registry, entity);
+    return true;
+}
+
+bool Scene::hasComponent(entt::entity entity, const std::string& type) const
+{
+    if (!registry.valid(entity))
+        return false;
+    const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
+    return descriptor && descriptor->has(registry, entity);
+}
+
+std::optional<scene::ComponentRecord> Scene::readComponent(entt::entity entity,
+                                                           const std::string& type) const
+{
+    if (!registry.valid(entity))
+        return std::nullopt;
+    const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
+    if (!descriptor || !descriptor->has(registry, entity))
+        return std::nullopt;
+    scene::ComponentRecord record = descriptor->read(registry, entity);
+    if (record.type.empty())
+        record.type = type;
+    return record;
+}
+
+std::optional<scene::ComponentRecord> Scene::defaultComponentRecord(const std::string& type) const
+{
+    const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
+    if (!descriptor)
+        return std::nullopt;
+    scene::ComponentRecord record = descriptor->defaults();
+    if (record.type.empty())
+        record.type = type;
+    return record;
+}
+
+bool Scene::applyComponentRecord(entt::entity entity, const scene::ComponentRecord& record)
+{
+    if (!registry.valid(entity) || record.type.empty())
+        return false;
+    const scene::ComponentDescriptor* descriptor = componentRegistry.find(record.type);
+    if (!descriptor)
+        return false;
+    descriptor->write(registry, entity, record);
+    return descriptor->has(registry, entity);
+}
+
+std::vector<scene::ComponentRecord> Scene::captureComponentRecords(entt::entity entity) const
+{
+    std::vector<scene::ComponentRecord> records;
+    if (!registry.valid(entity))
+        return records;
+    for (const scene::ComponentDescriptor& descriptor : componentRegistry.descriptors())
+    {
+        if (!descriptor.has(registry, entity))
+            continue;
+        scene::ComponentRecord record = descriptor.read(registry, entity);
+        if (!record.type.empty())
+            records.push_back(std::move(record));
+    }
+    return records;
+}
+
 void Scene::init(Device& deviceArg, VkCommandPool commandPoolArg, DescriptorManager& descriptorManagerArg,
                  bool loadDefaultContent, JobSystem* jobSystemArg)
 {
@@ -810,7 +900,9 @@ void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCa
             std::chrono::steady_clock::now() - streamingStart).count();
 
         const auto worldStart = std::chrono::steady_clock::now();
+        systemScheduler.run(registry, scene::SystemPhase::Simulation, dt);
         updateWorldTransforms();
+        systemScheduler.run(registry, scene::SystemPhase::PostTransform, dt);
         worldMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - worldStart).count();
 
@@ -832,7 +924,11 @@ void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCa
     refreshStreamingTerrain();
     processVoxelChunkBuilds();
 
+    // 效果系统（Spin / Orbit…）先改局部 Transform，再统一刷新世界矩阵。
+    // PostTransform 预留给依赖世界坐标的系统（当前无内置系统）。
+    systemScheduler.run(registry, scene::SystemPhase::Simulation, dt);
     updateWorldTransforms();
+    systemScheduler.run(registry, scene::SystemPhase::PostTransform, dt);
     refreshSpatialIndex();
     updateVisibility(camera.getProjection() * camera.getView());
 }
@@ -1299,8 +1395,118 @@ bool Scene::selfTest()
         }
     }
 
+    // ---- 元数据驱动 ECS：组件注册 / 属性读写 / 系统更新 ----
+    // 这段不建 Vulkan 设备，直接构造一个 Scene（构造函数只注册组件和系统）
+    // 就能覆盖编辑器依赖的全部纯 CPU 路径。
+    std::size_t componentCount = 0;
+    std::size_t systemCount = 0;
+    {
+        Scene scene;
+        scene.getRegistry();
+        componentCount = scene.getComponentRegistry().descriptors().size();
+        systemCount = scene.getSystemScheduler().systemCount();
+        if (componentCount != 2 || systemCount != 2)
+        {
+            std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
+            ok = false;
+        }
+
+        const auto defaultSpin = scene.defaultComponentRecord("effects.spin");
+        if (!defaultSpin || defaultSpin->type != "effects.spin" ||
+            defaultSpin->properties.size() != 3)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Spin default record mismatch\n";
+            ok = false;
+        }
+
+        entt::registry& testRegistry = scene.getRegistry();
+        const entt::entity testEntity = testRegistry.create();
+        testRegistry.emplace<TransformComponent>(testEntity);
+
+        if (scene.readComponent(testEntity, "effects.spin").has_value())
+        {
+            std::cerr << "[Scene] selfTest FAIL: unregistered component read returned a record\n";
+            ok = false;
+        }
+
+        if (!scene.addComponent(testEntity, "effects.spin") ||
+            !scene.hasComponent(testEntity, "effects.spin"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: addComponent failed\n";
+            ok = false;
+        }
+
+        auto spin = scene.readComponent(testEntity, "effects.spin");
+        if (!spin)
+        {
+            std::cerr << "[Scene] selfTest FAIL: readComponent returned no record\n";
+            ok = false;
+        }
+        else
+        {
+            scene::NamedProperty* speed = spin->find("degreesPerSecond");
+            if (!speed || speed->value.asFloat() != 45.0f)
+            {
+                std::cerr << "[Scene] selfTest FAIL: Spin default speed mismatch\n";
+                ok = false;
+            }
+            else
+            {
+                speed->value = scene::PropertyValue::fromFloat(90.0f);
+                if (!scene.applyComponentRecord(testEntity, *spin))
+                {
+                    std::cerr << "[Scene] selfTest FAIL: applyComponentRecord failed\n";
+                    ok = false;
+                }
+                const auto updated = scene.readComponent(testEntity, "effects.spin");
+                const scene::NamedProperty* updatedSpeed =
+                    updated ? updated->find("degreesPerSecond") : nullptr;
+                if (!updatedSpeed || updatedSpeed->value.asFloat() != 90.0f)
+                {
+                    std::cerr << "[Scene] selfTest FAIL: component property round trip mismatch\n";
+                    ok = false;
+                }
+            }
+        }
+
+        // Spin 以 90°/s 跑 0.5s：四元数应变化，但幅度必须是 45°（点积≈cos22.5°）。
+        const glm::quat beforeOrientation =
+            testRegistry.get<TransformComponent>(testEntity).getOrientation();
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::Simulation, 0.5f);
+        const glm::quat afterOrientation =
+            testRegistry.get<TransformComponent>(testEntity).getOrientation();
+        const float dot = std::abs(glm::dot(beforeOrientation, afterOrientation));
+        if (dot > 0.9999f || dot < 0.9f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: spin system rotation mismatch\n";
+            ok = false;
+        }
+
+        if (!scene.removeComponent(testEntity, "effects.spin") ||
+            scene.hasComponent(testEntity, "effects.spin"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: removeComponent semantics mismatch\n";
+            ok = false;
+        }
+
+        if (scene.addComponent(testEntity, "missing.component"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: unknown component was accepted\n";
+            ok = false;
+        }
+
+        if (!defaultSpin || !scene.defaultComponentRecord("effects.spin") ||
+            !defaultSpin->equivalentTo(*scene.defaultComponentRecord("effects.spin")))
+        {
+            std::cerr << "[Scene] selfTest FAIL: default record equivalence mismatch\n";
+            ok = false;
+        }
+    }
+
     std::cout << "[Scene] ECS/spatial selfTest " << (ok ? "PASS" : "FAIL")
               << " | hierarchy=T*Ry*Rx*Rz*S | grid cells=" << index.cellCount() << "\n";
+    std::cout << "[Scene] ECS component selfTest " << (ok ? "PASS" : "FAIL")
+              << " | components=" << componentCount << " | systems=" << systemCount << "\n";
     return ok;
 }
 
@@ -1413,6 +1619,10 @@ scene::SceneDescription Scene::captureDescription() const
                 if (m.metallicRoughnessMap) e.material.metallicRoughnessMap = m.metallicRoughnessMap->getPath();
             }
         }
+
+        // 元数据注册过的扩展组件（Spin / Orbit / 以后新增的效果）。
+        // 顺序由 ComponentRegistry 的注册顺序决定，序列化与撤销都按 type 匹配。
+        e.components = captureComponentRecords(entity);
 
         // 注意：这里用 push_back，顺序必须与我上面 enum 的顺序一致。
         // 因为 idToIndex 也是按同一个 view 顺序建的，所以两边一致。
@@ -1724,6 +1934,37 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
 
     for (entt::entity entity : created)
         attachDirtyTracking(entity);
+
+    // 通用组件：相机实体会被复用，先把本次描述之外的注册组件摘掉，保证
+    // "载入后的实体 = 文件里的实体"，不会残留上一个场景的 Spin/Orbit。
+    for (size_t i = 0; i < description.entities.size(); ++i)
+    {
+        const entt::entity entity = created[i];
+        if (entity == entt::null || !registry.valid(entity))
+            continue;
+
+        const scene::EntityDescription& e = description.entities[i];
+        for (const scene::ComponentDescriptor& descriptor : componentRegistry.descriptors())
+        {
+            const bool inDescription = std::any_of(
+                e.components.begin(), e.components.end(),
+                [&descriptor](const scene::ComponentRecord& record)
+                {
+                    return record.type == descriptor.type;
+                });
+            if (!inDescription && descriptor.has(registry, entity))
+                descriptor.remove(registry, entity);
+        }
+
+        for (const scene::ComponentRecord& record : e.components)
+        {
+            if (!applyComponentRecord(entity, record))
+            {
+                std::cerr << "[Scene] failed to apply component '" << record.type
+                          << "' while loading scene\n";
+            }
+        }
+    }
 
     // 第二遍：挂父子关系（父必须先存在，所以不能和创建放在一个循环里）
     for (size_t i = 0; i < description.entities.size(); ++i)

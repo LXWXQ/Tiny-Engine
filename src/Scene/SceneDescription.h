@@ -14,6 +14,7 @@
 // 实体 ID 是运行期分配的，跨进程没有意义。
 // ===========================================================================
 
+#include "Scene/ComponentTypes.h"
 #include "Terrain/TerrainConfig.h"
 
 #include <cstdint>
@@ -86,6 +87,11 @@ struct EntityDescription
     float characterGroundSnapDistance = 0.4f;
 
     MaterialDescription material;
+
+    // 元数据驱动的扩展组件（Spin / Orbit / 以后新增的特性）。
+    // 只有 ComponentRegistry 注册过的类型才会出现在这里；运行期专用
+    // 组件（TerrainChunk、VoxelChunk 等）不进序列化。
+    std::vector<ComponentRecord> components;
 };
 
 // F3：体素世界只存 seed + 与"按 seed 重新生成"的差分。

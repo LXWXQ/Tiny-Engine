@@ -270,6 +270,7 @@ updated: 2026-11-06
 | F4-02 | 未开始 | 模型 LOD 链（GPU 端 LOD 选级的前置，见 F1 剩余项） | F4-01 | 同一模型可切 2~3 级，切换无跳变 |
 | F1-R1 | 未开始 | 粒子真实接入（`ExternalInstance` 入口已就位，还没有生产方） | F6 | 粒子与 ECS 实例共用分组/合批/剔除 |
 | E-P1 | 已完成 | 启动失败的原生 MessageBox（UX-04） | — | 双击启动失败时用户能看到可读提示 |
+| F5-01 | 已完成 | 元数据驱动 ECS：组件注册表 + SystemScheduler + Inspector Add Component + 序列化 v3 | — | 实体可加/删/改 Spin/Orbit，Inspector 编辑并撤销；场景存读保留 components；`selftest-default` 断言 ECS component selfTest |
 
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
@@ -296,6 +297,8 @@ updated: 2026-11-06
 > R-06 水面黑白格已完成（2026-11-06）：规则黑白菱形格来自 3 个高频正弦 ripple 的解析法线在 Fresnel/高光下的干涉，关 `waveStrength` 即消失；现改为 1024x1024 无缝 FFT 水波法线（`Resources/Texture/Water/water_normal.png`，CC0），片元按 18m/42m 两层滚动、`textureGrad` 足迹采样，Set0 binding14 常驻。截图 `build/Debug/water_normal_test.png` 与修复前 `build/Debug/water_check.png` 对比黑白格消失；`f3v-water` 新增 `[Tiny] Water normal map loaded` 断言。详见 [milestones](milestones.md#r-06水面法线贴图替换高频正弦波2026-11-06)，验证日志 `build/validation/20261106-113028`。
 >
 > V-04 已完成（2026-11-06）：体素不透明几何在 `applyVoxelChunkMesh()` 里先临时上传 `Model`，再 `TerrainMeshArena::acquire/copyInto` 并 `releaseGpuBuffers()`，`Model` 只留 CPU 几何；`GeometrySystem` 按可见集合写专用 224B 实例表与 `VkDrawIndexedIndirectCommand`，整批一条 indirect。半径 12 实测 `chunks=625 arena=625 vertices=725888 indices=1088832`，可见 535 块整批 `commands=535`，材质槽池 256→1024；`f3-voxel-arena-625` 覆盖。详见 [milestones](milestones.md#v-04体素-arena-间接合批2026-11-06)。
+>
+> F5-01 元数据驱动 ECS 已完成（2026-11-06）：`ComponentRegistry` 用模板描述符注册组件（Bool/Int/Float/Vec3/Color/String 六种属性），`SystemScheduler` 在 `updateWorldTransforms()` 前后跑 Simulation/PostTransform；内置 `effects.spin`、`effects.orbit`。Inspector 增加 + Add Component / 属性编辑 / 移除，统一走 `SetComponentRecordCommand`；`SceneSerializer` v3 把 components 作为可选数组，未知组件跳过。`selftest-default` 断言 `[Scene] ECS component selfTest PASS`，编辑器自检覆盖 capture → JSON → build → undo/redo。全套 75 项 ALL PASS（日志 `build/validation/20261106-120327`）。详见 [milestones](milestones.md#f5-01元数据驱动-ecs2026-11-06)。
 
 ## 更新方式
 

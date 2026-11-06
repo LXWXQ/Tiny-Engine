@@ -5,13 +5,13 @@ type: validation
 scope: tools/Validate.ps1
 read-when: 加/改回归项，或某项失败需要知道它在测什么
 size: ~200 行
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **70 项引擎用例 + 2 项工具自测 = 72 项**；
-加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`。
+`tools/Validate.ps1` 默认跑 **73 项引擎/编辑器用例 + 2 项工具自测 = 75 项**；
+加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`（第 76 项）。
 
 ## 1. 每项的判据（统一）
 
@@ -31,7 +31,7 @@ updated: 2026-11-05
 |---|---|---|---|---|
 | 1 | `jobtest` | `--jobtest` | `[JobSystem] selfTest PASS` | worker pool、parallelFor、嵌套、异常传播 |
 | 2 | `td09-config-migration` | `--config-test` | `[Config] selfTest PASS` | v0->v2 迁移、备份、损坏/未来版本保护 |
-| 3 | `selftest-default` | `--selftest 120` | `[Scene] ECS/spatial selfTest PASS`、`[TD07] ComputeProbe disabled...`、`[RenderGraph] setPassEnabled selfTest PASS` | 主路径 + setter 自动 Transform/Bounds dirty 通知 + 增量 AABB |
+| 3 | `selftest-default` | `--selftest 120` | `[Scene] ECS/spatial selfTest PASS`、`[Scene] ECS component selfTest PASS`、`[TD07] ComputeProbe disabled...`、`[RenderGraph] setPassEnabled selfTest PASS` | 主路径 + setter 自动 Transform/Bounds dirty 通知 + 增量 AABB + 元数据组件/系统调度自检 |
 | 4 | `selftest-no-bloom` | `--no-bloom` | `[TD06] Bloom disabled: skipping Bright + Down + Up passes` | Bloom 关闭分支真跳过 |
 | 5 | `selftest-no-ssao` | `--no-ssao` | `[TD07] ...` | SSAO 关闭分支 |
 | 6 | `selftest-no-bloom-no-ssao` | 两者 | 同上两者 | 组合分支 |
@@ -109,7 +109,7 @@ updated: 2026-11-05
 |---|---|---|
 | 74 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
 | 75 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
-| 76 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 72 项不含它） |
+| 76 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 75 项不含它） |
 
 ## 4. 文档一致性检查
 

@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Scene/Components.h"
+#include "Scene/ComponentRegistry.h"
 #include "Scene/SceneDescription.h"
+#include "Scene/SystemScheduler.h"
 #include "Scene/Camera.h"
 #include "Scene/CameraController.h"
 #include "Scene/SpatialIndex.h"
@@ -22,6 +24,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -51,6 +54,8 @@ public:
     // DescriptorManager is required because glTF materials must reserve
     // bindless material slots while the scene is being loaded.
     // loadDefaultContent=false 时只创建相机实体，不加载 Sponza / 天空盒。
+    // 构造函数只注册内置组件/系统，不碰 GPU；init() 才建立 Vulkan 相关资源。
+    Scene();
     void init(Device& device, VkCommandPool commandPool, DescriptorManager& descriptorManager,
               bool loadDefaultContent = true, JobSystem* jobSystem = nullptr);
     ~Scene();
@@ -69,6 +74,24 @@ public:
     entt::registry& getRegistry() { return registry; }
     const entt::registry& getRegistry() const { return registry; }
     const std::vector<entt::entity>& getVisibleEntities() const { return visibleEntities; }
+
+    // ---- 通用 ECS 组件（元数据驱动）----
+    // ComponentRegistry 只保存“类型/属性/反射回调”，不持有任何实体数据。
+    // 因此编辑器可以遍历它画出 Add Component 与通用属性面板，序列化也能
+    // 只依赖 ComponentRecord 这一层纯数据。
+    scene::ComponentRegistry& getComponentRegistry() { return componentRegistry; }
+    const scene::ComponentRegistry& getComponentRegistry() const { return componentRegistry; }
+    scene::SystemScheduler& getSystemScheduler() { return systemScheduler; }
+    const scene::SystemScheduler& getSystemScheduler() const { return systemScheduler; }
+
+    bool addComponent(entt::entity entity, const std::string& type);
+    bool removeComponent(entt::entity entity, const std::string& type);
+    bool hasComponent(entt::entity entity, const std::string& type) const;
+    std::optional<scene::ComponentRecord> readComponent(entt::entity entity,
+                                                       const std::string& type) const;
+    std::optional<scene::ComponentRecord> defaultComponentRecord(const std::string& type) const;
+    bool applyComponentRecord(entt::entity entity, const scene::ComponentRecord& record);
+    std::vector<scene::ComponentRecord> captureComponentRecords(entt::entity entity) const;
 
     entt::entity getCameraEntity() const { return cameraEntity; }
     TransformComponent& getCameraTransform() { return registry.get<TransformComponent>(cameraEntity); }
@@ -421,6 +444,8 @@ private:
     void updateVisibility(const glm::mat4& viewProjection);
 
     entt::registry registry;
+    scene::ComponentRegistry componentRegistry;
+    scene::SystemScheduler systemScheduler;
     entt::entity cameraEntity = entt::null;
     SpatialIndex spatialIndex{ 16.0f };
     std::unordered_map<entt::entity, AABB> indexedBounds;

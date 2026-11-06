@@ -4,8 +4,8 @@ title: 撤销 / 重做
 type: architecture
 scope: CommandStack 的语义、合并窗口、以及"必须走命令"的硬规则
 read-when: 加任何会修改场景的交互；或撤销结果不对、撤销后数据损坏
-size: ~120 行
-updated: 2026-11-03
+size: ~160 行
+updated: 2026-11-06
 ---
 
 # 撤销 / 重做
@@ -62,6 +62,7 @@ stack.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(ch
 
 `DuplicateEntityCommand` 复制一个实体及其子树：只拷"数据型"组件（`NameComponent` 追加
 `" Copy"`、`Transform`、`Mesh`、`Material`、`RenderTag`、`Bounds`、`CharacterController`），
+并额外把 `Scene::captureComponentRecords()` 得到的元数据注册组件逐条 apply 到副本；
 地形 / 流送 chunk / 相机拒绝复制（`canDuplicate()`）。撤销 = 销毁这次新建的副本，重做会重建一遍
 （新 ID，和 `DeleteEntityCommand` 的恢复语义一致）。
 
@@ -84,6 +85,28 @@ stack.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(ch
 - `SetMaterialCommand` 的 apply / revert 都走 `writeState()`：写 `Material` 字段，并调 `DescriptorManager::updateMaterialFactors()` 把 factor 推给 GPU —— 撤销也要推，否则 UI 回退了画面没回退；
 - `mergeWith` 只比较实体，连续拖滑杆在 0.35 秒窗口内合并成一条；
 - `SetRenderTagCommand` 同理，管 Skybox / Grid 两个开关。
+
+## 通用组件：SetComponentRecordCommand
+
+元数据注册组件（`effects.spin` / `effects.orbit` 等）没有专用命令类。Inspector 统一用
+`SetComponentRecordCommand(Scene&, entity, type, before, after, action)`：
+
+| before | after | 语义 |
+|---|---|---|
+| 有 | 无 | 移除组件 |
+| 无 | 有 | 添加组件（after 来自 `defaultComponentRecord()`） |
+| 有 | 有 | 修改属性 |
+
+- `apply()`：`after` 存在时 `scene.applyComponentRecord()`，否则 `scene.removeComponent()`；
+  `revert()` 对称地用 `before`。
+- `mergeWith(previous)`：必须是同一实体 + 同一组件 type，且双方 `before`/`after` 都存在；
+  拖 `DragFloat` 产生的连续命令因此合并成一条，`absorb()` 只覆盖 `after`，`before` 保留拖拽起点。
+- 组件 record 是纯数据值拷贝，不持有组件指针，撤销时不会悬空。
+- `DeleteEntityCommand` 快照也带 `components`，覆盖删除后撤销；`DuplicateEntityCommand`
+  在 `copyDataComponents()` 之后逐条 apply record，覆盖复制。
+
+Inspector 的 `+ Add Component` 菜单只列 `descriptor.exposed` 且当前未挂载的类型；
+移除走组件标题右键菜单。两条路径都 `state.markDirty()` 并经过命令栈。
 
 ## 删除实体的撤销（最容易写错的地方）
 

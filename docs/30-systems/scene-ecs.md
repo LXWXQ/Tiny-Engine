@@ -2,10 +2,10 @@
 id: systems/scene-ecs
 title: 场景、ECS、Transform 层级与空间索引
 type: system
-scope: src/Scene/Scene.h, src/Scene/Scene.cpp, src/Scene/Components.h, src/Scene/SpatialIndex.h, src/Scene/GLTFLoader.cpp, src/Scene/Model.cpp
-read-when: 修改场景结构、增删组件、改变换传播或剔除逻辑
-size: ~260 行
-updated: 2026-11-01
+scope: src/Scene/Scene.h, src/Scene/Scene.cpp, src/Scene/Components.h, src/Scene/ComponentTypes.h, src/Scene/ComponentRegistry.h, src/Scene/SystemScheduler.h, src/Scene/FeatureComponents.h, src/Scene/SpatialIndex.h, src/Scene/GLTFLoader.cpp, src/Scene/Model.cpp
+read-when: 修改场景结构、增删组件、注册新组件/系统、改变换传播或剔除逻辑
+size: ~360 行
+updated: 2026-11-06
 ---
 
 # 场景、ECS、Transform 层级与空间索引
@@ -29,6 +29,74 @@ updated: 2026-11-01
 | `TerrainChunkComponent` | 运行期 chunk 标记与 chunk 坐标；不逐项序列化 |
 | `CharacterControllerComponent` | kinematic 角色：半径/高度/移速/跳跃/重力/坡度/step/snap；`verticalVelocity`/`grounded`/`groundEntity` 为运行期状态 |
 | `CharacterAnimationComponent` | 运行模式角色的动画状态机：当前 clip / time / loop / landTimer + 6 个 clip 名（默认 Idle/Walk/Run/Jump/Jump_Idle/Jump_Land） |
+
+以上是**引擎内置、有专用代码路径**的组件。除此之外还有一层
+**元数据注册的扩展组件**，见 §1.1；它不需要改 `Components.h` 或 Inspector。
+
+### 1.1 元数据组件与系统调度（F5-01）
+
+EnTT 只提供存储。F5-01 在它上面加了两件事：**组件描述表**和**按阶段运行的系统**，
+让“把某个特性挂到实体上”变成数据操作，而不是每个特性复制一遍编辑器/序列化代码。
+
+**组件描述（`src/Scene/ComponentTypes.h` + `ComponentRegistry.h`）**
+
+`ComponentDescriptor` 为一个 C++ 组件类型记录：稳定 id（如 `effects.spin`）、显示名、
+分类、是否在 `+ Add Component` 菜单暴露，以及属性列表。每个属性是一个
+`PropertyDescriptor`：稳定属性名、显示名、`PropertyType`、类型擦除的 getter/setter。
+`makeComponentDescriptor<T>()` 负责把具体类型包成 `addDefault` / `has` / `remove` /
+`read` / `write` / `defaults` 回调；`read`/`write` 只在注册属性上工作，不碰裸组件内存。
+
+属性类型目前是固定集合：`Bool`、`Int`、`Float`、`Vec3`、`Color`（vec4）、`String`。
+`ComponentRecord` 是这些值的纯数据快照（`type` + `NamedProperty` 列表），
+不依赖 EnTT / Vulkan，供序列化、命令栈、复制/删除共用。
+
+**系统调度（`SystemScheduler.h`）**
+
+`SystemPhase::Simulation` 在 `updateWorldTransforms()` **之前**运行，适合改变换/状态；
+`SystemPhase::PostTransform` 在之后运行。每个系统有 `id`、`order`（稳定排序）和一个
+`(entt::registry&, float dt)` 回调。调度器在运行前拷贝阶段表，所以系统内部可以安全地
+注册/移除系统。
+
+`Scene::update()` 的两个分支（profiling / 非 profiling）都在
+`processVoxelChunkBuilds()` 之后、`refreshSpatialIndex()` 之前执行：
+
+```
+Simulation systems -> updateWorldTransforms() -> PostTransform systems -> refreshSpatialIndex()
+```
+
+**内置示例（`FeatureComponents.h`）**
+
+| 组件 id | 属性 | 系统行为 |
+|---|---|---|
+| `effects.spin` | `axis` / `degreesPerSecond` / `enabled` | 每帧绕本地轴累乘四元数 |
+| `effects.orbit` | `center` / `radius` / `degreesPerSecond` / `angle` / `enabled` | 累加角度并写世界平移 |
+
+它们是可用的效果，也是新组件的模板：注册组件 +（可选）注册系统，不需要改 Inspector、
+SceneSerializer 或 Commands。
+
+**Scene 公开 API**
+
+| API | 语义 |
+|---|---|
+| `getComponentRegistry()` / `getSystemScheduler()` | 注册表与调度器 |
+| `addComponent(e, type)` / `removeComponent` / `hasComponent` | 按注册 id 增删查 |
+| `readComponent(e, type)` | 取当前值快照；未挂载返回 `nullopt` |
+| `defaultComponentRecord(type)` | 新建组件时的默认 record |
+| `applyComponentRecord(e, record)` | 写入快照；缺组件时按默认值新建 |
+| `captureComponentRecords(e)` | 收集实体上所有已注册组件 |
+
+**编辑器与持久化**
+
+- Inspector 在固定内置面板之后显示所有已挂载的注册组件；`+ Add Component` 按分类列出
+  未挂载且 `exposed` 的组件。所有增删改都走 `SetComponentRecordCommand`，可撤销。
+- `SceneSerializer` 从 **version 3** 起把 `components` 写进每个实体（格式见
+  [serialization](../90-editor/serialization.md)）。`Scene::captureDescription()` 只捕获
+  已注册组件；`buildFromDescription()` 逐条 apply，未注册的类型安全跳过。
+- `DeleteEntityCommand` 的快照与 `DuplicateEntityCommand` 都会带上注册组件 record，
+  所以删除撤销/复制不会丢效果。
+
+**边界**：组件和系统仍在 C++ 编译期注册，没有脚本/热重载/属性数组/预制体；
+系统在编辑模式也会随 `Scene::update()` 推进，撤销删除后实体 ID 会变。
 
 ## 2. Transform 层级
 
@@ -163,12 +231,22 @@ Scene::selfTest();
 ```
 
 覆盖：父子/孙节点的世界变换传播、dirty 子树计数、空间网格查询与增量 upsert/remove、
-XZ region 重建/范围查询/移除。
-输出标记：`[Scene] ECS/spatial selfTest PASS | hierarchy=T*Ry*Rx*Rz*S | grid cells=8`。
+XZ region 重建/范围查询/移除；以及元数据组件注册表（add/read/write/remove/default）、
+`ComponentRecord` 值往返、`SpinComponent` 在 Simulation 阶段实际推进四元数。
+输出标记：
+
+```
+[Scene] ECS/spatial selfTest PASS | hierarchy=T*Ry*Rx*Rz*S | grid cells=8
+[Scene] ECS component selfTest PASS | components=2 | systems=2
+```
 
 ## 7. 改动注意
 
-- 加组件要在 `Scene::selfTest()` 里补相应校验。
+- 加**元数据组件**：在 `FeatureComponents.cpp`（或新文件）写组件 + 描述符注册，必要时在
+  `registerFeatureSystems()` 加系统，再在 `Scene::selfTest()` 补校验；不需要改 Inspector、
+  序列化或命令栈。
+- 加**内置组件**（有专用渲染/物理路径）仍要改 `Components.h`、场景捕获/重建、序列化和
+  对应 Inspector 面板，并在 `Scene::selfTest()` 补校验。
 - 改变换顺序要同步 `CameraController` 与配置里存的欧拉角约定；
   旋转矩阵由 `TransformComponent::orientation` 生成，欧拉角只做显示/序列化。
 - 改剔除逻辑后确认 Sponza `draw calls` 仍是 104（少了说明误剔除）。

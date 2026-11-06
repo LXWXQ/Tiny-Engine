@@ -17,9 +17,10 @@ namespace editor
 
 namespace
 {
-// v2（2026-11-04）：新增 voxelWorlds（seed + 差分）。旧文件缺这一段时按空处理，
-// 所以读取端不按版本号拒绝，只有写入端跟着升版本。
-constexpr int kCurrentVersion = 2;
+// v2（2026-11-04）：新增 voxelWorlds（seed + 差分）。
+// v3（2026-11-06）：每个实体新增可选 components（元数据注册的扩展组件）。
+// 旧文件缺这一段时按空处理，所以读取端不按版本号拒绝，只有写入端跟着升版本。
+constexpr int kCurrentVersion = 3;
 
 std::string toRelative(const std::string& absolutePath)
 {
@@ -53,6 +54,84 @@ glm::vec4 vec4From(const json& j, const glm::vec4& fallback)
 {
     if (!j.is_array() || j.size() != 4) return fallback;
     return glm::vec4(j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>());
+}
+
+const char* propertyTypeName(scene::PropertyType type)
+{
+    switch (type)
+    {
+    case scene::PropertyType::Bool:   return "bool";
+    case scene::PropertyType::Int:    return "int";
+    case scene::PropertyType::Float:  return "float";
+    case scene::PropertyType::Vec3:   return "vec3";
+    case scene::PropertyType::Color:  return "color";
+    case scene::PropertyType::String: return "string";
+    }
+    return "float";
+}
+
+bool propertyTypeFromName(const std::string& name, scene::PropertyType& outType)
+{
+    if (name == "bool")   { outType = scene::PropertyType::Bool;   return true; }
+    if (name == "int")    { outType = scene::PropertyType::Int;    return true; }
+    if (name == "float")  { outType = scene::PropertyType::Float;  return true; }
+    if (name == "vec3")   { outType = scene::PropertyType::Vec3;   return true; }
+    if (name == "color")  { outType = scene::PropertyType::Color;  return true; }
+    if (name == "string") { outType = scene::PropertyType::String; return true; }
+    return false;
+}
+
+json propertyValueToJson(const scene::PropertyValue& value)
+{
+    switch (value.type)
+    {
+    case scene::PropertyType::Bool:   return json(value.boolValue);
+    case scene::PropertyType::Int:    return json(value.intValue);
+    case scene::PropertyType::Float:  return json(value.floatValue);
+    case scene::PropertyType::Vec3:   return toJson(value.vec3);
+    case scene::PropertyType::Color:  return toJson(value.color);
+    case scene::PropertyType::String: return json(value.stringValue);
+    }
+    return json(nullptr);
+}
+
+// 坏属性只跳过自己；组件类型 / 组件名坏掉则跳过整个组件。
+bool propertyValueFromJson(const json& j, scene::PropertyType type, scene::PropertyValue& outValue)
+{
+    switch (type)
+    {
+    case scene::PropertyType::Bool:
+        if (!j.is_boolean()) return false;
+        outValue = scene::PropertyValue::fromBool(j.get<bool>());
+        return true;
+    case scene::PropertyType::Int:
+        if (!j.is_number_integer()) return false;
+        outValue = scene::PropertyValue::fromInt(j.get<int>());
+        return true;
+    case scene::PropertyType::Float:
+        if (!j.is_number()) return false;
+        outValue = scene::PropertyValue::fromFloat(j.get<float>());
+        return true;
+    case scene::PropertyType::Vec3:
+    {
+        if (!j.is_array() || j.size() != 3) return false;
+        outValue = scene::PropertyValue::fromVec3(
+            glm::vec3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>()));
+        return true;
+    }
+    case scene::PropertyType::Color:
+    {
+        if (!j.is_array() || j.size() != 4) return false;
+        outValue = scene::PropertyValue::fromColor(glm::vec4(
+            j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>()));
+        return true;
+    }
+    case scene::PropertyType::String:
+        if (!j.is_string()) return false;
+        outValue = scene::PropertyValue::fromString(j.get<std::string>());
+        return true;
+    }
+    return false;
 }
 
 void readTerrainConfig(const json& t, terrain::TerrainConfig& cfg)
@@ -202,6 +281,45 @@ scene::SceneDescription fromJson(const json& root)
             entity.material.metallicRoughnessMap = toAbsolute(m.value("metallicRoughnessMap", std::string()));
         }
 
+        // v3：元数据注册的扩展组件。这里只做语法层的值还原；
+        // “这个组件类型是否仍然注册”由 Scene::buildFromDescription() 判断，
+        // 未知组件会被安全跳过，不影响场景其余部分。
+        if (e.contains("components") && e["components"].is_array())
+        {
+            for (const json& c : e["components"])
+            {
+                if (!c.is_object())
+                    continue;
+                scene::ComponentRecord record;
+                record.type = c.value("type", std::string());
+                if (record.type.empty())
+                    continue;
+                if (c.contains("properties") && c["properties"].is_array())
+                {
+                    for (const json& p : c["properties"])
+                    {
+                        if (!p.is_object())
+                            continue;
+                        const std::string propertyName = p.value("name", std::string());
+                        if (propertyName.empty())
+                            continue;
+                        scene::PropertyType type = scene::PropertyType::Float;
+                        if (!propertyTypeFromName(p.value("type", std::string()), type))
+                            continue;
+                        if (!p.contains("value"))
+                            continue;
+                        scene::NamedProperty property;
+                        property.name = propertyName;
+                        property.label = propertyName;
+                        if (!propertyValueFromJson(p["value"], type, property.value))
+                            continue;
+                        record.properties.push_back(std::move(property));
+                    }
+                }
+                entity.components.push_back(std::move(record));
+            }
+        }
+
         description.entities.push_back(std::move(entity));
     }
 
@@ -321,6 +439,30 @@ json toJson(const scene::SceneDescription& description)
             j["material"] = m;
         }
 
+        // v3：只写元数据注册的组件。Scene::captureDescription() 已经把
+        // 非注册的运行期组件过滤掉了。label 不写盘 —— 它由注册表重新生成。
+        if (!e.components.empty())
+        {
+            json components = json::array();
+            for (const scene::ComponentRecord& record : e.components)
+            {
+                json c;
+                c["type"] = record.type;
+                json properties = json::array();
+                for (const scene::NamedProperty& property : record.properties)
+                {
+                    json p;
+                    p["name"] = property.name;
+                    p["type"] = propertyTypeName(property.value.type);
+                    p["value"] = propertyValueToJson(property.value);
+                    properties.push_back(std::move(p));
+                }
+                c["properties"] = std::move(properties);
+                components.push_back(std::move(c));
+            }
+            j["components"] = std::move(components);
+        }
+
         entities.push_back(std::move(j));
     }
 
@@ -433,6 +575,28 @@ bool SceneSerializer::roundTrip(const scene::SceneDescription& input,
     {
         errorMessage = "entity count mismatch after round trip";
         return false;
+    }
+
+    for (size_t i = 0; i < input.entities.size(); ++i)
+    {
+        const auto& inputComponents = input.entities[i].components;
+        const auto& outputComponents = output.entities[i].components;
+        if (inputComponents.size() != outputComponents.size())
+        {
+            errorMessage = "component count mismatch after round trip (entity " +
+                           std::to_string(i) + ")";
+            return false;
+        }
+        for (size_t c = 0; c < inputComponents.size(); ++c)
+        {
+            if (!inputComponents[c].equivalentTo(outputComponents[c]))
+            {
+                errorMessage = "component value mismatch after round trip (entity " +
+                               std::to_string(i) + ", component " +
+                               inputComponents[c].type + ")";
+                return false;
+            }
+        }
     }
     return true;
 }
