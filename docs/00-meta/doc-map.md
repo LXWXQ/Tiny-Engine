@@ -46,7 +46,7 @@ updated: 2026-11-10
 | `WaterPass.*` / `water.vert` / `water.frag` | 相机中心径向网格、波浪位移、Fresnel/环境反射/厚度吸收/泡沫，HDR 前向混合 | [water](../30-systems/water.md)、[pass-order](../20-pipeline/pass-order.md) | water、pass-order |
 | `ParticlePass.*` / `particle.vert` / `particle.frag` | 每帧 host-visible 粒子实例、billboard、圆形软遮罩，Water 后/TAA 前前向混合 HDR，按相机距离排序 | [scene-ecs](../30-systems/scene-ecs.md)、[pass-order](../20-pipeline/pass-order.md) | scene-ecs、pass-order |
 | `CloudPass.*` / `cloud.frag` | 全屏体积云：读 G-Buffer 世界位置截断 + 64³ 3D 噪声，4 步太阳自阴影，预乘 alpha 写 HDR；Lighting 后/反射前 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
-| `SunFlarePass.*` / `sunflare.frag` | 太阳盘 + 镜头光晕：方向跟随场景方向光，世界空间射线夹角画日盘，5 点深度可见度，六边形鬼影/色散/光条；TAA 后/Bloom 前纯加色写 HDR | [pass-order](../20-pipeline/pass-order.md) | pass-order |
+| `SunFlarePass.*` / `sunflare.frag` | 太阳盘 + 镜头光晕：方向跟随场景方向光，世界空间射线夹角画日盘，5 点深度可见度，圆形散景鬼影/色散/光条（太阳在背后/出画不产生）；TAA 后/Bloom 前纯加色写 HDR | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `BloomPass.*` | Bright + 3 down + 3 up 金字塔 | [intermediate](../20-pipeline/intermediate.md) | intermediate |
 | `PresentPass.*` | 双路径（Bloom/NoBloom）、ACES、ImGui 叠加 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `IBLBaker.*` | irradiance / prefilter / BRDF LUT 烘焙 | [ibl](../20-pipeline/ibl.md) | ibl |

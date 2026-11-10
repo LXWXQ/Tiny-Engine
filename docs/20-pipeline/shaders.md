@@ -20,7 +20,7 @@ updated: 2026-11-10
 | `particle.vert` / `particle.frag` | vert/frag | 粒子 billboard：6 顶点四边形按相机 right/up 展开；实例带 materialId，frag 从 set1 bindless 数组采 sprite，0xFFFFFFFF 时回退程序化圆形软遮罩；前向 alpha 混合 |
 | `ssr.frag` | frag | 半分辨率屏幕空间反射：读 HDR + G-Buffer 世界位置，48 步追踪后用命中置信度与平面反射/IBL 混合 |
 | `cloud.frag` | frag | 体积云：读 G-Buffer 世界位置与 64³ 3D 噪声，全屏 raymarch + 4 步太阳自阴影，预乘 alpha 写 HDR |
-| `sunflare.frag` | frag | 太阳盘 + 镜头光晕：世界空间射线夹角画日盘、两段日冕、5 点深度可见度、沿太阳-中心镜像的六边形鬼影与色散、横向光条；纯加色写 `taaOutput` |
+| `sunflare.frag` | frag | 太阳盘 + 镜头光晕：世界空间射线夹角画日盘、两段日冕、5 点深度可见度、沿太阳-中心镜像的柔和圆形散景鬼影（色散）与横向光条，太阳在背后/出画时不产生；纯加色写 `taaOutput` |
 | `grid_mrt.vert` / `grid_mrt.frag` | vert/frag | 网格线写 G-Buffer（当前无实体触发） |
 | `skybox_mrt.vert` / `skybox_mrt.frag` | vert/frag | 天空盒写 G-Buffer（写 `outNormal=(0,0,0)`） |
 | `ssao.frag` | frag | SSAO（视图空间遮挡判断）；Normal.w=0 的地形/网格线直接输出 1.0 |

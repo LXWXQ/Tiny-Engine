@@ -4,8 +4,8 @@ title: 已踩过的坑
 type: debug
 scope: 空（跨代码库）
 read-when: 改任何代码之前；或遇到"看起来不可能"的怪异现象时
-size: ~550 行
-updated: 2026-11-06
+size: ~560 行
+updated: 2026-11-10
 ---
 
 # 已踩过的坑
@@ -544,3 +544,11 @@ vec2 sampleSphericalMap(vec3 v) {
   2. `sin(x) * sin(y)` 在屏幕空间就是格子。任何全屏 pattern 都要在俯视、斜视、低渲染倍率三种视角下检查。
   3. 排查渲染图案时，关闭一个大系统（waveStrength、SSAO）会同时改多个输入；必须做单因子关闭，不能把相关性当因果。
 - **回归**：同机位 before/after 见 `build/foam_grid_compare.png`；75 项 ALL PASS，验证日志 `build/validation/20261106-180307`；提交 `6b2e50c`。
+
+## 37. 太阳在相机背后时，镜头鬼影落在画面正中
+
+- **现象**：镜头光晕的六边形/圆形鬼影出现在草地中央或屏幕中心，但抬头/转头都找不到太阳；太阳其实在相机背后。
+- **原因**：`SunFlarePass` 只有投影成功（`sunClip.w > 0`）才写入太阳 UV；太阳在背后时 CPU 把 `sunU/sunV` 留在默认 `(0.5, 0.5)`，而旧 shader 只判断 UV 是否落在 `[0,1]`，于是把屏幕中心当成太阳，照常生成鬼影。
+- **判据**：`[Sun] first draw` 里 `inFront=0`，画面中心仍有鬼影；把 `occlusion` 关掉也不能消除（`sunVisibility()` 在 occlusion 关闭时会直接返回 1）。
+- **修法**：`sunVisibility()` 第一件事就检查 `push.color.a`（CPU 写入的 `inFront`），为 0 时直接返回 0；再对太阳 UV 出界返回 0；太阳贴近画面边缘时用 `sourceFade = smoothstep(0.0, 0.06, edge)` 把鬼影与光条一起淡出。
+- **通用教训**：屏幕空间伪影的“源点”必须同时满足“在相机前方”和“在画面内”。只检查 UV 范围不够，因为 UV 在源点投影失败时仍有默认值。

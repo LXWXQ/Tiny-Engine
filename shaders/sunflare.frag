@@ -4,7 +4,7 @@
 //
 // 日盘由世界空间射线与 sunDir 的夹角决定，因此不随屏幕纵横比拉伸；
 // 鬼影是屏幕空间伪影，沿“太阳 -> 中心”的连线镜像，不参与逐像素遮挡判定，
-// 只受太阳整体可见度调制。所有输出都是加色，混合方程见 SunFlarePass。
+// 只受太阳整体可见度与是否入画调制；形状用柔和圆形散景。所有输出都是加色，混合方程见 SunFlarePass。
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
@@ -41,10 +41,16 @@ float isSky(vec2 uv)
 // 这里用 5 个点判断“太阳是不是被山/建筑挡住了”，避免山后还在闪鬼影。
 float sunVisibility(vec2 uv)
 {
+    // 太阳在相机背后时 CPU 把 sunUV 留在屏幕中心，必须先用 inFront
+    // 挡住，否则鬼影会凭空落在画面正中。
+    if (push.color.a < 0.5)
+        return 0.0;
     if (push.params0.w < 0.5)
         return 1.0;
-    if (any(lessThan(uv, vec2(0.001))) || any(greaterThan(uv, vec2(0.999))))
-        return 1.0;
+    // 太阳中心不在画面内时不再产生镜头伪影；否则太阳在身后/画面外，
+    // 鬼影仍会落在画面中央，看起来像凭空出现的贴图。
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return 0.0;
 
     const vec2 o = vec2(0.006, 0.004);
     float sum = isSky(uv);
@@ -55,11 +61,15 @@ float sunVisibility(vec2 uv)
     return sum * 0.2;
 }
 
-// 近似六边形距离：|x|*cos30 + |y|*0.5 与 |y| 的较大值，边缘略带圆角，
-// 比真正的 SDF 便宜，远看就是镜头鬼影的六边形光斑。
-float hexDistance(vec2 p)
+// 圆形散景：中心亮、边缘柔化，接近大光圈镜头的失焦光斑。
+// 不用硬边多边形，避免出现“游戏图标”式的六边形。
+float bokeh(vec2 p, float radius)
 {
-    return max(abs(p.x) * 0.8660254 + abs(p.y) * 0.5, abs(p.y));
+    float r = length(p) / max(radius, 1.0e-4);
+    float disc = 1.0 - smoothstep(0.78, 1.02, r);
+    float core = exp(-r * r * 2.8);
+    float rim = smoothstep(0.55, 0.90, r) * (1.0 - smoothstep(0.90, 1.02, r));
+    return disc * (0.35 + 0.55 * core + 0.25 * rim);
 }
 
 void main()
@@ -100,6 +110,10 @@ void main()
     {
         vec2 sunUV = vec2(push.params1.z, push.params1.w);
         float visibility = sunVisibility(sunUV);
+        // 太阳贴近画面边缘时淡出：完全移出画面后不再出现“凭空”的鬼影。
+        float edge = min(min(sunUV.x, 1.0 - sunUV.x),
+                         min(sunUV.y, 1.0 - sunUV.y));
+        float sourceFade = smoothstep(0.0, 0.06, edge);
         float aspect = max(push.params1.y, 0.1);
         int ghosts = clamp(int(push.params1.x), 0, 8);
 
@@ -109,38 +123,37 @@ void main()
             if (i >= ghosts)
                 break;
 
-            // 0.35 起步，逐个向屏幕中心镜像并穿过中心；k>1 的鬼影落在
-            // 太阳对面，正是广角镜头里最常见的那条光斑链。
-            float k = 0.35 + 0.42 * float(i);
-            vec2 center = sunUV + (vec2(0.5) - sunUV) * k;
+            // 大小和落点带一点不规则，避免像等距复制出来的图标。
+            float rnd = fract(sin(float(i) * 12.9898 + 4.1414) * 43758.5453);
+            float k = 0.30 + 0.36 * float(i) + 0.10 * (rnd - 0.5);
+            vec2 center = mix(sunUV, vec2(0.5), k);
             vec2 p = inUV - center;
             p.x *= aspect;
 
-            float radius = 0.016 + 0.010 * float(i % 3);
-            float hex = hexDistance(p);
-            // 略微填充中心、边缘再提亮：纯边缘环看起来像 UI 描边，
-            // 实心 + 亮边的光斑更接近镀膜镜头的散景。
-            float body = 1.0 - smoothstep(radius * 0.60, radius, hex);
-            float rim = mix(0.45, 1.0, smoothstep(radius * 0.25, radius * 0.90, hex));
+            float radius = 0.012 + 0.020 * fract(float(i) * 0.6180339);
+            // 三个通道用略不同的半径，形成很轻的紫/青色散。
+            vec3 shape = vec3(
+                bokeh(p, radius * 1.035),
+                bokeh(p, radius),
+                bokeh(p, radius * 0.965));
 
-            // 轻微色散：奇偶鬼影在冷/暖之间摆动，模拟镀膜镜头的偏色。
             float hue = fract(float(i) * 0.37);
             vec3 tint = mix(vec3(0.55, 0.78, 1.0), vec3(1.0, 0.62, 0.35), hue);
-            vec3 tinted = mix(push.color.rgb, tint, 0.55);
-            ghostColor += tinted * body * rim;
+            vec3 tinted = mix(push.color.rgb, tint, 0.42);
+            ghostColor += tinted * shape * (0.55 + 0.45 * rnd);
         }
 
         // 横向光条：只在太阳所在高度附近，向两侧快速衰减。
-        float streak = exp(-abs(inUV.y - vec2(push.params1.z, push.params1.w).y) * 260.0) *
-                       exp(-abs(inUV.x - vec2(push.params1.z, push.params1.w).x) * 3.0);
+        float streak = exp(-abs(inUV.y - sunUV.y) * 220.0) *
+                       exp(-abs(inUV.x - sunUV.x) * 2.2);
         vec3 streakColor = mix(push.color.rgb, vec3(0.65, 0.82, 1.0), 0.25);
 
         // 日盘周围的彩色细环，强度低，只用来破掉“纯白圆点”的塑料感。
         float ring = exp(-abs(theta - angularRadius * 2.6) / max(angularRadius * 0.35, 0.0001));
 
-        radiance += push.color.rgb * push.params0.x * flare * 0.05 * ring * sky;
-        radiance += ghostColor * flare * visibility * 0.22;
-        radiance += streakColor * flare * visibility * 0.14 * streak;
+        radiance += push.color.rgb * push.params0.x * flare * 0.04 * ring * sky;
+        radiance += ghostColor * flare * visibility * sourceFade * 0.20;
+        radiance += streakColor * flare * visibility * sourceFade * 0.08 * streak;
     }
 
     outColor = vec4(radiance, 1.0);

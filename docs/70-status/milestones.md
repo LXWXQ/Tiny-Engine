@@ -1209,7 +1209,7 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 
 **实现**：
 - 新增场景级 `scene.sun`（`SceneSunComponent`，分类“大气”）8 个属性：`enabled`（默认 true）、`intensity` 12、`angularRadius` 0.8、`glow` 0.35、`flareIntensity` 0.8、`flareGhosts` 7、`occlusion` true、`color` (1,0.96,0.88,1)；不单独保存太阳方向，方向与光色实时跟随 `scene.environment` 的方向光。Inspector 可添加/启用/调参/移除，随场景 v4 `sceneComponents` 存读。
-- 新增 `src/Render/SunFlarePass.{h,cpp}` 与 `shaders/sunflare.frag`：全屏三角形，插在 TAA 之后、Bloom 之前；从方向光求 `toSun = -normalize(directionalLightDir)`，把 `camera + toSun * 10000` 投到屏幕求太阳 UV 与 `inFront`，片元用世界空间射线夹角画日盘和两段日冕。读 `gbDepth` 做 5 点可见度采样，只调制日盘与鬼影整体强度；沿太阳-屏幕中心镜像画最多 8 个六边形鬼影（体/亮边/hue 色散），再叠横向光条。`LOAD` 已有 HDR、纯加色（颜色 `ONE/ONE`、alpha `ZERO/ONE`），无深度附件、不写深度；关闭时整个 pass 不注册并只打印一次 `[Sun] disabled | settings.sunEnabled=0`。
+- 新增 `src/Render/SunFlarePass.{h,cpp}` 与 `shaders/sunflare.frag`：全屏三角形，插在 TAA 之后、Bloom 之前；从方向光求 `toSun = -normalize(directionalLightDir)`，把 `camera + toSun * 10000` 投到屏幕求太阳 UV 与 `inFront`，片元用世界空间射线夹角画日盘和两段日冕。读 `gbDepth` 做 5 点可见度采样，只调制日盘与鬼影整体强度；沿太阳-屏幕中心镜像画最多 8 个柔和圆形散景鬼影（圆形 disc + core/rim、hue 色散与轻微通道半径差，落点/大小带确定性抖动），再叠横向光条；鬼影与光条在太阳位于相机背后时直接关闭、出画时淡出。`LOAD` 已有 HDR、纯加色（颜色 `ONE/ONE`、alpha `ZERO/ONE`），无深度附件、不写深度；关闭时整个 pass 不注册并只打印一次 `[Sun] disabled | settings.sunEnabled=0`。
 - `EngineSettings` 增加 `sunEnabled=false` 与同名字段，`EngineConfig` 使用独立 `sun` 节点、不升版本；`--sun-demo` 在空场景创建或启用 `scene.sun` 与 `scene.environment`，设 intensity 14、angularRadius 0.9、glow 0.45、flare 0.9、ghosts 7、occlusion true、颜色 (1,0.93,0.82)，方向光 (0.32,-0.30,0.90) / 光色 (1,0.90,0.78)，相机 (0,35,80)、euler(-8°,180°,0)。
 
 **测试**：
@@ -1218,5 +1218,7 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 - 1920x1080 截图 `build/sun_demo_bloom.png`（30 帧、frame 25、bloom 开）：日盘、光晕、水面高光与地形链路可见；日盘中心过曝偏大、鬼影较淡，作为后续调参基线。
 - 新增 `f6-sun` 用例（30 帧、空场景 + `--sun-demo`），断言 `[Sun] initialized |`、`demo scene ready |`、`first draw |` 与 0/0。
 - 全套回归 **78 项** ALL PASS（含 `f6-sun`），stderr 全 0，验证日志 `build/validation/20261110-155457`；DocCheck PASS（documents=68 lines=12316）。
+
+**后续观感修复（2026-11-10）**：用户反馈镜头光晕的六边形鬼影像贴图。`sunflare.frag` 删除 `hexDistance()`，改用圆形 `bokeh`（disc + core + rim、三通道半径差、落点/大小确定性抖动）；同时把 `push.color.a`（`inFront`）接入 `sunVisibility()`：太阳在相机背后时 CPU 保留的默认屏幕中心 UV 不再生成鬼影，太阳出画时按 `sourceFade` 淡出。`--sun-demo` 相机背后实测 `inFront=0`、画面无鬼影；全量回归 ALL PASS（含 `f6-sun`），验证日志 `build/validation/20261110-163759`；DocCheck PASS。
 
 **边界**：屏幕空间后效，不是天空盒里的真实太阳；方向/光色只跟随 `scene.environment`，不能单独移动；5 点深度只判断日盘整体可见度，鬼影不逐像素遮挡，也不进 TAA 历史；云不写深度，日盘会叠在云层上；太阳不进平面反射/SSR，默认关闭。

@@ -270,7 +270,7 @@ updated: 2026-11-10
 | F6-03 | 未开始 | Compute Bloom（金字塔迁到 compute） | F6 | 输出与当前 bloom 视觉一致、GPU 时间下降 |
 | F6-04 | 未开始 | 切线空间法线贴图（启用 `getNormalFromMap()`，先补切线或 TBN） | F4 | 法线贴图生效；`normalMaps` 不再白绑（tech-debt #3） |
 | F6-05 | 已完成 | 体积云（场景级 `scene.clouds` 组件 + 全屏 raymarch `CloudPass`） | F6 | coverage/密度/高度/厚度可调；透明表面读到带云 HDR；`f6-clouds` 通过；云不进平面反射/阴影作为边界 |
-| F6-06 | 已完成 | 太阳盘 + 镜头光晕（场景级 `scene.sun` 组件 + 全屏后效 `SunFlarePass`） | F6、F5-06 | 8 参数可调；方向/光色跟随 `scene.environment`；5 点深度判定日盘遮挡；六边形鬼影/色散/光条；TAA 后 Bloom 前纯加色；`f6-sun` 通过；默认关闭，云遮挡为边界 |
+| F6-06 | 已完成 | 太阳盘 + 镜头光晕（场景级 `scene.sun` 组件 + 全屏后效 `SunFlarePass`） | F6、F5-06 | 8 参数可调；方向/光色跟随 `scene.environment`；5 点深度判定日盘遮挡；圆形散景鬼影/色散/光条（太阳在背后/出画不产生）；TAA 后 Bloom 前纯加色；`f6-sun` 通过；默认关闭，云遮挡为边界 |
 | F4-01 | 未开始 | glTF 保留 node 层级（决策 13 的翻转）、primitive 独立变换、异步加载 | — | 载入后可改任意 node 局部变换并实时可见 |
 | F4-02 | 未开始 | 模型 LOD 链（GPU 端 LOD 选级的前置，见 F1 剩余项） | F4-01 | 同一模型可切 2~3 级，切换无跳变 |
 | F1-R1 | 已取代 | 粒子不接入 `ExternalInstance`：改由 F5-07 的独立组件与 `ParticlePass` 落地 | F5-07 | 不再以复用 ExternalInstance 为目标；粒子独立缓冲、独立前向 Pass |
