@@ -68,6 +68,11 @@ updated: 2026-10-30
 `EngineSettings` + 相机位姿进配置；场景 / 模型 / 材质**不进**。
 后者是**资源**不是**设置**，恢复它们涉及资产路径、加载顺序、失败回退，是另一件事。
 
+F5-06 起，阴影 / Bloom / SSAO / SSR / 运动模糊 / TAA / 水面 / 雾 / 环境这 9 类画质功能由
+场景级组件（`.scene.json` v4 顶层 `sceneComponents`）持有；`engine.json` 仍是**启动默认值**，
+载入场景后由组件写回 `EngineSettings` 缓存。编辑器里 Save/Reload `engine.json` 会以新默认值
+重建当前场景的组件，属于“恢复默认”，不是保存场景。
+
 ## 7. 自检
 
 ```powershell
@@ -86,5 +91,5 @@ updated: 2026-10-30
 1. 加进 `EngineSettings`（`src/Core/FrameInfo.h`）；
 2. 在 `EngineConfig` 的 serialize / deserialize 两侧同步；
 3. 若影响配置结构，**升 `version` 并加迁移函数**，同时更新本文件 §3；
-4. 在 ImGui 面板加控件；
+4. 若属于场景画质功能，注册 `scene.*` 组件并接入 `syncSceneSettings()`；仅调试/提交路径开关才留在 ImGui/Render 面板；
 5. 在 `--config-test` 里补校验（至少确保往返一致）。

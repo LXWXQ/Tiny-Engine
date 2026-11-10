@@ -127,6 +127,14 @@ struct SceneDescription
 
     std::vector<EntityDescription> entities;
 
+    // v4：场景级功能组件（阴影 / Bloom / 雾 / 水面…）。
+    // 与实体组件分开存，因为它们的宿主是 Scene 内部的隐藏设置实体。
+    std::vector<ComponentRecord> sceneComponents;
+
+    // 区分“旧文件里没有 sceneComponents 字段”（从 EngineSettings 初始化）
+    // 和“v4 文件写了空数组”（用户把全部场景功能都移除了）。
+    bool sceneComponentsAuthored = false;
+
     // F3：体素世界（seed + 差分）。老场景文件没有这一段，读的时候为空。
     std::vector<VoxelWorldDescription> voxelWorlds;
 };

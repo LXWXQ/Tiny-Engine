@@ -1117,3 +1117,24 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 **回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261106-180307`；DocCheck PASS。
 
 **边界**：泡沫仍是观感模型，不是白浪频谱/破碎波模拟；没有独立的泡沫贴图，只借用 18m 水波法线的低频；泡沫只覆盖岸边，湖心/深海不会出现白浪。用户原始截图机位来自当时的 `config/engine.json`，本条用同一相机复现高角度水面，不代表该截图逐像素一致。
+
+## F5-06：场景级组件系统（2026-11-10）
+
+**问题**：阴影、Bloom、SSAO、雾、水面等画质功能原本只能改 `EngineSettings`（硬编码在 `RenderSettingsPanel` 或 engine.json），不能随场景保存、不能按场景开关，也不进撤销栈。编辑器因此有两套入口：实体组件 Inspector 和渲染设置面板；新增一个功能要同时改面板、配置和渲染器，「场景里有哪些功能」无法从一处看清。
+
+**实现**：
+- `ComponentRegistry` 增加 `ComponentScope { Entity, Scene }` 与 `ComponentOptions/ComponentDescriptor::scope`；现有 16 个实体组件保持 Entity。
+- 新增 `src/Scene/SceneComponents.h/.cpp` 注册 9 个 `scene.*` 组件：environment、shadows、bloom、ssao、ssr、motionBlur、taa、water、fog；每个含 `enabled` 与原 `EngineSettings` 参数，属性带范围/提示。
+- `Scene` 构造时创建一个无 Transform/Hierarchy/Name 的隐藏 `sceneSettingsEntity`，Scene scope 组件只能挂它；实体组件不能挂它，它也不会出现在 Hierarchy、可见实体与普通整场景实体捕获中；`destroyEntity` 拒绝销毁。
+- 通用 add/remove/apply 对 Scene scope 立即调用 `syncSceneSettings()`：先把本函数拥有的 `EngineSettings` 字段恢复默认，再让存在且启用的组件覆盖；组件缺失或 `enabled=false` 即功能关闭。方向光归一化，全零回默认。
+- 场景描述 v4：顶层 `sceneComponents` + `sceneComponentsAuthored`；旧文件缺字段时从当前 `EngineSettings` 初始化（画面不变），v4 空数组表示用户移除了全部组件。`SceneSerializer` 抽公共组件读写函数，`roundTrip` 比较顶层场景组件；预制体不携带场景组件。
+- Inspector 无选中时显示 `Scene Components`，`+ Add Scene Component` 只列 Scene scope；添加/启用/调参/移除走 `SetComponentRecordCommand`，移除即关闭。选中实体时仍只列 Entity scope。
+- `RenderSettingsPanel` 收敛：移除曝光/Bloom/SSAO/运动模糊/TAA/水面/SSR/雾/阴影/方向光滑杆，保留 engine.json Save/Reload、场景功能入口与 GPU 批/merged/Hi-Z/地形批调试；Reload 会重建场景组件。
+- `Application` 载入 engine.json 后、`FirstApp::loadConfig()` 重新加载后、`EditorLayer::newScene()` 新建场景后调用 `resetSceneComponentsFromSettings()`。
+
+**测试**：
+- `[Scene] ECS component selfTest PASS | components=25 | systems=7`：9 个 Scene scope 描述符与默认挂载；scope 双向拒挂；exposure 修改后 settings 同步；Bloom/Fog 禁用/移除后开关关闭、重新添加恢复；capture 有 9 条且 authored=true；clear 后全关；reset 后恢复；隐藏实体不可销毁。
+- `[Editor] selfTest PASS`：capture 的 environment.exposure=1.35 经 roundTrip、JSON 存读与 `buildFromDescription` 后仍为 1.35，场景组件仍为 9 条。
+- 全套回归 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261110-105403`；DocCheck PASS（documents=68 lines=12179）。
+
+**边界**：`EngineSettings` 仍是渲染器读取的缓存，场景组件是编辑期 source of truth；旧场景没有 `sceneComponents` 时从当前 settings 初始化，可能继承上一场景运行时改动而不是 engine.json 原值；组件仍编译期注册，没有脚本/热插拔；`scene.*` 不覆盖 GPU 批、merged buffers、Hi-Z、terrain batch 等调试开关。

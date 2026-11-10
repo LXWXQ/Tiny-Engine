@@ -3,6 +3,7 @@
 #include "Editor/EditorPanel.h"
 #include "Editor/Commands.h"
 #include "Editor/TextureLibrary.h"
+#include "Scene/ComponentRegistry.h"
 
 #include <entt/entt.hpp>
 
@@ -26,9 +27,11 @@ private:
     void drawMesh(EditorState& state, entt::entity entity);
     void drawMaterial(EditorState& state, entt::entity entity);
     void drawRenderTag(EditorState& state, entt::entity entity);
-    // 元数据注册的扩展组件（Spin / Orbit / 以后新增的特性）。
-    // 这里不写死组件类型，全部按 ComponentRegistry 的描述绘制。
-    void drawComponents(EditorState& state, entt::entity entity);
+    // 元数据注册的扩展组件（Spin / Orbit / 场景阴影 / Bloom…）。
+    // 这里不写死组件类型，全部按 ComponentRegistry 的描述绘制；
+    // scope 决定只列出实体组件还是场景功能组件。
+    void drawComponents(EditorState& state, entt::entity entity,
+                        scene::ComponentScope scope);
 
     // E6：一行贴图（当前文件名 + 选择按钮 + 弹窗列表）。
     // srgb 由贴图语义决定：颜色类 true，法线/金属粗糙度/AO 必须 false。

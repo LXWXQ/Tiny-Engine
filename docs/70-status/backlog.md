@@ -4,8 +4,8 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~120 行
-updated: 2026-11-06
+size: ~130 行
+updated: 2026-11-10
 ---
 
 # 后续任务台账
@@ -278,6 +278,7 @@ updated: 2026-11-06
 | F5-03 | 已完成 | 内置效果/运动组件第一批：Bob、Pulse、Sway、LookAt、Follow | F5-01 | `+ Add Component` 列出 7 个 `effects.*`；场景存读/预制体/撤销自动生效；`selftest-default` 断言 `components=7 systems=7` |
 | F5-04 | 已完成 | 原生组件接入统一 Add Component：Character/Render Tag 可增删，Managed 组件置灰说明；v3 序列化去重 | F5-01 | 16 个描述符（7 effects + 9 native）；Character/Render Tag 经 Inspector 增删改并撤销；原生组件不写入 v3 `components`；`components=16 systems=7` |
 | F5-05 | 已完成 | 组件编辑工作流：属性范围/提示/单属性重置、组件复制/粘贴/重置、Add Component 置顶 + 搜索 | F5-04 | 7 effects 与 Character 属性有范围/提示；组件可跨实体复制粘贴并撤销；Add 弹窗可搜索；`selftest-default` 断言属性元数据且全套回归通过 |
+| F5-06 | 已完成 | 场景级组件系统：阴影/Bloom/SSAO/SSR/运动模糊/TAA/水面/雾/环境作为 scope=Scene 组件，可添加/启用/调参/移除，v4 序列化 | F5-05 | Inspector 无选中可管理；旧场景兼容；场景存读保留；自检断言 25 描述符与 sync |
 
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
@@ -314,6 +315,8 @@ updated: 2026-11-06
 > F5-04 原生组件接入已完成（2026-11-06）：`ComponentRegistry` 描述符新增 `addable`/`removable`/`drawProperties`/`serialized`/`required`/`canRemove` 与 `unavailableReason`；新增 `src/Scene/NativeComponents.*` 注册 9 个 `native.*`（Name/Transform/Hierarchy 必需只读，Character Controller 8 个 Float 与 Render Tag 可增删，Camera/Terrain/Streaming/VoxelWorld 为创建菜单托管、菜单置灰）。`captureComponentRecords` 与加载循环按 `serialized` 过滤，原生组件仍走专用字段，不重复写 v3。Inspector 的 Character 参数与 Character/Render Tag 移除均走 `SetComponentRecordCommand`；`DeleteEntityCommand` 增加 Character 显式快照。`[Scene] ECS component selfTest PASS | components=16 | systems=7` 覆盖 native 增删与去重；`[Editor] prefab selfTest PASS` 断言 capture 只含 effects.spin 且 Character radius 保留。全套 75 项 ALL PASS（日志 `build/validation/20261106-150438`），DocCheck PASS（documents=68 lines=11864）。详见 [milestones](milestones.md#f5-04原生组件接入统一-add-component2026-11-06)。
 >
 > F5-05 组件编辑工作流已完成（2026-11-10）：`PropertyDescriptor` 增加 `hasRange/minimum/maximum/dragSpeed/tooltip` 纯 UI 元数据，7 个效果与 Character 的 8 个参数全部登记范围、拖动速度和中文提示；Inspector 按元数据生成 Drag 控件，右键可重置单个属性。新增跨实体组件剪贴板与复制/粘贴/重置菜单，`+ Add Component` 移到组件区顶部并支持名称/分类/id 搜索，组件头默认展开。所有写入仍走 `SetComponentRecordCommand`。`[Scene] ECS component selfTest` 新增属性元数据断言。详见 [milestones](milestones.md#f5-05组件编辑工作流2026-11-10)。
+>
+> F5-06 场景级组件系统已完成（2026-11-10）：新增 `ComponentScope { Entity, Scene }` 与 9 个 `scene.*` 组件（environment/shadows/bloom/ssao/ssr/motionBlur/taa/water/fog），挂在 Scene 构造时创建的隐藏设置实体上；Scene scope 只能挂它、实体组件不能挂它，Hierarchy 与普通实体捕获看不到。`syncSceneSettings()` 把存在且启用的组件写回 `EngineSettings`，缺失或禁用即关闭。场景 v4 新增顶层 `sceneComponents` 与 `sceneComponentsAuthored`，旧文件从当前 settings 初始化；Inspector 无选中时显示 Scene Components，添加/调参/移除走撤销栈；`RenderSettingsPanel` 只保留 engine.json Save/Reload 与 GPU 批调试。`[Scene] ECS component selfTest PASS | components=25 | systems=7`，编辑器自检覆盖 v4 往返；全套 75 项 ALL PASS，验证日志 `build/validation/20261110-105403`，DocCheck PASS（documents=68 lines=12179）。详见 [milestones](milestones.md#f5-06场景级组件系统2026-11-10)。
 >
 > R-08 水面暗反射补天空底色已完成（2026-11-06）：用户标注的远水发暗不是“黑天空反射”，旧 R-07 alpha 覆盖率在三种机位下都只有 UI 像素差（≤2537），已完整回退。`shaders/water.frag` 改为按反射亮度只提亮暗部（`0.34 * (1-smoothstep(0.04,0.22,luma))`），并把 `shallow/deep` 提到 `(0.050,0.160,0.167)`、`(0.016,0.058,0.075)`，远水 alpha 上限 0.92→0.89；亮水面/天空倒影保持原对比度。低机位 [16,8,140] 同机位 before/after 见 `build/water_tune_compare_v2.png`，水面区域 luma 76.2→81.8、蓝色 94.2→99.6。详见 [milestones](milestones.md#r-08水面暗反射补天空底色2026-11-06)，验证日志 `build/validation/20261106-164734`。
 

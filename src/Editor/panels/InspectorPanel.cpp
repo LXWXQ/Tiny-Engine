@@ -448,8 +448,19 @@ void InspectorPanel::draw(EditorState& state)
 
     if (entity == entt::null || !registry.valid(entity))
     {
-        ImGui::TextDisabled("没有选中对象。");
-        ImGui::TextDisabled("在 Hierarchy 里点一个对象，或用 Assets 双击模型加进来。");
+        // 没有选中对象时显示“场景级功能组件”：阴影 / Bloom / 雾 / 水面…
+        // 它们和实体组件共用同一套组件控件，只是宿主是 Scene 内部的设置实体。
+        Scene* scene = state.services.scene;
+        if (scene != nullptr && scene->getSceneSettingsEntity() != entt::null)
+        {
+            drawComponents(state, scene->getSceneSettingsEntity(),
+                           scene::ComponentScope::Scene);
+        }
+        else
+        {
+            ImGui::TextDisabled("没有选中对象。");
+            ImGui::TextDisabled("在 Hierarchy 里点一个对象，或用 Assets 双击模型加进来。");
+        }
         ImGui::End();
         return;
     }
@@ -487,12 +498,13 @@ void InspectorPanel::draw(EditorState& state)
     drawMesh(state, entity);
     drawMaterial(state, entity);
     drawRenderTag(state, entity);
-    drawComponents(state, entity);
+    drawComponents(state, entity, scene::ComponentScope::Entity);
 
     ImGui::End();
 }
 
-void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
+void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
+                                    scene::ComponentScope scope)
 {
     Scene* scene = state.services.scene;
     if (scene == nullptr || state.services.registry == nullptr)
@@ -503,11 +515,20 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
     if (components.empty())
         return;
 
+    const bool sceneScope = scope == scene::ComponentScope::Scene;
     ImGui::Separator();
-    ImGui::TextDisabled("ECS Components");
+    if (sceneScope)
+    {
+        ImGui::TextDisabled("Scene Components");
+        ImGui::TextDisabled("场景级功能：添加 / 启用 / 调参 / 移除。移除即关闭该功能。");
+    }
+    else
+    {
+        ImGui::TextDisabled("ECS Components");
+    }
 
     // 添加入口放在列表顶部：组件越多，越不应该滚到底部才能加。
-    if (ImGui::Button("+ Add Component"))
+    if (ImGui::Button(sceneScope ? "+ Add Scene Component" : "+ Add Component"))
     {
         componentFilter[0] = '\0';
         ImGui::OpenPopup("##add_component");
@@ -515,7 +536,11 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
 
     const scene::ComponentDescriptor* clipboardDescriptor = nullptr;
     if (state.componentClipboard)
+    {
         clipboardDescriptor = components.find(state.componentClipboard->type);
+        if (clipboardDescriptor != nullptr && clipboardDescriptor->scope != scope)
+            clipboardDescriptor = nullptr;
+    }
     if (clipboardDescriptor != nullptr)
     {
         ImGui::SameLine();
@@ -548,6 +573,8 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
 
         for (const scene::ComponentDescriptor& descriptor : components.descriptors())
         {
+            if (descriptor.scope != scope)
+                continue;
             if (!descriptor.exposed || descriptor.has(registry, entity))
                 continue;
             if (!matchesComponentFilter(descriptor, query))
@@ -588,10 +615,14 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
         ImGui::EndPopup();
     }
 
+    bool drewAny = false;
     for (const scene::ComponentDescriptor& descriptor : components.descriptors())
     {
+        if (descriptor.scope != scope)
+            continue;
         if (!descriptor.has(registry, entity))
             continue;
+        drewAny = true;
         // 原生组件由固定面板绘制（Transform / Character / Render Tag…），
         // 这里只负责元数据扩展组件，避免同一份字段出现两次。
         if (!descriptor.drawProperties)
@@ -668,6 +699,12 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
         }
 
         ImGui::PopID();
+    }
+
+    if (!drewAny && sceneScope)
+    {
+        ImGui::TextDisabled("当前场景没有功能组件，渲染使用引擎默认。");
+        ImGui::TextDisabled("点上面的 + Add Scene Component 添加阴影、Bloom、雾等。");
     }
 }
 

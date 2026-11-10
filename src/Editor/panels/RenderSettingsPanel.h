@@ -6,36 +6,29 @@
 namespace editor
 {
 
-// 渲染设置面板（E5-b）：把 EngineSettings 里那些"改一下就能立刻看出差别"的
-// 开关与滑杆摆到编辑器里。
+// 渲染设置面板：场景渲染功能已经全部迁移到“场景组件”
+// （Inspector 没有选中对象时显示，或从这里一键跳过去）。
 //
-// 之前这些字段只能改 config/engine.json 或命令行参数 —— 而 engine.json 要
-// 重启才生效，调曝光/辉光/SSAO 时这条路径基本不可用（眼睛看到的和值是断开的）。
-// 这里直接改 Scene 持有的 EngineSettings 实例，下一帧就生效。
+// 这个面板现在只负责两件事：
+//   1. EngineSettings 的引擎级默认值（config/engine.json 的保存 / 重载）；
+//   2. 不属于场景内容的提交路径调试开关（GPU batch / Hi-Z / terrain batch）。
 //
-// 注意：这些值属于"引擎默认预设"，不是场景文档的内容 ——
-// 所以既不进撤销栈，也不让 documentDirty 变脏。要留到下次启动，按
-// "Save to engine.json"（否则退出后回到磁盘上的值）。
+// 场景里实际启用哪些功能、每个功能怎么调参，全部由 SceneComponents 决定；
+// 不要在别处再加一套曝光/阴影/Bloom 控件，否则两套 UI 会写同一份值。
 class RenderSettingsPanel : public EditorPanel
 {
 public:
     const char* name() const override { return "Render"; }
     void draw(EditorState& state) override;
 
-    // SSAO 核大小必须是 4..64 的偶数：slider 拖动时允许任意整数，
-    // 真正写回设置前夹一手，避免 0 或 4096 直接打崩采样循环。
+    // SSAO 核大小必须是 4..64 的偶数：场景 SSAO 组件共用这条规则，
+    // 这里保留纯函数回归，避免夹取逻辑被改坏。
     static int clampKernelSize(int value);
 
     static bool selfTest();
 
 private:
-    void drawLight(EngineSettings& settings);
     void drawAdvanced(EngineSettings& settings);
-
-    // 打开面板那一刻的会话基线：用户试了一堆值想回到"刚才的样子"，
-    // 这时候该回的是本次启动时的快照，不是代码里的编译期默认值。
-    EngineSettings baseline;
-    bool baselineCaptured = false;
 };
 
 } // namespace editor

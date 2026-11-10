@@ -153,6 +153,9 @@ scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager,
 	// W1：把配置应用到场景。顺序很重要 —— Scene::init 里会摆好默认相机位姿，
 	// 配置只能在那之后再覆盖，否则会被 init 的默认值抹掉。
 	scene->getSettings() = loadedSettings;
+	// 场景级组件（阴影 / Bloom / 雾…）是渲染设置的场景内副本；
+	// 配置只在 Scene 构造后到这里才可用，所以要在这里重建一次。
+	scene->resetSceneComponentsFromSettings();
 	// B-03: --terrain-test enables the GPU-vs-CPU selection parity mirror.
 	scene->getSettings().terrainGpuSelectionSelfTest = diagnosticsOptions.terrainTest;
 	if (hasCamera)
@@ -1725,6 +1728,9 @@ void FirstApp::saveConfig()
 void FirstApp::loadConfig()
 {
 	EngineConfig::load(scene->getSettings());
+	// “重新加载配置”把 engine.json 当作新的默认值：同步重建场景功能组件，
+	// 否则 Inspector 里显示的还是旧值，而渲染却已经用了新配置。
+	scene->resetSceneComponentsFromSettings();
 
 	CameraState cam;
 	cam.position = scene->getCameraTransform().getTranslation();

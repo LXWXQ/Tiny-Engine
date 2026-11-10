@@ -4,8 +4,8 @@ title: 场景编辑器
 type: system
 scope: 编辑器的整体结构、分层边界与面板清单
 read-when: 要动编辑器任何部分之前，先读这一页决定该看哪份子文档
-size: ~90 行
-updated: 2026-11-04
+size: ~95 行
+updated: 2026-11-10
 ---
 
 # 场景编辑器
@@ -45,10 +45,12 @@ updated: 2026-11-04
 
 - 层级树：选中、拖拽重挂、右键删除
 - 属性面板：变换 / 网格信息 / 材质 / 渲染标签，变换走命令栈
+- 场景级组件：无选中时在 Inspector 管理 `scene.*`（阴影/Bloom/SSAO/SSR/运动模糊/TAA/水面/雾/环境），
+  添加 / 启用 / 调参 / 移除即功能开关；组件进撤销栈并随场景保存
 - 控制台：分级过滤、自动滚动
 - 菜单栏：File / Edit / Play / View / Help，状态条显示脏标记与撤销深度
 - 播放状态机：Editing / Playing / Paused，Stop 时恢复快照
-- 场景存读：`*.scene.json`
+- 场景存读：`*.scene.json`（v4，实体 `components` + 顶层 `sceneComponents`）
 - 预制体：选中子树保存为 `*.prefab.json`、实例化到当前场景、撤销/重做（[prefabs](prefabs.md)）
 - 离屏视口：3D 画面渲染到纹理，作为 ImGui 图片嵌在面板里（面板环绕而非覆盖）
 - 视口点选：AABB 粗筛 + 三角形精确求交，点空白处取消选中
@@ -58,6 +60,8 @@ updated: 2026-11-04
 - 资产面板：扫描 `Resources/Models`，双击即通过命令栈创建实体（可撤销）
 - 程序化地形：`Create -> Terrain` / Hierarchy 按钮创建；Inspector 改参数、Generate/Reset/Randomize、High Detail 257；创建与重建都走命令栈；地形没有 MaterialComponent，顶点色 + 片元程序化材质层走既有 G-Buffer 路径
 - 帮助 → 示例：一键加载预设场景（体素玻璃 / 体素世界 / 程序化地形 / 流送地形），自动替换当前文档并取景；有未保存修改时先走确认框，示例本身不置脏
+- 渲染设置面板收敛：只保留 engine.json 默认值（Save/Reload）与 GPU 批/merged/Hi-Z/地块批调试；
+  画质入口统一到 Inspector 场景组件
 - 纯 3D 截图：`--screenshot-viewport` 读视口纹理，不含 UI
 
 ## 启动

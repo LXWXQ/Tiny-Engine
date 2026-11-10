@@ -19,8 +19,9 @@ namespace
 {
 // v2（2026-11-04）：新增 voxelWorlds（seed + 差分）。
 // v3（2026-11-06）：每个实体新增可选 components（元数据注册的扩展组件）。
-// 旧文件缺这一段时按空处理，所以读取端不按版本号拒绝，只有写入端跟着升版本。
-constexpr int kCurrentVersion = 3;
+// v4（2026-11-10）：新增顶层 sceneComponents（阴影 / Bloom / 雾等场景级功能），
+// 空数组表示用户已把所有场景功能移除；旧文件没有该字段时从 EngineSettings 初始化。
+constexpr int kCurrentVersion = 4;
 
 std::string toRelative(const std::string& absolutePath)
 {
@@ -208,10 +209,71 @@ json writeTerrainConfig(const terrain::TerrainConfig& cfg)
     return t;
 }
 
+scene::ComponentRecord readComponentRecord(const json& c)
+{
+    scene::ComponentRecord record;
+    if (!c.is_object())
+        return record;
+    record.type = c.value("type", std::string());
+    if (record.type.empty())
+        return record;
+    if (c.contains("properties") && c["properties"].is_array())
+    {
+        for (const json& p : c["properties"])
+        {
+            if (!p.is_object())
+                continue;
+            const std::string propertyName = p.value("name", std::string());
+            if (propertyName.empty())
+                continue;
+            scene::PropertyType type = scene::PropertyType::Float;
+            if (!propertyTypeFromName(p.value("type", std::string()), type))
+                continue;
+            if (!p.contains("value"))
+                continue;
+            scene::NamedProperty property;
+            property.name = propertyName;
+            property.label = propertyName;
+            if (!propertyValueFromJson(p["value"], type, property.value))
+                continue;
+            record.properties.push_back(std::move(property));
+        }
+    }
+    return record;
+}
+
+json writeComponentRecord(const scene::ComponentRecord& record)
+{
+    json c;
+    c["type"] = record.type;
+    json properties = json::array();
+    for (const scene::NamedProperty& property : record.properties)
+    {
+        json p;
+        p["name"] = property.name;
+        p["type"] = propertyTypeName(property.value.type);
+        p["value"] = propertyValueToJson(property.value);
+        properties.push_back(std::move(p));
+    }
+    c["properties"] = std::move(properties);
+    return c;
+}
+
 scene::SceneDescription fromJson(const json& root)
 {
     scene::SceneDescription description;
     description.version = root.value("version", kCurrentVersion);
+
+    if (root.contains("sceneComponents") && root["sceneComponents"].is_array())
+    {
+        description.sceneComponentsAuthored = true;
+        for (const json& c : root["sceneComponents"])
+        {
+            scene::ComponentRecord record = readComponentRecord(c);
+            if (!record.type.empty())
+                description.sceneComponents.push_back(std::move(record));
+        }
+    }
 
     if (!root.contains("entities") || !root["entities"].is_array())
         return description;
@@ -288,35 +350,9 @@ scene::SceneDescription fromJson(const json& root)
         {
             for (const json& c : e["components"])
             {
-                if (!c.is_object())
-                    continue;
-                scene::ComponentRecord record;
-                record.type = c.value("type", std::string());
-                if (record.type.empty())
-                    continue;
-                if (c.contains("properties") && c["properties"].is_array())
-                {
-                    for (const json& p : c["properties"])
-                    {
-                        if (!p.is_object())
-                            continue;
-                        const std::string propertyName = p.value("name", std::string());
-                        if (propertyName.empty())
-                            continue;
-                        scene::PropertyType type = scene::PropertyType::Float;
-                        if (!propertyTypeFromName(p.value("type", std::string()), type))
-                            continue;
-                        if (!p.contains("value"))
-                            continue;
-                        scene::NamedProperty property;
-                        property.name = propertyName;
-                        property.label = propertyName;
-                        if (!propertyValueFromJson(p["value"], type, property.value))
-                            continue;
-                        record.properties.push_back(std::move(property));
-                    }
-                }
-                entity.components.push_back(std::move(record));
+                scene::ComponentRecord record = readComponentRecord(c);
+                if (!record.type.empty())
+                    entity.components.push_back(std::move(record));
             }
         }
 
@@ -445,21 +481,7 @@ json toJson(const scene::SceneDescription& description)
         {
             json components = json::array();
             for (const scene::ComponentRecord& record : e.components)
-            {
-                json c;
-                c["type"] = record.type;
-                json properties = json::array();
-                for (const scene::NamedProperty& property : record.properties)
-                {
-                    json p;
-                    p["name"] = property.name;
-                    p["type"] = propertyTypeName(property.value.type);
-                    p["value"] = propertyValueToJson(property.value);
-                    properties.push_back(std::move(p));
-                }
-                c["properties"] = std::move(properties);
-                components.push_back(std::move(c));
-            }
+                components.push_back(writeComponentRecord(record));
             j["components"] = std::move(components);
         }
 
@@ -467,6 +489,12 @@ json toJson(const scene::SceneDescription& description)
     }
 
     root["entities"] = std::move(entities);
+
+    // v4：场景级功能组件。总是写（即使为空），空数组是“全部移除”的明确状态。
+    json sceneComponents = json::array();
+    for (const scene::ComponentRecord& record : description.sceneComponents)
+        sceneComponents.push_back(writeComponentRecord(record));
+    root["sceneComponents"] = std::move(sceneComponents);
 
     // F3：体素世界 = seed + 与按 seed 重新生成的差分。
     // edits 写成 [x, y, z, block] 四元组，比对象数组省一半体积。
@@ -575,6 +603,21 @@ bool SceneSerializer::roundTrip(const scene::SceneDescription& input,
     {
         errorMessage = "entity count mismatch after round trip";
         return false;
+    }
+
+    if (output.sceneComponents.size() != input.sceneComponents.size())
+    {
+        errorMessage = "scene component count mismatch after round trip";
+        return false;
+    }
+    for (size_t i = 0; i < input.sceneComponents.size(); ++i)
+    {
+        if (!input.sceneComponents[i].equivalentTo(output.sceneComponents[i]))
+        {
+            errorMessage = "scene component value mismatch after round trip (" +
+                           input.sceneComponents[i].type + ")";
+            return false;
+        }
     }
 
     for (size_t i = 0; i < input.entities.size(); ++i)

@@ -84,6 +84,21 @@ public:
     scene::SystemScheduler& getSystemScheduler() { return systemScheduler; }
     const scene::SystemScheduler& getSystemScheduler() const { return systemScheduler; }
 
+    // ---- 场景级组件（阴影 / Bloom / 雾 / 水面…）----
+    // 它们同样走 ComponentRegistry 与 ComponentRecord，只是 scope = Scene，
+    // 并且只能挂在 Scene 自建的隐藏实体上。UI 因此可以复用同一套组件控件。
+    entt::entity getSceneSettingsEntity() const { return sceneSettingsEntity; }
+    bool addSceneComponent(const std::string& type);
+    bool removeSceneComponent(const std::string& type);
+    bool hasSceneComponent(const std::string& type) const;
+    std::vector<scene::ComponentRecord> captureSceneComponents() const;
+    // 用当前 EngineSettings 重建整套场景组件（旧场景 / 引擎默认 / 新建场景）。
+    void resetSceneComponentsFromSettings();
+    // 移除全部场景组件：等价于关闭所有可选渲染功能。
+    void clearSceneComponents();
+    // 组件 -> EngineSettings 的同步。组件值变化、加载、撤销后都必须调用。
+    void syncSceneSettings();
+
     bool addComponent(entt::entity entity, const std::string& type);
     bool removeComponent(entt::entity entity, const std::string& type);
     bool hasComponent(entt::entity entity, const std::string& type) const;
@@ -447,6 +462,10 @@ private:
     bool applyMeshAndMaterialFromDescription(const scene::EntityDescription& e,
                                              entt::entity entity,
                                              std::string& errorMessage);
+    // 通用 add/read/apply 的 target 校验：Scene scope 只允许隐藏设置实体，
+    // Entity scope 则不允许挂到设置实体上。
+    bool acceptsComponentTarget(entt::entity entity,
+                                const scene::ComponentDescriptor& descriptor) const;
     void markAllTransformsDirty();
     void markAllSpatialDirty();
     void updateWorldTransforms();
@@ -459,6 +478,9 @@ private:
     scene::ComponentRegistry componentRegistry;
     scene::SystemScheduler systemScheduler;
     entt::entity cameraEntity = entt::null;
+    // 场景级组件的宿主：没有 Transform/Hierarchy/Name，因此不会出现在
+    // Hierarchy、可见实体列表或普通场景实体遍历里；clearEntities() 也会保留它。
+    entt::entity sceneSettingsEntity = entt::null;
     SpatialIndex spatialIndex{ 16.0f };
     std::unordered_map<entt::entity, AABB> indexedBounds;
     std::unordered_set<entt::entity> dirtyTransformEntities;

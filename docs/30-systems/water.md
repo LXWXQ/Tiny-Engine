@@ -282,5 +282,5 @@ SSR 关闭时没有 `[SSR] first draw`，水面日志为 `ssr=0`。
 | `tools/GenerateWaterNormal.py` | 可复现生成上述法线贴图（cutoff=32、seed=44） |
 | `src/Core/Application.cpp` | 加载水波法线；每帧上传 `fogParams`；开关变化时重建全局描述符，binding12 在反射纹理/环境图之间切换 |
 | `src/Core/EngineConfig.cpp` | `water` / `fog` 节点读写 |
-| `src/Editor/panels/RenderSettingsPanel.cpp` | 编辑器 Water / 距离雾面板 |
+| `src/Editor/panels/RenderSettingsPanel.cpp` | 场景水面/雾组件的渲染消费者调试入口（Render 面板已收敛） |
 | `src/Core/ImGuiSystem.cpp` | 运行时 Water / Atmosphere 面板 |

@@ -96,6 +96,8 @@ updated: 2026-11-06
 - 可观测：`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
 - 验证：编辑器自检 0/0；截图确认面板可读、按钮在顶部不用滚动；回归 51 项（新增 `e5-render-settings`）。
 
+> **后续（F5-06，2026-11-10）**：画质控件已迁到 Inspector 无选中时的场景组件；`Render` 面板只保留 engine.json Save/Reload 与 GPU 批调试，不再有第二套滑杆。
+
 ## B1（部分）：`--help` 与未知参数退出码
 
 - 问题：[UX-02](../90-editor/ux-audit.md) —— `--help` 什么都不打印，参数写错也照常启动，用户以为参数生效了。

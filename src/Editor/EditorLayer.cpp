@@ -1513,6 +1513,8 @@ bool EditorLayer::newScene(bool announce)
         return false;
 
     state.services.scene->clearEntities();
+    // 新建场景恢复整套场景功能组件（用当前引擎设置作为默认值）。
+    state.services.scene->resetSceneComponentsFromSettings();
     state.selection.clear();
     state.commands.clear();
     state.documentPath.clear();
@@ -3864,6 +3866,21 @@ bool EditorLayer::selfTestWithScene()
             return false;
         }
 
+        // 场景级组件属于场景文档：改一个值，保存/加载后必须原样恢复。
+        auto environment = scene.readComponent(scene.getSceneSettingsEntity(),
+                                               "scene.environment");
+        if (!environment || !environment->find("exposure"))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: scene environment missing\n";
+            return false;
+        }
+        environment->find("exposure")->value = scene::PropertyValue::fromFloat(1.35f);
+        if (!scene.applyComponentRecord(scene.getSceneSettingsEntity(), *environment))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: scene environment apply\n";
+            return false;
+        }
+
         const scene::SceneDescription captured = scene.captureDescription();
         int worldManagers = 0;
         int serializedChunks = 0;
@@ -3903,14 +3920,38 @@ bool EditorLayer::selfTestWithScene()
             std::cerr << "[Editor] selfTestWithScene FAIL: metadata component not captured\n";
             return false;
         }
+        if (!captured.sceneComponentsAuthored || captured.sceneComponents.size() != 9)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: scene components not captured | count="
+                      << captured.sceneComponents.size() << "\n";
+            return false;
+        }
         scene::SceneDescription serialized;
         std::string serializationError;
         if (!SceneSerializer::roundTrip(captured, serialized, serializationError) ||
-            worldManagers != 1 || serializedChunks != 0 || serializedCharacters != 1)
+            worldManagers != 1 || serializedChunks != 0 || serializedCharacters != 1 ||
+            !serialized.sceneComponentsAuthored || serialized.sceneComponents.size() != 9)
         {
             std::cerr << "[Editor] selfTestWithScene FAIL: streaming serialization | "
-                      << serializationError << "\n";
+                      << serializationError << " | sceneComponents="
+                      << serialized.sceneComponents.size() << "\n";
             return false;
+        }
+        {
+            bool exposureRoundTrip = false;
+            for (const scene::ComponentRecord& record : serialized.sceneComponents)
+            {
+                if (record.type != "scene.environment")
+                    continue;
+                const scene::NamedProperty* exposure = record.find("exposure");
+                exposureRoundTrip = exposure &&
+                    std::abs(exposure->value.asFloat() - 1.35f) <= 1e-4f;
+            }
+            if (!exposureRoundTrip)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: scene component value lost\n";
+                return false;
+            }
         }
         int roundTripManagers = 0;
         for (const scene::EntityDescription& entity : serialized.entities)
@@ -3997,6 +4038,14 @@ bool EditorLayer::selfTestWithScene()
         {
             std::cerr << "[Editor] selfTestWithScene FAIL: streaming rebuild -> "
                       << rebuildError << "\n";
+            return false;
+        }
+        if (std::abs(scene.getSettings().exposure - 1.35f) > 1e-4f ||
+            scene.captureSceneComponents().size() != 9)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: scene components missing after rebuild |"
+                      << " exposure=" << scene.getSettings().exposure
+                      << " count=" << scene.captureSceneComponents().size() << "\n";
             return false;
         }
 

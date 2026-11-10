@@ -5,6 +5,7 @@
 #include "Scene/GLTFLoader.h"
 #include "Scene/FeatureComponents.h"
 #include "Scene/NativeComponents.h"
+#include "Scene/SceneComponents.h"
 #include "Render/TerrainMaterial.h"
 #include "Render/TerrainComputeGenerator.h"
 #include "Render/SubMeshCulling.h"
@@ -525,7 +526,60 @@ Scene::Scene()
     // 纯 CPU 注册，不依赖设备；selfTest 直接构造 Scene 也能拿到同样的类型表。
     scene::registerFeatureComponents(componentRegistry);
     scene::registerNativeComponents(componentRegistry);
+    scene::registerSceneComponents(componentRegistry);
     scene::registerFeatureSystems(systemScheduler);
+
+    // 场景级组件需要一个不参与 Transform/父子/渲染的宿主实体。
+    // 不挂 Name 与 Hierarchy，所以 Hierarchy 面板和场景实体遍历都看不到它。
+    sceneSettingsEntity = registry.create();
+    scene::resetSceneComponentsFromSettings(registry, sceneSettingsEntity, engineSettings);
+}
+
+bool Scene::acceptsComponentTarget(entt::entity entity,
+                                   const scene::ComponentDescriptor& descriptor) const
+{
+    if (!registry.valid(entity))
+        return false;
+    if (descriptor.scope == scene::ComponentScope::Scene)
+        return entity == sceneSettingsEntity;
+    return entity != sceneSettingsEntity;
+}
+
+bool Scene::addSceneComponent(const std::string& type)
+{
+    return addComponent(sceneSettingsEntity, type);
+}
+
+bool Scene::removeSceneComponent(const std::string& type)
+{
+    return removeComponent(sceneSettingsEntity, type);
+}
+
+bool Scene::hasSceneComponent(const std::string& type) const
+{
+    return hasComponent(sceneSettingsEntity, type);
+}
+
+std::vector<scene::ComponentRecord> Scene::captureSceneComponents() const
+{
+    return captureComponentRecords(sceneSettingsEntity);
+}
+
+void Scene::resetSceneComponentsFromSettings()
+{
+    scene::resetSceneComponentsFromSettings(registry, sceneSettingsEntity, engineSettings);
+    syncSceneSettings();
+}
+
+void Scene::clearSceneComponents()
+{
+    scene::clearSceneComponents(registry, sceneSettingsEntity);
+    syncSceneSettings();
+}
+
+void Scene::syncSceneSettings()
+{
+    scene::syncSceneSettings(registry, sceneSettingsEntity, engineSettings);
 }
 
 bool Scene::addComponent(entt::entity entity, const std::string& type)
@@ -533,9 +587,11 @@ bool Scene::addComponent(entt::entity entity, const std::string& type)
     if (!registry.valid(entity))
         return false;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
-    if (!descriptor || !descriptor->addable)
+    if (!descriptor || !descriptor->addable || !acceptsComponentTarget(entity, *descriptor))
         return false;
     descriptor->addDefault(registry, entity);
+    if (descriptor->scope == scene::ComponentScope::Scene)
+        syncSceneSettings();
     return descriptor->has(registry, entity);
 }
 
@@ -544,13 +600,16 @@ bool Scene::removeComponent(entt::entity entity, const std::string& type)
     if (!registry.valid(entity))
         return false;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
-    if (!descriptor || !descriptor->has(registry, entity))
+    if (!descriptor || !descriptor->has(registry, entity) ||
+        !acceptsComponentTarget(entity, *descriptor))
         return false;
     if (descriptor->required || !descriptor->removable)
         return false;
     if (descriptor->canRemove && !descriptor->canRemove(registry, entity))
         return false;
     descriptor->remove(registry, entity);
+    if (descriptor->scope == scene::ComponentScope::Scene)
+        syncSceneSettings();
     return true;
 }
 
@@ -559,7 +618,8 @@ bool Scene::hasComponent(entt::entity entity, const std::string& type) const
     if (!registry.valid(entity))
         return false;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
-    return descriptor && descriptor->has(registry, entity);
+    return descriptor && acceptsComponentTarget(entity, *descriptor) &&
+           descriptor->has(registry, entity);
 }
 
 std::optional<scene::ComponentRecord> Scene::readComponent(entt::entity entity,
@@ -568,7 +628,8 @@ std::optional<scene::ComponentRecord> Scene::readComponent(entt::entity entity,
     if (!registry.valid(entity))
         return std::nullopt;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
-    if (!descriptor || !descriptor->has(registry, entity))
+    if (!descriptor || !acceptsComponentTarget(entity, *descriptor) ||
+        !descriptor->has(registry, entity))
         return std::nullopt;
     scene::ComponentRecord record = descriptor->read(registry, entity);
     if (record.type.empty())
@@ -592,9 +653,11 @@ bool Scene::applyComponentRecord(entt::entity entity, const scene::ComponentReco
     if (!registry.valid(entity) || record.type.empty())
         return false;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(record.type);
-    if (!descriptor)
+    if (!descriptor || !acceptsComponentTarget(entity, *descriptor))
         return false;
     descriptor->write(registry, entity, record);
+    if (descriptor->scope == scene::ComponentScope::Scene)
+        syncSceneSettings();
     return descriptor->has(registry, entity);
 }
 
@@ -608,6 +671,8 @@ std::vector<scene::ComponentRecord> Scene::captureComponentRecords(entt::entity 
         // 原生组件的字段已经由 EntityDescription 的专用字段保存，不再重复
         // 写进 v3 的通用 components 数组。
         if (!descriptor.serialized)
+            continue;
+        if (!acceptsComponentTarget(entity, descriptor))
             continue;
         if (!descriptor.has(registry, entity))
             continue;
@@ -761,6 +826,10 @@ entt::entity Scene::createEntity()
 void Scene::destroyEntity(entt::entity entity)
 {
     if (!registry.valid(entity))
+        return;
+
+    // 场景级组件的宿主不接受普通销毁；它随 Scene 生命周期存在。
+    if (entity == sceneSettingsEntity)
         return;
 
     if (entity == terrainStreamingEntity)
@@ -1415,7 +1484,7 @@ bool Scene::selfTest()
         scene.getRegistry();
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
-        if (componentCount != 16 || systemCount != 7)
+        if (componentCount != 25 || systemCount != 7)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;
@@ -1751,6 +1820,159 @@ bool Scene::selfTest()
             std::cerr << "[Scene] selfTest FAIL: default record equivalence mismatch\n";
             ok = false;
         }
+
+        // 场景级组件：和实体组件共用同一套 descriptor / record，但只能挂在
+        // 隐藏的场景设置实体上，并且值变化会立即同步到 EngineSettings。
+        const entt::entity settingsEntity = scene.getSceneSettingsEntity();
+        std::size_t sceneDescriptorCount = 0;
+        std::size_t mountedSceneComponents = 0;
+        for (const scene::ComponentDescriptor& descriptor : scene.getComponentRegistry().descriptors())
+        {
+            if (descriptor.scope != scene::ComponentScope::Scene)
+                continue;
+            ++sceneDescriptorCount;
+            if (scene.hasSceneComponent(descriptor.type))
+                ++mountedSceneComponents;
+        }
+        if (sceneDescriptorCount != 9 || mountedSceneComponents != 9 ||
+            settingsEntity == entt::null || !testRegistry.valid(settingsEntity) ||
+            testRegistry.any_of<TransformComponent>(settingsEntity) ||
+            testRegistry.any_of<HierarchyComponent>(settingsEntity) ||
+            testRegistry.any_of<NameComponent>(settingsEntity))
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene component registration/host mismatch"
+                      << " | descriptors=" << sceneDescriptorCount
+                      << " mounted=" << mountedSceneComponents << "\n";
+            ok = false;
+        }
+
+        // scope 是硬约束：场景组件不能挂普通实体，实体组件也不能挂设置实体。
+        if (scene.addComponent(testEntity, "scene.shadows") ||
+            scene.hasComponent(testEntity, "scene.shadows") ||
+            scene.readComponent(testEntity, "scene.shadows").has_value() ||
+            scene.addComponent(settingsEntity, "effects.spin") ||
+            scene.hasComponent(settingsEntity, "effects.spin"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: component scope guard failed\n";
+            ok = false;
+        }
+        if (const auto spinDefault = scene.defaultComponentRecord("effects.spin");
+            spinDefault && scene.applyComponentRecord(settingsEntity, *spinDefault))
+        {
+            std::cerr << "[Scene] selfTest FAIL: entity record applied to scene settings entity\n";
+            ok = false;
+        }
+
+        // 调参立即写回 EngineSettings；禁用 = 功能关闭但参数仍保留。
+        auto environmentRecord = scene.readComponent(settingsEntity, "scene.environment");
+        if (!environmentRecord)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene environment component missing\n";
+            ok = false;
+        }
+        else if (scene::NamedProperty* exposure = environmentRecord->find("exposure"))
+        {
+            exposure->value = scene::PropertyValue::fromFloat(1.75f);
+            if (!scene.applyComponentRecord(settingsEntity, *environmentRecord) ||
+                std::abs(scene.getSettings().exposure - 1.75f) > 1e-4f)
+            {
+                std::cerr << "[Scene] selfTest FAIL: scene exposure did not sync\n";
+                ok = false;
+            }
+        }
+        else
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene exposure property missing\n";
+            ok = false;
+        }
+
+        auto bloomRecord = scene.readComponent(settingsEntity, "scene.bloom");
+        if (!bloomRecord)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene bloom component missing\n";
+            ok = false;
+        }
+        else if (scene::NamedProperty* enabled = bloomRecord->find("enabled"))
+        {
+            enabled->value = scene::PropertyValue::fromBool(false);
+            if (!scene.applyComponentRecord(settingsEntity, *bloomRecord) ||
+                scene.getSettings().bloomEnabled)
+            {
+                std::cerr << "[Scene] selfTest FAIL: disabled bloom still enabled\n";
+                ok = false;
+            }
+            enabled = bloomRecord->find("enabled");
+            enabled->value = scene::PropertyValue::fromBool(true);
+            if (!scene.applyComponentRecord(settingsEntity, *bloomRecord) ||
+                !scene.getSettings().bloomEnabled)
+            {
+                std::cerr << "[Scene] selfTest FAIL: bloom re-enable failed\n";
+                ok = false;
+            }
+        }
+        else
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene bloom enabled property missing\n";
+            ok = false;
+        }
+
+        // 移除 = 关闭；重新添加 = 默认值并重新启用。
+        if (!scene.removeSceneComponent("scene.fog") || scene.getSettings().fogEnabled ||
+            !scene.addSceneComponent("scene.fog") || !scene.getSettings().fogEnabled)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene fog add/remove semantics mismatch\n";
+            ok = false;
+        }
+
+        // 整场景导出：sceneComponents 总是 authored，且包含全部 9 项。
+        const scene::SceneDescription captured = scene.captureDescription();
+        bool capturedExposure = false;
+        for (const scene::ComponentRecord& record : captured.sceneComponents)
+        {
+            if (record.type != "scene.environment")
+                continue;
+            const scene::NamedProperty* exposure = record.find("exposure");
+            capturedExposure = exposure &&
+                               std::abs(exposure->value.asFloat() - 1.75f) < 1e-4f;
+        }
+        if (!captured.sceneComponentsAuthored || captured.sceneComponents.size() != 9 ||
+            !capturedExposure)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene component capture mismatch | authored="
+                      << captured.sceneComponentsAuthored
+                      << " count=" << captured.sceneComponents.size() << "\n";
+            ok = false;
+        }
+
+        // 清空 = 全部功能关闭；reset 从 EngineSettings 恢复整套默认组件。
+        scene.clearSceneComponents();
+        if (!scene.captureSceneComponents().empty() ||
+            scene.getSettings().shadowEnabled || scene.getSettings().bloomEnabled ||
+            scene.getSettings().fogEnabled ||
+            std::abs(scene.getSettings().exposure - EngineSettings{}.exposure) > 1e-4f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: clearing scene components left features enabled\n";
+            ok = false;
+        }
+        // 从一份真实的 engine.json 默认值恢复（clear 已把当前 settings 改成全关）。
+        scene.getSettings() = EngineSettings{};
+        scene.resetSceneComponentsFromSettings();
+        if (scene.captureSceneComponents().size() != 9 ||
+            !scene.getSettings().shadowEnabled || !scene.getSettings().bloomEnabled ||
+            !scene.getSettings().fogEnabled)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene component reset did not restore defaults\n";
+            ok = false;
+        }
+
+        // 隐藏设置实体不能被普通删除路径销毁。
+        scene.destroyEntity(settingsEntity);
+        if (!scene.getRegistry().valid(settingsEntity) ||
+            !scene.hasSceneComponent("scene.shadows"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene settings entity was destroyed\n";
+            ok = false;
+        }
     }
 
     std::cout << "[Scene] ECS/spatial selfTest " << (ok ? "PASS" : "FAIL")
@@ -1906,6 +2128,14 @@ scene::SceneDescription Scene::captureDescription(entt::entity root) const
         // 注意：这里用 push_back，顺序必须与我上面 enum 的顺序一致。
         // 因为 idToIndex 也是按同一个 view 顺序建的，所以两边一致。
         description.entities.push_back(std::move(e));
+    }
+
+    // 场景级功能也属于场景文档：保存时总是写 sceneComponents（即使为空）。
+    // 空数组是“用户把功能全删了”的明确状态，和旧文件“没有这个字段”不同。
+    if (root == entt::null)
+    {
+        description.sceneComponents = captureSceneComponents();
+        description.sceneComponentsAuthored = true;
     }
 
     // F3：体素世界按 seed + 差分存盘。差分用"按同一 seed 重新生成一份"对比得到，
@@ -2469,6 +2699,34 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
             }
         }
     }
+
+    // 场景级组件：文件里明确写过 sceneComponents 就按文件恢复（空数组 =
+    // 全部移除）；旧文件没有该字段时从当前 EngineSettings 初始化，画面不变。
+    if (description.sceneComponentsAuthored)
+    {
+        scene::clearSceneComponents(registry, sceneSettingsEntity);
+        for (const scene::ComponentRecord& record : description.sceneComponents)
+        {
+            const scene::ComponentDescriptor* descriptor =
+                componentRegistry.find(record.type);
+            if (descriptor == nullptr || descriptor->scope != scene::ComponentScope::Scene)
+            {
+                std::cerr << "[Scene] ignoring non-scene component '" << record.type
+                          << "' in sceneComponents\n";
+                continue;
+            }
+            if (!applyComponentRecord(sceneSettingsEntity, record))
+            {
+                std::cerr << "[Scene] failed to apply scene component '" << record.type
+                          << "' while loading scene\n";
+            }
+        }
+    }
+    else
+    {
+        resetSceneComponentsFromSettings();
+    }
+    syncSceneSettings();
 
     // 第二遍：挂父子关系（父必须先存在，所以不能和创建放在一个循环里）
     for (size_t i = 0; i < description.entities.size(); ++i)

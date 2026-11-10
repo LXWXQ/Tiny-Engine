@@ -4,8 +4,8 @@ title: 面板与布局
 type: system
 scope: 现有面板、布局实现方式、以及没有 docking 时的注意事项
 read-when: 写新面板、改布局、或面板位置错乱
-size: ~200 行
-updated: 2026-11-05
+size: ~500 行
+updated: 2026-11-10
 ---
 
 # 面板与布局
@@ -15,7 +15,7 @@ updated: 2026-11-05
 | 面板 | 职责 |
 |---|---|
 | Hierarchy | 实体树，选中 / 拖拽重挂 / 右键删除；runtime `TerrainChunkComponent` 默认隐藏 |
-| Inspector | 选中实体的组件编辑（变换/地形参数走命令栈；地形 Generate 单独重建） |
+| Inspector | 选中实体时编辑实体组件（变换/地形参数走命令栈；地形 Generate 单独重建）；无选中时编辑场景级组件（scope=Scene） |
 | Console | 分级过滤的日志，自动滚动 |
 | Assets | 扫描 `Resources/Models`，双击创建实体（走命令栈，可撤销） |
 | Viewport | 离屏纹理 + 点选 + 三轴手柄（见 [viewport](viewport.md)、[gizmo](gizmo.md)） |
@@ -43,6 +43,22 @@ CPU 网格交给 JobSystem，旧网格继续渲染。生成期间再次点击 Ge
 只有 Chunk Grid X/Z、LOD Levels 等几何相关参数与 `generatedConfig` 不一致时显示
 "Parameters changed, press Generate."。`Surface Detail`、`UV Tiling`、
 `Surface Style` 与 `LOD Distance` 立即生效，不强制重建。
+
+## Inspector 空选中：场景组件（F5-06）
+
+没有选中实体时，Inspector 不再只显示“没有选中对象”，而是显示 **Scene Components**：
+场景环境、阴影、Bloom、SSAO、SSR、运动模糊、TAA、水面、距离雾。这 9 个组件
+（`scene.*`，`scope=Scene`）挂在 `Scene` 的隐藏设置实体上，不出现在 Hierarchy 或实体列表里。
+
+- 顶部 `+ Add Scene Component` 只列 Scene scope 且未挂载的组件，支持按名称/分类/id 搜索；
+  添加走 `SetComponentRecordCommand`，可撤销。
+- 每个组件有 `enabled` 与功能参数；控件与实体组件共用 `drawPropertyWidgets`，同样有范围、
+  拖动速度、悬停提示、右键重置、复制/粘贴/重置/移除。
+- **移除组件 = 关闭该功能**；`enabled=false` 保留参数但同样关闭。组件值通过
+  `Scene::syncSceneSettings()` 写回渲染器读取的 `EngineSettings` 缓存。
+- 场景组件属于场景文档：编辑进入撤销栈，保存时写到 `.scene.json` v4 顶层
+  `sceneComponents`；预制体只存实体，不携带这些功能。
+- Render 面板里有“在 Inspector 中编辑场景组件”按钮：清空选中并把焦点带回这里。
 
 ## 多选与搜索（E1）
 
@@ -247,36 +263,29 @@ const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBar
 2. 菜单栏右侧原来也写了一遍「保存状态 / 播放状态 / undo 深度」，和工具栏、状态栏三处重复。
    E5-a 起菜单栏只显示文档名（脏时加 `*` 和 `(unsaved)`），状态只在一处出现。
 
-## 渲染设置面板（E5-b）
+## 渲染设置面板（E5-b / F5-06 收敛）
 
 `RenderSettingsPanel`（窗口名 `Render`）是一个**浮动工具窗**：不在 `drawPanels()` 的固定矩形里，
 位置和大小只在自己 `draw()` 里用 `ImGuiCond_FirstUseEver` 给一次，之后由用户拖动、记在
-`imgui.ini`。理由：它不参与工作区划分，压着视口反而方便看改动效果（调曝光要盯着画面）。
-入口有两个：工具栏的 `Render` 按钮、`View -> Render Settings`。
+`imgui.ini`。入口有两个：工具栏的 `Render` 按钮、`View -> Render Settings`。
 
-它直接改 `state.services.settings` 指向的 `EngineSettings` 实例 ——
-这正是 `Application` 每帧塞进 `FrameInfo` 的 `scene->getSettings()`（`src/Core/Application.cpp:2107` 起），
-所以**改完下一帧就生效**，不需要重新加载配置。
+F5-06 起，曝光 / Bloom / SSAO / 运动模糊 / TAA / 水面 / SSR / 距离雾 / 阴影 / 方向光这些
+**画质控件已迁到 Inspector 的场景组件**（见上一节），Render 面板不再重复一套滑杆，只保留：
 
-| 分组 | 字段 |
+| 分组 | 内容 |
 |---|---|
-| 曝光 / 分辨率 | `exposure`、`renderScale` |
-| Bloom | `bloomEnabled`、`bloomThreshold`、`bloomKnee`、`bloomIntensity` |
-| SSAO | `ssaoEnabled`、`ssaoRadius`、`ssaoBias`、`ssaoKernelSize` |
-| 运动模糊 | `motionBlurEnabled`、`motionBlurStrength`、`motionBlurMaxRadius` |
-| 方向光 | `directionalLightDir`（写回前归一化）、`directionalLightColor` 的 rgb 与 w（强度） |
+| 场景功能 | 已挂载的场景组件数量；`在 Inspector 中编辑场景组件` 按钮（清空选中并回到 Inspector） |
+| 引擎默认值 | `Save to engine.json`、`Reload engine.json`；重载会重建场景组件 |
 | 提交路径（调试） | `gpuSceneEnabled`、`gpuMergedBuffers`、`hizEnabled`、`terrainBatchEnabled`、`gpuSceneMinInstances`、`gpuSceneMinScreenPixels` |
 
-两个刻意设计：
+这些剩余项仍是**引擎/本机运行参数，不是场景内容**：不进撤销栈、不让文档变脏；要永久保留
+engine.json 默认值就按 `Save to engine.json`。画质功能现在属于场景文档，修改会进撤销栈，
+随 `.scene.json` v4 保存。渲染 pass 仍每帧读 `EngineSettings`，场景组件通过
+`Scene::syncSceneSettings()` 把值写进这份缓存。
 
-- **不进撤销栈、不让文档变脏**。这些值是引擎默认预设而不是场景内容；它们和 Play 状态一样
-  属于"运行期/环境"而不是"文档"，混进撤销栈会让 Ctrl+Z 变成不可预期的东西。
-- **Revert 回到"本次启动时"**，不是回代码里的编译期默认值 —— 用户试坏一排滑杆时想回的是
-  刚才那套配置（来自 `config/engine.json`），不是作者的出厂值。要永久保留则按
-  `Save to engine.json`（走 `EngineServices::saveConfig`）。
-
-`ssaoKernelSize` 由 `RenderSettingsPanel::clampKernelSize()` 夹到 4..64 的偶数：滑杆允许拖到任意
-整数，但采样循环拿 0 或奇数会出问题。自检：`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
+`ssaoKernelSize` 滑杆虽然迁走，`RenderSettingsPanel::clampKernelSize()` 仍保留为纯函数并参与自检：
+夹到 4..64 的偶数，采样循环拿 0 或奇数会出问题。自检：
+`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
 
 ## 语言分层（B5 / UX-07）
 

@@ -46,10 +46,22 @@ struct PropertyDescriptor
     std::function<void(void*, const PropertyValue&)> set;
 };
 
+// 组件挂在谁身上：
+//   Entity = 普通实体（Transform / Character / Spin…）
+//   Scene  = 场景本身（阴影 / Bloom / 雾 / 水面…），由 Scene 的隐藏设置实体持有。
+// UI 用同一个 ComponentRegistry 列出两套组件，但 Add 菜单按 scope 过滤，
+// 这样“场景功能目录”和“对象组件”不会互相污染。
+enum class ComponentScope
+{
+    Entity,
+    Scene,
+};
+
 // 注册选项。原生组件要同时满足两件事：既出现在统一的 + Add Component
 // 菜单里，又不能重复写进 v3 场景的通用 components 数组。
 struct ComponentOptions
 {
+    ComponentScope scope = ComponentScope::Entity;
     bool exposed = true;
     bool addable = true;
     bool removable = true;
@@ -64,6 +76,8 @@ struct ComponentDescriptor
     std::string type;
     std::string label;
     std::string category;
+    // 场景级组件只能挂在 Scene 的隐藏设置实体上，普通实体不允许添加。
+    ComponentScope scope = ComponentScope::Entity;
     // false 表示不在 + Add Component 菜单里出现（仍可显示已挂载实例）。
     bool exposed = true;
     // false 时菜单里仍显示该项，但置灰并提示 unavailableReason。
@@ -183,6 +197,7 @@ ComponentDescriptor makeComponentDescriptor(std::string type,
     descriptor.type = std::move(type);
     descriptor.label = std::move(label);
     descriptor.category = std::move(category);
+    descriptor.scope = options.scope;
     descriptor.exposed = options.exposed;
     descriptor.addable = options.addable;
     descriptor.removable = options.removable;

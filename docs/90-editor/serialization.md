@@ -4,8 +4,8 @@ title: 场景序列化
 type: system
 scope: 场景描述模型、文件格式、以及"什么该存什么不该存"
 read-when: 改 *.scene.json 格式、加组件要存盘、或加载后场景不对
-size: ~190 行
-updated: 2026-11-06
+size: ~240 行
+updated: 2026-11-10
 ---
 
 # 场景序列化
@@ -32,16 +32,27 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 | 材质名字 + PBR 参数 + 贴图路径 | 材质**槽位下标** | 槽位是 `DescriptorManager` 运行期分发的 |
 | 渲染标签（skybox/grid/terrain） | `SpatialIndex` / `indexedBounds` | 可增量刷新的派生数据，不存盘 |
 | 地形参数对象 | 地形顶点/索引/GPU 句柄/纹理 | 加载时按相同 seed/算法重新生成；16 张地形纹理由启动代码确定性生成 |
-| 元数据注册的扩展组件（v3 `components`；`native.*` 不写入） | 未注册的运行期组件 | 只有注册过的类型能稳定读写；运行期临时组件没有稳定的磁盘语义 |
+| 元数据注册的实体组件（v3 `components`；`native.*` 不写入） | 未注册的运行期组件 | 只有注册过的类型能稳定读写；运行期临时组件没有稳定的磁盘语义 |
+| 场景级组件（v4 顶层 `sceneComponents`，`scope=Scene`） | GPU scene / merged buffer / Hi-Z 等编辑器调试开关 | 功能存在性和参数属于场景；调试开关属于引擎/编辑器配置 |
 
 父子关系用**数组下标**表示（`parent: 2`），不用实体 ID。
 加载时按顺序重建即可。
 
-## 文件格式（version 3）
+## 文件格式（version 4）
 
 ```json
 {
-  "version": 3,
+  "version": 4,
+  "sceneComponents": [
+    {
+      "type": "scene.shadows",
+      "properties": [
+        { "name": "enabled", "type": "bool", "value": true },
+        { "name": "distance", "type": "float", "value": 90 },
+        { "name": "strength", "type": "float", "value": 0.65 }
+      ]
+    }
+  ],
   "entities": [
     {
       "name": "Sponza",
@@ -83,23 +94,25 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 |---|---|---|
 | 1 | 实体、变换、父子、网格、材质 | — |
 | 2 | 新增可选 `voxelWorlds`（seed + 差分） | 旧文件缺省为空 |
-| 3 | 每个实体新增可选 `components`（元数据注册组件；`native.*` 不写入） | 旧文件缺省为空；未知组件/属性跳过 |
+| 3 | 每个实体新增可选 `components`（元数据注册实体组件；`native.*` 不写入） | 旧文件缺省为空；未知组件/属性跳过 |
+| 4 | 顶层新增 `sceneComponents`（9 个 `scene.*` 场景功能组件，`scope=Scene`） | 旧文件缺字段时按当前 `EngineSettings` 重建；空数组表示全部移除/关闭 |
 
-`terrain` / `terrainWorld` / `character` / `components` 都是**可选字段**，所以旧场景
-不需要迁移；读取端不按版本号拒绝，只有写入端跟 `kCurrentVersion` 升版本。
+`terrain` / `terrainWorld` / `character` / `components` / `sceneComponents` 都是**可选字段**，所以旧场景
+不需要迁移；读取端不按版本号拒绝，只有写入端跟 `kCurrentVersion`（当前 4）升版本。
+`sceneComponents` 与实体 `components` 分开：前者只接受 `scope=Scene` 的组件，且只存在一份。
 
 ## 预制体文件（`.prefab.json`）
 
-预制体复用同一个 v3 `SceneDescription`，不引入新版本号，只是**约束文件内容**：
+预制体复用同一个 v4 `SceneDescription`，不引入新版本号，只是**约束文件内容**：
 
 - 只保存一棵子树；根实体 `parent: -1`，其余下标都指向子树内部。
 - 变换是**相对父节点**的局部值，与场景文件一致。
-- 不写顶层 `voxelWorlds`；保存时拒绝体素世界、地形/流送地形、相机、天空盒、Grid 与体素 chunk。
+- 不写顶层 `voxelWorlds`；`sceneComponents` 固定为空数组，不携带场景功能；保存时拒绝体素世界、地形/流送地形、相机、天空盒、Grid 与体素 chunk。
 - 仍是普通场景 JSON，可以直接当场景打开查看；编辑器里的“实例化预制体”会把它追加到当前场景，而不是替换场景。
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "entities": [
     { "name": "Root", "parent": -1, "mesh": "Models/debug_cube.obj" },
     { "name": "Spinner", "parent": 0, "translation": [1, 2, 0],
@@ -148,7 +161,7 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 }
 ```
 
-这是**可选字段**，旧场景不缺字段照常加载；场景文件版本从 v3 起为 3。
+这是**可选字段**，旧场景缺字段照常加载；场景文件当前 `version` 为 4（v4 起有顶层 `sceneComponents`）。
 `terrain.version` 是地形子对象自己的版本（stage 7 版为 5；旧 v1~v4 缺省字段由
 TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心，
 `localColorRange` 控制顶点色是否按局部高度范围拉伸；流送 chunk 使用绝对 [0,1]。
@@ -176,13 +189,14 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 运行期派生数据，不逐项写入。加载后由 `Scene::updateTerrainStreaming()` 围绕相机
 重建 chunk 集。详细规则见 [terrain](../30-systems/terrain.md) §6.1。
 
-## 扩展组件（v3）
+## 扩展组件（v3+）
 
 `components` 是元数据注册组件的通用容器，格式由组件描述表决定，序列化器不针对
 单个类型写代码：
 
-- `type`：注册 id（如 `effects.spin`）。读取时只做语法还原；**是否注册由
-  `Scene::buildFromDescription()` 判断**，未知 id 安全跳过，不影响场景其余部分。
+- `type`：注册 id（如 `effects.spin`）。读取时只做语法还原；**是否注册、scope 是否匹配由
+  `Scene::buildFromDescription()` 判断**，未知 id 或放错容器（如 `scene.*` 写进实体）安全跳过，
+  不影响场景其余部分。
 - `properties`：属性数组，每个属性是 `name` / `type` / `value`。`name` 必须是
   描述符里的稳定名；`type` 只接受 `bool` / `int` / `float` / `vec3` / `color` / `string`。
 - 值编码：Bool/Int/Float 是标量，Vec3 是 3 元数组，Color 是 4 元数组，String 是字符串。
@@ -190,14 +204,37 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 - `label` 不写盘，读取后由注册表重新生成；`ComponentRecord::equivalentTo()` 因此只比较
   `type` + 属性名 + 值。
 
-`roundTrip` 自检给 Root 实体挂一个覆盖全部 6 种属性类型的 `test.sixTypes` 记录，并逐实体
-比较组件数量与 `equivalentTo()`。删除撤销、复制实体也会带走这些 record，见
-[commands](commands.md)。
+`roundTrip` 自检给 Root 实体挂一个覆盖全部 6 种属性类型的 `test.sixTypes` 记录，逐实体比较组件数量
+与 `equivalentTo()`；同时比较顶层 `sceneComponents` 的数量与内容。删除撤销、复制实体也会带走
+实体 record，见 [commands](commands.md)。
 
-### 原生组件与 v3 去重（F5-04）
+### 场景级组件与 `sceneComponents`（v4，F5-06）
+
+9 个渲染功能组件（environment/shadows/bloom/ssao/ssr/motionBlur/taa/water/fog）挂在
+`Scene` 的隐藏设置实体上，存盘写在**顶层**：
+
+```json
+"sceneComponents": [
+  { "type": "scene.bloom", "properties": [
+    { "name": "enabled", "type": "bool", "value": true },
+    { "name": "threshold", "type": "float", "value": 2.2 }
+  ] }
+]
+```
+
+- 容器复用 `ComponentRecord` 格式，`type` / `properties` 规则与实体组件相同。
+- `SceneDescription::sceneComponentsAuthored` 区分“旧文件没有字段”和“v4 空数组”：前者按当前
+  `EngineSettings` 调 `resetSceneComponentsFromSettings()` 重建 9 个组件；后者保留空容器，
+  等于用户把功能全部移除。
+- `captureDescription()` 总是把 `sceneComponentsAuthored` 置 true；`toJson` 总是写数组（可为空）。
+- 加载时逐条校验 `scope=Scene`，`scene.*` 写进实体 `components` 会被警告并跳过；
+  实体组件写进 `sceneComponents` 同样拒绝。
+- 预制体只捕获子树实体，顶层数组为空，不把当前场景的阴影/雾等设置带进预制体。
+
+### 原生组件与 `components` 去重（v3+，F5-04）
 
 `src/Scene/NativeComponents.cpp` 注册的 `native.*` 描述符只用于 Inspector 元数据与增删校验，
-不进入 v3 `components`：
+不进入实体 `components`：
 
 - 描述符带 `serialized=false`；`Scene::captureComponentRecords()` 跳过它们，
   `SceneSerializer` 不会把 Character/Render Tag 等写成通用组件。
@@ -208,6 +245,8 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
   记录会打印警告并跳过。
 - 因此同一个 Character 不会既写 `character` 又写 `components`；Render Tag 也不会重复。
   删除/撤销对 Character 的原生快照在 `DeleteEntityCommand` 单独维护。
+- `scene.*` 只进顶层 `sceneComponents`，不会挂在实体上；原生组件的 `components` 去重规则
+  与场景组件容器无关。
 
 ## 路径处理
 
@@ -227,10 +266,12 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 
 **A. 元数据注册组件（推荐，不改序列化器）**
 
-1. 写组件结构体并在 `ComponentRegistry` 里 `registerComponent`（参考 `FeatureComponents.cpp`）
-2. 需要每帧行为时在 `SystemScheduler` 注册系统
+1. 写组件结构体并在 `ComponentRegistry` 里 `registerComponent`（参考 `FeatureComponents.cpp`）；
+   实体功能用 `scope=Entity`，场景功能用 `scope=Scene`（参考 `SceneComponents.cpp`）
+2. 需要每帧行为时在 `SystemScheduler` 注册系统；场景组件改参数后需同步 `EngineSettings`
 3. 需要默认值/属性 UI 时把属性加进描述符
-4. 不需要改 `SceneSerializer`、`SceneDescription`、Commands 或 Inspector
+4. 不需要改 `SceneSerializer`、`SceneDescription`、Commands 或 Inspector（实体组件进 `components`，
+   场景组件进顶层 `sceneComponents`）
 5. 在 `Scene::selfTest()` / `EditorLayer::selfTest()` 的 roundTrip 用例里加断言
 
 只有**已注册且 `serialized=true`** 的类型会进 `captureDescription()`；未注册组件和
