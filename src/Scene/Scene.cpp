@@ -1484,7 +1484,7 @@ bool Scene::selfTest()
         scene.getRegistry();
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
-        if (componentCount != 26 || systemCount != 8)
+        if (componentCount != 27 || systemCount != 8)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;
@@ -1901,7 +1901,7 @@ bool Scene::selfTest()
             if (scene.hasSceneComponent(descriptor.type))
                 ++mountedSceneComponents;
         }
-        if (sceneDescriptorCount != 9 || mountedSceneComponents != 9 ||
+        if (sceneDescriptorCount != 10 || mountedSceneComponents != 10 ||
             settingsEntity == entt::null || !testRegistry.valid(settingsEntity) ||
             testRegistry.any_of<TransformComponent>(settingsEntity) ||
             testRegistry.any_of<HierarchyComponent>(settingsEntity) ||
@@ -1991,6 +1991,20 @@ bool Scene::selfTest()
             ok = false;
         }
 
+        if (!scene.removeSceneComponent("scene.clouds") || scene.getSettings().cloudEnabled ||
+            !scene.addSceneComponent("scene.clouds") || !scene.getSettings().cloudEnabled)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene clouds add/remove semantics mismatch\n";
+            ok = false;
+        }
+
+        const auto defaultClouds = scene.defaultComponentRecord("scene.clouds");
+        if (!defaultClouds || defaultClouds->properties.size() != 10)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene clouds default record mismatch\n";
+            ok = false;
+        }
+
         // 整场景导出：sceneComponents 总是 authored，且包含全部 9 项。
         const scene::SceneDescription captured = scene.captureDescription();
         bool capturedExposure = false;
@@ -2002,7 +2016,7 @@ bool Scene::selfTest()
             capturedExposure = exposure &&
                                std::abs(exposure->value.asFloat() - 1.75f) < 1e-4f;
         }
-        if (!captured.sceneComponentsAuthored || captured.sceneComponents.size() != 9 ||
+        if (!captured.sceneComponentsAuthored || captured.sceneComponents.size() != 10 ||
             !capturedExposure)
         {
             std::cerr << "[Scene] selfTest FAIL: scene component capture mismatch | authored="
@@ -2024,7 +2038,7 @@ bool Scene::selfTest()
         // 从一份真实的 engine.json 默认值恢复（clear 已把当前 settings 改成全关）。
         scene.getSettings() = EngineSettings{};
         scene.resetSceneComponentsFromSettings();
-        if (scene.captureSceneComponents().size() != 9 ||
+        if (scene.captureSceneComponents().size() != 10 ||
             !scene.getSettings().shadowEnabled || !scene.getSettings().bloomEnabled ||
             !scene.getSettings().fogEnabled)
         {

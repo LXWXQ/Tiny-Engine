@@ -328,7 +328,12 @@ $tests = @(
     # Texture/Particles，CPU 模拟后由 ParticlePass 前向透明绘制；断言贴图预加载、
     # 发射器、存活粒子与一次 draw，验证层仍为零消息。
     @{ Name = "f6-particles"; Exe = "engine"; Args = @("--selftest", "60", "--empty-scene", "--particle-demo");
-       MustContain = @("[Particle] textures=", "status=ready", "[Particle] demo emitter created |", "texture=Particles/Kenney/fire_01.png", "[Particle] emitters=1 alive=", "drawcalls=1", "[Validation] errors=0 warnings=0") }
+       MustContain = @("[Particle] textures=", "status=ready", "[Particle] demo emitter created |", "texture=Particles/Kenney/fire_01.png", "[Particle] emitters=1 alive=", "drawcalls=1", "[Validation] errors=0 warnings=0") },
+    # F6-05：体积云。空场景创建 scene.clouds，启动生成 64³ 3D 噪声，
+    # CloudPass 在 Lighting 后 raymarch 并预乘混合进 HDR；断言初始化、演示参数、
+    # 首帧绘制与验证层零消息。
+    @{ Name = "f6-clouds"; Exe = "engine"; Args = @("--selftest", "30", "--empty-scene", "--cloud-demo");
+       MustContain = @("[Cloud] initialized | noise=64^3", "[Cloud] demo scene ready |", "[Cloud] first draw |", "[Validation] errors=0 warnings=0") }
 )
 
 # Only meaningful for a profiling build (-EnableProfiling).

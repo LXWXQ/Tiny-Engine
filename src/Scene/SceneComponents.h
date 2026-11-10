@@ -3,7 +3,7 @@
 // ===========================================================================
 // 场景级组件（Scene Components）
 //
-// 阴影、Bloom、SSAO、雾、水面这些“整个场景一份”的渲染功能，过去硬编码在
+// 阴影、Bloom、SSAO、雾、水面、体积云这些“整个场景一份”的渲染功能，过去硬编码在
 // EngineSettings 与 RenderSettingsPanel 里：用户只能看到一堆固定滑杆，
 // 不能添加/移除，也无法在场景文件里保存“这套场景启用了哪些功能”。
 //
@@ -97,7 +97,24 @@ struct SceneFogComponent
     float density = 0.00045f;
 };
 
-// 注册 9 个 Scene scope 组件。Scene 构造时调用一次。
+// F6-05：体积云。参数对应 CloudPass 的全屏 raymarch：
+// coverage 控制云量，density 控制消光，baseHeight/thickness 定义云层高度带，
+// speed 是风移速度，absorption/ambient 控制自阴影与天光，steps 是步进预算。
+struct SceneCloudsComponent
+{
+    bool enabled = true;
+    float coverage = 0.45f;
+    float density = 0.9f;
+    float baseHeight = 120.0f;
+    float thickness = 90.0f;
+    float speed = 4.0f;
+    float absorption = 0.9f;
+    float ambient = 0.35f;
+    int steps = 48;
+    glm::vec4 color{ 1.0f, 1.0f, 1.0f, 1.0f };
+};
+
+// 注册 10 个 Scene scope 组件。Scene 构造时调用一次。
 void registerSceneComponents(ComponentRegistry& registry);
 
 // 把当前挂载的场景组件写回渲染器缓存的 EngineSettings。

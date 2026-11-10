@@ -23,6 +23,7 @@ updated: 2026-11-10
 | `Pipeline.h/.cpp` | Graphics/Compute pipeline 封装、动态状态 | [pass-order](../20-pipeline/pass-order.md) 的"管线约定"节 | pass-order |
 | `GBuffer.h/.cpp` | 5 个附件与格式常量 `GBufferFormat` | [gbuffer](../20-pipeline/gbuffer.md) | gbuffer |
 | `Texture.h/.cpp` / `CubemapTexture.*` | 普通纹理 / cubemap 上传 | [ibl](../20-pipeline/ibl.md) | ibl |
+| `Texture3D.h/.cpp` | 64³ RGBA8 3D 纹理上传（staging → `VK_IMAGE_TYPE_3D`、REPEAT/LINEAR、无 mip） | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `GpuTimer.h/.cpp` | 每 pass timestamp | [diagnostics](../60-debug-profiling/diagnostics.md) | diagnostics |
 | `GpuProfiler.h/.cpp` | Tracy GPU zone | [tools](../60-debug-profiling/tools.md) | tools |
 | `ScreenshotCapture.h/.cpp` | 交换链读回写 PNG | [diagnostics](../60-debug-profiling/diagnostics.md) | diagnostics |
@@ -44,6 +45,7 @@ updated: 2026-11-10
 | `LightingPass.*` / `LightingSystem.*` | HDR 光照输出、导入交换链 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `WaterPass.*` / `water.vert` / `water.frag` | 相机中心径向网格、波浪位移、Fresnel/环境反射/厚度吸收/泡沫，HDR 前向混合 | [water](../30-systems/water.md)、[pass-order](../20-pipeline/pass-order.md) | water、pass-order |
 | `ParticlePass.*` / `particle.vert` / `particle.frag` | 每帧 host-visible 粒子实例、billboard、圆形软遮罩，Water 后/TAA 前前向混合 HDR，按相机距离排序 | [scene-ecs](../30-systems/scene-ecs.md)、[pass-order](../20-pipeline/pass-order.md) | scene-ecs、pass-order |
+| `CloudPass.*` / `cloud.frag` | 全屏体积云：读 G-Buffer 世界位置截断 + 64³ 3D 噪声，4 步太阳自阴影，预乘 alpha 写 HDR；Lighting 后/反射前 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `BloomPass.*` | Bright + 3 down + 3 up 金字塔 | [intermediate](../20-pipeline/intermediate.md) | intermediate |
 | `PresentPass.*` | 双路径（Bloom/NoBloom）、ACES、ImGui 叠加 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `IBLBaker.*` | irradiance / prefilter / BRDF LUT 烘焙 | [ibl](../20-pipeline/ibl.md) | ibl |
@@ -71,7 +73,7 @@ updated: 2026-11-10
 |---|---|---|---|
 | `Scene.h/.cpp` | `entt::registry`、setParent、世界变换传播、visibleEntities、地形异步请求/主线程上传 | [scene-ecs](../30-systems/scene-ecs.md)、[terrain](../30-systems/terrain.md) | scene-ecs、terrain |
 | `Components.h` | 全部 component 定义（含 `TerrainComponent::generating` / `isTerrain`） | [scene-ecs](../30-systems/scene-ecs.md)、[terrain](../30-systems/terrain.md) | scene-ecs、terrain |
-| `FeatureComponents.*` / `SceneComponents.*` | 实体组件与系统（`effects.*`，含 Particle 200）、9 个 `scene.*` 场景组件与 `syncSceneSettings` | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
+| `FeatureComponents.*` / `SceneComponents.*` | 实体组件与系统（`effects.*`，含 Particle 200）、10 个 `scene.*` 场景组件与 `syncSceneSettings` | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
 | `SpatialIndex.h/.cpp` | 均匀网格 broad phase，entity cell 记录与增量 upsert/remove | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
 | `GLTFLoader.h/.cpp` | glTF 导入（几何烘焙到世界空间） | [scene-ecs](../30-systems/scene-ecs.md)、[known-limits](../70-status/known-limits.md) | scene-ecs |
 | `Model.h/.cpp` | 顶点/索引上传、子网格、OBJ | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
@@ -96,6 +98,7 @@ updated: 2026-11-10
 | `ssao.frag`、`ssao_blur.frag` | SSAO 与模糊 | [pass-order](../20-pipeline/pass-order.md) |
 | `lighting.frag/.vert` | HDR 光照 | [pass-order](../20-pipeline/pass-order.md) |
 | `ssr.frag` | 半分辨率水面屏幕空间反射 | [pass-order](../20-pipeline/pass-order.md) |
+| `cloud.frag` | 全屏体积云 raymarch（64³ 噪声 + 4 步太阳自阴影） | [pass-order](../20-pipeline/pass-order.md) |
 | `particle.vert` / `particle.frag` | 粒子 billboard 与圆形软遮罩、前向透明混合 | [pass-order](../20-pipeline/pass-order.md) |
 | `bloom_bright/down/up.frag` | Bloom 金字塔 | [intermediate](../20-pipeline/intermediate.md) |
 | `present.frag`、`present_no_bloom.frag` | tonemap + ImGui 前合成 | [pass-order](../20-pipeline/pass-order.md) |

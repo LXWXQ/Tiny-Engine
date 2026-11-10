@@ -82,6 +82,9 @@ bool voxelGlassDemo = false;
 // --particle-demo：在空场景原点放一个粒子发射器，用于目测前向透明
 // billboard（配合 --screenshot 做视觉回归）。
 bool particleDemo = false;
+// --cloud-demo：启用体积云场景组件，并把相机放到云层下方（配合
+// --streaming-world 可同时看到地形与云层）。
+bool cloudDemo = false;
 int32_t streamingRadius = 3;
 // --streaming-fly [speed]：自检/无人值守时让相机沿圆周自动飞行，
 // 用来验证 chunk 的加载与卸载（不飞就只会在原地加载一圈）。

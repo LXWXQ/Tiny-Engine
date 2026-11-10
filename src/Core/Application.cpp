@@ -21,6 +21,7 @@
 #include <iterator>
 #include "Render/GeometryPass.h"
 #include "Render/LightingPass.h"
+#include "Render/CloudPass.h"
 #include "Render/BloomPass.h"
 #include "Render/PresentPass.h"
 #include "Render/UiCompositePass.h"
@@ -35,6 +36,7 @@
 #include "Render/TAAPass.h"
 #include "Render/ShadowPass.h"
 #include "Scene/FeatureComponents.h"
+#include "Scene/SceneComponents.h"
 #include "Voxel/VoxelChunk.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
@@ -806,6 +808,11 @@ streamingConfig.skirtsEnabled = false;
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	auto lightPass = std::make_unique<LightingPass>(*vulkanDevice, *gBuffers[0], *vulkanSwapchain,
 		*renderGraph, *renderResources, descriptorManager->getGlobalSetLayout());
+	// F6-05：体积云。必须在 Lighting 之后（混进已着色的 HDR），且在 Reflection/
+	// SSR/Glass/Water 之前 —— 水面和玻璃要能看到带云的天空。
+	auto cloudPass = std::make_unique<CloudPass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
+		renderer->getCommandPool());
 	// C1：平面反射用镜像相机把水面以上的几何重画到半分辨率 G-Buffer，再跑一遍
 	// 光照。必须排在 Lighting 之后（LightingPass::init 先建好 hdrScene，反射
 	// 据此决定分辨率），Glass/Water 之前（水面要读反射颜色）。
@@ -873,6 +880,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(geoPass));
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
+	renderPipeline.addPass(std::move(cloudPass));
 	renderPipeline.addPass(std::move(reflectionPass));
 	renderPipeline.addPass(std::move(ssrPass));
 	renderPipeline.addPass(std::move(glassPass));
@@ -1030,6 +1038,38 @@ streamingConfig.skirtsEnabled = false;
 		std::cout << "[Particle] demo emitter created | rate=" << particles.emissionRate
 			<< " max=" << particles.maxParticles
 			<< " texture=" << particles.texture << std::endl;
+	}
+
+	// 体积云目测场景：启用 scene.clouds，把相机放在云层下方朝远景看。
+	// 空场景里云后面是黑底，建议配合 --streaming-world 得到地平线/地形对比。
+	if (options.cloudDemo)
+	{
+		if (!scene->hasSceneComponent("scene.clouds") &&
+			!scene->addSceneComponent("scene.clouds"))
+			throw std::runtime_error("--cloud-demo component creation failed");
+
+		auto& clouds = scene->getRegistry().get<scene::SceneCloudsComponent>(
+			scene->getSceneSettingsEntity());
+		clouds.enabled = true;
+		clouds.coverage = 0.55f;
+		clouds.density = 1.0f;
+		clouds.baseHeight = 200.0f;
+		clouds.thickness = 120.0f;
+		clouds.speed = 6.0f;
+		clouds.absorption = 0.9f;
+		clouds.ambient = 0.42f;
+		clouds.steps = 56;
+		clouds.color = glm::vec4(1.0f, 0.97f, 0.92f, 1.0f);
+		scene->syncSceneSettings();
+
+		TransformComponent& cameraTransform = scene->getCameraTransform();
+		cameraTransform.setTranslation(glm::vec3(0.0f, 35.0f, 80.0f));
+		cameraTransform.setEuler(glm::vec3(glm::radians(-7.0f), glm::radians(180.0f), 0.0f));
+		cameraTransform.setScale(glm::vec3(1.0f));
+		scene->markTransformDirty(scene->getCameraEntity());
+		std::cout << "[Cloud] demo scene ready | coverage=" << clouds.coverage
+			<< " base=" << clouds.baseHeight << " thickness=" << clouds.thickness
+			<< " steps=" << clouds.steps << std::endl;
 	}
 
 	currentTime = std::chrono::high_resolution_clock::now();

@@ -300,6 +300,20 @@ struct EngineSettings
 	bool  fogEnabled = true;
 	float fogStart = 80.0f;
 	float fogDensity = 0.00045f;
+
+	// F6-05：体积云。默认关闭 —— 云会遮挡远景，开着会改变所有现有场景的
+	// 对比截图；需要时在 Inspector 添加「体积云」场景组件，或用 --cloud-demo。
+	// coverage 是云量，density 是消光系数，步数是每像素最多采样次数。
+	bool  cloudEnabled = false;
+	float cloudCoverage = 0.45f;
+	float cloudDensity = 0.9f;
+	float cloudBaseHeight = 120.0f;
+	float cloudThickness = 90.0f;
+	float cloudSpeed = 4.0f;
+	float cloudAbsorption = 0.9f;
+	float cloudAmbient = 0.35f;
+	int   cloudSteps = 48;
+	glm::vec4 cloudColor{ 1.0f, 1.0f, 1.0f, 1.0f };
 };
 
 struct RenderTelemetry

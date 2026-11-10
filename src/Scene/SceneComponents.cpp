@@ -239,6 +239,40 @@ void registerSceneComponents(ComponentRegistry& registry)
                                              "1/m。0.00045 约 1km 处 34%、4km 处 83%；0 等于关闭"),
         },
         sceneOptions));
+
+    registry.add(makeComponentDescriptor<SceneCloudsComponent>(
+        "scene.clouds", "体积云", "大气",
+        {
+            boolProperty<SceneCloudsComponent>("enabled", "启用", &SceneCloudsComponent::enabled,
+                                               "在 Lighting 之后、透明通道之前混入 HDR 的云层"),
+            floatProperty<SceneCloudsComponent>("coverage", "云量", &SceneCloudsComponent::coverage,
+                                                0.0f, 1.0f, 0.005f,
+                                                "天空被云覆盖的比例。0.45 约一半天空有云，1 接近全阴"),
+            floatProperty<SceneCloudsComponent>("density", "密度", &SceneCloudsComponent::density,
+                                                0.0f, 3.0f, 0.01f,
+                                                "消光强度。越大云越厚、越不透光；0 等于没有云"),
+            floatProperty<SceneCloudsComponent>("baseHeight", "云底高度", &SceneCloudsComponent::baseHeight,
+                                                10.0f, 800.0f, 1.0f,
+                                                "云层底部的世界高度（米）。相机需要在这个高度以下才能看到云顶"),
+            floatProperty<SceneCloudsComponent>("thickness", "云层厚度", &SceneCloudsComponent::thickness,
+                                                5.0f, 500.0f, 1.0f,
+                                                "云底到云顶的距离（米）。越厚越容易形成高耸的积云"),
+            floatProperty<SceneCloudsComponent>("speed", "风速", &SceneCloudsComponent::speed,
+                                                0.0f, 40.0f, 0.1f,
+                                                "云层水平漂移速度（米/秒）。只改变采样偏移，不影响几何"),
+            floatProperty<SceneCloudsComponent>("absorption", "光吸收", &SceneCloudsComponent::absorption,
+                                                0.0f, 3.0f, 0.01f,
+                                                "云对阳光的自吸收。越大背光面越暗，0 表示云层不产生自阴影"),
+            floatProperty<SceneCloudsComponent>("ambient", "环境光", &SceneCloudsComponent::ambient,
+                                                0.0f, 1.0f, 0.01f,
+                                                "云层内部的天空散射光。过大会让云失去体积感"),
+            intProperty<SceneCloudsComponent>("steps", "步进次数", &SceneCloudsComponent::steps,
+                                              8, 128,
+                                              "每像素最多步进次数。越大细节越好，开销也越高；48 是默认平衡点"),
+            colorProperty<SceneCloudsComponent>("color", "云色", &SceneCloudsComponent::color,
+                                                "云体散射的色调；偏向暖白可模拟夕阳，偏蓝可模拟阴天"),
+        },
+        sceneOptions));
 }
 
 void clearSceneComponents(entt::registry& registry, entt::entity settingsEntity)
@@ -254,6 +288,7 @@ void clearSceneComponents(entt::registry& registry, entt::entity settingsEntity)
     registry.remove<SceneTaaComponent>(settingsEntity);
     registry.remove<SceneWaterComponent>(settingsEntity);
     registry.remove<SceneFogComponent>(settingsEntity);
+    registry.remove<SceneCloudsComponent>(settingsEntity);
 }
 
 void resetSceneComponentsFromSettings(entt::registry& registry, entt::entity settingsEntity,
@@ -321,6 +356,19 @@ void resetSceneComponentsFromSettings(entt::registry& registry, entt::entity set
     fog.start = settings.fogStart;
     fog.density = settings.fogDensity;
     registry.emplace<SceneFogComponent>(settingsEntity, fog);
+
+    SceneCloudsComponent clouds;
+    clouds.enabled = settings.cloudEnabled;
+    clouds.coverage = settings.cloudCoverage;
+    clouds.density = settings.cloudDensity;
+    clouds.baseHeight = settings.cloudBaseHeight;
+    clouds.thickness = settings.cloudThickness;
+    clouds.speed = settings.cloudSpeed;
+    clouds.absorption = settings.cloudAbsorption;
+    clouds.ambient = settings.cloudAmbient;
+    clouds.steps = settings.cloudSteps;
+    clouds.color = settings.cloudColor;
+    registry.emplace<SceneCloudsComponent>(settingsEntity, clouds);
 }
 
 void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
@@ -372,6 +420,17 @@ void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
     settings.fogEnabled = false;
     settings.fogStart = defaults.fogStart;
     settings.fogDensity = defaults.fogDensity;
+
+    settings.cloudEnabled = defaults.cloudEnabled;
+    settings.cloudCoverage = defaults.cloudCoverage;
+    settings.cloudDensity = defaults.cloudDensity;
+    settings.cloudBaseHeight = defaults.cloudBaseHeight;
+    settings.cloudThickness = defaults.cloudThickness;
+    settings.cloudSpeed = defaults.cloudSpeed;
+    settings.cloudAbsorption = defaults.cloudAbsorption;
+    settings.cloudAmbient = defaults.cloudAmbient;
+    settings.cloudSteps = defaults.cloudSteps;
+    settings.cloudColor = defaults.cloudColor;
 
     if (const auto* environment = registry.try_get<SceneEnvironmentComponent>(settingsEntity);
         environment != nullptr && environment->enabled)
@@ -455,6 +514,21 @@ void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
         settings.fogEnabled = true;
         settings.fogStart = fog->start;
         settings.fogDensity = fog->density;
+    }
+
+    if (const auto* clouds = registry.try_get<SceneCloudsComponent>(settingsEntity);
+        clouds != nullptr && clouds->enabled)
+    {
+        settings.cloudEnabled = true;
+        settings.cloudCoverage = clouds->coverage;
+        settings.cloudDensity = clouds->density;
+        settings.cloudBaseHeight = clouds->baseHeight;
+        settings.cloudThickness = clouds->thickness;
+        settings.cloudSpeed = clouds->speed;
+        settings.cloudAbsorption = clouds->absorption;
+        settings.cloudAmbient = clouds->ambient;
+        settings.cloudSteps = clouds->steps;
+        settings.cloudColor = clouds->color;
     }
 }
 

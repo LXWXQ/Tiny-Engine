@@ -27,6 +27,8 @@ SSAOBlur          模糊遮蔽图
    |
 LightingPass      读 G-Buffer + SSAO + IBL 三件套 + 环境图 -> 写 R16G16B16A16_SFLOAT（线性 HDR）
    |
+CloudPass         F6-05：体积云；LOAD HDR；读 G-Buffer.Position + 64³ 噪声，预乘 alpha 混合，无深度
+   |
 PlanarReflection  半分辨率平面反射：镜像相机重画 960x540 G-Buffer + 延迟光照 -> 反射色，供水面倒影
    |
 SSRPass           半分辨率屏幕空间反射：读 HDR + G-Buffer.Position（世界坐标）-> 近场水面反射色，供 Water 混合
@@ -52,7 +54,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 体素 chunk 走同一份 arena VBO/IBO，但实例表与命令由 `GeometrySystem` 每帧按可见集合写进专用 host-visible 缓冲，整批一条 `vkCmdDrawIndexedIndirect`；这条路径不经过 `SceneGpuCull`，反射视图也不复用它，而是逐块 arena draw。
 `HiZBuild` 必须排在 `Geometry` **之后**：金字塔要包含本帧刚画出的几何；它写的是 `(frameInFlight + 1) % kFramesInFlight` 槽，供下一帧 `SceneGpuCull` 读（错帧一帧，第一帧 `params.z = 0` 关闭遮挡）。
 渲染图里注册的 pass 名依次是：
-`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `SSR`, `Glass`, `Water`, `Particle`, `TAA`,
+`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `Cloud`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `SSR`, `Glass`, `Water`, `Particle`, `TAA`,
 `Bloom.Bright`, `Bloom.Down0/1/2`, `Bloom.Up2/1/0`, `Present`,
 `PresentTransition`。
 
@@ -74,6 +76,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | 约束 | 原因 |
 |---|---|
 | SSAO 在 Lighting **之前** | SSAO 调制环境光项（`ambient *= ssao`），是光照的输入 |
+| Cloud 在 Lighting **之后**、PlanarReflection/SSR/Glass/Water **之前** | 云是叠在已着色 HDR 上的大气层，必须读 Lighting 的输出；放在反射/透明之前，水面、玻璃和 SSR 读到的 HDR 才带云。读 G-Buffer.Position 把射线截到最近不透明表面（天空位置在 10000 处，自然不截断），用预乘 alpha（`src=ONE`、`dst=ONE_MINUS_SRC_ALPHA`）保留 HDR alpha；无深度附件、不写深度，只由 `scene.clouds` 组件启用。PlanarReflection 内部的第二套 Lighting 不跑云，因此倒影里没有云，作为已知边界 |
 | Glass 在 Lighting **之后**、Bloom **之前** | 玻璃必须混合在已经着色好的 HDR 上（延迟着色只存一个表面，玻璃进 G-Buffer 会把后面的层盖掉）；放在 Bloom 前，玻璃高光也参与辉光。深度 `LOAD` 但 `depthWrite = FALSE`、`compare = LESS_OR_EQUAL`：不透明几何仍挡住玻璃，玻璃之间由 CPU 排序（远->近）决定顺序 |
 | SSR 在 PlanarReflection **之后**、Glass/Water **之前** | 屏幕空间反射要读本帧已着色的 HDR 做颜色命中，并把结果留给 Water 混合；放在 Water 之前才能覆盖近场水面。只在水面启用、场景有地形/体素块、且 `ssrEnabled` 时注册；半分辨率 960x540，48 步 DDA 追踪，屏幕外/超过 200m 或无命中时返回 0，Water 再回退到平面反射/IBL。SSR 是纯屏幕空间效果，不写深度、不影响不透明几何 |
 | PlanarReflection 在 Lighting **之后**、Glass/Water **之前** | 反射必须用本帧 G-Buffer 和 IBL 重新着色；透明 Pass 之前写完，Water 才能把反射色当输入。只有水面启用、平面反射开启且场景有地形/体素块时才注册；镜像相机沿水面对称，用未抖动投影重画半分辨率 960x540 的 G-Buffer，再用第二套 Lighting 着色，开销约为全分辨率的一半 |
@@ -93,6 +96,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | `--no-taa` | TAA Pass 仍执行，但 `historyWeight = 0`、jitter = 0，着色器直接输出当前帧；窗口/渲染目标 resize 与重新开启时 `historyValid = false`，首帧不吃旧历史 |
 | `--no-water` | Water Pass **完全不注册**，只打印一次 `[Water] disabled`；有地形/体素块时才可能注册。PlanarReflection 与 SSR 也因 `waterEnabled=false` 不注册，全局 Set0 的 binding12/13 回退到环境图 |
 | `--no-ssr` | SSR Pass **完全不注册**，只打印一次 `[SSR] disabled`；Water 仍读 binding13，但内容回退为环境图，日志里 `ssr=0`。没有 SSR 时水面只靠平面反射/IBL |
+| 体积云 | 没有命令行开关；关闭 `scene.clouds` 组件或 `engine.json` 的 `clouds.enabled` 时 `CloudPass` 完全不注册，只打印一次 `[Cloud] disabled`。`--cloud-demo` 只负责创建/启用演示场景 |
 | 距离雾 | 没有命令行开关；只能通过 `config/engine.json` 的 `fog.enabled` 或编辑器/运行时 UI 关闭。它不是 Pass，关闭时着色器按密度 0 跳过混合 |
 
 距离雾不是独立 Pass：`GlobalUbo.fogParams`（x=起始距离、y=密度、z=保留、w=启用）由

@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~930 行
+size: ~1200 行
 updated: 2026-11-10
 ---
 
@@ -37,7 +37,7 @@ updated: 2026-11-10
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 76 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 77 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -1174,3 +1174,21 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 - 全套回归 **76 项** ALL PASS（含 `f6-particles`），stderr 全 0，验证日志 `build/validation/20261110-124840`；DocCheck 通过。
 
 **边界**：每次启动预加载最多 64 张，每个发射器只能选一张，空/失效路径回退圆形；新增或替换贴图需要重启，不支持热重载、逐粒子旋转、图集动画或独立 alpha 通道（alpha 由亮度生成）。粒子仍不进 G-Buffer/平面反射/阴影，TAA 没有粒子运动向量。
+
+## F6-05：体积云组件（2026-11-10）
+
+**问题**：场景只有大气散射与天空盒，没有能写进 HDR 的云层；水面、玻璃等透明表面也无法看到带云的天空，缺少一层可调、可存读的场景级大气效果。
+
+**实现**：
+- 新增场景级 `scene.clouds`（`SceneCloudsComponent`，分类“大气”）10 个属性：`enabled`（默认 false）、`coverage` 0.45、`density` 0.9、`baseHeight` 120、`thickness` 90、`speed` 4、`absorption` 0.9、`ambient` 0.35、`steps` 48、`color` (1,1,1,1)；Inspector 可添加/启用/调参/移除，随场景 v4 `sceneComponents` 存读。
+- 新增 `src/Render/CloudPass.{h,cpp}` 与 `shaders/cloud.frag`：全屏三角形，插在 Lighting 之后、PlanarReflection/SSR/Glass/Water 之前；读 `gbPosition` 还原视线，天空像素按远平面距离截断，在 `[baseHeight, baseHeight + thickness]` 云层内 raymarch（最远 6500，steps clamp 1..128），按 64³ RGBA8 可平铺程序化噪声（R 形状、G 侵蚀、B 细节、A 天气）求密度，4 步固定太阳自阴影，预乘 alpha 混合写 HDR（`ONE / ONE_MINUS_SRC_ALPHA`，alpha 通道 src=ZERO/dst=ONE）；无深度附件，不写深度；交换链或 render-scale 变化时重新绑定 `gbPosition` 描述符，避免下一帧采样已销毁的 image view。
+- `EngineSettings` 增加 `cloudEnabled=false` 与同名字段，`EngineConfig` 使用独立 `clouds` 节点、不升版本；禁用时 CloudPass 不注册渲染图 pass，并打印一次 `[Cloud] disabled`。
+- `--cloud-demo` 在空场景创建或启用 `scene.clouds`，设 coverage 0.55、density 1、baseHeight 200、thickness 120、speed 6、absorption 0.9、ambient 0.42、steps 56、color (1,0.97,0.92)，相机 (0,35,80)、euler(-7°,180°,0)。
+
+**测试**：
+- `TinyEngine.exe --selftest 30 --empty-scene --cloud-demo --hidden`：`[Cloud] initialized | noise=64^3`、`[Cloud] demo scene ready | coverage=0.55 base=200 thickness=120 steps=56`、`[Cloud] first draw | coverage=0.55 density=1 base=200 thickness=120 steps=56`；30 帧 0.322234 s（93.1 FPS）、draw calls 1、triangles 8192、`[Validation] errors=0 warnings=0`，stderr 空。
+- `build/cloud_demo.png`（1920x1080）目测：水面前景 + 有暗底层次的破碎云层 + 蓝天，云层遮挡关系正确。
+- 新增 `f6-clouds` 用例（30 帧、空场景 + `--cloud-demo`），断言 `[Cloud] initialized | noise=64^3`、`demo scene ready`、`first draw` 与 0/0。
+- 全套回归 **77 项** ALL PASS（含 `f6-clouds`），stderr 全 0，验证日志 `build/validation/20261110-140504`；`td03-window-resize` / `td03-render-scale` 均 PASS；DocCheck PASS（documents=68 lines=12275）。
+
+**边界**：单层均匀云壳、单次 raymarch，没有时域重投影/云阴影/二次散射/高度分层；64³ 噪声为启动时 CPU 生成、不支持运行时换图；云只进主 HDR，不进平面反射的第二套 Lighting，也不写 CSM 阴影；默认关闭，最远 6500，steps 上限 128。

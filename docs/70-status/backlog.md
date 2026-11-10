@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~130 行
+size: ~340 行
 updated: 2026-11-10
 ---
 
@@ -269,6 +269,7 @@ updated: 2026-11-10
 | F6-02 | 未开始 | 自动曝光（compute 直方图 + 曝光纹理） | F6 | 室内外切换后 2 秒内亮度收敛 |
 | F6-03 | 未开始 | Compute Bloom（金字塔迁到 compute） | F6 | 输出与当前 bloom 视觉一致、GPU 时间下降 |
 | F6-04 | 未开始 | 切线空间法线贴图（启用 `getNormalFromMap()`，先补切线或 TBN） | F4 | 法线贴图生效；`normalMaps` 不再白绑（tech-debt #3） |
+| F6-05 | 已完成 | 体积云（场景级 `scene.clouds` 组件 + 全屏 raymarch `CloudPass`） | F6 | coverage/密度/高度/厚度可调；透明表面读到带云 HDR；`f6-clouds` 通过；云不进平面反射/阴影作为边界 |
 | F4-01 | 未开始 | glTF 保留 node 层级（决策 13 的翻转）、primitive 独立变换、异步加载 | — | 载入后可改任意 node 局部变换并实时可见 |
 | F4-02 | 未开始 | 模型 LOD 链（GPU 端 LOD 选级的前置，见 F1 剩余项） | F4-01 | 同一模型可切 2~3 级，切换无跳变 |
 | F1-R1 | 已取代 | 粒子不接入 `ExternalInstance`：改由 F5-07 的独立组件与 `ParticlePass` 落地 | F5-07 | 不再以复用 ExternalInstance 为目标；粒子独立缓冲、独立前向 Pass |
@@ -323,6 +324,8 @@ updated: 2026-11-10
 > F5-07 粒子组件已完成（2026-11-10）：新增实体级 `ParticleEmitterComponent`（`effects.particles`，16 个属性，Inspector 可添加/调参/撤销），CPU 系统在 PostTransform 200 以 xorshift 随机数做锥形发射、重力、寿命与尺寸/颜色插值，全局上限 16384；新增独立 `ParticlePass`，在 Water 后、TAA 前以 billboard 前向混合进 HDR，深度测试不写、按相机距离远→近排序，每帧一份 host-visible 实例缓冲与一次 draw。`--particle-demo` 创建喷泉，`[Particle] emitters=1 alive=376 drawcalls=1`；场景自检 26 描述符/8 系统；全套 76 项回归 ALL PASS（含 `f6-particles`），日志 `build/validation/20261110-113649`。详见 [milestones](milestones.md#f5-07粒子组件2026-11-10)。
 >
 > F5-08 粒子 sprite 资源与贴图选择已完成（2026-11-10）：引入 Kenney Particle Pack（CC0）14 张 512x512 sprite 到 `Resources/Texture/Particles/Kenney/`，上游黑底灰度就地转 RGBA（A=亮度）；`effects.particles` 增加第 17 个属性 `texture`（相对 `Resources/Texture`，空=程序化圆形），Inspector 用专用选择器只列 `Particles/` 下的 sprite，支持过滤/重新扫描/清除，写入仍走 `SetComponentRecordCommand`。`ParticlePass` 启动时递归预加载贴图（最多 64 张）并分配 bindless 材质槽，实例增加 `materialId`，shader 未命中时回退程序化圆形；`--particle-demo` 改用 `Particles/Kenney/fire_01.png`。验证：`[Particle] textures=14 failed=0 status=ready`、`[Particle] demo emitter created | ... texture=Particles/Kenney/fire_01.png`、240 帧截图 `build/particle_texture.png` 可见火焰柱；全套 76 项 ALL PASS，验证日志 `build/validation/20261110-124840`。详见 [milestones](milestones.md#f5-08粒子-sprite-资源与贴图选择2026-11-10)。
+>
+> F6-05 体积云组件已完成（2026-11-10）：新增场景级 `scene.clouds`（10 属性，默认关闭）与 `CloudPass`，插在 Lighting 后、PlanarReflection/SSR/Glass/Water 前，读 G-Buffer 位置在 64³ 四通道噪声里 raymarch，4 步太阳自阴影、预乘 alpha 写 HDR、无深度附件；云层随场景 v4 `sceneComponents` 存读，`engine.json` 独立 `clouds` 节点。`--cloud-demo` 空场景一键出云；`f6-clouds` 断言初始化/首绘/0-0，全套 77 项 ALL PASS（日志 `build/validation/20261110-140504`，含 resize 后重绑 `gbPosition` 的 td03 用例）。云只进主 HDR，不进平面反射与 CSM 阴影，单层无时域。详见 [milestones](milestones.md#f6-05体积云组件2026-11-10)。
 >
 > R-08 水面暗反射补天空底色已完成（2026-11-06）：用户标注的远水发暗不是“黑天空反射”，旧 R-07 alpha 覆盖率在三种机位下都只有 UI 像素差（≤2537），已完整回退。`shaders/water.frag` 改为按反射亮度只提亮暗部（`0.34 * (1-smoothstep(0.04,0.22,luma))`），并把 `shallow/deep` 提到 `(0.050,0.160,0.167)`、`(0.016,0.058,0.075)`，远水 alpha 上限 0.92→0.89；亮水面/天空倒影保持原对比度。低机位 [16,8,140] 同机位 before/after 见 `build/water_tune_compare_v2.png`，水面区域 luma 76.2→81.8、蓝色 94.2→99.6。详见 [milestones](milestones.md#r-08水面暗反射补天空底色2026-11-06)，验证日志 `build/validation/20261106-164734`。
 

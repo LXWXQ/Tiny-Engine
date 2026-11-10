@@ -134,6 +134,20 @@ namespace
 		fog["density"] = s.fogDensity;
 		j["fog"] = std::move(fog);
 
+		// F6-05：体积云。独立节点，默认 enabled=false，不改变旧配置的画面。
+		json clouds;
+		clouds["enabled"] = s.cloudEnabled;
+		clouds["coverage"] = s.cloudCoverage;
+		clouds["density"] = s.cloudDensity;
+		clouds["baseHeight"] = s.cloudBaseHeight;
+		clouds["thickness"] = s.cloudThickness;
+		clouds["speed"] = s.cloudSpeed;
+		clouds["absorption"] = s.cloudAbsorption;
+		clouds["ambient"] = s.cloudAmbient;
+		clouds["steps"] = s.cloudSteps;
+		writeVec(clouds, "color", s.cloudColor);
+		j["clouds"] = std::move(clouds);
+
 		json light;
 		writeVec(light, "direction", s.directionalLightDir);
 		writeVec(light, "color", s.directionalLightColor);
@@ -208,6 +222,21 @@ namespace
 			out.fogEnabled = read(n, "enabled", out.fogEnabled, warnings);
 			out.fogStart = read(n, "start", out.fogStart, warnings);
 			out.fogDensity = read(n, "density", out.fogDensity, warnings);
+		}
+
+		if (j.contains("clouds") && j["clouds"].is_object())
+		{
+			const json& n = j["clouds"];
+			out.cloudEnabled = read(n, "enabled", out.cloudEnabled, warnings);
+			out.cloudCoverage = read(n, "coverage", out.cloudCoverage, warnings);
+			out.cloudDensity = read(n, "density", out.cloudDensity, warnings);
+			out.cloudBaseHeight = read(n, "baseHeight", out.cloudBaseHeight, warnings);
+			out.cloudThickness = read(n, "thickness", out.cloudThickness, warnings);
+			out.cloudSpeed = read(n, "speed", out.cloudSpeed, warnings);
+			out.cloudAbsorption = read(n, "absorption", out.cloudAbsorption, warnings);
+			out.cloudAmbient = read(n, "ambient", out.cloudAmbient, warnings);
+			out.cloudSteps = read(n, "steps", out.cloudSteps, warnings);
+			out.cloudColor = readVec(n, "color", out.cloudColor);
 		}
 
 		if (j.contains("lighting") && j["lighting"].is_object())

@@ -43,10 +43,10 @@ updated: 2026-11-10
 | TD-24 | arena 按固定槽位（2048 顶点 / 12288 索引）切分，chunk 实际只用约 1620 / 8544，浪费近三成 | 空槽里的剩余空间无法复用；半径 12 的 625 块需要 384 槽 × 136 KB ≈ 51 MB，而实际几何约 36 MB | 改成按实际尺寸的首次适配 + 空闲区间合并（bump allocator）：顶点 1.1M / 索引 5.9M 两块大缓冲，`Slice` 记录 base + count，`release()` 前后合并；实测半径 2 的 25 块只用 25 次分配，飞行 600 帧 `arenaAllocs` 在 305~323 之间回落 |
 | TD-23 | 地形每个 chunk 各持一个 `Model` 与自己的 device-local VBO/IBO，生成时各拷贝一次、渲染时逐 chunk 绑定 | 半径 12 的 625 块就是 625 份缓冲对象 + 625 次 bind；与「每 chunk 固定开销」的无限世界目标冲突 | 把 arena 所有权移到 `Scene`（`getTerrainMeshArena()`），网格一落地就 `acquire()` + `copyInto()` + `Model::releaseGpuBuffers()`，Model 只留子网格/包围盒/UV 元数据；实体销毁时归还槽位；抢不到槽位的 chunk 保留自己的 buffer 走旧路径 |
 | TD-22 | 浮动原点只在运行时生效，`EngineConfig::save()` 直接写局部坐标 | 存档写绝对坐标（局部 + `worldOrigin`），`loadConfig()` 落 Transform 时再减去当前原点；顺带把 `saveToFile()` 打开失败的 `errno`/`strerror` 带进错误串 | 飞行 + rebase 后退出，`config/engine.json` 不再出现 ±chunk 整数倍偏移 |
-| TD-28 | 渲染功能硬编码在 RenderSettingsPanel/EngineSettings，不能随场景保存或开关，且与组件 UI 形成两套入口 | 9 个 `scene.*` 场景组件（scope=Scene）+ 隐藏设置实体 + `syncSceneSettings` 写回 EngineSettings；Render 面板只保留 engine.json 默认值与 GPU 批调试 | Inspector 无选中可添加/启用/调参/移除；场景组件随 v4 `sceneComponents` 存读；`[Scene] ECS component selfTest` 断言 25 描述符与 sync |
+| TD-28 | 渲染功能硬编码在 RenderSettingsPanel/EngineSettings，不能随场景保存或开关，且与组件 UI 形成两套入口 | 10 个 `scene.*` 场景组件（scope=Scene）+ 隐藏设置实体 + `syncSceneSettings` 写回 EngineSettings；Render 面板只保留 engine.json 默认值与 GPU 批调试 | Inspector 无选中可添加/启用/调参/移除；场景组件随 v4 `sceneComponents` 存读；`[Scene] ECS component selfTest` 断言 27 描述符与 sync |
 | TD-29 | 粒子没有生产方，只有 `ExternalInstance` 数据入口 | 实体级 `ParticleEmitterComponent`（16 属性，默认 512/属性上限 4096）+ CPU 发射/模拟系统（Particle 200）+ 独立 `ParticlePass`（Water 后、TAA 前，前向混合 HDR、`depthWrite = FALSE`、按相机距离排序）；不占用 `ExternalInstance` 与 merged buffer | `--particle-demo` 240 帧 `alive=376`、`drawcalls=1`、验证层 0/0；`f6-particles` 回归 |
 
-> TD-28 证据：`[Scene] ECS component selfTest PASS | components=25 | systems=7` 覆盖 scope 约束、settings 同步、capture/clear/reset；编辑器自检覆盖 v4 存读往返；全套 75 项 ALL PASS，日志 `build/validation/20261110-105403`；DocCheck PASS（documents=68 lines=12179）。
+> TD-28 证据：`[Scene] ECS component selfTest PASS | components=27 | systems=8` 覆盖 scope 约束、settings 同步、capture/clear/reset；编辑器自检覆盖 v4 存读往返；全套 77 项 ALL PASS，日志 `build/validation/20261110-140504`；DocCheck PASS（documents=68 lines=12275）。
 ## 2. 未关闭（按"何时必须处理"排序）
 
 | # | 内容 | 影响 | 触发条件 |

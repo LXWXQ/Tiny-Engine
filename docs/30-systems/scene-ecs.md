@@ -115,7 +115,7 @@ F5-04 把已有原生组件也纳入同一张描述表，但**不复制它们的
 `makeFloatProperty` 同时把范围用于 setter clamp。Inspector 只消费这些字段，不再为每个组件写一套控件。
 
 因此 `+ Add Component` 的可选项是 8 个 `effects.*` + Character Controller + Render Tag；
-Camera/Terrain/Streaming/Voxel 以置灰项出现。另有 9 个 `scene.*` 场景组件，只出现在无选中实体的
+Camera/Terrain/Streaming/Voxel 以置灰项出现。另有 10 个 `scene.*` 场景组件，只出现在无选中实体的
 Scene Components 区，见 §1.2。Character 面板的 8 个参数与 Render Tag 的移除按钮
 都走 `SetComponentRecordCommand`，可撤销。`DeleteEntityCommand` 为 Character 增加显式快照，
 因为 `native.*` 不会进入通用 `components` 数组；Render Tag 原本就有专用快照。
@@ -130,10 +130,10 @@ Scene Components 区，见 §1.2。Character 面板的 8 个参数与 Render Tag
 | `defaultComponentRecord(type)` | 新建组件时的默认 record |
 | `applyComponentRecord(e, record)` | 写入快照；缺组件时按默认值新建 |
 | `captureComponentRecords(e)` | 收集实体上所有已注册且 `serialized` 的组件；原生组件走专用字段，不在此列 |
-| `getSceneSettingsEntity()` | 隐藏的场景设置实体，9 个场景组件的宿主；不是可见实体 |
+| `getSceneSettingsEntity()` | 隐藏的场景设置实体，10 个场景组件的宿主；不是可见实体 |
 | `addSceneComponent(type)` / `removeSceneComponent` / `hasSceneComponent` | 场景组件增删查；只能作用于设置实体，增删后立即同步 `EngineSettings` |
 | `captureSceneComponents()` | 捕获设置实体的全部场景组件 record |
-| `resetSceneComponentsFromSettings()` / `clearSceneComponents()` | 按当前 `EngineSettings` 重建 9 个组件 / 全部移除并关闭功能 |
+| `resetSceneComponentsFromSettings()` / `clearSceneComponents()` | 按当前 `EngineSettings` 重建 10 个组件 / 全部移除并关闭功能 |
 | `syncSceneSettings()` | 把场景组件写回渲染缓存的 `EngineSettings` |
 
 **编辑器与持久化**
@@ -150,7 +150,7 @@ Scene Components 区，见 §1.2。Character 面板的 8 个参数与 Render Tag
   仍从 v3 起（格式见 [serialization](../90-editor/serialization.md)）。`Scene::captureDescription()`
   只捕获已注册且 `serialized` 的组件；场景组件走 `captureSceneComponents()`，只允许 Scene scope。
   `buildFromDescription()` 逐条 apply，未注册/scope 不符的类型安全跳过，文件里伪造的 `native.*`
-  记录会被忽略；旧文件缺 `sceneComponents` 时按当前 `EngineSettings` 重建 9 个组件。
+  记录会被忽略；旧文件缺 `sceneComponents` 时按当前 `EngineSettings` 重建 10 个组件。
   原生组件仍由专用字段存盘，不会重复写入。预制体复用实体描述：`captureDescription(root)` 收子树、
   `instantiatePrefab()` 追加恢复，顶层 `sceneComponents` 为空，见 [prefabs](../90-editor/prefabs.md)。
 - `DeleteEntityCommand` 的快照与 `DuplicateEntityCommand` 都会带上注册组件 record，
@@ -159,7 +159,7 @@ Scene Components 区，见 §1.2。Character 面板的 8 个参数与 Render Tag
 **边界**：组件和系统仍在 C++ 编译期注册，没有脚本/热重载/属性数组；属性范围/提示只是 UI 元数据，
 不参与序列化。系统在编辑模式也会随 `Scene::update()` 推进，撤销删除后实体 ID 会变。
 原生组件只把 Character/Render Tag 接进统一增删；Mesh/Material/Terrain chunk 等仍由
-专用创建流程或固定面板管理。场景组件只有 9 个渲染功能，不覆盖 GPU scene/merged buffer 等调试开关，
+专用创建流程或固定面板管理。场景组件只有 10 个渲染功能，不覆盖 GPU scene/merged buffer 等调试开关，
 也不改变“渲染器读 EngineSettings”的缓存结构。
 
 ### 1.2 场景级组件（scope=Scene，F5-06）
@@ -168,7 +168,7 @@ Scene Components 区，见 §1.2。Character 面板的 8 个参数与 Render Tag
 并且只维护一套组件 UI。F5-06 把 8 个渲染功能 + 场景环境做成 **Scene scope** 组件。
 
 `ComponentScope` 在 `ComponentRegistry.h` 中定义，`Entity` / `Scene` 两种。描述符带 `scope`，
-`makeComponentDescriptor<T>` 透传。当前共 **26 个描述符**：17 个实体组件（8 个 `effects.*` + 9 个 `native.*`，§1.1）+ 9 个场景组件。
+`makeComponentDescriptor<T>` 透传。当前共 **27 个描述符**：17 个实体组件（8 个 `effects.*` + 9 个 `native.*`，§1.1）+ 10 个场景组件。
 
 | 组件 id | 名称 | 分类 | 属性（均含 `enabled`） |
 |---|---|---|---|
@@ -181,6 +181,9 @@ Scene Components 区，见 §1.2。Character 面板的 8 个参数与 Render Tag
 | `scene.taa` | TAA 时域抗锯齿 | 后处理 | `blend` / `jitterScale` |
 | `scene.water` | 水面 | 水体 | `level` / `waveStrength` / `waveSpeed` / `planarReflection` |
 | `scene.fog` | 距离雾 | 后处理 | `start` / `density` |
+| `scene.clouds` | 体积云 | 大气 | `coverage` / `density` / `baseHeight` / `thickness` / `speed` / `absorption` / `ambient` / `steps` / `color` |
+
+`scene.clouds` 不挂系统：它只把 10 个参数同步到 `EngineSettings`，由 `CloudPass` 在 Lighting 后做全屏 raymarch（默认关闭，`enabled=true` 才注册）。噪声是启动时 CPU 生成的 64³ RGBA8 可平铺体素，上传为 `VK_IMAGE_TYPE_3D`；参数范围与默认值见“体积云”里程碑。
 
 **宿主实体**：`Scene` 构造时 `registry.create()` 一个 `sceneSettingsEntity`，不挂 Transform / Hierarchy / Name。
 Hierarchy、可见实体遍历和普通 `captureDescription()` 都看不到它；`clearEntities()` 只销毁带 Transform 的实体，
@@ -194,7 +197,7 @@ Scene scope 只能挂设置实体，Entity scope 不能挂设置实体；通用 
 `lightColor.rgb * lightIntensity` 写入 `directionalLightColor`。add/remove/apply 场景组件后立即同步，
 不依赖每帧轮询，避免覆盖调试命令行直接改 settings 的路径。
 
-**初始化与兼容**：Scene 构造先挂 9 个默认组件；`Application` 载入 `engine.json` 后、
+**初始化与兼容**：Scene 构造先挂 10 个默认组件；`Application` 载入 `engine.json` 后、
 `FirstApp::loadConfig()` 与 `newScene()` 都调用 `resetSceneComponentsFromSettings()`，
 让默认画面与旧配置一致。v4 场景文件**没有** `sceneComponents` 字段时同样按当前 `EngineSettings` 重建；
 字段存在但为空数组表示用户移除了全部功能。预制体只捕获实体子树，不携带场景组件。
@@ -341,12 +344,12 @@ XZ region 重建/范围查询/移除；以及元数据组件注册表（add/read
 `ComponentRecord` 值往返、8 个系统各跑一个完整周期（Spin 转 45°、Bob 到 0.25 再回 0、
 Pulse 到 1.15 再回 1、Sway 摆动后回正、Look At 朝 +X、Follow 按 speed 靠近并在 stopDistance 停；粒子发射后 0.5s 有存量、禁用后停发并等存量走完），
 以及原生组件描述符（Character/Render Tag 增删、必需组件拒删、`captureComponentRecords` 不含 `native.*`），
-以及 9 个场景组件的 scope 约束、`EngineSettings` 同步、capture/clear/reset 与隐藏实体保护。
+以及 10 个场景组件的 scope 约束、`EngineSettings` 同步、capture/clear/reset 与隐藏实体保护。
 输出标记：
 
 ```
 [Scene] ECS/spatial selfTest PASS | hierarchy=T*Ry*Rx*Rz*S | grid cells=8
-[Scene] ECS component selfTest PASS | components=26 | systems=8
+[Scene] ECS component selfTest PASS | components=27 | systems=8
 ```
 
 ## 7. 改动注意

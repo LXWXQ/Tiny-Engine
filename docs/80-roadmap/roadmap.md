@@ -153,6 +153,7 @@ Transform/Bounds 字段已私有并通过 setter 自动通知 Scene；streaming 
 | Compute Bloom | Bloom 金字塔迁移到 compute | TD-06 / TD-07 已完成 |
 | TAA（已完成，见 [pass-order](../20-pipeline/pass-order.md)） | Halton 抖动 + 相机重投影 + 3x3 邻域 clamp；无运动向量 | HDR + G-Buffer Position（已有） |
 | 粒子（已完成，见 [scene-ecs](../30-systems/scene-ecs.md)） | 16 属性 CPU 发射器 + 独立前向透明 `ParticlePass`；Water 后、TAA 前，按相机距离排序 | 相机/深度（已有） |
+| 体积云（已完成，见 [pass-order](../20-pipeline/pass-order.md)） | 场景级 `scene.clouds`；64³ 噪声全屏 raymarch + 4 步太阳自阴影，Lighting 后、PlanarReflection 前预乘混合进 HDR | HDR + G-Buffer Position（已有） |
 | 时间超分 | 内部低分辨率 + 上采样 | TAA、动态分辨率（已有） |
 | 切线空间法线贴图 | 启用 `getNormalFromMap()` | 可靠切线或 TBN 构造 |
 
