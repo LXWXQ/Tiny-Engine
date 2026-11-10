@@ -98,6 +98,7 @@ const UsageLine kUsageLines[] = {
     { "地形", "--streaming-world [r]", "流送世界，半径 r（1..24，默认 3）" },
     { "地形", "--voxel-world [r]", "体素世界（32x32x32 方块 chunk），半径 r（1..12，默认 1）" },
     { "地形", "--voxel-glass-demo", "在体素世界出生点前摆交叉玻璃（V-01 透明排序目测）" },
+    { "地形", "--particle-demo", "在原点放一个粒子喷泉（前向透明 billboard 目测）" },
     { "地形", "--streaming-fly [speed]", "沿 +X 直线飞行，用于流送/卸载回归" },
     { "地形", "--streaming-fly-radius <r>", "绕圆飞行半径（0 = 直线）" },
     { "地形", "--streaming-budget <ms>", "每帧地形生成预算（毫秒）" },
@@ -278,6 +279,10 @@ int main(int argc, char** argv)
         else if (arg == "--voxel-glass-demo")
         {
             diagOptions.voxelGlassDemo = true;
+        }
+        else if (arg == "--particle-demo")
+        {
+            diagOptions.particleDemo = true;
         }
         else if (arg == "--streaming-fly")
         {

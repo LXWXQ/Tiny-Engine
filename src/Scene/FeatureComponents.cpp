@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace scene
 {
@@ -68,6 +69,43 @@ PropertyDescriptor makeBoolProperty(const char* name, const char* label,
         {
             component.*member = value.asBool();
         });
+    if (tooltip != nullptr)
+        property.tooltip = tooltip;
+    return property;
+}
+
+template <typename T>
+PropertyDescriptor makeColorProperty(const char* name, const char* label,
+                                     glm::vec4 T::*member, const char* tooltip = nullptr)
+{
+    PropertyDescriptor property = makeProperty<T>(
+        name, label, PropertyType::Color,
+        [member](const T& component) { return PropertyValue::fromColor(component.*member); },
+        [member](T& component, const PropertyValue& value)
+        {
+            component.*member = value.asColor();
+        });
+    if (tooltip != nullptr)
+        property.tooltip = tooltip;
+    return property;
+}
+
+template <typename T>
+PropertyDescriptor makeIntProperty(const char* name, const char* label,
+                                   int T::*member, int minimum, int maximum,
+                                   const char* tooltip = nullptr, float dragSpeed = 1.0f)
+{
+    PropertyDescriptor property = makeProperty<T>(
+        name, label, PropertyType::Int,
+        [member](const T& component) { return PropertyValue::fromInt(component.*member); },
+        [member, minimum, maximum](T& component, const PropertyValue& value)
+        {
+            component.*member = std::clamp(value.asInt(), minimum, maximum);
+        });
+    property.hasRange = true;
+    property.minimum = static_cast<float>(minimum);
+    property.maximum = static_cast<float>(maximum);
+    property.dragSpeed = dragSpeed;
     if (tooltip != nullptr)
         property.tooltip = tooltip;
     return property;
@@ -379,6 +417,162 @@ void followSystem(entt::registry& registry, float deltaSeconds)
     }
 }
 
+// xorshift32：每个发射器自带状态，避免共享 std::rand 导致多个发射器
+// 在同一帧拿到完全相同的随机序列。
+uint32_t nextRandom(uint32_t& state)
+{
+    if (state == 0u)
+        state = 0x9E3779B9u;
+    state ^= state << 13u;
+    state ^= state >> 17u;
+    state ^= state << 5u;
+    return state;
+}
+
+float random01(uint32_t& state)
+{
+    return static_cast<float>(nextRandom(state) & 0x00FFFFFFu) / 16777216.0f;
+}
+
+glm::vec3 randomUnitVector(uint32_t& state)
+{
+    const float z = random01(state) * 2.0f - 1.0f;
+    const float angle = random01(state) * glm::two_pi<float>();
+    const float radius = std::sqrt(std::max(0.0f, 1.0f - z * z));
+    return glm::vec3(radius * std::cos(angle), z, radius * std::sin(angle));
+}
+
+// 在以 axis 为轴、半角 acos(cosMaxAngle) 的圆锥内均匀取方向。
+glm::vec3 sampleConeDirection(const glm::vec3& axis, float cosMaxAngle,
+                              uint32_t& state)
+{
+    const glm::vec3 helper = std::abs(axis.y) > 0.99f
+                                 ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                 : glm::vec3(0.0f, 1.0f, 0.0f);
+    const glm::vec3 tangent = glm::normalize(glm::cross(helper, axis));
+    const glm::vec3 bitangent = glm::cross(axis, tangent);
+
+    const float cosTheta = 1.0f - random01(state) * (1.0f - cosMaxAngle);
+    const float sinTheta = std::sqrt(std::max(0.0f, 1.0f - cosTheta * cosTheta));
+    const float phi = random01(state) * glm::two_pi<float>();
+    return glm::normalize(axis * cosTheta +
+                          (tangent * std::cos(phi) + bitangent * std::sin(phi)) * sinTheta);
+}
+
+// 粒子模拟：推进、淘汰、发射。挂在 PostTransform，保证世界位置/旋转
+// 已经由 Scene::updateWorldTransforms 更新；enabled=false 时只推进不发射，
+// 移除组件时运行期粒子随组件一起销毁。
+void particleSystem(entt::registry& registry, float deltaSeconds)
+{
+    // 卡顿或断点恢复时不要让粒子一步飞出画面；0.1s 也足够覆盖 10 FPS。
+    const float dt = std::clamp(deltaSeconds, 0.0f, 0.1f);
+
+    std::size_t totalAlive = 0;
+    for (auto [entity, emitter] : registry.view<ParticleEmitterComponent>().each())
+    {
+        // 先推进已有粒子，再决定这一帧能发射多少，避免新粒子被本帧淘汰。
+        for (std::size_t i = 0; i < emitter.particles.size();)
+        {
+            Particle& particle = emitter.particles[i];
+            particle.age += dt;
+            if (particle.age >= particle.lifetime)
+            {
+                emitter.particles[i] = emitter.particles.back();
+                emitter.particles.pop_back();
+                continue;
+            }
+
+            particle.velocity += emitter.gravity * dt;
+            particle.position += particle.velocity * dt;
+            ++i;
+        }
+
+        totalAlive += emitter.particles.size();
+        if (!emitter.enabled)
+        {
+            emitter.spawnAccumulator = 0.0f;
+            continue;
+        }
+        if (dt <= 0.0f || emitter.emissionRate <= 0.0f || emitter.maxParticles <= 0)
+            continue;
+
+        glm::mat4 world(1.0f);
+        bool hasWorld = false;
+        if (const WorldTransformComponent* worldTransform =
+                registry.try_get<WorldTransformComponent>(entity);
+            worldTransform != nullptr && worldTransform->valid)
+        {
+            world = worldTransform->matrix;
+            hasWorld = true;
+        }
+
+        glm::vec3 origin(0.0f);
+        if (hasWorld)
+            origin = glm::vec3(world[3]);
+        else if (const TransformComponent* transform =
+                     registry.try_get<TransformComponent>(entity))
+            origin = transform->getTranslation();
+
+        const glm::mat3 rotation = hasWorld ? glm::mat3(world) : glm::mat3(1.0f);
+        origin += rotation * emitter.emissionOffset;
+
+        glm::vec3 direction = rotation * emitter.direction;
+        if (glm::length(direction) < 1e-5f)
+            direction = hasWorld ? rotation * glm::vec3(0.0f, 1.0f, 0.0f)
+                                 : glm::vec3(0.0f, 1.0f, 0.0f);
+        if (glm::length(direction) < 1e-5f)
+            direction = glm::vec3(0.0f, 1.0f, 0.0f);
+        direction = glm::normalize(direction);
+
+        emitter.spawnAccumulator += emitter.emissionRate * dt;
+        // 长时间被 maxParticles 卡住时不要攒出一次巨大的爆发。
+        emitter.spawnAccumulator = std::min(emitter.spawnAccumulator, 256.0f);
+        const std::size_t requested =
+            static_cast<std::size_t>(std::floor(emitter.spawnAccumulator));
+        if (requested == 0u)
+            continue;
+
+        const std::size_t particleLimit = static_cast<std::size_t>(emitter.maxParticles);
+        const std::size_t perEmitterRoom = emitter.particles.size() < particleLimit
+                                               ? particleLimit - emitter.particles.size()
+                                               : 0u;
+        const std::size_t globalRoom = totalAlive < kMaxParticlesTotal
+                                           ? kMaxParticlesTotal - totalAlive
+                                           : 0u;
+        const std::size_t spawnCount = std::min({ requested, perEmitterRoom, globalRoom });
+        if (spawnCount == 0u)
+            continue;
+
+        uint32_t& randomState = emitter.randomState;
+        if (randomState == 0u)
+            randomState = 0x9E3779B9u ^
+                          (static_cast<uint32_t>(entity) * 0x85EBCA6Bu + 0xC2B2AE35u);
+
+        const float cosMaxAngle = std::cos(glm::radians(std::clamp(emitter.spreadAngle, 0.0f, 180.0f)));
+        const float speedVariation = std::clamp(emitter.speedVariation, 0.0f, 1.0f);
+        const float lifetimeVariation = std::clamp(emitter.lifetimeVariation, 0.0f, 1.0f);
+
+        for (std::size_t i = 0; i < spawnCount; ++i)
+        {
+            Particle particle{};
+            particle.position = origin + randomUnitVector(randomState) *
+                                             (emitter.emissionRadius *
+                                              std::cbrt(random01(randomState)));
+            particle.velocity = sampleConeDirection(direction, cosMaxAngle, randomState) *
+                                (emitter.initialSpeed *
+                                 (1.0f + (random01(randomState) * 2.0f - 1.0f) * speedVariation));
+            particle.lifetime = std::max(
+                0.02f, emitter.lifetime *
+                           (1.0f + (random01(randomState) * 2.0f - 1.0f) * lifetimeVariation));
+            particle.sizeScale = 0.85f + random01(randomState) * 0.3f;
+            emitter.particles.push_back(particle);
+        }
+
+        emitter.spawnAccumulator -= static_cast<float>(spawnCount);
+        totalAlive += spawnCount;
+    }
+}
+
 } // namespace
 
 void registerFeatureComponents(ComponentRegistry& registry)
@@ -471,6 +665,59 @@ void registerFeatureComponents(ComponentRegistry& registry)
                                              "与目标保持的停止距离", 0.01f),
           makeBoolProperty<FollowComponent>("enabled", "Enabled", &FollowComponent::enabled,
                                             "关闭后系统跳过该组件，但保留设置") }));
+
+    // F5：粒子发射器。属性只暴露可序列化的发射/外观参数；particles 数组
+    // 是运行期状态，复制组件或撤销时由默认构造重置，不会把旧粒子带过去。
+    registry.add(makeComponentDescriptor<ParticleEmitterComponent>(
+        "effects.particles", "Particle Emitter", "Effects",
+        { makeBoolProperty<ParticleEmitterComponent>(
+              "enabled", "Enabled", &ParticleEmitterComponent::enabled,
+              "关闭后停止发射，已有粒子会走完寿命；移除组件立即消失"),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "emissionRate", "Emission Rate (per s)", &ParticleEmitterComponent::emissionRate,
+              0.0f, 2000.0f, "每秒发射的粒子数；0 表示不发射", 0.5f),
+          makeIntProperty<ParticleEmitterComponent>(
+              "maxParticles", "Max Particles", &ParticleEmitterComponent::maxParticles,
+              0, 4096, "单个发射器同时存在的粒子上限；全局上限 16384", 1.0f),
+          makeVec3Property<ParticleEmitterComponent>(
+              "direction", "Direction", &ParticleEmitterComponent::direction, 0.02f,
+              "发射锥的轴，局部空间；默认 +Y"),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "spreadAngle", "Spread Angle (deg)", &ParticleEmitterComponent::spreadAngle,
+              0.0f, 180.0f, "锥形半角；0 是笔直一束，180 是全向", 0.5f),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "initialSpeed", "Initial Speed", &ParticleEmitterComponent::initialSpeed,
+              0.0f, 100.0f, "初速度，单位/秒", 0.02f),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "speedVariation", "Speed Variation", &ParticleEmitterComponent::speedVariation,
+              0.0f, 1.0f, "初速度的随机浮动比例；0 表示完全一致", 0.005f),
+          makeVec3Property<ParticleEmitterComponent>(
+              "emissionOffset", "Emission Offset", &ParticleEmitterComponent::emissionOffset,
+              0.02f, "相对实体原点的局部偏移，会随实体旋转"),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "emissionRadius", "Emission Radius", &ParticleEmitterComponent::emissionRadius,
+              0.0f, 10.0f, "在球形范围内随机初始化位置；0 表示从一点发射", 0.01f),
+          makeVec3Property<ParticleEmitterComponent>(
+              "gravity", "Gravity", &ParticleEmitterComponent::gravity, 0.02f,
+              "世界空间重力加速度，单位/秒²"),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "lifetime", "Lifetime (s)", &ParticleEmitterComponent::lifetime,
+              0.05f, 30.0f, "粒子存活时间，单位秒", 0.01f),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "lifetimeVariation", "Lifetime Variation", &ParticleEmitterComponent::lifetimeVariation,
+              0.0f, 1.0f, "寿命的随机浮动比例；0 表示完全一致", 0.005f),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "startSize", "Start Size", &ParticleEmitterComponent::startSize,
+              0.001f, 10.0f, "出生时的世界空间直径", 0.005f),
+          makeFloatProperty<ParticleEmitterComponent>(
+              "endSize", "End Size", &ParticleEmitterComponent::endSize,
+              0.0f, 10.0f, "寿命结束时的世界空间直径", 0.005f),
+          makeColorProperty<ParticleEmitterComponent>(
+              "startColor", "Start Color", &ParticleEmitterComponent::startColor,
+              "出生颜色；alpha 决定初始不透明度"),
+          makeColorProperty<ParticleEmitterComponent>(
+              "endColor", "End Color", &ParticleEmitterComponent::endColor,
+              "寿命结束颜色；alpha 通常设 0 让粒子淡出") }));
 }
 
 void registerFeatureSystems(SystemScheduler& scheduler)
@@ -482,6 +729,8 @@ void registerFeatureSystems(SystemScheduler& scheduler)
     scheduler.add("effects.pulse", SystemPhase::Simulation, 140, &pulseSystem);
     scheduler.add("effects.follow", SystemPhase::Simulation, 150, &followSystem);
     scheduler.add("effects.lookAt", SystemPhase::Simulation, 160, &lookAtSystem);
+    // PostTransform：世界变换已经算完，粒子位置才能跟随父节点/旋转。
+    scheduler.add("effects.particles", SystemPhase::PostTransform, 200, &particleSystem);
 }
 
 } // namespace scene

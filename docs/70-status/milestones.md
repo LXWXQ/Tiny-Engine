@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
 size: ~930 行
-updated: 2026-11-06
+updated: 2026-11-10
 ---
 
 # 里程碑与实测基线
@@ -37,7 +37,7 @@ updated: 2026-11-06
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 38 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 76 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -1138,3 +1138,21 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 - 全套回归 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261110-105403`；DocCheck PASS（documents=68 lines=12179）。
 
 **边界**：`EngineSettings` 仍是渲染器读取的缓存，场景组件是编辑期 source of truth；旧场景没有 `sceneComponents` 时从当前 settings 初始化，可能继承上一场景运行时改动而不是 engine.json 原值；组件仍编译期注册，没有脚本/热插拔；`scene.*` 不覆盖 GPU 批、merged buffers、Hi-Z、terrain batch 等调试开关。
+
+## F5-07：粒子组件（2026-11-10）
+
+**问题**：引擎已有 `ExternalInstance` 数据入口，但没有生产方，用户无法在场景里放置会发射粒子的物体；需要一套能像其他组件一样在 Inspector 添加、调参、存读与撤销的粒子能力，并真实接进渲染管线。
+
+**实现**：
+- 新增实体级 `ParticleEmitterComponent`（`src/Scene/FeatureComponents.h`）与 `effects.particles` 描述符：16 个属性，含 emissionRate、maxParticles、direction/spreadAngle/emissionOffset/emissionRadius、lifetime/lifetimeVariation、initialSpeed/speedVariation、gravity、startSize/endSize、startColor/endColor；默认每发射器 512，属性上限 4096，全局 `kMaxParticlesTotal = 16384`。
+- CPU 系统注册为 `Particle 200`（PostTransform）：xorshift32 随机球内偏移、锥形方向、速度/寿命/尺寸抖动；按 WorldTransform 或 Transform 计算原点，重力积分、年龄推进、swap-pop 回收过期粒子；`enabled=false` 停止发射并清空 accumulator，存量粒子走完寿命。
+- 新增 `src/Render/ParticlePass.{h,cpp}`、`shaders/particle.vert` / `particle.frag`：每帧每在飞槽一份 host-visible 实例缓冲（16384×32B），6 顶点 billboard + 圆形软遮罩，`SRC_ALPHA/ONE_MINUS_SRC_ALPHA` 混合；在 Water 后、TAA 前写 `hdrScene`（LOAD），深度 `LESS_OR_EQUAL` 但不写，按相机距离远→近排序，一次 `vkCmdDraw` 提交。
+- 粒子不进 G-Buffer、平面反射与阴影；`--particle-demo` 在空场景创建喷泉（rate=220、max=1500）并把相机放到取景位。
+
+**测试**：
+- `[Scene] ECS component selfTest PASS | components=26 | systems=8`：`effects.particles` 记录 16 属性、apply 参数、0.5s 后 particles 非空、`enabled=false` 后 10×0.1s 清空。
+- `TinyEngine.exe --selftest 240 --empty-scene --particle-demo --screenshot build/particle_demo2.png --screenshot-frame 230 --hidden`：`[Particle] emitters=1 alive=376 drawcalls=1`、`[Validation] errors=0 warnings=0`，stderr 空。
+- 新增 `f6-particles` 用例（60 帧）断言 demo emitter、`emitters=1 alive=`、`drawcalls=1` 与 0/0。
+- 全套回归 **76 项** ALL PASS（含 `f6-particles`），stderr 全 0，验证日志 `build/validation/20261110-113649`；DocCheck PASS（documents=68 lines=12213）。
+
+**边界**：只有单一 CPU 发射器，没有碰撞、子发射器、寿命曲线、GPU 模拟、软粒子或阴影；粒子不写 G-Buffer、不进平面反射/阴影、不提供 TAA 运动向量；每发射器默认 512（属性上限 4096），全局 16384。

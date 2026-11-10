@@ -1484,7 +1484,7 @@ bool Scene::selfTest()
         scene.getRegistry();
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
-        if (componentCount != 25 || systemCount != 7)
+        if (componentCount != 26 || systemCount != 8)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;
@@ -1729,6 +1729,72 @@ bool Scene::selfTest()
             2e-3f)
         {
             std::cerr << "[Scene] selfTest FAIL: Follow stop distance mismatch\n";
+            ok = false;
+        }
+
+        // F5：粒子发射器。属性元数据、发射、寿命淘汰都走纯 CPU 路径；
+        // 渲染由 ParticlePass 消费同一个 particles 数组。
+        const entt::entity particleEntity = makeEffectEntity();
+        if (!scene.addComponent(particleEntity, "effects.particles"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: Particle Emitter addComponent failed\n";
+            ok = false;
+        }
+        auto particleRecord = scene.readComponent(particleEntity, "effects.particles");
+        if (!particleRecord || particleRecord->properties.size() != 16)
+        {
+            std::cerr << "[Scene] selfTest FAIL: Particle Emitter default record mismatch\n";
+            ok = false;
+        }
+        else
+        {
+            auto setFloat = [&particleRecord](const char* name, float value)
+            {
+                if (auto* property = particleRecord->find(name))
+                    property->value = scene::PropertyValue::fromFloat(value);
+            };
+            auto setInt = [&particleRecord](const char* name, int value)
+            {
+                if (auto* property = particleRecord->find(name))
+                    property->value = scene::PropertyValue::fromInt(value);
+            };
+            setFloat("emissionRate", 120.0f);
+            setInt("maxParticles", 64);
+            setFloat("lifetime", 0.4f);
+            setFloat("lifetimeVariation", 0.0f);
+            setFloat("initialSpeed", 0.4f);
+            setFloat("speedVariation", 0.0f);
+            setFloat("spreadAngle", 0.0f);
+            setFloat("emissionRadius", 0.0f);
+            setFloat("startSize", 0.1f);
+            setFloat("endSize", 0.1f);
+            if (!scene.applyComponentRecord(particleEntity, *particleRecord))
+            {
+                std::cerr << "[Scene] selfTest FAIL: Particle Emitter apply failed\n";
+                ok = false;
+            }
+        }
+
+        auto& particleWorld = testRegistry.emplace<WorldTransformComponent>(particleEntity);
+        particleWorld.matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 2.0f, 0.0f));
+        particleWorld.worldPosition = glm::vec3(0.0f, 2.0f, 0.0f);
+        particleWorld.valid = true;
+
+        scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::PostTransform, 0.5f);
+        if (testRegistry.get<scene::ParticleEmitterComponent>(particleEntity).particles.empty())
+        {
+            std::cerr << "[Scene] selfTest FAIL: Particle Emitter produced no particles\n";
+            ok = false;
+        }
+
+        auto& particleEmitter =
+            testRegistry.get<scene::ParticleEmitterComponent>(particleEntity);
+        particleEmitter.enabled = false;
+        for (int step = 0; step < 10 && !particleEmitter.particles.empty(); ++step)
+            scene.getSystemScheduler().run(testRegistry, scene::SystemPhase::PostTransform, 0.1f);
+        if (!particleEmitter.particles.empty())
+        {
+            std::cerr << "[Scene] selfTest FAIL: disabled Particle Emitter did not expire particles\n";
             ok = false;
         }
 

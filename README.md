@@ -3,8 +3,8 @@
 一个面向**学习与工程验证**的 Vulkan 1.3 渲染器（Windows x64 / C++17 / MSVC）。
 重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
 
-- 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> PlanarReflection -> SSR -> Glass -> Water -> TAA -> Bloom -> Present(ACES+gamma+ImGui)`
-- 一条命令完成：依赖准备 -> 全新 configure/build -> 75 项回归
+- 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> PlanarReflection -> SSR -> Glass -> Water -> Particle -> TAA -> Bloom -> Present(ACES+gamma+ImGui)`
+- 一条命令完成：依赖准备 -> 全新 configure/build -> 76 项回归
 - 验收基线：**退出码 0** + **stderr 0 字节** + `[Validation] errors=0 warnings=0`
 
 > 本文件是仓库根目录**唯一**的文档。所有细节在 [`docs/`](docs/README.md) 下，按类型分层。
@@ -62,9 +62,10 @@ cmake --build build --config Debug
 | HDR + Bloom + ACES | 光照输出线性 HDR，tonemap 独立成 PresentPass；Bloom 关闭时真跳过 7 个 pass | [pass-order](docs/20-pipeline/pass-order.md) |
 | TAA 时域抗锯齿 | Halton(2,3) 抖动 + 未抖动 VP 反投影 + 3x3 邻域 AABB clamp；`--no-taa` 关闭，窗口 resize 重置历史 | [pass-order](docs/20-pipeline/pass-order.md) |
 | **水面** | 相机中心径向网格（160 圈 × 192 段，约 4km）跟随相机；4 个大波做顶点位移，近景细节用 1024x1024 无缝 FFT 法线贴图两层滚动（18m/42m，去掉 K<32 低频、`tileableMips`），大波按像素 footprint 逐波过滤，未解析能量转粗糙度/高光展宽；Fresnel + 半分辨率平面反射（镜像相机重画 960x540 G-Buffer 与延迟光照）+ 近场半分辨率 SSR（读 HDR/位置，48 步屏幕空间追踪，屏幕外/远处回退平面反射或 IBL）+ 按反射亮度最多补 34% 天空环境图底色（深水色提亮、远水 alpha 0.89，避免整片暗色平板）+ 用 G-Buffer 深度算厚度吸收/只贴岸线的泡沫（法线贴图低频噪声打散）；Lighting 后、TAA 前混合；只在有地形/体素块时启用，`--no-water` / `--no-ssr` 关闭；场景功能由 `scene.water` 场景组件控制，移除/禁用即关闭 | [water](docs/30-systems/water.md) |
+| **粒子** | 实体级 `effects.particles` 组件（16 个参数，Inspector 可调）：CPU 发射与模拟（每发射器默认 512、属性上限 4096，全局上限 16384），前向透明 billboard 写 HDR，排在 Lighting/Glass/Water 之后、TAA 之前；按相机距离排序、深度测试不写深度，`--particle-demo` 演示 | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | **距离雾** | 指数距离雾（默认 80m 起、密度 0.00045，约 1km 处 34%、4km 处 83%）；雾色取环境图地平线 LOD3，地形/水面/玻璃共用，天空不参与；`config/engine.json` 的 `fog` 节点 + 运行时 ImGui；编辑器参数在 `scene.fog` 场景组件中，无命令行开关 | [water](docs/30-systems/water.md) |
 | IBL split-sum | irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙 | [ibl](docs/20-pipeline/ibl.md) |
-| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 7 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow）+ 9 个原生组件描述（Name/Transform/Hierarchy 必需，Character/Render Tag 可添加，Camera/Terrain/Streaming/Voxel 为创建菜单托管）；属性带范围/拖动速度/悬停提示与单属性重置，组件可跨实体复制/粘贴/重置；预制体保存/实例化走同一描述层；另有 9 个场景级组件（Environment/Shadows/Bloom/SSAO/SSR/MotionBlur/TAA/Water/Fog，scope=Scene，挂在隐藏设置实体，添加/启用/调参/移除即功能开关），共 25 个描述符 | [scene-ecs](docs/30-systems/scene-ecs.md) |
+| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 8 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow/Particle）+ 9 个原生组件描述（Name/Transform/Hierarchy 必需，Character/Render Tag 可添加，Camera/Terrain/Streaming/Voxel 为创建菜单托管）；属性带范围/拖动速度/悬停提示与单属性重置，组件可跨实体复制/粘贴/重置；预制体保存/实例化走同一描述层；另有 9 个场景级组件（Environment/Shadows/Bloom/SSAO/SSR/MotionBlur/TAA/Water/Fog，scope=Scene，挂在隐藏设置实体，添加/启用/调参/移除即功能开关），共 26 个描述符 | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | 空间索引 + 视锥剔除 | 均匀网格 broad phase + Transform/Bounds 私有字段/dirty + 增量 AABB upsert + XZ region bucket + frustum-AABB | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | CPU JobSystem | worker pool + `submit()`/`parallelFor()` + 异常传播 | [jobsystem](docs/30-systems/jobsystem.md) |
 | 窗口缩放 + 动态分辨率 | swapchain 原地重建；中间目标按 renderScale 缩放 | [synchronization](docs/10-architecture/synchronization.md) |
@@ -102,6 +103,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | `--editor` | 以场景编辑器模式启动（默认关闭，运行时行为完全不变） |
 | `--runtime-mode` | 编辑器启动后直接进入运行模式（第三人称角色 + 动画；仅编辑器构建有效） |
 | `--voxel-world [r]` / `--voxel-glass-demo` | 生成方块体素世界（半径 1..12）/ 摆交叉玻璃墙做透明排序目测 |
+| `--particle-demo` | 空场景创建一个粒子喷泉（rate=220、max=1500），用于粒子截图/回归 |
 | `--terrain-test` | 启动时创建持久地形 + 流送/雕刻/角色 smoke，校验 GPU 高度场、GPU mesh parity、GPU selection 过渡、区域限定重建与截图路径（常配合 `--empty-scene --selftest`） |
 
 构建同时产出 `build/<Config>/TinyEditor.exe`，双击即进编辑器，无需敲参数。
@@ -128,7 +130,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/20-pipeline/`](docs/20-pipeline/README.md) | Pass 顺序、G-Buffer/中间目标、IBL、Shader 清单 | 改 `src/Render/` 或 `shaders/` |
 | [`docs/30-systems/`](docs/30-systems/README.md) | ECS/场景、JobSystem、配置、ImGui | 改 `src/Scene/`、`src/Core/` 对应模块 |
 | [`docs/40-build/`](docs/40-build/README.md) | 依赖版本、构建运行、排障 | 构建失败 / 换机器 |
-| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、75 项回归矩阵、验收标准 | 加测试 / 定位回归 |
+| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、76 项回归矩阵、验收标准 | 加测试 / 定位回归 |
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
 | [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
@@ -161,7 +163,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 
 | 项 | 值 |
 |---|---|
-| 回归 | `tools/Validate.ps1`：**75 项全 PASS**，stderr 全 0 字节 |
+| 回归 | `tools/Validate.ps1`：**76 项全 PASS**，stderr 全 0 字节 |
 | 启动排错 | 交互式启动失败先弹原生 MessageBox（阶段 / 原因 / 日志路径 / `--help` / Vulkan 下一步），点确定后退出；日志仍追加到可执行文件旁的 `startup-error.log`。`--hidden` / `--selftest` / 截图等无人值守路径只写日志、不弹窗；窗口尺寸按显示器工作区 92% 收敛 |
 | 快捷键 | 只有一份 `kShortcutEntries`：速查表、`handleShortcuts()` 分发都读它；自检扫键位冲突（`entries=20 conflicts=0`，B4） |
 | 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |
@@ -170,7 +172,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 | 帧率 | Debug / RTX 2070：`--selftest 300` 约 240~260 FPS（仅作同机相对比较） |
 | 流送世界 | `--streaming-world [radius]`：半径 1~24（F2-h 起 chunk 坐标 int64），半径 2 → `chunks=25`、`maxUpdateMs≈0.7`；`--streaming-fly 60` 飞 150 帧 → `loaded=54 unloaded=19`；Release 半径 24（2401 块）= 208 FPS、`Scene::update()` 约 62 µs/帧（Debug 只有 17 FPS，FPS 数字必须标构建类型） |
 | 地形合批 | F2-b/F2-d/F2-g：可见 chunk 惰拷贝进 `TerrainMeshArena`（按实际尺寸分配，F2-h 起容量按环尺寸算：半径 12 约 46+22 MB、半径 24 约 171+82 MB），set 3 放 chunk 实例表，一条 `vkCmdDrawIndexedIndirect` 覆盖 16384 条命令；`--streaming-world 2` 的 draw calls 从 13 降到 2；合批与非合批都使用全局高度范围，流送 chunk 边界无沙/雪色块 |
-| GPU 批 | F1-a~e：实例数 ≥ 256 才走 GPU 驱动提交（当前 103 实例默认走 CPU 路径，`--gpu-scene` 可强制）。按 `(模型, 子网格)` 分组实例化，合并顶点/索引缓冲后一条 `vkCmdDrawIndexedIndirect` 画完所有组（跨模型 single draw，`--no-merged-buffers` 整条退回 CPU），组按材质排序；结构签名命中时跳过摊平与实例上传（稳定帧 439µs → 9µs，只写 256B `frameData`）；`vec4 screen` 做屏幕空间误差剔除（`--gpu-scene-min-px`）；`ExternalInstance` 让粒子复用同一提交路径（`--gpu-scene-external` 调试注入），体素则走自己的 arena 实例表 + 间接批；Hi-Z 遮挡剔除当前场景 `hizCulled=0`（Sponza 子网格太大，组级保守剔除不命中），`--no-hiz` 可关。 |
+| GPU 批 | F1-a~e：实例数 ≥ 256 才走 GPU 驱动提交（当前 103 实例默认走 CPU 路径，`--gpu-scene` 可强制）。按 `(模型, 子网格)` 分组实例化，合并顶点/索引缓冲后一条 `vkCmdDrawIndexedIndirect` 画完所有组（跨模型 single draw，`--no-merged-buffers` 整条退回 CPU），组按材质排序；结构签名命中时跳过摊平与实例上传（稳定帧 439µs → 9µs，只写 256B `frameData`）；`vec4 screen` 做屏幕空间误差剔除（`--gpu-scene-min-px`）；`ExternalInstance` 是通用批量入口（`--gpu-scene-external` 调试注入，当前无生产方）；粒子由独立 `ParticlePass` 前向绘制，体素则走自己的 arena 实例表 + 间接批；Hi-Z 遮挡剔除当前场景 `hizCulled=0`（Sponza 子网格太大，组级保守剔除不命中），`--no-hiz` 可关。 |
 
 > 这些数字随硬件与代码变化。**更新基线时请成对更新本表与
 > [`docs/70-status/milestones.md`](docs/70-status/milestones.md)。**

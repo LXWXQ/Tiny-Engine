@@ -5,7 +5,7 @@ type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
 size: ~125 行
-updated: 2026-11-06
+updated: 2026-11-10
 ---
 
 # Pass 顺序与原因
@@ -35,6 +35,8 @@ GlassPass         V-01：体素玻璃前向混合；LOAD HDR + 深度，写深�
    |
 WaterPass         水面前向混合：LOAD HDR + 深度，写深度关；径向网格铺到约 4km，逐像素 footprint 过滤波浪 + 距离雾
    |
+ParticlePass      F5：粒子前向透明 billboard；LOAD HDR + 深度，写深度关，按相机距离远->近，全局上限 16384
+   |
 TAAPass           时域抗锯齿：读 HDR / G-Buffer.Position / 上一帧 history，写 taaOutput + 新 history
    |
 Bloom.Bright      taaOutput -> level0（1/2 分辨率）
@@ -50,7 +52,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 体素 chunk 走同一份 arena VBO/IBO，但实例表与命令由 `GeometrySystem` 每帧按可见集合写进专用 host-visible 缓冲，整批一条 `vkCmdDrawIndexedIndirect`；这条路径不经过 `SceneGpuCull`，反射视图也不复用它，而是逐块 arena draw。
 `HiZBuild` 必须排在 `Geometry` **之后**：金字塔要包含本帧刚画出的几何；它写的是 `(frameInFlight + 1) % kFramesInFlight` 槽，供下一帧 `SceneGpuCull` 读（错帧一帧，第一帧 `params.z = 0` 关闭遮挡）。
 渲染图里注册的 pass 名依次是：
-`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `SSR`, `Glass`, `Water`, `TAA`,
+`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `SSR`, `Glass`, `Water`, `Particle`, `TAA`,
 `Bloom.Bright`, `Bloom.Down0/1/2`, `Bloom.Up2/1/0`, `Present`,
 `PresentTransition`。
 
@@ -75,8 +77,9 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | Glass 在 Lighting **之后**、Bloom **之前** | 玻璃必须混合在已经着色好的 HDR 上（延迟着色只存一个表面，玻璃进 G-Buffer 会把后面的层盖掉）；放在 Bloom 前，玻璃高光也参与辉光。深度 `LOAD` 但 `depthWrite = FALSE`、`compare = LESS_OR_EQUAL`：不透明几何仍挡住玻璃，玻璃之间由 CPU 排序（远->近）决定顺序 |
 | SSR 在 PlanarReflection **之后**、Glass/Water **之前** | 屏幕空间反射要读本帧已着色的 HDR 做颜色命中，并把结果留给 Water 混合；放在 Water 之前才能覆盖近场水面。只在水面启用、场景有地形/体素块、且 `ssrEnabled` 时注册；半分辨率 960x540，48 步 DDA 追踪，屏幕外/超过 200m 或无命中时返回 0，Water 再回退到平面反射/IBL。SSR 是纯屏幕空间效果，不写深度、不影响不透明几何 |
 | PlanarReflection 在 Lighting **之后**、Glass/Water **之前** | 反射必须用本帧 G-Buffer 和 IBL 重新着色；透明 Pass 之前写完，Water 才能把反射色当输入。只有水面启用、平面反射开启且场景有地形/体素块时才注册；镜像相机沿水面对称，用未抖动投影重画半分辨率 960x540 的 G-Buffer，再用第二套 Lighting 着色，开销约为全分辨率的一半 |
-| Water 在 Glass **之后**、TAA **之前** | 水面要混合进已经着色的 HDR；先于 TAA 才能让水边缘参与时域抗锯齿；先于 Bloom 才能让太阳高光参与辉光。深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，不透明几何与玻璃都能挡住它；相机中心径向网格跟随相机，铺到约 4km。片元用 `dFdx/dFdy` 足迹过滤大波，并用 binding14 的 1024x1024 无缝法线贴图两层滚动补细节，未解析能量转成粗糙度/高光展宽；距离雾在 Lighting、Water、Glass 内共用 `fogParams`；Water 同时读平面反射（binding12）、SSR（binding13）与水面法线（binding14），按 Fresnel/置信度混合 |
-| TAA 在 Water **之后**、Bloom **之前** | 先把玻璃和水面混合进 HDR 再做时域解析，透明边缘也能被抗锯齿；Bloom 读到的是已收敛的 HDR，不会把抖动噪声放大成辉光。TAA 用未抖动 VP 把 G-Buffer 世界坐标反投影到上一帧，不需要运动向量（当前只有相机运动）；ImGui 在 Present 内叠加，不参与历史混合 |
+| Water 在 Glass **之后**、Particle **之前** | 水面要混合进已经着色的 HDR；先于 TAA 才能让水边缘参与时域抗锯齿；先于 Bloom 才能让太阳高光参与辉光。深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，不透明几何与玻璃都能挡住它；相机中心径向网格跟随相机，铺到约 4km。片元用 `dFdx/dFdy` 足迹过滤大波，并用 binding14 的 1024x1024 无缝法线贴图两层滚动补细节，未解析能量转成粗糙度/高光展宽；距离雾在 Lighting、Water、Glass 内共用 `fogParams`；Water 同时读平面反射（binding12）、SSR（binding13）与水面法线（binding14），按 Fresnel/置信度混合 |
+| Particle 在 Water **之后**、TAA **之前** | 粒子是半透明 billboard，要混在已经着色的 HDR 上；放在 TAA 前让粒子边缘参与时域抗锯齿，放在 Bloom 前让亮粒子参与辉光。深度 `LOAD`、`depthWrite = FALSE`、`compare = LESS_OR_EQUAL`，不透明几何与水面能正确遮挡；粒子之间按相机距离远->近排序，关闭深度写避免互相裁掉。CPU 模拟，每发射器默认 512（属性上限 4096），全局上限 16384；粒子不进平面反射/阴影，也不参与 TAA 的运动向量（只有相机运动被补偿） |
+| TAA 在 Particle **之后**、Bloom **之前** | 先把玻璃、水面和粒子混合进 HDR 再做时域解析，透明边缘也能被抗锯齿；Bloom 读到的是已收敛的 HDR，不会把抖动噪声放大成辉光。TAA 用未抖动 VP 把 G-Buffer 世界坐标反投影到上一帧，不需要运动向量（当前只有相机运动）；ImGui 在 Present 内叠加，不参与历史混合 |
 | Bloom 在 tonemap **之前** | ACES 最后一步是 `clamp(0,1)`，高光被压到 1.0 后 Bloom 只能"把白涂白" |
 | 曝光在 Bloom **之后** | 曝光是 tonemap 的输入缩放；若写在光照里，Bloom 阈值会随曝光漂移，拖滑块时辉光乱跳 |
 | ImGui **最后** | 放在 Present 里，以后往 Present 前插任何后效，UI 都自动不被糊掉 |

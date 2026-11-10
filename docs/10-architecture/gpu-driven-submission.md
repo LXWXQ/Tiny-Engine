@@ -5,7 +5,7 @@ type: architecture
 scope: src/Render/SceneGpuBatch.h, src/Render/SceneGpuBatch.cpp, shaders/scene_cull.comp, shaders/hiz_build.comp, shaders/hiz_downsample.comp, shaders/mrt.vert, shaders/mrt.frag, src/Render/GeometrySystem.cpp
 read-when: 改几何提交路径、加实例属性、调视锥/遮挡剔除、改合并缓冲、接粒子/体素等大批量实例、调试 indirect draw 或 set 3 描述符
 size: ~160 行
-updated: 2026-11-02
+updated: 2026-11-10
 ---
 
 # GPU 驱动提交：实例缓冲、compute 剔除与间接绘制
@@ -25,7 +25,7 @@ F1 第一刀。目标不是「现在就更快」，而是把「CPU 逐实体决�
 仍未做：
 - 跨模型合成**一条**命令（间接命令不带顶点缓冲绑定，要一条画完就得先有全局合并缓冲 + 统一 firstIndex 重写，见 §4.1 的取舍）；
 - GPU 端 LOD 选择与屏幕空间误差；
-- 粒子/体素接入（它们只需往实例缓冲里塞记录，不需要新管线）。
+- 批量实例接入（`ExternalInstance` 仍是通用入口但无生产方；粒子已走独立 `ParticlePass`，体素走专用 arena）。
 
 ## 2. 数据流
 
@@ -135,7 +135,7 @@ push constant 是 `uvec4 params = (groupCount, hizWidth, hizHeight, mipLevels)`�
 
 ## 4.4 外部实例（F1-e）
 
-粒子/体素这类没有 ECS 实体的几何，每帧通过 `SceneGpuBatch::setExternalInstances(std::vector<ExternalInstance>)` 提交：
+`ExternalInstance` 是为没有 ECS 实体的批量几何预留的通用入口，通过 `SceneGpuBatch::setExternalInstances(std::vector<ExternalInstance>)` 提交。当前只有调试注入 `--gpu-scene-external` 在用：粒子已有独立 `ParticlePass`（每帧一份实例缓冲 + billboard），体素走 `VoxelChunk` + `TerrainMeshArena`，都不经过这里。
 
 ```cpp
 struct ExternalInstance
@@ -147,10 +147,10 @@ struct ExternalInstance
 };
 ```
 
-它们与 ECS 实例共用同一个分组键 `(模型, 子网格)`、同一份合并缓冲、同一套剔除与同一条 indirect 命令 —— 引擎侧不需要为粒子单独开绘制路径。三处配套改动：
+若将来有生产方，它们会与 ECS 实例共用同一个分组键 `(模型, 子网格)`、同一份合并缓冲、同一套剔除与同一条 indirect 命令，不需要新管线。三处配套改动：
 
 - `batchModels` 收集时把外部实例的模型也算进去，合并缓冲必须覆盖它们；
-- 结构签名混入外部实例的数量、几何 id、子网格、材质槽与 16 个矩阵 float（粒子在动，签名每帧都会变，这是预期行为，快速路径对它们不生效）；
+- 结构签名混入外部实例的数量、几何 id、子网格、材质槽与 16 个矩阵 float（外部实例若每帧变化，签名每帧都会变，这是预期行为，快速路径对它们不生效）；
 - 调试注入：`--gpu-scene-external <n>` 把第一个可批子网格复制 n 份当外部实例，日志 `[SceneGpu] external instances | count=<n> source=debug-injection`，`cull stats` 里有 `external=<n>`。实测 `--gpu-scene-external 4` 时 `instances=107`（103 + 4）。
 
 ## 5. 管线接线
@@ -213,13 +213,13 @@ F2-f 调试时就是踩了这条：`--gpu-scene` 与地形合批同时开启时�
 
 ## 9. 已知限制
 
-- **Hi-Z 是组级保守剔除**：组内任一实例可见就整组可见。Sponza 的 103 个子网格各自覆盖整栋建筑的一大块（相机在走廊里时几乎每组都有一小部分可见），所以当前场景 `hizCulled = 0` 是正确结果而不是失效 —— 收益要等「大量小实例」（粒子、植被、体素 chunk）进来。
+- **Hi-Z 是组级保守剔除**：组内任一实例可见就整组可见。Sponza 的 103 个子网格各自覆盖整栋建筑的一大块（相机在走廊里时几乎每组都有一小部分可见），所以当前场景 `hizCulled = 0` 是正确结果而不是失效 —— 收益要等「大量小实例」（植被、碎石、体素 chunk）进来。
 - 包围盒缓存以 `Model::getGeometryId()` 为键，超过 64 个或 600 帧不活跃会被淘汰；`forgetModel()` 保留但没有生产调用方。
 - 合并缓冲按模型集合整体重建：模型增删或规模变化会触发一次全量重传（低频；大资产场景要观察重建耗时）。
 - 合并缓冲要求可批模型带完整 CPU 顶点/索引副本（Sponza 约 11MB 常驻），地形模型不保留。
 - 合并模式已经是一条 `vkCmdDrawIndexedIndirect` 画完所有组（跨模型 single draw 成立）；`--no-merged-buffers` 会整帧退回 CPU 路径。`
 - 屏幕空间误差目前只用来「剔除」，还不是 LOD 选择：模型没有 LOD 链，等 F2/F6 有了 LOD 才会改成按误差选级。
 - 外部实例与 ECS 实体共用 `(模型, 子网格)` 分组，所以同一子网格上不同材质的实例会归到同一组、用第一条记录的材质槽。
-- 外部实例每帧变化会击穿结构签名，快速路径对粒子不生效（这正是应该的：数据确实变了）。
+- 外部实例每帧变化会击穿结构签名，快速路径对外部实例不生效（这正是应该的：数据确实变了）。
 - 遥测滞后两帧，`drawCalls` 也是。
 

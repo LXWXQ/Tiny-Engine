@@ -28,11 +28,13 @@
 #include "Render/SSAOPass.h"
 #include "Render/GlassPass.h"
 #include "Render/WaterPass.h"
+#include "Render/ParticlePass.h"
 #include "Render/ReflectionPass.h"
 #include "Render/SSRPass.h"
 #include "Core/Material.h"
 #include "Render/TAAPass.h"
 #include "Render/ShadowPass.h"
+#include "Scene/FeatureComponents.h"
 #include "Voxel/VoxelChunk.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
@@ -830,6 +832,11 @@ streamingConfig.skirtsEnabled = false;
 		gBuffers[0]->getDepth().format);
 	waterPass->setReflectionPass(reflectionPass.get());
 	waterPass->setSSRPass(ssrPass.get());
+	// F5：粒子与 Glass/Water 同一段（Lighting 之后、TAA 之前），只做深度测试、
+	// 不写深度；实例缓冲由 ParticlePass 每帧按相机距离排序后上传。
+	auto particlePass = std::make_unique<ParticlePass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
+		gBuffers[0]->getDepth().format);
 	// TAA：必须在 Glass/Water 之后（要拿混合后的 HDR）、Bloom 之前（辉光作用在
 	// 抗锯齿后的画面上）。每帧都注册 —— 否则 Bloom/Present 会读到没人写的
 	// taaOutput，渲染图的写覆盖校验会直接报错。
@@ -870,6 +877,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(ssrPass));
 	renderPipeline.addPass(std::move(glassPass));
 	renderPipeline.addPass(std::move(waterPass));
+	renderPipeline.addPass(std::move(particlePass));
 	renderPipeline.addPass(std::move(taaPass));
 	renderPipeline.addPass(std::move(bloomPass));
 	renderPipeline.addPass(std::move(presentPass));
@@ -985,6 +993,40 @@ streamingConfig.skirtsEnabled = false;
 			cameraTransform.setScale(glm::vec3(1.0f));
 			scene->markTransformDirty(scene->getCameraEntity());
 		}
+	}
+
+	// 粒子目测场景：原点上方一个橙色喷泉，相机正对它。组件走和编辑器
+	// Add Component 完全相同的注册表路径，验证的就是用户实际会用的那条路。
+	if (options.particleDemo)
+	{
+		const entt::entity emitter = scene->createEntity();
+		scene->getRegistry().emplace<NameComponent>(emitter, "粒子喷泉（Particle Demo）");
+		if (!scene->addComponent(emitter, "effects.particles"))
+			throw std::runtime_error("--particle-demo component creation failed");
+
+		auto& particles = scene->getRegistry().get<scene::ParticleEmitterComponent>(emitter);
+		particles.emissionRate = 220.0f;
+		particles.maxParticles = 1500;
+		particles.lifetime = 1.8f;
+		particles.lifetimeVariation = 0.35f;
+		particles.initialSpeed = 3.2f;
+		particles.speedVariation = 0.35f;
+		particles.spreadAngle = 30.0f;
+		particles.emissionRadius = 0.35f;
+		particles.gravity = glm::vec3(0.0f, -2.5f, 0.0f);
+		particles.startSize = 0.18f;
+		particles.endSize = 0.04f;
+		particles.startColor = glm::vec4(1.0f, 0.62f, 0.18f, 1.0f);
+		particles.endColor = glm::vec4(1.0f, 0.08f, 0.02f, 0.0f);
+		scene->markTransformDirty(emitter);
+
+		TransformComponent& cameraTransform = scene->getCameraTransform();
+		cameraTransform.setTranslation(glm::vec3(0.0f, 3.2f, 9.0f));
+		cameraTransform.setEuler(glm::vec3(0.20f, glm::radians(180.0f), 0.0f));
+		cameraTransform.setScale(glm::vec3(1.0f));
+		scene->markTransformDirty(scene->getCameraEntity());
+		std::cout << "[Particle] demo emitter created | rate=" << particles.emissionRate
+			<< " max=" << particles.maxParticles << std::endl;
 	}
 
 	currentTime = std::chrono::high_resolution_clock::now();

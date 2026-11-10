@@ -271,7 +271,7 @@ updated: 2026-11-10
 | F6-04 | 未开始 | 切线空间法线贴图（启用 `getNormalFromMap()`，先补切线或 TBN） | F4 | 法线贴图生效；`normalMaps` 不再白绑（tech-debt #3） |
 | F4-01 | 未开始 | glTF 保留 node 层级（决策 13 的翻转）、primitive 独立变换、异步加载 | — | 载入后可改任意 node 局部变换并实时可见 |
 | F4-02 | 未开始 | 模型 LOD 链（GPU 端 LOD 选级的前置，见 F1 剩余项） | F4-01 | 同一模型可切 2~3 级，切换无跳变 |
-| F1-R1 | 未开始 | 粒子真实接入（`ExternalInstance` 入口已就位，还没有生产方） | F6 | 粒子与 ECS 实例共用分组/合批/剔除 |
+| F1-R1 | 已取代 | 粒子不接入 `ExternalInstance`：改由 F5-07 的独立组件与 `ParticlePass` 落地 | F5-07 | 不再以复用 ExternalInstance 为目标；粒子独立缓冲、独立前向 Pass |
 | E-P1 | 已完成 | 启动失败的原生 MessageBox（UX-04） | — | 双击启动失败时用户能看到可读提示 |
 | F5-01 | 已完成 | 元数据驱动 ECS：组件注册表 + SystemScheduler + Inspector Add Component + 序列化 v3 | — | 实体可加/删/改 Spin/Orbit，Inspector 编辑并撤销；场景存读保留 components；`selftest-default` 断言 ECS component selfTest |
 | F5-02 | 已完成 | 预制体资产：保存选中子树为 .prefab.json、实例化、撤销/重做 | F5-01 | 含 effects.spin 的 cube 父子树可保存/读取/实例化；undo 消失、redo 换新 ID 恢复；e1 断言 prefab selfTest |
@@ -279,6 +279,7 @@ updated: 2026-11-10
 | F5-04 | 已完成 | 原生组件接入统一 Add Component：Character/Render Tag 可增删，Managed 组件置灰说明；v3 序列化去重 | F5-01 | 16 个描述符（7 effects + 9 native）；Character/Render Tag 经 Inspector 增删改并撤销；原生组件不写入 v3 `components`；`components=16 systems=7` |
 | F5-05 | 已完成 | 组件编辑工作流：属性范围/提示/单属性重置、组件复制/粘贴/重置、Add Component 置顶 + 搜索 | F5-04 | 7 effects 与 Character 属性有范围/提示；组件可跨实体复制粘贴并撤销；Add 弹窗可搜索；`selftest-default` 断言属性元数据且全套回归通过 |
 | F5-06 | 已完成 | 场景级组件系统：阴影/Bloom/SSAO/SSR/运动模糊/TAA/水面/雾/环境作为 scope=Scene 组件，可添加/启用/调参/移除，v4 序列化 | F5-05 | Inspector 无选中可管理；旧场景兼容；场景存读保留；自检断言 25 描述符与 sync |
+| F5-07 | 已完成 | 粒子组件：实体级 CPU 发射器（16 属性）+ 独立前向透明 `ParticlePass` | F5-06 | `--particle-demo` 空场景可发射；Water 后/TAA 前按距离排序混合；26 描述符/8 系统；`f6-particles` 与 240 帧 `alive=376` 验证层 0/0 |
 
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
@@ -317,6 +318,8 @@ updated: 2026-11-10
 > F5-05 组件编辑工作流已完成（2026-11-10）：`PropertyDescriptor` 增加 `hasRange/minimum/maximum/dragSpeed/tooltip` 纯 UI 元数据，7 个效果与 Character 的 8 个参数全部登记范围、拖动速度和中文提示；Inspector 按元数据生成 Drag 控件，右键可重置单个属性。新增跨实体组件剪贴板与复制/粘贴/重置菜单，`+ Add Component` 移到组件区顶部并支持名称/分类/id 搜索，组件头默认展开。所有写入仍走 `SetComponentRecordCommand`。`[Scene] ECS component selfTest` 新增属性元数据断言。详见 [milestones](milestones.md#f5-05组件编辑工作流2026-11-10)。
 >
 > F5-06 场景级组件系统已完成（2026-11-10）：新增 `ComponentScope { Entity, Scene }` 与 9 个 `scene.*` 组件（environment/shadows/bloom/ssao/ssr/motionBlur/taa/water/fog），挂在 Scene 构造时创建的隐藏设置实体上；Scene scope 只能挂它、实体组件不能挂它，Hierarchy 与普通实体捕获看不到。`syncSceneSettings()` 把存在且启用的组件写回 `EngineSettings`，缺失或禁用即关闭。场景 v4 新增顶层 `sceneComponents` 与 `sceneComponentsAuthored`，旧文件从当前 settings 初始化；Inspector 无选中时显示 Scene Components，添加/调参/移除走撤销栈；`RenderSettingsPanel` 只保留 engine.json Save/Reload 与 GPU 批调试。`[Scene] ECS component selfTest PASS | components=25 | systems=7`，编辑器自检覆盖 v4 往返；全套 75 项 ALL PASS，验证日志 `build/validation/20261110-105403`，DocCheck PASS（documents=68 lines=12179）。详见 [milestones](milestones.md#f5-06场景级组件系统2026-11-10)。
+>
+> F5-07 粒子组件已完成（2026-11-10）：新增实体级 `ParticleEmitterComponent`（`effects.particles`，16 个属性，Inspector 可添加/调参/撤销），CPU 系统在 PostTransform 200 以 xorshift 随机数做锥形发射、重力、寿命与尺寸/颜色插值，全局上限 16384；新增独立 `ParticlePass`，在 Water 后、TAA 前以 billboard 前向混合进 HDR，深度测试不写、按相机距离远→近排序，每帧一份 host-visible 实例缓冲与一次 draw。`--particle-demo` 创建喷泉，`[Particle] emitters=1 alive=376 drawcalls=1`；场景自检 26 描述符/8 系统；全套 76 项回归 ALL PASS（含 `f6-particles`），日志 `build/validation/20261110-113649`。详见 [milestones](milestones.md#f5-07粒子组件2026-11-10)。
 >
 > R-08 水面暗反射补天空底色已完成（2026-11-06）：用户标注的远水发暗不是“黑天空反射”，旧 R-07 alpha 覆盖率在三种机位下都只有 UI 像素差（≤2537），已完整回退。`shaders/water.frag` 改为按反射亮度只提亮暗部（`0.34 * (1-smoothstep(0.04,0.22,luma))`），并把 `shallow/deep` 提到 `(0.050,0.160,0.167)`、`(0.016,0.058,0.075)`，远水 alpha 上限 0.92→0.89；亮水面/天空倒影保持原对比度。低机位 [16,8,140] 同机位 before/after 见 `build/water_tune_compare_v2.png`，水面区域 luma 76.2→81.8、蓝色 94.2→99.6。详见 [milestones](milestones.md#r-08水面暗反射补天空底色2026-11-06)，验证日志 `build/validation/20261106-164734`。
 

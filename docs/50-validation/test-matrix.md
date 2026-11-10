@@ -5,13 +5,13 @@ type: validation
 scope: tools/Validate.ps1
 read-when: 加/改回归项，或某项失败需要知道它在测什么
 size: ~200 行
-updated: 2026-11-06
+updated: 2026-11-10
 ---
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **73 项引擎/编辑器用例 + 2 项工具自测 = 75 项**；
-加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`（第 76 项）。
+`tools/Validate.ps1` 默认跑 **74 项引擎/编辑器用例 + 2 项工具自测 = 76 项**；
+加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`（第 77 项）。
 
 ## 1. 每项的判据（统一）
 
@@ -65,7 +65,7 @@ updated: 2026-11-06
 | 34 | `f2e-terrain-picking` | 地形拾取走高度场（编辑器自检） | `TinyEditor.exe --selftest 5 --empty-scene` | `[Editor] streamed terrain PASS`、`picking=OK`、`[Editor] selfTest PASS` |
 | 35 | `f2f-arena-slots` | `--selftest 180 --streaming-world 8` | `[Terrain] mesh arena ready | vertexMB=`、`arenaAllocs=`、`[Validation] errors=0 warnings=0` | arena 归 `Scene` 所有，chunk 落地即 `acquire()` + `copyInto()` + `Model::releaseGpuBuffers()`；容量按实际尺寸分配，`arenaAllocs` 随 chunk 生灭回落（飞行 600 帧 305~323） |
 | 36 | `f2h-large-radius` | `--selftest 400 --streaming-world 16` | `mesh arena resized | radius=16`、`[Streaming] chunks=1089`、`[Validation] errors=0 warnings=0` | chunk 坐标 int64 + 采样锚点 double，半径上限 24；arena 按整环容量原地重建（`reconfigure()`，渲染侧只持 `this` 指针） |
-| 37 | `e1-batch-commands` | 编辑器批量命令（Composite / Duplicate）、预制体与原生组件 | `TinyEditor.exe --selftest 5 --empty-scene` | `batch delete/duplicate`、`[Editor] prefab selfTest PASS`、`components=25`、`[Editor] selfTest PASS` | 多选删除是一条撤销、复制含子树且名字追加 `" Copy"`、`revert()` 清空副本；预制体保存/读取/实例化/undo/redo 全通过；原生 Character 不重复写入 v3 components |
+| 37 | `e1-batch-commands` | 编辑器批量命令（Composite / Duplicate）、预制体与原生组件 | `TinyEditor.exe --selftest 5 --empty-scene` | `batch delete/duplicate`、`[Editor] prefab selfTest PASS`、`components=26`、`[Editor] selfTest PASS` | 多选删除是一条撤销、复制含子树且名字追加 `" Copy"`、`revert()` 清空副本；预制体保存/读取/实例化/undo/redo 全通过；原生 Character 不重复写入 v3 components |
 | 38 | `e2-multi-transform` | 编辑器多对象变换（一条命令） | `TinyEditor.exe --selftest 5 --empty-scene` | `multi transform`、`[Editor] selfTest PASS` | 多选拖拽只压一条命令、`mergeWith` 只接受同一选择 |
 | 39 | `e3-material-undo` | 材质参数与 Render Tag 的撤销 | `TinyEditor.exe --selftest 5 --empty-scene` | `material/render tag`、`[Editor] selfTest PASS` | 滑杆与复选框各压一条命令；undo 时同时把 GPU factor 写回去 |
 | 40 | `e3-play-doc-lock` | 播放期间文档只读 | `TinyEditor.exe --selftest 5 --empty-scene` | `play document lock selfTest PASS` | Playing 下 save/new/open 全被拒绝并留日志 |
@@ -102,14 +102,15 @@ updated: 2026-11-06
 | 71 | `f3v-water-off` | 水面关闭路径 | `TinyEngine.exe --selftest 20 --voxel-world 1 --no-water` | `[Water] disabled`、`[Validation] errors=0 warnings=0` | 与 TAA 不同：Water 是"真跳过"，因为下游没有任何 pass 固定读它的输出 |
 | 72 | `f3v-ssr` | 水面近场 SSR：半分辨率 48 步屏幕空间追踪，结果经 Set0 binding13 混入水面反射；主路径注册在 Water 之前 | `TinyEngine.exe --selftest 20 --voxel-world 1` | `[SSR] initialized \|`、`[SSR] first draw \|`、`[Water] first draw \|`、`ssr=1`、`[Validation] errors=0 warnings=0` | 只在水面启用、场景有地形/体素块时注册；屏幕外/超过 `ssrMaxDistance` 回退平面反射/IBL；关闭时 binding13 必须回退环境图 |
 | 73 | `f3v-ssr-off` | SSR 关闭路径：Pass 不注册，水面仍能画，日志 `ssr=0` | `TinyEngine.exe --selftest 20 --voxel-world 1 --no-ssr` | `[SSR] disabled`、`[Water] first draw \|`、`ssr=0`、`[Validation] errors=0 warnings=0` | 与 `--no-water` 不同：只关 SSR，水面/平面反射继续；Water 的 `params3.y` 分支必须跳过采样 |
+| 74 | `f6-particles` | 粒子发射器：空场景创建 `effects.particles` 喷泉，CPU 发射/模拟后由 `ParticlePass` 前向透明绘制 | `TinyEngine.exe --selftest 60 --empty-scene --particle-demo` | `[Particle] demo emitter created \|`、`[Particle] emitters=1 alive=`、`drawcalls=1`、`[Validation] errors=0 warnings=0` | 粒子不进 G-Buffer；Pass 在 Water 后、TAA 前，LOAD HDR + 深度、`depthWrite = FALSE`、按相机距离排序；`enabled=false` 停发但存量走完寿命 |
 
 ## 3. 工具自测
 
 | # | 名称 | 内容 |
 |---|---|---|
-| 74 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
-| 75 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
-| 76 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 75 项不含它） |
+| 75 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
+| 76 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
+| 77 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 76 项不含它） |
 
 ## 4. 文档一致性检查
 

@@ -74,8 +74,9 @@ Simulation systems -> updateWorldTransforms() -> PostTransform systems -> refres
 | `effects.pulse` | Effects | `amplitude` / `frequency` / `phase` / `enabled` | 缩放脉冲，增量乘缩放以保留手动缩放 |
 | `effects.lookAt` | Motion | `target` / `up` / `turnSpeed` / `enabled` | 朝向 target；`turnSpeed=0` 瞬时，否则 slerp |
 | `effects.follow` | Motion | `target` / `speed` / `stopDistance` / `enabled` | 向 target 匀速靠近并在 stopDistance 停下 |
+| `effects.particles` | Effects | `enabled` / `emissionRate` / `maxParticles` / `direction` / `spreadAngle` / `emissionOffset` / `emissionRadius` / `lifetime` / `lifetimeVariation` / `initialSpeed` / `speedVariation` / `gravity` / `startSize` / `endSize` / `startColor` / `endColor`（16 个属性） | 每帧按世界变换发射并推进粒子；`enabled=false` 停止发射但存量走完寿命，移除组件立即清空。CPU 模拟，每发射器默认 512（属性上限 4096），全局上限 16384；渲染见 §1.3 |
 
-系统顺序为 Spin 100、Orbit 110、Bob 120、Sway 130、Pulse 140、Follow 150、Look At 160。
+系统顺序为 Spin 100、Orbit 110、Bob 120、Sway 130、Pulse 140、Follow 150、Look At 160、Particle 200。
 Look At/Follow 的 target/up 是父空间坐标；顶层实体即世界坐标。它们都是可用的效果/运动，
 也是新组件的模板：注册组件 +（可选）注册系统，不需要改 Inspector、SceneSerializer 或 Commands。
 
@@ -107,7 +108,7 @@ F5-04 把已有原生组件也纳入同一张描述表，但**不复制它们的
 `withTooltip(withRange(makeSpinSpeedProperty(), -3600, 3600, 0.5f), "局部自转速度")`；
 `makeFloatProperty` 同时把范围用于 setter clamp。Inspector 只消费这些字段，不再为每个组件写一套控件。
 
-因此 `+ Add Component` 的可选项是 7 个 `effects.*` + Character Controller + Render Tag；
+因此 `+ Add Component` 的可选项是 8 个 `effects.*` + Character Controller + Render Tag；
 Camera/Terrain/Streaming/Voxel 以置灰项出现。另有 9 个 `scene.*` 场景组件，只出现在无选中实体的
 Scene Components 区，见 §1.2。Character 面板的 8 个参数与 Render Tag 的移除按钮
 都走 `SetComponentRecordCommand`，可撤销。`DeleteEntityCommand` 为 Character 增加显式快照，
@@ -161,7 +162,7 @@ Scene Components 区，见 §1.2。Character 面板的 8 个参数与 Render Tag
 并且只维护一套组件 UI。F5-06 把 8 个渲染功能 + 场景环境做成 **Scene scope** 组件。
 
 `ComponentScope` 在 `ComponentRegistry.h` 中定义，`Entity` / `Scene` 两种。描述符带 `scope`，
-`makeComponentDescriptor<T>` 透传。当前共 **25 个描述符**：16 个实体组件（§1.1）+ 9 个场景组件。
+`makeComponentDescriptor<T>` 透传。当前共 **26 个描述符**：17 个实体组件（8 个 `effects.*` + 9 个 `native.*`，§1.1）+ 9 个场景组件。
 
 | 组件 id | 名称 | 分类 | 属性（均含 `enabled`） |
 |---|---|---|---|
@@ -331,15 +332,15 @@ Scene::selfTest();
 
 覆盖：父子/孙节点的世界变换传播、dirty 子树计数、空间网格查询与增量 upsert/remove、
 XZ region 重建/范围查询/移除；以及元数据组件注册表（add/read/write/remove/default）、
-`ComponentRecord` 值往返、7 个系统各跑一个完整周期（Spin 转 45°、Bob 到 0.25 再回 0、
-Pulse 到 1.15 再回 1、Sway 摆动后回正、Look At 朝 +X、Follow 按 speed 靠近并在 stopDistance 停），
+`ComponentRecord` 值往返、8 个系统各跑一个完整周期（Spin 转 45°、Bob 到 0.25 再回 0、
+Pulse 到 1.15 再回 1、Sway 摆动后回正、Look At 朝 +X、Follow 按 speed 靠近并在 stopDistance 停；粒子发射后 0.5s 有存量、禁用后停发并等存量走完），
 以及原生组件描述符（Character/Render Tag 增删、必需组件拒删、`captureComponentRecords` 不含 `native.*`），
 以及 9 个场景组件的 scope 约束、`EngineSettings` 同步、capture/clear/reset 与隐藏实体保护。
 输出标记：
 
 ```
 [Scene] ECS/spatial selfTest PASS | hierarchy=T*Ry*Rx*Rz*S | grid cells=8
-[Scene] ECS component selfTest PASS | components=25 | systems=7
+[Scene] ECS component selfTest PASS | components=26 | systems=8
 ```
 
 ## 7. 改动注意
