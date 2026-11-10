@@ -64,12 +64,12 @@ cmake --build build --config Debug
 | **水面** | 相机中心径向网格（160 圈 × 192 段，约 4km）跟随相机；4 个大波做顶点位移，近景细节用 1024x1024 无缝 FFT 法线贴图两层滚动（18m/42m，去掉 K<32 低频、`tileableMips`），大波按像素 footprint 逐波过滤，未解析能量转粗糙度/高光展宽；Fresnel + 半分辨率平面反射（镜像相机重画 960x540 G-Buffer 与延迟光照）+ 近场半分辨率 SSR（读 HDR/位置，48 步屏幕空间追踪，屏幕外/远处回退平面反射或 IBL）+ 按反射亮度最多补 34% 天空环境图底色（深水色提亮、远水 alpha 0.89，避免整片暗色平板）+ 用 G-Buffer 深度算厚度吸收/只贴岸线的泡沫（法线贴图低频噪声打散）；Lighting 后、TAA 前混合；只在有地形/体素块时启用，`--no-water` / `--no-ssr` 关闭 | [water](docs/30-systems/water.md) |
 | **距离雾** | 指数距离雾（默认 80m 起、密度 0.00045，约 1km 处 34%、4km 处 83%）；雾色取环境图地平线 LOD3，地形/水面/玻璃共用，天空不参与；`config/engine.json` 的 `fog` 节点 + 编辑器/运行时 UI，无命令行开关 | [water](docs/30-systems/water.md) |
 | IBL split-sum | irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙 | [ibl](docs/20-pipeline/ibl.md) |
-| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 7 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow）+ 9 个原生组件描述（Name/Transform/Hierarchy 必需，Character/Render Tag 可添加，Camera/Terrain/Streaming/Voxel 为创建菜单托管）；预制体保存/实例化走同一描述层 | [scene-ecs](docs/30-systems/scene-ecs.md) |
+| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 7 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow）+ 9 个原生组件描述（Name/Transform/Hierarchy 必需，Character/Render Tag 可添加，Camera/Terrain/Streaming/Voxel 为创建菜单托管）；属性带范围/拖动速度/悬停提示与单属性重置，组件可跨实体复制/粘贴/重置；预制体保存/实例化走同一描述层 | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | 空间索引 + 视锥剔除 | 均匀网格 broad phase + Transform/Bounds 私有字段/dirty + 增量 AABB upsert + XZ region bucket + frustum-AABB | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | CPU JobSystem | worker pool + `submit()`/`parallelFor()` + 异常传播 | [jobsystem](docs/30-systems/jobsystem.md) |
 | 窗口缩放 + 动态分辨率 | swapchain 原地重建；中间目标按 renderScale 缩放 | [synchronization](docs/10-architecture/synchronization.md) |
 | 版本化配置 v2 | 显式 v0->v1->v2 迁移、备份、损坏/未来版本保护 | [config](docs/30-systems/config.md) |
-| **场景编辑器** | Hierarchy / Inspector / Console 面板，菜单栏 + 播放状态机；多选（Ctrl/Shift）、`Ctrl+D` 复制、`Delete` 批量删除、`Ctrl+A` 全选、`F` 聚焦、多选一起拖拽（E2）、层级搜索、材质参数可撤销（E3）、未保存提示与文档标题（E4）、偏好持久化与最近场景（E4-b）、快捷键速查与中文字形（E4-c）、工具栏/状态栏与 Gizmo 吸附（E5-a）、编辑/运行模式合并为视口左上角徽标、渲染设置面板（E5-b）、空场景三处引导（B2）、错误三处可见 + 打开失败重试（B3）、菜单补齐四项 + 快捷键单一数据源 + 面板可拖动（B4）、界面中文统一 + Console 时间列/过滤/复制/搜索 + 状态栏三段 + 诊断复制（B5/B6）、地形生成两阶段提示与 DPI 缩放（B6）、资产拖拽入视口 + 材质贴图选择 + Inspector 数值行重置（E6）、地形异步生成（E7/TD-24）、帮助 → 示例预设一键加载（E10）、Hierarchy 父子树（体素 chunk 归入 Voxel World 子树）、ECS 通用组件 Inspector（Add Component / 属性编辑 / 删除 / 撤销）、预制体保存/实例化（`--editor`） | [editor](docs/90-editor/README.md) |
+| **场景编辑器** | Hierarchy / Inspector / Console 面板，菜单栏 + 播放状态机；多选（Ctrl/Shift）、`Ctrl+D` 复制、`Delete` 批量删除、`Ctrl+A` 全选、`F` 聚焦、多选一起拖拽（E2）、层级搜索、材质参数可撤销（E3）、未保存提示与文档标题（E4）、偏好持久化与最近场景（E4-b）、快捷键速查与中文字形（E4-c）、工具栏/状态栏与 Gizmo 吸附（E5-a）、编辑/运行模式合并为视口左上角徽标、渲染设置面板（E5-b）、空场景三处引导（B2）、错误三处可见 + 打开失败重试（B3）、菜单补齐四项 + 快捷键单一数据源 + 面板可拖动（B4）、界面中文统一 + Console 时间列/过滤/复制/搜索 + 状态栏三段 + 诊断复制（B5/B6）、地形生成两阶段提示与 DPI 缩放（B6）、资产拖拽入视口 + 材质贴图选择 + Inspector 数值行重置（E6）、地形异步生成（E7/TD-24）、帮助 → 示例预设一键加载（E10）、Hierarchy 父子树（体素 chunk 归入 Voxel World 子树）、ECS 通用组件 Inspector（Add Component 搜索 / 属性范围与提示 / 复制粘贴 / 重置 / 删除 / 撤销）、预制体保存/实例化（`--editor`） | [editor](docs/90-editor/README.md) |
 | **撤销 / 重做** | 命令栈 + 拖拽合并窗口；删除实体可完整撤销（含子树与父子关系、通用元数据组件；体素世界的专用组件快照仍未覆盖） | [commands](docs/90-editor/commands.md) |
 | **场景存读** | `*.scene.json`（v3）；预制体为单根子树的 `*.prefab.json`；存语义（路径/参数）与已注册元数据组件，不存 GPU 句柄 | [serialization](docs/90-editor/serialization.md) / [prefabs](docs/90-editor/prefabs.md) |
 | **离屏视口** | 3D 渲染到纹理后作为 ImGui 图片嵌入面板；相机纵横比按视口算 | [viewport](docs/90-editor/viewport.md) |
@@ -128,7 +128,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/20-pipeline/`](docs/20-pipeline/README.md) | Pass 顺序、G-Buffer/中间目标、IBL、Shader 清单 | 改 `src/Render/` 或 `shaders/` |
 | [`docs/30-systems/`](docs/30-systems/README.md) | ECS/场景、JobSystem、配置、ImGui | 改 `src/Scene/`、`src/Core/` 对应模块 |
 | [`docs/40-build/`](docs/40-build/README.md) | 依赖版本、构建运行、排障 | 构建失败 / 换机器 |
-| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、72 项回归矩阵、验收标准 | 加测试 / 定位回归 |
+| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、75 项回归矩阵、验收标准 | 加测试 / 定位回归 |
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
 | [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
@@ -161,7 +161,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 
 | 项 | 值 |
 |---|---|
-| 回归 | `tools/Validate.ps1`：**72 项全 PASS**，stderr 全 0 字节 |
+| 回归 | `tools/Validate.ps1`：**75 项全 PASS**，stderr 全 0 字节 |
 | 启动排错 | 交互式启动失败先弹原生 MessageBox（阶段 / 原因 / 日志路径 / `--help` / Vulkan 下一步），点确定后退出；日志仍追加到可执行文件旁的 `startup-error.log`。`--hidden` / `--selftest` / 截图等无人值守路径只写日志、不弹窗；窗口尺寸按显示器工作区 92% 收敛 |
 | 快捷键 | 只有一份 `kShortcutEntries`：速查表、`handleShortcuts()` 分发都读它；自检扫键位冲突（`entries=20 conflicts=0`，B4） |
 | 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |

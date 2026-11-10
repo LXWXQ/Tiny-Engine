@@ -4,8 +4,8 @@ title: 已踩过的坑
 type: debug
 scope: 空（跨代码库）
 read-when: 改任何代码之前；或遇到"看起来不可能"的怪异现象时
-size: ~430 行
-updated: 2026-11-05
+size: ~550 行
+updated: 2026-11-06
 ---
 
 # 已踩过的坑
@@ -522,3 +522,25 @@ vec2 sampleSphericalMap(vec3 v) {
 - **角色不显示 / 位置乱跳**：蒙皮模型 `isDynamic() == true`，不能进静态 GPU 合批，也不能被"合并 buffer"路径缓存。`GeometrySystem` / `SceneGpuBatch` 都要显式跳过它。
 - **进入运行模式后角色坠出世界**：出生点不能固定在"相机前方 2m"，要沿视线 ray-march 找地面；相机 yaw/pitch 本来就是弧度，存进 `runtimeYaw/runtimePitch` 后不能再按"度→弧度"转一次，否则 WASD 方向整体反向、角度缩小约 57 倍。
 - **判据**：`[Character] model attached | skinned=1 animations=18`、`[Runtime] spawn=... onGround=1`、按 W/Shift+W/Space 时 `[Runtime] clip=Walk/Run/Jump` 依次出现；没有这些日志时先查导入参数，再查状态机阈值和输入分支。
+
+## 36. 高角度水面泡沫的规则菱形格
+
+- **现象**：从高角度俯视水面时，整片水出现成排的亮暗菱形/棋盘格；低角度近处几乎看不出来。用户 1536x864 截图里框出的就是这类白色小菱形簇，和反射里的物体无关。
+- **原因**：`shaders/water.frag` 的旧泡沫同时犯了两个错：
+  1. `crest`（波峰项）没有乘 `shore`，白浪铺满整个水面，而不是只在水陆交界；
+  2. 泡沫图案是 `foamPattern = 0.55 + 0.45 * sin(p.x * 1.7 + t * 0.6) * sin(p.y * 2.1 - t * 0.45)`。可分离正弦的乘积本身就是规则网格，透视俯视后变成菱形棋盘格。
+- **排除过程**：在同一机位依次关掉 SSAO、TAA、平面反射、SSR、环境反射、太阳高光，甚至把水面 alpha 强制为 1，菱形格都还在；只把泡沫混合 `color = mix(color, vec3(0.82,0.90,0.94), foam*0.55)` 注释掉，水面立刻完全平滑。
+- **判据**：先把 `foam` 置 0（或只注释上面那行混合），网格完全消失就说明根因在泡沫，不在反射/SSAO/背景。再分别把 `shore`、`crest`、`foamPattern` 置 0 做单因子确认，最后会落在“crest 未乘 shore + 双正弦”上。
+- **两个容易误导的对照**：
+  - 关 `waveStrength` 也会让网格消失，但它同时关掉波峰项和水面法线扰动，不能据此认定“与泡沫无关”；
+  - 只开关 SSAO 时画面差异很大，容易误判成 SSAO 问题；实际上泡沫在两种情况下都存在，只是背景明暗改变了它的可见度。相关性不等于因果。
+- **修法**：
+  - `shore = 1 - smoothstep(0, 1.8, thickness)`，泡沫只在水陆交界 1.8m 内；
+  - `crest = smoothstep(0.10, 0.30, bigWaveHeight)`，并且波峰项也乘 `shore`；
+  - 噪声改用已有的 `waterNormalMap` LOD1.5：`foamNoise = textureLod(waterNormalMap, p/7 + t*(0.011,-0.008), 1.5).x`，`foamMask = smoothstep(0.34, 0.74, foamNoise)`；
+  - `foam = clamp(shore * foamMask * (0.75 + 0.25 * crest), 0, 1)`，不再用解析正弦生成泡沫。
+- **通用教训**：
+  1. 全屏程序化效果必须乘“局部存在的物理 mask”；否则一个岸边效果会变成整片水的纹理。
+  2. `sin(x) * sin(y)` 在屏幕空间就是格子。任何全屏 pattern 都要在俯视、斜视、低渲染倍率三种视角下检查。
+  3. 排查渲染图案时，关闭一个大系统（waveStrength、SSAO）会同时改多个输入；必须做单因子关闭，不能把相关性当因果。
+- **回归**：同机位 before/after 见 `build/foam_grid_compare.png`；75 项 ALL PASS，验证日志 `build/validation/20261106-180307`；提交 `6b2e50c`。

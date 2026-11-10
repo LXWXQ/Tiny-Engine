@@ -1429,6 +1429,42 @@ bool Scene::selfTest()
             ok = false;
         }
 
+        // F5-05：属性 UI 元数据必须随注册表一起可用，否则 Inspector 只能猜范围。
+        auto findProperty = [](const scene::ComponentRegistry& registry,
+                               const char* type, const char* name)
+            -> const scene::PropertyDescriptor*
+        {
+            const scene::ComponentDescriptor* descriptor = registry.find(type);
+            if (descriptor == nullptr)
+                return nullptr;
+            for (const scene::PropertyDescriptor& property : descriptor->properties)
+            {
+                if (property.name == name)
+                    return &property;
+            }
+            return nullptr;
+        };
+
+        const scene::PropertyDescriptor* spinSpeed =
+            findProperty(scene.getComponentRegistry(), "effects.spin", "degreesPerSecond");
+        if (spinSpeed == nullptr || !spinSpeed->hasRange ||
+            spinSpeed->minimum != -3600.0f || spinSpeed->maximum != 3600.0f ||
+            spinSpeed->dragSpeed != 0.5f || spinSpeed->tooltip.empty())
+        {
+            std::cerr << "[Scene] selfTest FAIL: effect property metadata mismatch\n";
+            ok = false;
+        }
+
+        const scene::PropertyDescriptor* characterHeight =
+            findProperty(scene.getComponentRegistry(), "native.characterController", "height");
+        if (characterHeight == nullptr || !characterHeight->hasRange ||
+            characterHeight->minimum != 0.2f || characterHeight->maximum != 10.0f ||
+            characterHeight->tooltip.empty())
+        {
+            std::cerr << "[Scene] selfTest FAIL: native property metadata mismatch\n";
+            ok = false;
+        }
+
         entt::registry& testRegistry = scene.getRegistry();
         const entt::entity testEntity = testRegistry.create();
         testRegistry.emplace<TransformComponent>(testEntity);

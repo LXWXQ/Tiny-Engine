@@ -20,41 +20,57 @@ namespace
 // 需要自定义语义（例如 Orbit.radius 不能为负）时仍写专用 lambda。
 template <typename T>
 PropertyDescriptor makeVec3Property(const char* name, const char* label,
-                                    glm::vec3 T::* member)
+                                    glm::vec3 T::* member, float dragSpeed = 0.0f,
+                                    const char* tooltip = nullptr)
 {
-    return makeProperty<T>(
+    PropertyDescriptor property = makeProperty<T>(
         name, label, PropertyType::Vec3,
         [member](const T& component) { return PropertyValue::fromVec3(component.*member); },
         [member](T& component, const PropertyValue& value)
         {
             component.*member = value.asVec3();
         });
+    property.dragSpeed = dragSpeed;
+    if (tooltip != nullptr)
+        property.tooltip = tooltip;
+    return property;
 }
 
 template <typename T>
 PropertyDescriptor makeFloatProperty(const char* name, const char* label,
-                                     float T::* member, float minimum, float maximum)
+                                     float T::* member, float minimum, float maximum,
+                                     const char* tooltip = nullptr, float dragSpeed = 0.0f)
 {
-    return makeProperty<T>(
+    PropertyDescriptor property = makeProperty<T>(
         name, label, PropertyType::Float,
         [member](const T& component) { return PropertyValue::fromFloat(component.*member); },
         [member, minimum, maximum](T& component, const PropertyValue& value)
         {
             component.*member = std::clamp(value.asFloat(), minimum, maximum);
         });
+    property.hasRange = true;
+    property.minimum = minimum;
+    property.maximum = maximum;
+    property.dragSpeed = dragSpeed;
+    if (tooltip != nullptr)
+        property.tooltip = tooltip;
+    return property;
 }
 
 template <typename T>
 PropertyDescriptor makeBoolProperty(const char* name, const char* label,
-                                    bool T::* member)
+                                    bool T::* member, const char* tooltip = nullptr)
 {
-    return makeProperty<T>(
+    PropertyDescriptor property = makeProperty<T>(
         name, label, PropertyType::Bool,
         [member](const T& component) { return PropertyValue::fromBool(component.*member); },
         [member](T& component, const PropertyValue& value)
         {
             component.*member = value.asBool();
         });
+    if (tooltip != nullptr)
+        property.tooltip = tooltip;
+    return property;
 }
 
 float sinePhase(float timeSeconds, float frequency, float phaseDegrees)
@@ -93,7 +109,7 @@ PropertyDescriptor makeSpinSpeedProperty()
         },
         [](SpinComponent& component, const PropertyValue& value)
         {
-            component.degreesPerSecond = value.asFloat();
+            component.degreesPerSecond = std::clamp(value.asFloat(), -3600.0f, 3600.0f);
         });
 }
 
@@ -126,7 +142,7 @@ PropertyDescriptor makeOrbitRadiusProperty()
         [](const OrbitComponent& component) { return PropertyValue::fromFloat(component.radius); },
         [](OrbitComponent& component, const PropertyValue& value)
         {
-            component.radius = std::max(0.0f, value.asFloat());
+            component.radius = std::clamp(value.asFloat(), 0.0f, 1000.0f);
         });
 }
 
@@ -140,7 +156,7 @@ PropertyDescriptor makeOrbitSpeedProperty()
         },
         [](OrbitComponent& component, const PropertyValue& value)
         {
-            component.degreesPerSecond = value.asFloat();
+            component.degreesPerSecond = std::clamp(value.asFloat(), -3600.0f, 3600.0f);
         });
 }
 
@@ -369,61 +385,92 @@ void registerFeatureComponents(ComponentRegistry& registry)
 {
     registry.add(makeComponentDescriptor<SpinComponent>(
         "effects.spin", "Spin", "Effects",
-        { makeSpinAxisProperty(), makeSpinSpeedProperty(), makeSpinEnabledProperty() }));
+        { withTooltip(makeSpinAxisProperty(), "局部旋转轴；零向量表示不旋转"),
+          withTooltip(withRange(makeSpinSpeedProperty(), -3600.0f, 3600.0f, 0.5f),
+                      "局部空间自转速度，单位度/秒；负值反向"),
+          withTooltip(makeSpinEnabledProperty(), "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<OrbitComponent>(
         "effects.orbit", "Orbit", "Effects",
-        { makeOrbitCenterProperty(), makeOrbitRadiusProperty(), makeOrbitSpeedProperty(),
-          makeOrbitAngleProperty(), makeOrbitEnabledProperty() }));
+        { withTooltip(makeOrbitCenterProperty(), "父空间里的轨道中心"),
+          withTooltip(withRange(makeOrbitRadiusProperty(), 0.0f, 1000.0f, 0.05f),
+                      "父空间轨道半径；0 表示绕中心原地旋转"),
+          withTooltip(withRange(makeOrbitSpeedProperty(), -3600.0f, 3600.0f, 0.5f),
+                      "绕 Y 轴公转速度，单位度/秒；负值反向"),
+          withTooltip(withRange(makeOrbitAngleProperty(), -360.0f, 360.0f, 0.5f),
+                      "当前公转角，单位度；系统会按 360° 回绕"),
+          withTooltip(makeOrbitEnabledProperty(), "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<BobComponent>(
         "effects.bob", "Bob", "Effects",
-        { makeVec3Property<BobComponent>("axis", "Axis", &BobComponent::axis),
+        { makeVec3Property<BobComponent>("axis", "Axis", &BobComponent::axis, 0.05f,
+                                         "位移轴；零向量表示不动"),
           makeFloatProperty<BobComponent>("amplitude", "Amplitude",
-                                          &BobComponent::amplitude, 0.0f, 100.0f),
+                                          &BobComponent::amplitude, 0.0f, 100.0f,
+                                          "单程位移，单位米", 0.005f),
           makeFloatProperty<BobComponent>("frequency", "Frequency (Hz)",
-                                          &BobComponent::frequency, 0.0f, 100.0f),
+                                          &BobComponent::frequency, 0.0f, 100.0f,
+                                          "振荡频率，Hz", 0.01f),
           makeFloatProperty<BobComponent>("phase", "Phase (deg)",
-                                          &BobComponent::phase, -720.0f, 720.0f),
-          makeBoolProperty<BobComponent>("enabled", "Enabled", &BobComponent::enabled) }));
+                                          &BobComponent::phase, -720.0f, 720.0f,
+                                          "相位偏移，单位度", 0.5f),
+          makeBoolProperty<BobComponent>("enabled", "Enabled", &BobComponent::enabled,
+                                         "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<PulseComponent>(
         "effects.pulse", "Pulse", "Effects",
         { makeFloatProperty<PulseComponent>("amplitude", "Amplitude",
-                                            &PulseComponent::amplitude, -0.95f, 10.0f),
+                                            &PulseComponent::amplitude, -0.95f, 10.0f,
+                                            "缩放增量；-0.95 表示最小缩到 5%", 0.005f),
           makeFloatProperty<PulseComponent>("frequency", "Frequency (Hz)",
-                                            &PulseComponent::frequency, 0.0f, 100.0f),
+                                            &PulseComponent::frequency, 0.0f, 100.0f,
+                                            "振荡频率，Hz", 0.01f),
           makeFloatProperty<PulseComponent>("phase", "Phase (deg)",
-                                            &PulseComponent::phase, -720.0f, 720.0f),
-          makeBoolProperty<PulseComponent>("enabled", "Enabled", &PulseComponent::enabled) }));
+                                            &PulseComponent::phase, -720.0f, 720.0f,
+                                            "相位偏移，单位度", 0.5f),
+          makeBoolProperty<PulseComponent>("enabled", "Enabled", &PulseComponent::enabled,
+                                           "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<SwayComponent>(
         "effects.sway", "Sway", "Effects",
-        { makeVec3Property<SwayComponent>("axis", "Axis", &SwayComponent::axis),
+        { makeVec3Property<SwayComponent>("axis", "Axis", &SwayComponent::axis, 0.05f,
+                                          "局部旋转轴；零向量表示不摆动"),
           makeFloatProperty<SwayComponent>("amplitudeDegrees", "Amplitude (deg)",
-                                           &SwayComponent::amplitudeDegrees, 0.0f, 180.0f),
+                                           &SwayComponent::amplitudeDegrees, 0.0f, 180.0f,
+                                           "左右摆动的最大角度，单位度", 0.5f),
           makeFloatProperty<SwayComponent>("frequency", "Frequency (Hz)",
-                                           &SwayComponent::frequency, 0.0f, 100.0f),
+                                           &SwayComponent::frequency, 0.0f, 100.0f,
+                                           "振荡频率，Hz", 0.01f),
           makeFloatProperty<SwayComponent>("phase", "Phase (deg)",
-                                           &SwayComponent::phase, -720.0f, 720.0f),
-          makeBoolProperty<SwayComponent>("enabled", "Enabled", &SwayComponent::enabled) }));
+                                           &SwayComponent::phase, -720.0f, 720.0f,
+                                           "相位偏移，单位度", 0.5f),
+          makeBoolProperty<SwayComponent>("enabled", "Enabled", &SwayComponent::enabled,
+                                          "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<LookAtComponent>(
         "effects.lookAt", "Look At", "Motion",
-        { makeVec3Property<LookAtComponent>("target", "Target", &LookAtComponent::target),
-          makeVec3Property<LookAtComponent>("up", "Up", &LookAtComponent::up),
+        { makeVec3Property<LookAtComponent>("target", "Target", &LookAtComponent::target, 0.05f,
+                                            "父空间目标点；局部 -Z 轴对准它"),
+          makeVec3Property<LookAtComponent>("up", "Up", &LookAtComponent::up, 0.05f,
+                                            "父空间上方向；与视线平行时自动兜底"),
           makeFloatProperty<LookAtComponent>("turnSpeed", "Turn Speed (deg/s)",
-                                             &LookAtComponent::turnSpeed, 0.0f, 3600.0f),
-          makeBoolProperty<LookAtComponent>("enabled", "Enabled", &LookAtComponent::enabled) }));
+                                             &LookAtComponent::turnSpeed, 0.0f, 3600.0f,
+                                             "最大转向速度；0 表示瞬间对准", 0.5f),
+          makeBoolProperty<LookAtComponent>("enabled", "Enabled", &LookAtComponent::enabled,
+                                            "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<FollowComponent>(
         "effects.follow", "Follow", "Motion",
-        { makeVec3Property<FollowComponent>("target", "Target", &FollowComponent::target),
+        { makeVec3Property<FollowComponent>("target", "Target", &FollowComponent::target, 0.05f,
+                                            "父空间目标点"),
           makeFloatProperty<FollowComponent>("speed", "Speed",
-                                             &FollowComponent::speed, 0.0f, 1000.0f),
+                                             &FollowComponent::speed, 0.0f, 1000.0f,
+                                             "移动速度，单位/秒；0 表示停止", 0.01f),
           makeFloatProperty<FollowComponent>("stopDistance", "Stop Distance",
-                                             &FollowComponent::stopDistance, 0.0f, 1000.0f),
-          makeBoolProperty<FollowComponent>("enabled", "Enabled", &FollowComponent::enabled) }));
+                                             &FollowComponent::stopDistance, 0.0f, 1000.0f,
+                                             "与目标保持的停止距离", 0.01f),
+          makeBoolProperty<FollowComponent>("enabled", "Enabled", &FollowComponent::enabled,
+                                            "关闭后系统跳过该组件，但保留设置") }));
 }
 
 void registerFeatureSystems(SystemScheduler& scheduler)

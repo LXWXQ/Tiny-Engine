@@ -38,6 +38,8 @@ private:
     TextureLibrary textures;
     bool texturesScanned = false;
     char textureFilter[64] = {};
+    // + Add Component 弹窗的搜索框。按名称 / 分类 / id 过滤。
+    char componentFilter[64] = {};
 };
 
 } // namespace editor

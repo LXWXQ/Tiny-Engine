@@ -20,6 +20,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace scene
@@ -30,6 +31,15 @@ struct PropertyDescriptor
     std::string name;
     std::string label;
     PropertyType type = PropertyType::Float;
+
+    // ---- Inspector 元数据（不参与序列化） ----
+    // 有范围时 DragFloat/DragInt 会夹取，并在 tooltip 里显示区间。
+    bool hasRange = false;
+    float minimum = 0.0f;
+    float maximum = 0.0f;
+    // <= 0 时按属性类型选默认拖动速度。
+    float dragSpeed = 0.0f;
+    std::string tooltip;
 
     // void* 指向组件实例；由 makeProperty<T>() 做类型擦除。
     std::function<PropertyValue(const void*)> get;
@@ -117,6 +127,23 @@ PropertyDescriptor makeProperty(
     {
         setter(*static_cast<T*>(component), value);
     };
+    return property;
+}
+
+// 给属性补 UI 元数据。按值返回，方便在注册表初始化里串起来写。
+inline PropertyDescriptor withRange(PropertyDescriptor property, float minimum, float maximum,
+                                    float dragSpeed = 0.0f)
+{
+    property.hasRange = true;
+    property.minimum = minimum;
+    property.maximum = maximum;
+    property.dragSpeed = dragSpeed;
+    return property;
+}
+
+inline PropertyDescriptor withTooltip(PropertyDescriptor property, std::string tooltip)
+{
+    property.tooltip = std::move(tooltip);
     return property;
 }
 

@@ -22,6 +22,7 @@
 #include <ctime>
 #include <functional>
 #include <deque>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,12 @@ struct EditorState
 
     // ---- 撤销 / 重做 ----
     CommandStack commands;
+
+    // ---- 组件剪贴板 ----
+    // 只保存数据快照，不持有实体；可以跨实体、跨场景粘贴。
+    // type 同时是校验：目标实体没有同名组件描述符时粘贴按钮不出现。
+    std::optional<scene::ComponentRecord> componentClipboard;
+    std::string componentClipboardLabel;
 
     // ---- 日志 ----
     std::deque<LogEntry> log;

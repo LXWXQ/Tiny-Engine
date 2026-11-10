@@ -156,8 +156,9 @@ N = normalize(vec3(-gradient.x, 1.0, -gradient.y))
   `foamMask = smoothstep(0.34, 0.74, foamNoise)`，
   `foam = clamp(shore * foamMask * (0.75 + 0.25 * crest), 0, 1)`。旧版把波峰项铺满整个水面，
   并用 `sin(x) * sin(y)` 生成泡沫，高角度俯视时会形成规则的菱形棋盘格；现在泡沫只贴着
-  岸边出现、由法线贴图的非周期噪声打散，深水不再产生泡沫；噪声门控也让部分岸线的白边
-  很弱，不保证每条水陆交界都有明显白沫。泡沫同时抬高 alpha。
+  岸边出现、由法线贴图低频噪声打散，深水不再产生泡沫；噪声门控也让部分岸线的白边
+  很弱，不保证每条水陆交界都有明显白沫。泡沫同时抬高 alpha。排查记录见
+  [pitfalls](../60-debug-profiling/pitfalls.md) 坑 36。
 - **混合**：`alpha = mix(0.18, 0.89, depthFactor) + fresnel * 0.55`，上限 0.985；
   管线用 `SRC_ALPHA / ONE_MINUS_SRC_ALPHA`，alpha 通道写 1。远水上限从 0.92
   降到 0.89，保留少量背景透出，避免整片水变成不透明深色板。

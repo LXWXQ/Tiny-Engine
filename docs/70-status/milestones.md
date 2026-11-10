@@ -1010,6 +1010,35 @@ updated: 2026-11-06
 
 **边界**：只接入 Character Controller 与 Render Tag 两个可添加原生组件；Mesh/Material 及 Terrain/Voxel/Streaming/Camera 仍由固定面板或创建菜单管理；原生组件不进 v3 `components`，跨版本仍依赖专用字段。
 
+## F5-05：组件编辑工作流（2026-11-10）
+
+**问题**：F5-04 之后组件已经能挂到实体，但“挂上去之后”的编辑仍然难用：所有 Float 都是无范围的 0.01 拖动，
+不知道单位和合法区间；改坏了只能靠撤销或手改 JSON；想把一组参数复用到另一个实体只能重新手调；
+组件多了以后 `+ Add Component` 在 Inspector 最底部，还要滚很久。
+
+**实现**：
+- `PropertyDescriptor` 增加纯 UI 元数据 `hasRange/minimum/maximum/dragSpeed/tooltip`（不序列化），
+  并提供 `withRange()` / `withTooltip()` 链式 helper；`ComponentRegistry.h` 补 `<utility>`。
+- `FeatureComponents.cpp`：`makeFloatProperty` 写范围并 clamp setter，`makeVec3Property` / `makeBoolProperty`
+  接受拖动速度与提示；7 个 `effects.*` 的 20 个属性全部填范围/速度/中文说明（Spin/Orbit 的速度补 clamp）。
+- `NativeComponents.cpp`：Character 的 8 个 Float 保留原 clamp 范围，补 `dragSpeed` 与中文提示；Render Tag 两个 Bool 补提示。
+- `InspectorPanel`：`drawPropertyWidgets` 接收 `defaults`，按元数据画 `DragFloat/DragFloat3/DragInt`；
+  悬停 tooltip 统一显示“字段含义 + 范围 + 操作”；右键属性“重置为默认值”。
+- 新增跨实体组件剪贴板（`EditorState::componentClipboard`）：组件头右键与原生面板底部支持复制 / 粘贴 / 重置 / 移除；
+  复制不置脏，粘贴/重置/移除走 `SetComponentRecordCommand`，可撤销。粘贴校验同类型、目标可添加、值不同。
+- `+ Add Component` 移到组件区顶部，弹窗按名称/分类/id 搜索；组件头默认展开，减少“挂上了但看不见”的情况。
+
+**测试**：
+- `[Scene] ECS component selfTest PASS | components=16 | systems=7` 新增断言：`effects.spin.degreesPerSecond`
+  的 `hasRange=true`、范围 -3600..3600、`dragSpeed=0.5`、tooltip 非空；`native.characterController.height`
+  范围 0.2..10 且 tooltip 非空。
+- `TinyEngine.exe --selftest 20` 本地通过，ECS/spatial、ECS component、[Editor] selfTest 均 PASS。
+
+**回归**：全套 **75 项** ALL PASS，stderr 全 0，验证日志 `build/validation/20261110-101328`；DocCheck PASS（documents=68 lines=12042）。
+
+**边界**：属性元数据只服务 Inspector，不进场景/预制体 JSON；剪贴板不持久化、跨编辑器会话丢失；
+不支持数组/曲线/对象引用属性，也没有脚本或热重载；组件仍只能挂一个实例。
+
 ## R-08：水面暗反射补天空底色（2026-11-06）
 
 **问题**：用户标注的远水区域整体发暗、偏绿，像一块没有细节的暗色平板（水面区域 mean RGB≈(100,117,117)，天空≈(133,143,154)）。先怀疑平面反射没有写天空 alpha，做了“反射 G-Buffer 天空 alpha=0 + 水面按 alpha 混合”的修复；但在 streaming 高机位、voxel 低机位和“反射跳过 skybox”三组对照下，开/关都只有 UI 区域差异（最多 2537 像素，水面 0 像素），说明反射 G-Buffer 里天空并不是黑的，这条路径是 no-op，已完整回退。
@@ -1059,6 +1088,8 @@ updated: 2026-11-06
 - `crest`（波峰项）没有乘 `shore`，白浪会铺满整个水面，不只在岸边；
 - 噪声是 `sin(p.x * 1.7 + t * 0.6) * sin(p.y * 2.1 - t * 0.45)` 的乘积，俯视时形成规则菱形棋盘格。
 
+排查与单因子排除过程归档在 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 36。
+
 旧代码（`shaders/water.frag` 约 229-236 行）：
 
 ```glsl
@@ -1072,7 +1103,7 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 **实现**：
 - `shore = 1 - smoothstep(0, 1.8, thickness)`，泡沫只在水陆交界 1.8m 内出现；
 - `crest = smoothstep(0.10, 0.30, bigWaveHeight)`，波峰项也乘 `shore`，深水不再有泡沫；
-- 噪声改采已有的 `waterNormalMap` 低频（`textureLod(waterNormalMap, p/7 + t*(0.011,-0.008), 1.5).x`），`foamMask = smoothstep(0.34, 0.74, foamNoise)`；非周期纹理打散泡沫，不新增资产；
+- 噪声改采已有的 `waterNormalMap` 低频（`textureLod(waterNormalMap, p/7 + t*(0.011,-0.008), 1.5).x`），`foamMask = smoothstep(0.34, 0.74, foamNoise)`；法线贴图低频噪声打散泡沫，不新增资产；
 - `foam = clamp(shore * foamMask * (0.75 + 0.25 * crest), 0, 1)`，颜色混合量与 alpha 抬高逻辑不变。
 
 **实测（Debug / RTX 2070，1920x1080，--streaming-world 1 --selftest 40 --screenshot-frame 30 --hidden）**：

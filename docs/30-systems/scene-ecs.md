@@ -103,6 +103,11 @@ F5-04 把已有原生组件也纳入同一张描述表，但**不复制它们的
 - `required`：Name/Transform/Hierarchy 不可增删。
 - `canRemove`：按实体状态否决删除（Render Tag 在地形实体上返回 false）。
 
+属性描述符另带一组**纯 UI 元数据**（F5-05，不写入 JSON）：`hasRange` / `minimum` / `maximum` /
+`dragSpeed` / `tooltip`。注册时用 `withRange()` / `withTooltip()` 链式附加，例如
+`withTooltip(withRange(makeSpinSpeedProperty(), -3600, 3600, 0.5f), "局部自转速度")`；
+`makeFloatProperty` 同时把范围用于 setter clamp。Inspector 只消费这些字段，不再为每个组件写一套控件。
+
 因此 `+ Add Component` 的可选项是 7 个 `effects.*` + Character Controller + Render Tag；
 Camera/Terrain/Streaming/Voxel 以置灰项出现。Character 面板的 8 个参数与 Render Tag 的移除按钮
 都走 `SetComponentRecordCommand`，可撤销。`DeleteEntityCommand` 为 Character 增加显式快照，
@@ -122,8 +127,13 @@ Camera/Terrain/Streaming/Voxel 以置灰项出现。Character 面板的 8 个参
 **编辑器与持久化**
 
 - Inspector 先画固定原生面板（Transform/Character/Terrain/Streaming/Mesh/Material/Render Tag），
-  再显示已挂载且 `drawProperties` 的注册组件；`+ Add Component` 按分类列出未挂载且 `exposed`
-  的组件，不可添加的托管项置灰并显示原因。所有增删改都走 `SetComponentRecordCommand`，可撤销。
+  再显示已挂载且 `drawProperties` 的注册组件。组件区顶部是 `+ Add Component` 与剪贴板粘贴按钮；
+  Add 弹窗支持按名称/分类/id 搜索，组件头默认展开。
+- 属性控件按注册表元数据设置范围、拖动速度和悬停提示；右键属性可单独“重置为默认值”。
+  组件头右键与原生面板底部提供复制 / 粘贴 / 重置 / 移除，全部走 `SetComponentRecordCommand`，可撤销。
+  剪贴板是跨实体的纯数据快照，复制不置脏；粘贴要求同类型、目标可添加且值不同，
+  重置使用 `defaultComponentRecord(type)`。
+- `+ Add Component` 按分类列出未挂载且 `exposed` 的组件，不可添加的托管项置灰并显示原因。
 - `SceneSerializer` 从 **version 3** 起把 `components` 写进每个实体（格式见
   [serialization](../90-editor/serialization.md)）。`Scene::captureDescription()` 只捕获
   已注册且 `serialized` 的组件；`buildFromDescription()` 逐条 apply，未注册的类型安全跳过，
@@ -133,8 +143,8 @@ Camera/Terrain/Streaming/Voxel 以置灰项出现。Character 面板的 8 个参
 - `DeleteEntityCommand` 的快照与 `DuplicateEntityCommand` 都会带上注册组件 record，
   所以删除撤销/复制不会丢效果；Character 另由显式原生快照覆盖。
 
-**边界**：组件和系统仍在 C++ 编译期注册，没有脚本/热重载/属性数组；
-系统在编辑模式也会随 `Scene::update()` 推进，撤销删除后实体 ID 会变。
+**边界**：组件和系统仍在 C++ 编译期注册，没有脚本/热重载/属性数组；属性范围/提示只是 UI 元数据，
+不参与序列化。系统在编辑模式也会随 `Scene::update()` 推进，撤销删除后实体 ID 会变。
 原生组件只把 Character/Render Tag 接进统一增删；Mesh/Material/Terrain chunk 等仍由
 专用创建流程或固定面板管理。
 

@@ -14,9 +14,10 @@ namespace
 PropertyDescriptor makeFloatProperty(std::string name, std::string label, float minimum,
                                      float maximum,
                                      std::function<float(const CharacterControllerComponent&)> getter,
-                                     std::function<void(CharacterControllerComponent&, float)> setter)
+                                     std::function<void(CharacterControllerComponent&, float)> setter,
+                                     const char* tooltip = nullptr, float dragSpeed = 0.0f)
 {
-    return makeProperty<CharacterControllerComponent>(
+    PropertyDescriptor property = makeProperty<CharacterControllerComponent>(
         std::move(name), std::move(label), PropertyType::Float,
         [getter = std::move(getter)](const CharacterControllerComponent& component)
         {
@@ -27,13 +28,21 @@ PropertyDescriptor makeFloatProperty(std::string name, std::string label, float 
         {
             setter(component, std::clamp(value.asFloat(), minimum, maximum));
         });
+    property.hasRange = true;
+    property.minimum = minimum;
+    property.maximum = maximum;
+    property.dragSpeed = dragSpeed;
+    if (tooltip != nullptr)
+        property.tooltip = tooltip;
+    return property;
 }
 
 PropertyDescriptor makeBoolProperty(std::string name, std::string label,
                                     std::function<bool(const RenderTagComponent&)> getter,
-                                    std::function<void(RenderTagComponent&, bool)> setter)
+                                    std::function<void(RenderTagComponent&, bool)> setter,
+                                    const char* tooltip = nullptr)
 {
-    return makeProperty<RenderTagComponent>(
+    PropertyDescriptor property = makeProperty<RenderTagComponent>(
         std::move(name), std::move(label), PropertyType::Bool,
         [getter = std::move(getter)](const RenderTagComponent& component)
         {
@@ -43,6 +52,9 @@ PropertyDescriptor makeBoolProperty(std::string name, std::string label,
         {
             setter(component, value.asBool());
         });
+    if (tooltip != nullptr)
+        property.tooltip = tooltip;
+    return property;
 }
 
 // 场景必需组件：不出现在菜单里，也不能被移除。属性面板由固定面板负责。
@@ -135,35 +147,43 @@ void registerNativeComponents(ComponentRegistry& registry)
     characterProperties.push_back(makeFloatProperty(
         "radius", "Radius", 0.05f, 5.0f,
         [](const CharacterControllerComponent& c) { return c.radius; },
-        [](CharacterControllerComponent& c, float v) { c.radius = v; }));
+        [](CharacterControllerComponent& c, float v) { c.radius = v; },
+        "角色胶囊半径，单位米", 0.005f));
     characterProperties.push_back(makeFloatProperty(
         "height", "Height", 0.2f, 10.0f,
         [](const CharacterControllerComponent& c) { return c.height; },
-        [](CharacterControllerComponent& c, float v) { c.height = v; }));
+        [](CharacterControllerComponent& c, float v) { c.height = v; },
+        "角色总高度，从脚底到头顶", 0.01f));
     characterProperties.push_back(makeFloatProperty(
         "moveSpeed", "Move Speed", 0.0f, 50.0f,
         [](const CharacterControllerComponent& c) { return c.moveSpeed; },
-        [](CharacterControllerComponent& c, float v) { c.moveSpeed = v; }));
+        [](CharacterControllerComponent& c, float v) { c.moveSpeed = v; },
+        "地面最大移动速度，单位/秒", 0.05f));
     characterProperties.push_back(makeFloatProperty(
         "jumpSpeed", "Jump Speed", 0.0f, 50.0f,
         [](const CharacterControllerComponent& c) { return c.jumpSpeed; },
-        [](CharacterControllerComponent& c, float v) { c.jumpSpeed = v; }));
+        [](CharacterControllerComponent& c, float v) { c.jumpSpeed = v; },
+        "起跳初速度，单位/秒", 0.05f));
     characterProperties.push_back(makeFloatProperty(
         "gravity", "Gravity", 0.0f, 100.0f,
         [](const CharacterControllerComponent& c) { return c.gravity; },
-        [](CharacterControllerComponent& c, float v) { c.gravity = v; }));
+        [](CharacterControllerComponent& c, float v) { c.gravity = v; },
+        "重力加速度；越大下落越快", 0.05f));
     characterProperties.push_back(makeFloatProperty(
         "maxSlopeAngle", "Max Slope", 0.0f, 89.0f,
         [](const CharacterControllerComponent& c) { return c.maxSlopeAngle; },
-        [](CharacterControllerComponent& c, float v) { c.maxSlopeAngle = v; }));
+        [](CharacterControllerComponent& c, float v) { c.maxSlopeAngle = v; },
+        "可站立的最大坡度，单位度", 0.5f));
     characterProperties.push_back(makeFloatProperty(
         "stepHeight", "Step Height", 0.0f, 3.0f,
         [](const CharacterControllerComponent& c) { return c.stepHeight; },
-        [](CharacterControllerComponent& c, float v) { c.stepHeight = v; }));
+        [](CharacterControllerComponent& c, float v) { c.stepHeight = v; },
+        "可自动跨上的台阶高度，单位米", 0.01f));
     characterProperties.push_back(makeFloatProperty(
         "groundSnapDistance", "Ground Snap", 0.0f, 5.0f,
         [](const CharacterControllerComponent& c) { return c.groundSnapDistance; },
-        [](CharacterControllerComponent& c, float v) { c.groundSnapDistance = v; }));
+        [](CharacterControllerComponent& c, float v) { c.groundSnapDistance = v; },
+        "贴地检测距离；防止下坡时反复离地", 0.01f));
 
     registry.add(makeComponentDescriptor<CharacterControllerComponent>(
         "native.characterController", "Character Controller", "Scene",
@@ -177,11 +197,13 @@ void registerNativeComponents(ComponentRegistry& registry)
     renderTagProperties.push_back(makeBoolProperty(
         "skybox", "Skybox",
         [](const RenderTagComponent& c) { return c.isSkybox; },
-        [](RenderTagComponent& c, bool v) { c.isSkybox = v; }));
+        [](RenderTagComponent& c, bool v) { c.isSkybox = v; },
+        "把该实体当作天空盒渲染"));
     renderTagProperties.push_back(makeBoolProperty(
         "grid", "Grid",
         [](const RenderTagComponent& c) { return c.isGrid; },
-        [](RenderTagComponent& c, bool v) { c.isGrid = v; }));
+        [](RenderTagComponent& c, bool v) { c.isGrid = v; },
+        "把该实体当作世界网格渲染（编辑辅助）"));
 
     ComponentDescriptor renderTag = makeComponentDescriptor<RenderTagComponent>(
         "native.renderTag", "Render Tag", "Scene", std::move(renderTagProperties),

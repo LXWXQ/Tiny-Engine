@@ -73,8 +73,11 @@ void drawTerrainBrushControls(EditorState& state)
 }
 
 // 通用属性控件。drawComponents 与原生 Character 面板共用，避免两套 switch。
+// defaults 是组件默认值快照：右键菜单用它做“重置为默认值”，没有默认值时
+// 不弹菜单。属性元数据（范围/拖动速度/提示）来自 ComponentRegistry。
 bool drawPropertyWidgets(scene::ComponentRecord& record,
-                         const scene::ComponentDescriptor& descriptor)
+                         const scene::ComponentDescriptor& descriptor,
+                         const scene::ComponentRecord* defaults = nullptr)
 {
     bool changed = false;
     for (const scene::PropertyDescriptor& property : descriptor.properties)
@@ -82,6 +85,14 @@ bool drawPropertyWidgets(scene::ComponentRecord& record,
         scene::NamedProperty* value = record.find(property.name);
         if (value == nullptr)
             continue;
+
+        ImGui::PushID(property.name.c_str());
+        const scene::NamedProperty* defaultValue =
+            defaults != nullptr ? defaults->find(property.name) : nullptr;
+        const bool hasRange = property.hasRange && property.maximum > property.minimum;
+        const float fallbackSpeed =
+            property.type == scene::PropertyType::Int ? 1.0f : 0.01f;
+        const float dragSpeed = property.dragSpeed > 0.0f ? property.dragSpeed : fallbackSpeed;
 
         switch (property.type)
         {
@@ -98,7 +109,12 @@ bool drawPropertyWidgets(scene::ComponentRecord& record,
         case scene::PropertyType::Int:
         {
             int v = value->value.asInt();
-            if (ImGui::DragInt(property.label.c_str(), &v, 0.1f))
+            const bool edited = hasRange
+                ? ImGui::DragInt(property.label.c_str(), &v, dragSpeed,
+                                 static_cast<int>(property.minimum),
+                                 static_cast<int>(property.maximum), "%d")
+                : ImGui::DragInt(property.label.c_str(), &v, dragSpeed);
+            if (edited)
             {
                 value->value = scene::PropertyValue::fromInt(v);
                 changed = true;
@@ -108,7 +124,11 @@ bool drawPropertyWidgets(scene::ComponentRecord& record,
         case scene::PropertyType::Float:
         {
             float v = value->value.asFloat();
-            if (ImGui::DragFloat(property.label.c_str(), &v, 0.01f, 0.0f, 0.0f, "%.3f"))
+            const bool edited = hasRange
+                ? ImGui::DragFloat(property.label.c_str(), &v, dragSpeed,
+                                   property.minimum, property.maximum, "%.3f")
+                : ImGui::DragFloat(property.label.c_str(), &v, dragSpeed, 0.0f, 0.0f, "%.3f");
+            if (edited)
             {
                 value->value = scene::PropertyValue::fromFloat(v);
                 changed = true;
@@ -118,8 +138,12 @@ bool drawPropertyWidgets(scene::ComponentRecord& record,
         case scene::PropertyType::Vec3:
         {
             glm::vec3 v = value->value.asVec3();
-            if (ImGui::DragFloat3(property.label.c_str(), glm::value_ptr(v),
-                                  0.01f, 0.0f, 0.0f, "%.3f"))
+            const bool edited = hasRange
+                ? ImGui::DragFloat3(property.label.c_str(), glm::value_ptr(v), dragSpeed,
+                                    property.minimum, property.maximum, "%.3f")
+                : ImGui::DragFloat3(property.label.c_str(), glm::value_ptr(v),
+                                    dragSpeed, 0.0f, 0.0f, "%.3f");
+            if (edited)
             {
                 value->value = scene::PropertyValue::fromVec3(v);
                 changed = true;
@@ -149,13 +173,151 @@ bool drawPropertyWidgets(scene::ComponentRecord& record,
             break;
         }
         }
+
+        // 提示里同时给“这个字段是什么”和“怎么操作”，避免只有一句泛泛的
+        // “拖动修改”。范围由注册表提供，UI 不再自己猜。
+        if (ImGui::IsItemHovered())
+        {
+            std::string tip = property.tooltip;
+            if (hasRange)
+            {
+                char range[96] = {};
+                std::snprintf(range, sizeof(range), "范围 [%.3f, %.3f]",
+                              property.minimum, property.maximum);
+                if (!tip.empty())
+                    tip += "\n";
+                tip += range;
+            }
+            if (!tip.empty())
+                tip += "\n";
+            tip += property.type == scene::PropertyType::Bool
+                ? "点击切换，右键重置"
+                : "拖动修改，Ctrl+点击输入数值，右键重置";
+            ImGui::SetTooltip("%s", tip.c_str());
+        }
+
+        if (defaultValue != nullptr && ImGui::BeginPopupContextItem("##property_menu"))
+        {
+            if (ImGui::MenuItem("重置为默认值"))
+            {
+                value->value = defaultValue->value;
+                changed = true;
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
     }
     return changed;
 }
 
-// 原生组件由固定面板绘制，这里补一个统一的移除入口（同样走命令栈）。
-void drawNativeRemoveFooter(EditorState& state, entt::entity entity, const char* type,
-                            const char* label)
+// 组件剪贴板是纯数据快照，不绑定实体。复制不算场景修改，粘贴/重置才进命令栈。
+void copyComponent(EditorState& state, entt::entity entity,
+                   const scene::ComponentDescriptor& descriptor)
+{
+    Scene* scene = state.services.scene;
+    if (scene == nullptr)
+        return;
+    std::optional<scene::ComponentRecord> record =
+        scene->readComponent(entity, descriptor.type);
+    if (!record)
+        return;
+
+    state.componentClipboard = std::move(*record);
+    state.componentClipboardLabel = descriptor.label;
+    state.notifySuccess("已复制组件：" + descriptor.label);
+}
+
+bool canPasteComponent(const EditorState& state, const Scene& scene, entt::entity entity,
+                       const scene::ComponentDescriptor& descriptor)
+{
+    if (!state.componentClipboard || state.componentClipboard->type != descriptor.type)
+        return false;
+    if (!descriptor.has(*state.services.registry, entity) && !descriptor.addable)
+        return false;
+    const std::optional<scene::ComponentRecord> before =
+        scene.readComponent(entity, descriptor.type);
+    return !before || !before->equivalentTo(*state.componentClipboard);
+}
+
+bool pasteComponent(EditorState& state, entt::entity entity,
+                    const scene::ComponentDescriptor& descriptor)
+{
+    Scene* scene = state.services.scene;
+    if (scene == nullptr || !state.componentClipboard ||
+        state.componentClipboard->type != descriptor.type)
+        return false;
+
+    std::optional<scene::ComponentRecord> before =
+        scene->readComponent(entity, descriptor.type);
+    if (!before && !descriptor.addable)
+    {
+        state.notify(LogEntry::Level::Warning,
+                     "该组件不能单独添加：" + descriptor.label);
+        return false;
+    }
+    if (before && before->equivalentTo(*state.componentClipboard))
+        return false;
+
+    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+        *scene, entity, descriptor.type, std::move(before), *state.componentClipboard,
+        "Paste Component"));
+    state.markDirty();
+    state.notifySuccess("已粘贴组件：" + descriptor.label);
+    return true;
+}
+
+bool canResetComponent(const Scene& scene, entt::entity entity,
+                       const scene::ComponentDescriptor& descriptor)
+{
+    const std::optional<scene::ComponentRecord> before =
+        scene.readComponent(entity, descriptor.type);
+    const std::optional<scene::ComponentRecord> defaults =
+        scene.defaultComponentRecord(descriptor.type);
+    return before && defaults && !before->equivalentTo(*defaults);
+}
+
+bool resetComponent(EditorState& state, entt::entity entity,
+                    const scene::ComponentDescriptor& descriptor)
+{
+    Scene* scene = state.services.scene;
+    if (scene == nullptr)
+        return false;
+
+    std::optional<scene::ComponentRecord> before =
+        scene->readComponent(entity, descriptor.type);
+    std::optional<scene::ComponentRecord> defaults =
+        scene->defaultComponentRecord(descriptor.type);
+    if (!before || !defaults || before->equivalentTo(*defaults))
+        return false;
+
+    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+        *scene, entity, descriptor.type, std::move(before), std::move(defaults),
+        "Reset Component"));
+    state.markDirty();
+    state.notifySuccess("已重置组件：" + descriptor.label);
+    return true;
+}
+
+std::string lowercase(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+bool matchesComponentFilter(const scene::ComponentDescriptor& descriptor,
+                            const std::string& query)
+{
+    if (query.empty())
+        return true;
+    return lowercase(descriptor.label).find(query) != std::string::npos ||
+           lowercase(descriptor.type).find(query) != std::string::npos ||
+           lowercase(descriptor.category).find(query) != std::string::npos;
+}
+
+// 原生组件由固定面板绘制，这里补统一的复制 / 重置 / 移除入口（都走命令栈）。
+void drawNativeComponentFooter(EditorState& state, entt::entity entity, const char* type,
+                               const char* label)
 {
     Scene* scene = state.services.scene;
     if (scene == nullptr || state.services.registry == nullptr)
@@ -163,26 +325,45 @@ void drawNativeRemoveFooter(EditorState& state, entt::entity entity, const char*
 
     entt::registry& registry = *state.services.registry;
     const scene::ComponentDescriptor* descriptor = scene->getComponentRegistry().find(type);
-    if (descriptor == nullptr || !descriptor->removable)
+    if (descriptor == nullptr || !descriptor->has(registry, entity))
         return;
 
-    if (descriptor->canRemove && !descriptor->canRemove(registry, entity))
-    {
-        ImGui::TextDisabled("%s is managed by its creation flow.", label);
-        return;
-    }
+    const bool canRemove = descriptor->removable &&
+        (!descriptor->canRemove || descriptor->canRemove(registry, entity));
+    const bool resetAvailable = canResetComponent(*scene, entity, *descriptor);
 
     ImGui::Separator();
     ImGui::PushID(type);
-    if (ImGui::Button("Remove Component"))
+    if (ImGui::Button("Copy"))
+        copyComponent(state, entity, *descriptor);
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!resetAvailable);
+    if (ImGui::Button("Reset"))
+        resetComponent(state, entity, *descriptor);
+    ImGui::EndDisabled();
+    if (!resetAvailable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("当前值已经是默认值");
+
+    if (descriptor->removable && !canRemove)
     {
-        std::optional<scene::ComponentRecord> before = scene->readComponent(entity, type);
-        if (before)
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s is managed by its creation flow.", label);
+    }
+    else if (canRemove)
+    {
+        ImGui::SameLine();
+        if (ImGui::Button("Remove Component"))
         {
-            state.commands.execute(std::make_unique<SetComponentRecordCommand>(
-                *scene, entity, type, std::move(before), std::nullopt,
-                "Remove Component"));
-            state.markDirty();
+            std::optional<scene::ComponentRecord> before =
+                scene->readComponent(entity, type);
+            if (before)
+            {
+                state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                    *scene, entity, type, std::move(before), std::nullopt,
+                    "Remove Component"));
+                state.markDirty();
+            }
         }
     }
     ImGui::PopID();
@@ -325,73 +506,42 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
     ImGui::Separator();
     ImGui::TextDisabled("ECS Components");
 
-    for (const scene::ComponentDescriptor& descriptor : components.descriptors())
+    // 添加入口放在列表顶部：组件越多，越不应该滚到底部才能加。
+    if (ImGui::Button("+ Add Component"))
     {
-        if (!descriptor.has(registry, entity))
-            continue;
-        // 原生组件由固定面板绘制（Transform / Character / Render Tag…），
-        // 这里只负责元数据扩展组件，避免同一份字段出现两次。
-        if (!descriptor.drawProperties)
-            continue;
-
-        ImGui::PushID(descriptor.type.c_str());
-        const bool open = ImGui::CollapsingHeader(descriptor.label.c_str());
-
-        // 右键移除。移除和添加都走同一条 SetComponentRecordCommand：
-        // before 有值、after 为空就是删除，撤销时把整份属性写回去。
-        if (ImGui::BeginPopupContextItem("##component_menu"))
-        {
-            const bool canRemove = descriptor.removable &&
-                (!descriptor.canRemove || descriptor.canRemove(registry, entity));
-            if (canRemove && ImGui::MenuItem("移除组件"))
-            {
-                std::optional<scene::ComponentRecord> before =
-                    scene->readComponent(entity, descriptor.type);
-                if (before)
-                {
-                    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
-                        *scene, entity, descriptor.type, std::move(before), std::nullopt,
-                        "Remove Component"));
-                    state.markDirty();
-                }
-                ImGui::EndPopup();
-                ImGui::PopID();
-                continue;
-            }
-            ImGui::EndPopup();
-        }
-
-        if (open)
-        {
-            std::optional<scene::ComponentRecord> beforeRecord =
-                scene->readComponent(entity, descriptor.type);
-            if (beforeRecord)
-            {
-                scene::ComponentRecord afterRecord = *beforeRecord;
-                bool changed = false;
-
-                changed = drawPropertyWidgets(afterRecord, descriptor);
-
-                if (changed && !afterRecord.equivalentTo(*beforeRecord))
-                {
-                    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
-                        *scene, entity, descriptor.type, std::move(beforeRecord),
-                        std::move(afterRecord), "Modify Component"));
-                    state.markDirty();
-                }
-            }
-        }
-
-        ImGui::PopID();
+        componentFilter[0] = '\0';
+        ImGui::OpenPopup("##add_component");
     }
 
-    // ---- + Add Component ----
-    // 只列 exposed 且当前实体未挂载的组件，按 category 分组。
-    if (ImGui::Button("+ Add Component"))
-        ImGui::OpenPopup("##add_component");
+    const scene::ComponentDescriptor* clipboardDescriptor = nullptr;
+    if (state.componentClipboard)
+        clipboardDescriptor = components.find(state.componentClipboard->type);
+    if (clipboardDescriptor != nullptr)
+    {
+        ImGui::SameLine();
+        const bool canPaste =
+            canPasteComponent(state, *scene, entity, *clipboardDescriptor);
+        const std::string label = "Paste " + clipboardDescriptor->label;
+        ImGui::BeginDisabled(!canPaste);
+        if (ImGui::Button(label.c_str()))
+            pasteComponent(state, entity, *clipboardDescriptor);
+        ImGui::EndDisabled();
+        if (!canPaste && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("剪贴板内容与当前值相同，或该组件不能挂到此实体");
+    }
 
     if (ImGui::BeginPopup("##add_component"))
     {
+        ImGui::TextDisabled("添加组件");
+        ImGui::SetNextItemWidth(300.0f);
+        // 打开就聚焦搜索框：组件多时直接输入比滚动更快。
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+        ImGui::InputTextWithHint("##component_search", "搜索名称 / 分类 / id",
+                                 componentFilter, IM_ARRAYSIZE(componentFilter));
+        ImGui::Separator();
+
+        const std::string query = lowercase(componentFilter);
         std::string lastCategory;
         bool first = true;
         bool any = false;
@@ -399,6 +549,8 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
         for (const scene::ComponentDescriptor& descriptor : components.descriptors())
         {
             if (!descriptor.exposed || descriptor.has(registry, entity))
+                continue;
+            if (!matchesComponentFilter(descriptor, query))
                 continue;
 
             if (first || descriptor.category != lastCategory)
@@ -429,8 +581,93 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity)
         }
 
         if (!any)
-            ImGui::TextDisabled("没有可添加的组件。");
+        {
+            ImGui::TextDisabled(query.empty() ? "没有可添加的组件。"
+                                              : "没有匹配的组件。");
+        }
         ImGui::EndPopup();
+    }
+
+    for (const scene::ComponentDescriptor& descriptor : components.descriptors())
+    {
+        if (!descriptor.has(registry, entity))
+            continue;
+        // 原生组件由固定面板绘制（Transform / Character / Render Tag…），
+        // 这里只负责元数据扩展组件，避免同一份字段出现两次。
+        if (!descriptor.drawProperties)
+            continue;
+
+        ImGui::PushID(descriptor.type.c_str());
+        const bool open =
+            ImGui::CollapsingHeader(descriptor.label.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+
+        // 右键菜单同时承担复制 / 粘贴 / 重置 / 移除：都是对整份属性快照操作，
+        // 因此和属性拖拽一样走 SetComponentRecordCommand，可撤销。
+        if (ImGui::BeginPopupContextItem("##component_menu"))
+        {
+            if (ImGui::MenuItem("复制组件"))
+                copyComponent(state, entity, descriptor);
+
+            const bool pasteAvailable =
+                canPasteComponent(state, *scene, entity, descriptor);
+            if (ImGui::MenuItem("粘贴组件", nullptr, false, pasteAvailable))
+                pasteComponent(state, entity, descriptor);
+            if (!pasteAvailable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("剪贴板没有同类型组件，或当前值与剪贴板相同");
+
+            const bool resetAvailable =
+                canResetComponent(*scene, entity, descriptor);
+            if (ImGui::MenuItem("重置为默认值", nullptr, false, resetAvailable))
+                resetComponent(state, entity, descriptor);
+            if (!resetAvailable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("当前值已经是默认值");
+
+            ImGui::Separator();
+            const bool canRemove = descriptor.removable &&
+                (!descriptor.canRemove || descriptor.canRemove(registry, entity));
+            if (canRemove && ImGui::MenuItem("移除组件"))
+            {
+                std::optional<scene::ComponentRecord> before =
+                    scene->readComponent(entity, descriptor.type);
+                if (before)
+                {
+                    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                        *scene, entity, descriptor.type, std::move(before), std::nullopt,
+                        "Remove Component"));
+                    state.markDirty();
+                }
+                ImGui::EndPopup();
+                ImGui::PopID();
+                continue;
+            }
+            ImGui::EndPopup();
+        }
+
+        if (open)
+        {
+            std::optional<scene::ComponentRecord> beforeRecord =
+                scene->readComponent(entity, descriptor.type);
+            if (beforeRecord)
+            {
+                scene::ComponentRecord afterRecord = *beforeRecord;
+                const std::optional<scene::ComponentRecord> defaults =
+                    scene->defaultComponentRecord(descriptor.type);
+                bool changed = false;
+
+                changed = drawPropertyWidgets(afterRecord, descriptor,
+                                              defaults ? &*defaults : nullptr);
+
+                if (changed && !afterRecord.equivalentTo(*beforeRecord))
+                {
+                    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                        *scene, entity, descriptor.type, std::move(beforeRecord),
+                        std::move(afterRecord), "Modify Component"));
+                    state.markDirty();
+                }
+            }
+        }
+
+        ImGui::PopID();
     }
 }
 
@@ -530,7 +767,10 @@ void InspectorPanel::drawCharacter(EditorState& state, entt::entity entity)
         if (before)
         {
             scene::ComponentRecord after = *before;
-            if (drawPropertyWidgets(after, *descriptor) && !after.equivalentTo(*before))
+            const std::optional<scene::ComponentRecord> defaults =
+                scene->defaultComponentRecord("native.characterController");
+            if (drawPropertyWidgets(after, *descriptor, defaults ? &*defaults : nullptr) &&
+                !after.equivalentTo(*before))
             {
                 state.commands.execute(std::make_unique<SetComponentRecordCommand>(
                     *scene, entity, "native.characterController", std::move(before),
@@ -545,7 +785,8 @@ void InspectorPanel::drawCharacter(EditorState& state, entt::entity entity)
                        controller->grounded ? "Grounded" : "Airborne",
                        controller->groundEntity == entt::null ? "none" : "yes");
     ImGui::TextDisabled("Play mode: WASD move, Space jump.");
-    drawNativeRemoveFooter(state, entity, "native.characterController", "Character Controller");
+    drawNativeComponentFooter(state, entity, "native.characterController",
+                              "Character Controller");
 }
 
 void InspectorPanel::drawTerrain(EditorState& state, entt::entity entity)
@@ -1035,7 +1276,7 @@ void InspectorPanel::drawRenderTag(EditorState& state, entt::entity entity)
         state.markDirty();
     }
 
-    drawNativeRemoveFooter(state, entity, "native.renderTag", "Render Tag");
+    drawNativeComponentFooter(state, entity, "native.renderTag", "Render Tag");
 }
 
 } // namespace editor

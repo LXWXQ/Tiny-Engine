@@ -5,7 +5,7 @@ type: meta
 scope: 空（纯索引）
 read-when: 新会话开始，或接到一个具体任务时
 size: ~125 行
-updated: 2026-11-03
+updated: 2026-11-06
 ---
 
 # 阅读路径
@@ -18,7 +18,7 @@ updated: 2026-11-03
 | 顺序 | 文档 | 目的 | 成本 |
 |---|---|---|---|
 | 1 | [根 README](../../README.md) | 项目定位、构建命令、特性总表 | 小 |
-| 2 | [pitfalls](../60-debug-profiling/pitfalls.md) | **已知的 16 个坑**，能直接避免几小时的排查 | 中 |
+| 2 | [pitfalls](../60-debug-profiling/pitfalls.md) | **已知的 36 个坑**，能直接避免几小时的排查 | 中 |
 
 > 例外：纯文档改动可以只读 [doc-rules](doc-rules.md)。
 
@@ -110,7 +110,7 @@ updated: 2026-11-03
 | 阅读组合 | 约行数 | 适合 |
 |---|---|---|
 | 根 README | ~150 | 只需要知道项目是什么 |
-| + pitfalls | ~450 | 准备动手改代码 |
+| + pitfalls | ~550 | 准备动手改代码 |
 | + 一个 architecture 文档 | ~800 | 做该子系统内的改动 |
 | + 两个 architecture + 一个 pipeline | ~1400 | 跨子系统改动 |
 
