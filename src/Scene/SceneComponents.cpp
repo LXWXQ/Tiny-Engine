@@ -273,6 +273,33 @@ void registerSceneComponents(ComponentRegistry& registry)
                                                 "云体散射的色调；偏向暖白可模拟夕阳，偏蓝可模拟阴天"),
         },
         sceneOptions));
+
+    registry.add(makeComponentDescriptor<SceneSunComponent>(
+        "scene.sun", "太阳光晕", "大气",
+        {
+            boolProperty<SceneSunComponent>("enabled", "启用", &SceneSunComponent::enabled,
+                                           "在 TAA 之后、Bloom 之前叠加太阳盘与镜头光晕"),
+            floatProperty<SceneSunComponent>("intensity", "太阳强度", &SceneSunComponent::intensity,
+                                             0.0f, 60.0f, 0.1f,
+                                             "太阳盘与光晕的整体亮度；会先被色调映射压到 LDR"),
+            floatProperty<SceneSunComponent>("angularRadius", "角半径", &SceneSunComponent::angularRadius,
+                                             0.05f, 8.0f, 0.01f,
+                                             "太阳盘的角半径（度）。真实太阳约 0.27°，0.8° 更接近镜头里的观感"),
+            floatProperty<SceneSunComponent>("glow", "日冕强度", &SceneSunComponent::glow,
+                                             0.0f, 3.0f, 0.01f,
+                                             "盘外柔和光晕的强度。0 只剩硬边日盘"),
+            floatProperty<SceneSunComponent>("flareIntensity", "光晕强度", &SceneSunComponent::flareIntensity,
+                                             0.0f, 4.0f, 0.01f,
+                                             "鬼影和水平光条的整体强度；0 关闭镜头光晕"),
+            intProperty<SceneSunComponent>("flareGhosts", "鬼影数量", &SceneSunComponent::flareGhosts,
+                                           0, 8,
+                                           "沿屏幕中心-太阳连线镜像的鬼影个数，0..8；越多越像广角镜头"),
+            boolProperty<SceneSunComponent>("occlusion", "几何遮挡", &SceneSunComponent::occlusion,
+                                            "开启后山体/建筑挡住太阳时，日盘与光晕一起淡出"),
+            colorProperty<SceneSunComponent>("color", "太阳颜色", &SceneSunComponent::color,
+                                             "日盘与光晕的色调；偏暖白适合日出/日落，纯白适合正午"),
+        },
+        sceneOptions));
 }
 
 void clearSceneComponents(entt::registry& registry, entt::entity settingsEntity)
@@ -289,6 +316,7 @@ void clearSceneComponents(entt::registry& registry, entt::entity settingsEntity)
     registry.remove<SceneWaterComponent>(settingsEntity);
     registry.remove<SceneFogComponent>(settingsEntity);
     registry.remove<SceneCloudsComponent>(settingsEntity);
+    registry.remove<SceneSunComponent>(settingsEntity);
 }
 
 void resetSceneComponentsFromSettings(entt::registry& registry, entt::entity settingsEntity,
@@ -369,6 +397,17 @@ void resetSceneComponentsFromSettings(entt::registry& registry, entt::entity set
     clouds.steps = settings.cloudSteps;
     clouds.color = settings.cloudColor;
     registry.emplace<SceneCloudsComponent>(settingsEntity, clouds);
+
+    SceneSunComponent sun;
+    sun.enabled = settings.sunEnabled;
+    sun.intensity = settings.sunIntensity;
+    sun.angularRadius = settings.sunAngularRadius;
+    sun.glow = settings.sunGlow;
+    sun.flareIntensity = settings.sunFlareIntensity;
+    sun.flareGhosts = settings.sunFlareGhosts;
+    sun.occlusion = settings.sunOcclusion;
+    sun.color = settings.sunColor;
+    registry.emplace<SceneSunComponent>(settingsEntity, sun);
 }
 
 void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
@@ -431,6 +470,15 @@ void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
     settings.cloudAmbient = defaults.cloudAmbient;
     settings.cloudSteps = defaults.cloudSteps;
     settings.cloudColor = defaults.cloudColor;
+
+    settings.sunEnabled = defaults.sunEnabled;
+    settings.sunIntensity = defaults.sunIntensity;
+    settings.sunAngularRadius = defaults.sunAngularRadius;
+    settings.sunGlow = defaults.sunGlow;
+    settings.sunFlareIntensity = defaults.sunFlareIntensity;
+    settings.sunFlareGhosts = defaults.sunFlareGhosts;
+    settings.sunOcclusion = defaults.sunOcclusion;
+    settings.sunColor = defaults.sunColor;
 
     if (const auto* environment = registry.try_get<SceneEnvironmentComponent>(settingsEntity);
         environment != nullptr && environment->enabled)
@@ -529,6 +577,19 @@ void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
         settings.cloudAmbient = clouds->ambient;
         settings.cloudSteps = clouds->steps;
         settings.cloudColor = clouds->color;
+    }
+
+    if (const auto* sun = registry.try_get<SceneSunComponent>(settingsEntity);
+        sun != nullptr && sun->enabled)
+    {
+        settings.sunEnabled = true;
+        settings.sunIntensity = sun->intensity;
+        settings.sunAngularRadius = sun->angularRadius;
+        settings.sunGlow = sun->glow;
+        settings.sunFlareIntensity = sun->flareIntensity;
+        settings.sunFlareGhosts = sun->flareGhosts;
+        settings.sunOcclusion = sun->occlusion;
+        settings.sunColor = sun->color;
     }
 }
 

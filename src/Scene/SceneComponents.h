@@ -114,7 +114,21 @@ struct SceneCloudsComponent
     glm::vec4 color{ 1.0f, 1.0f, 1.0f, 1.0f };
 };
 
-// 注册 10 个 Scene scope 组件。Scene 构造时调用一次。
+// F6-06：太阳盘与镜头光晕。方向/光色不在这里，跟随 scene.environment
+// 的方向光；本组件只控制太阳自身的视觉强度和光晕风格。
+struct SceneSunComponent
+{
+    bool enabled = true;
+    float intensity = 12.0f;
+    float angularRadius = 0.8f;
+    float glow = 0.35f;
+    float flareIntensity = 0.8f;
+    int flareGhosts = 7;
+    bool occlusion = true;
+    glm::vec4 color{ 1.0f, 0.96f, 0.88f, 1.0f };
+};
+
+// 注册 11 个 Scene scope 组件。Scene 构造时调用一次。
 void registerSceneComponents(ComponentRegistry& registry);
 
 // 把当前挂载的场景组件写回渲染器缓存的 EngineSettings。

@@ -314,6 +314,18 @@ struct EngineSettings
 	float cloudAmbient = 0.35f;
 	int   cloudSteps = 48;
 	glm::vec4 cloudColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+
+	// F6-06：太阳盘与镜头光晕。默认关闭，避免改变现有场景的曝光/对比。
+	// 方向与颜色不单独存：SunFlarePass 跟随 scene.environment 的方向光，
+	// 保证“画面里看到的太阳”和“照亮场景的光”始终是同一个方向。
+	bool  sunEnabled = false;
+	float sunIntensity = 12.0f;
+	float sunAngularRadius = 0.8f; // 度
+	float sunGlow = 0.35f;
+	float sunFlareIntensity = 0.8f;
+	int   sunFlareGhosts = 7;
+	bool  sunOcclusion = true;
+	glm::vec4 sunColor{ 1.0f, 0.96f, 0.88f, 1.0f };
 };
 
 struct RenderTelemetry

@@ -148,6 +148,18 @@ namespace
 		writeVec(clouds, "color", s.cloudColor);
 		j["clouds"] = std::move(clouds);
 
+		// F6-06：太阳与镜头光晕。独立节点，默认 enabled=false。
+		json sun;
+		sun["enabled"] = s.sunEnabled;
+		sun["intensity"] = s.sunIntensity;
+		sun["angularRadius"] = s.sunAngularRadius;
+		sun["glow"] = s.sunGlow;
+		sun["flareIntensity"] = s.sunFlareIntensity;
+		sun["flareGhosts"] = s.sunFlareGhosts;
+		sun["occlusion"] = s.sunOcclusion;
+		writeVec(sun, "color", s.sunColor);
+		j["sun"] = std::move(sun);
+
 		json light;
 		writeVec(light, "direction", s.directionalLightDir);
 		writeVec(light, "color", s.directionalLightColor);
@@ -237,6 +249,19 @@ namespace
 			out.cloudAmbient = read(n, "ambient", out.cloudAmbient, warnings);
 			out.cloudSteps = read(n, "steps", out.cloudSteps, warnings);
 			out.cloudColor = readVec(n, "color", out.cloudColor);
+		}
+
+		if (j.contains("sun") && j["sun"].is_object())
+		{
+			const json& n = j["sun"];
+			out.sunEnabled = read(n, "enabled", out.sunEnabled, warnings);
+			out.sunIntensity = read(n, "intensity", out.sunIntensity, warnings);
+			out.sunAngularRadius = read(n, "angularRadius", out.sunAngularRadius, warnings);
+			out.sunGlow = read(n, "glow", out.sunGlow, warnings);
+			out.sunFlareIntensity = read(n, "flareIntensity", out.sunFlareIntensity, warnings);
+			out.sunFlareGhosts = read(n, "flareGhosts", out.sunFlareGhosts, warnings);
+			out.sunOcclusion = read(n, "occlusion", out.sunOcclusion, warnings);
+			out.sunColor = readVec(n, "color", out.sunColor);
 		}
 
 		if (j.contains("lighting") && j["lighting"].is_object())

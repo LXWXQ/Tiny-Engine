@@ -3920,7 +3920,7 @@ bool EditorLayer::selfTestWithScene()
             std::cerr << "[Editor] selfTestWithScene FAIL: metadata component not captured\n";
             return false;
         }
-        if (!captured.sceneComponentsAuthored || captured.sceneComponents.size() != 10)
+        if (!captured.sceneComponentsAuthored || captured.sceneComponents.size() != 11)
         {
             std::cerr << "[Editor] selfTestWithScene FAIL: scene components not captured | count="
                       << captured.sceneComponents.size() << "\n";
@@ -3930,7 +3930,7 @@ bool EditorLayer::selfTestWithScene()
         std::string serializationError;
         if (!SceneSerializer::roundTrip(captured, serialized, serializationError) ||
             worldManagers != 1 || serializedChunks != 0 || serializedCharacters != 1 ||
-            !serialized.sceneComponentsAuthored || serialized.sceneComponents.size() != 10)
+            !serialized.sceneComponentsAuthored || serialized.sceneComponents.size() != 11)
         {
             std::cerr << "[Editor] selfTestWithScene FAIL: streaming serialization | "
                       << serializationError << " | sceneComponents="
@@ -4066,7 +4066,7 @@ bool EditorLayer::selfTestWithScene()
             return false;
         }
         if (std::abs(scene.getSettings().exposure - 1.35f) > 1e-4f ||
-            scene.captureSceneComponents().size() != 10)
+            scene.captureSceneComponents().size() != 11)
         {
             std::cerr << "[Editor] selfTestWithScene FAIL: scene components missing after rebuild |"
                       << " exposure=" << scene.getSettings().exposure

@@ -95,7 +95,7 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 | 1 | 实体、变换、父子、网格、材质 | — |
 | 2 | 新增可选 `voxelWorlds`（seed + 差分） | 旧文件缺省为空 |
 | 3 | 每个实体新增可选 `components`（元数据注册实体组件；`native.*` 不写入） | 旧文件缺省为空；未知组件/属性跳过 |
-| 4 | 顶层新增 `sceneComponents`（当前 10 个 `scene.*` 场景功能组件，`scope=Scene`） | 旧文件缺字段时按当前 `EngineSettings` 重建；空数组表示全部移除/关闭 |
+| 4 | 顶层新增 `sceneComponents`（当前 11 个 `scene.*` 场景功能组件，`scope=Scene`） | 旧文件缺字段时按当前 `EngineSettings` 重建；空数组表示全部移除/关闭 |
 
 `terrain` / `terrainWorld` / `character` / `components` / `sceneComponents` 都是**可选字段**，所以旧场景
 不需要迁移；读取端不按版本号拒绝，只有写入端跟 `kCurrentVersion`（当前 4）升版本。

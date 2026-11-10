@@ -34,6 +34,7 @@ class SubresourceProbePass;
 class GeometryPass;
 class ReflectionPass;
 class SSRPass;
+class SunFlarePass;
 
 class FirstApp
 {
@@ -141,6 +142,8 @@ private:
 	ShadowPass* shadowPassPtr = nullptr;
 	// TAA：Glass 之后、Bloom 之前，负责抖动重建与历史混合。
 	TAAPass* taaPassPtr = nullptr;
+	// F6-06：太阳盘 + 镜头光晕，TAA 之后、Bloom 之前（只用于调试观察）。
+	SunFlarePass* sunFlarePassPtr = nullptr;
 	// C1：半分辨率平面反射（Lighting 之后、Glass/Water 之前）。
 	ReflectionPass* reflectionPassPtr = nullptr;
 	// F6-01：水面近场 SSR（Lighting/Reflection 之后、Water 之前）。

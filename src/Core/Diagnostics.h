@@ -85,6 +85,9 @@ bool particleDemo = false;
 // --cloud-demo：启用体积云场景组件，并把相机放到云层下方（配合
 // --streaming-world 可同时看到地形与云层）。
 bool cloudDemo = false;
+// --sun-demo：启用太阳盘与镜头光晕，并把方向光/相机调到能看见太阳的
+// 角度（配合 --streaming-world 可同时看到地形轮廓）。
+bool sunDemo = false;
 int32_t streamingRadius = 3;
 // --streaming-fly [speed]：自检/无人值守时让相机沿圆周自动飞行，
 // 用来验证 chunk 的加载与卸载（不飞就只会在原地加载一圈）。

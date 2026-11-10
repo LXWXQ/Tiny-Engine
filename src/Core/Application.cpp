@@ -34,6 +34,7 @@
 #include "Render/SSRPass.h"
 #include "Core/Material.h"
 #include "Render/TAAPass.h"
+#include "Render/SunFlarePass.h"
 #include "Render/ShadowPass.h"
 #include "Scene/FeatureComponents.h"
 #include "Scene/SceneComponents.h"
@@ -849,6 +850,10 @@ streamingConfig.skirtsEnabled = false;
 	// taaOutput，渲染图的写覆盖校验会直接报错。
 	auto taaPass = std::make_unique<TAAPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
+	// F6-06：太阳盘 + 镜头光晕。放在 TAA 之后（不参与重投影，快速摇镜时
+	// 日盘不会拖出历史鬼影），Bloom 之前（辉光要吃到日盘的高光）。
+	auto sunFlarePass = std::make_unique<SunFlarePass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	auto presentPass = std::make_unique<PresentPass>(*vulkanDevice, *vulkanSwapchain, *renderGraph,
 		*renderResources, descriptorManager.get(), descriptorManager->getGlobalSetLayout());
 
@@ -868,6 +873,7 @@ streamingConfig.skirtsEnabled = false;
 	uiCompositePassPtr = uiComposite.get();
 	editorOverlayPassPtr = editorOverlay.get();
 	taaPassPtr = taaPass.get();
+	sunFlarePassPtr = sunFlarePass.get();
 	ssaoPassPtr = ssaoPass.get();
 	reflectionPassPtr = reflectionPass.get();
 	ssrPassPtr = ssrPass.get();
@@ -887,6 +893,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(waterPass));
 	renderPipeline.addPass(std::move(particlePass));
 	renderPipeline.addPass(std::move(taaPass));
+	renderPipeline.addPass(std::move(sunFlarePass));
 	renderPipeline.addPass(std::move(bloomPass));
 	renderPipeline.addPass(std::move(presentPass));
 	// TD-15：带深度测试的包围盒线框，必须在 Present 之后、UiComposite 之前。
@@ -1070,6 +1077,45 @@ streamingConfig.skirtsEnabled = false;
 		std::cout << "[Cloud] demo scene ready | coverage=" << clouds.coverage
 			<< " base=" << clouds.baseHeight << " thickness=" << clouds.thickness
 			<< " steps=" << clouds.steps << std::endl;
+	}
+
+	// 太阳光晕目测场景：启用 scene.sun，并把方向光转到相机前方右上，
+	// 这样日盘与鬼影都在画面里。方向光与太阳共用同一方向（toSun = -lightDirection），
+	// 改 lightDirection 等价于同时移动太阳。
+	if (options.sunDemo)
+	{
+		if (!scene->hasSceneComponent("scene.sun") && !scene->addSceneComponent("scene.sun"))
+			throw std::runtime_error("--sun-demo component creation failed");
+		if (!scene->hasSceneComponent("scene.environment") &&
+			!scene->addSceneComponent("scene.environment"))
+			throw std::runtime_error("--sun-demo environment component creation failed");
+
+		auto& sun = scene->getRegistry().get<scene::SceneSunComponent>(
+			scene->getSceneSettingsEntity());
+		sun.enabled = true;
+		sun.intensity = 14.0f;
+		sun.angularRadius = 0.9f;
+		sun.glow = 0.45f;
+		sun.flareIntensity = 0.9f;
+		sun.flareGhosts = 7;
+		sun.occlusion = true;
+		sun.color = glm::vec4(1.0f, 0.93f, 0.82f, 1.0f);
+
+		auto& environment = scene->getRegistry().get<scene::SceneEnvironmentComponent>(
+			scene->getSceneSettingsEntity());
+		// toSun = (-0.32, 0.30, -0.90)；相机 yaw 180 朝 -Z，太阳在右上。
+		environment.lightDirection = glm::vec3(0.32f, -0.30f, 0.90f);
+		environment.lightColor = glm::vec4(1.0f, 0.90f, 0.78f, environment.lightColor.w);
+		scene->syncSceneSettings();
+
+		TransformComponent& cameraTransform = scene->getCameraTransform();
+		cameraTransform.setTranslation(glm::vec3(0.0f, 35.0f, 80.0f));
+		cameraTransform.setEuler(glm::vec3(glm::radians(-8.0f), glm::radians(180.0f), 0.0f));
+		cameraTransform.setScale(glm::vec3(1.0f));
+		scene->markTransformDirty(scene->getCameraEntity());
+		std::cout << "[Sun] demo scene ready | intensity=" << sun.intensity
+			<< " angular=" << sun.angularRadius << " flare=" << sun.flareIntensity
+			<< " ghosts=" << sun.flareGhosts << std::endl;
 	}
 
 	currentTime = std::chrono::high_resolution_clock::now();

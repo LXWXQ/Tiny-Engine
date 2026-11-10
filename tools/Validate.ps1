@@ -333,7 +333,11 @@ $tests = @(
     # CloudPass 在 Lighting 后 raymarch 并预乘混合进 HDR；断言初始化、演示参数、
     # 首帧绘制与验证层零消息。
     @{ Name = "f6-clouds"; Exe = "engine"; Args = @("--selftest", "30", "--empty-scene", "--cloud-demo");
-       MustContain = @("[Cloud] initialized | noise=64^3", "[Cloud] demo scene ready |", "[Cloud] first draw |", "[Validation] errors=0 warnings=0") }
+       MustContain = @("[Cloud] initialized | noise=64^3", "[Cloud] demo scene ready |", "[Cloud] first draw |", "[Validation] errors=0 warnings=0") },
+    # F6-06：太阳盘 + 镜头光晕。空场景创建 scene.sun，日盘按世界空间射线绘制，
+    # 鬼影沿“太阳->屏幕中心”镜像；断言初始化、演示参数、首帧绘制与验证层零消息。
+    @{ Name = "f6-sun"; Exe = "engine"; Args = @("--selftest", "30", "--empty-scene", "--sun-demo");
+       MustContain = @("[Sun] initialized |", "[Sun] demo scene ready |", "[Sun] first draw |", "[Validation] errors=0 warnings=0") }
 )
 
 # Only meaningful for a profiling build (-EnableProfiling).

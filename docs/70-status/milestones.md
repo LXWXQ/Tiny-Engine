@@ -37,7 +37,7 @@ updated: 2026-11-10
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 77 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 78 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -1202,3 +1202,21 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 **测试**：编辑器 `selfTestWithScene` 增加“父目录不存在”用例：先 `remove_all` `.tmp/editor-save-nested`，再保存 `.tmp/editor-save-nested/scene.json`，断言文件生成后清理；`TinyEditor.exe --selftest 5 --empty-scene` 打印 `[Editor] scene save missing parent selfTest PASS | parent created`。全套 77 项 ALL PASS（使用仓库内 `config/engine.json`），stderr 全 0，日志 `build/validation/20261110-143356`；DocCheck PASS。注意：`f2b-terrain-batch` / `f2b-terrain-batch-off` 依赖相机看到地形，本地相机移开后这两项会缺少地形 marker，跑回归前先还原仓库配置。
 
 **边界**：只自动补目录，不改变保存格式、原子性或权限检查；父路径不可写、或是已存在的文件时，仍按原错误路径返回。
+
+## F6-06：太阳盘与镜头光晕（2026-11-10）
+
+**问题**：天空盒只有渐变和环境图，缺少可见的太阳；即使场景方向光设成朝向镜头，画面上也不会出现日盘，更没有镜头光晕。太阳方向还分散在光照/天空/后效各自解释，缺少一个跟随场景方向光的统一视觉锚点。
+
+**实现**：
+- 新增场景级 `scene.sun`（`SceneSunComponent`，分类“大气”）8 个属性：`enabled`（默认 true）、`intensity` 12、`angularRadius` 0.8、`glow` 0.35、`flareIntensity` 0.8、`flareGhosts` 7、`occlusion` true、`color` (1,0.96,0.88,1)；不单独保存太阳方向，方向与光色实时跟随 `scene.environment` 的方向光。Inspector 可添加/启用/调参/移除，随场景 v4 `sceneComponents` 存读。
+- 新增 `src/Render/SunFlarePass.{h,cpp}` 与 `shaders/sunflare.frag`：全屏三角形，插在 TAA 之后、Bloom 之前；从方向光求 `toSun = -normalize(directionalLightDir)`，把 `camera + toSun * 10000` 投到屏幕求太阳 UV 与 `inFront`，片元用世界空间射线夹角画日盘和两段日冕。读 `gbDepth` 做 5 点可见度采样，只调制日盘与鬼影整体强度；沿太阳-屏幕中心镜像画最多 8 个六边形鬼影（体/亮边/hue 色散），再叠横向光条。`LOAD` 已有 HDR、纯加色（颜色 `ONE/ONE`、alpha `ZERO/ONE`），无深度附件、不写深度；关闭时整个 pass 不注册并只打印一次 `[Sun] disabled | settings.sunEnabled=0`。
+- `EngineSettings` 增加 `sunEnabled=false` 与同名字段，`EngineConfig` 使用独立 `sun` 节点、不升版本；`--sun-demo` 在空场景创建或启用 `scene.sun` 与 `scene.environment`，设 intensity 14、angularRadius 0.9、glow 0.45、flare 0.9、ghosts 7、occlusion true、颜色 (1,0.93,0.82)，方向光 (0.32,-0.30,0.90) / 光色 (1,0.90,0.78)，相机 (0,35,80)、euler(-8°,180°,0)。
+
+**测试**：
+- `TinyEngine.exe --selftest 30 --empty-scene --sun-demo`：`[Sun] initialized | ghostLimit=8`、`[Sun] demo scene ready | intensity=14 angular=0.9 flare=0.9 ghosts=7`、`[Sun] first draw | ... inFront=1`；30 帧 0.669032 s（44.84 FPS）、`[Validation] errors=0 warnings=0`，stderr 空。
+- `TinyEditor.exe --selftest 5 --empty-scene`：`[Scene] ECS component selfTest PASS | components=28 | systems=8`，`scene.sun` 的 8 个属性可读写。
+- 1920x1080 截图 `build/sun_demo_bloom.png`（30 帧、frame 25、bloom 开）：日盘、光晕、水面高光与地形链路可见；日盘中心过曝偏大、鬼影较淡，作为后续调参基线。
+- 新增 `f6-sun` 用例（30 帧、空场景 + `--sun-demo`），断言 `[Sun] initialized |`、`demo scene ready |`、`first draw |` 与 0/0。
+- 全套回归 **78 项** ALL PASS（含 `f6-sun`），stderr 全 0，验证日志 `build/validation/20261110-155457`；DocCheck PASS（documents=68 lines=12316）。
+
+**边界**：屏幕空间后效，不是天空盒里的真实太阳；方向/光色只跟随 `scene.environment`，不能单独移动；5 点深度只判断日盘整体可见度，鬼影不逐像素遮挡，也不进 TAA 历史；云不写深度，日盘会叠在云层上；太阳不进平面反射/SSR，默认关闭。
