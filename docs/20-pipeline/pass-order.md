@@ -4,7 +4,7 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~125 行
+size: ~135 行
 updated: 2026-11-10
 ---
 
@@ -20,6 +20,8 @@ SceneGpuCull        F1：无附件 pass；摊平实例 + 视锥/Hi-Z 剔除，�
 GeometryPass      写 G-Buffer 5 张附件（4 颜色 + 深度，全部 CLEAR），消费 GPU 命令
    |
 HiZBuild          F1-c：无附件 pass；读 G-Buffer.Position 建下一帧用的 Hi-Z 金字塔（错帧一帧）
+   |
+VegetationPass    F6-07：实例化草/树；LOAD G-Buffer 四颜色 + 深度，深度测试 LESS_OR_EQUAL、写深度开，草叶 alpha-test discard
    |
 SSAOPass          读 G-Buffer.Position/Normal -> 写 R8_UNORM 遮蔽图
    |
@@ -56,7 +58,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 体素 chunk 走同一份 arena VBO/IBO，但实例表与命令由 `GeometrySystem` 每帧按可见集合写进专用 host-visible 缓冲，整批一条 `vkCmdDrawIndexedIndirect`；这条路径不经过 `SceneGpuCull`，反射视图也不复用它，而是逐块 arena draw。
 `HiZBuild` 必须排在 `Geometry` **之后**：金字塔要包含本帧刚画出的几何；它写的是 `(frameInFlight + 1) % kFramesInFlight` 槽，供下一帧 `SceneGpuCull` 读（错帧一帧，第一帧 `params.z = 0` 关闭遮挡）。
 渲染图里注册的 pass 名依次是：
-`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `SSAO`, `SSAOBlur`, `Lighting`, `Cloud`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `SSR`, `Glass`, `Water`, `Particle`, `TAA`, `SunFlare`,
+`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `Vegetation`, `SSAO`, `SSAOBlur`, `Lighting`, `Cloud`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `SSR`, `Glass`, `Water`, `Particle`, `TAA`, `SunFlare`,
 `Bloom.Bright`, `Bloom.Down0/1/2`, `Bloom.Up2/1/0`, `Present`,
 `PresentTransition`。
 
@@ -77,6 +79,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 
 | 约束 | 原因 |
 |---|---|
+| Vegetation 在 Geometry/HiZBuild **之后**、SSAO **之前** | 植被写 G-Buffer 的四张颜色 + 深度（`LOAD`、`LESS_OR_EQUAL`、depthWrite ON），必须排在 SSAO/Lighting 之前，草和树才能接收 SSAO、级联阴影与延迟光照。草叶在片元里 alpha-test `discard`，不按透明物体排序；不透明深度由植被自己写，后面的 SSAO/Lighting 只看到最近表面。植被不参与 `SceneGpuCull`/Hi-Z（实例由 CPU 按地形放置），也不进 ShadowPass 与 PlanarReflection，所以不投自身阴影、不进水倒影 |
 | SSAO 在 Lighting **之前** | SSAO 调制环境光项（`ambient *= ssao`），是光照的输入 |
 | Cloud 在 Lighting **之后**、PlanarReflection/SSR/Glass/Water **之前** | 云是叠在已着色 HDR 上的大气层，必须读 Lighting 的输出；放在反射/透明之前，水面、玻璃和 SSR 读到的 HDR 才带云。读 G-Buffer.Position 把射线截到最近不透明表面（天空位置在 10000 处，自然不截断），用预乘 alpha（`src=ONE`、`dst=ONE_MINUS_SRC_ALPHA`）保留 HDR alpha；无深度附件、不写深度，只由 `scene.clouds` 组件启用。PlanarReflection 内部的第二套 Lighting 不跑云，因此倒影里没有云，作为已知边界 |
 | Glass 在 Lighting **之后**、Bloom **之前** | 玻璃必须混合在已经着色好的 HDR 上（延迟着色只存一个表面，玻璃进 G-Buffer 会把后面的层盖掉）；放在 Bloom 前，玻璃高光也参与辉光。深度 `LOAD` 但 `depthWrite = FALSE`、`compare = LESS_OR_EQUAL`：不透明几何仍挡住玻璃，玻璃之间由 CPU 排序（远->近）决定顺序 |
@@ -100,6 +103,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | `--no-water` | Water Pass **完全不注册**，只打印一次 `[Water] disabled`；有地形/体素块时才可能注册。PlanarReflection 与 SSR 也因 `waterEnabled=false` 不注册，全局 Set0 的 binding12/13 回退到环境图 |
 | `--no-ssr` | SSR Pass **完全不注册**，只打印一次 `[SSR] disabled`；Water 仍读 binding13，但内容回退为环境图，日志里 `ssr=0`。没有 SSR 时水面只靠平面反射/IBL |
 | 太阳光晕 | 没有命令行开关；关闭 `scene.sun` 组件或 `engine.json` 的 `sun.enabled` 时 `SunFlarePass` 完全不注册，只打印一次 `[Sun] disabled`。`--sun-demo` 只负责创建/启用演示场景 |
+| 地形植被 | 没有命令行开关；关闭 `scene.vegetation` 组件或 `engine.json` 的 `vegetation.enabled` 时 `VegetationPass` 仍注册，但 `execute` 直接早退，不产生实例/绘制。`--vegetation-demo` 只负责创建/启用演示场景 |
 | 体积云 | 没有命令行开关；关闭 `scene.clouds` 组件或 `engine.json` 的 `clouds.enabled` 时 `CloudPass` 完全不注册，只打印一次 `[Cloud] disabled`。`--cloud-demo` 只负责创建/启用演示场景 |
 | 距离雾 | 没有命令行开关；只能通过 `config/engine.json` 的 `fog.enabled` 或编辑器/运行时 UI 关闭。它不是 Pass，关闭时着色器按密度 0 跳过混合 |
 

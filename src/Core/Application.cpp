@@ -30,6 +30,7 @@
 #include "Render/GlassPass.h"
 #include "Render/WaterPass.h"
 #include "Render/ParticlePass.h"
+#include "Render/VegetationPass.h"
 #include "Render/ReflectionPass.h"
 #include "Render/SSRPass.h"
 #include "Core/Material.h"
@@ -805,6 +806,11 @@ streamingConfig.skirtsEnabled = false;
 	auto geoPass = std::make_unique<GeometryPass>(*vulkanDevice, gBufferPtrs, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),
 		descriptorManager->getTerrainSetLayout(), scene->getTerrainMeshArena());
+	// F6-07：植被。紧接 Geometry 之后写 G-Buffer，SSAO/Lighting/阴影都把它当
+	// 普通不透明几何处理；必须早于 SSAO，否则草和树不会参与环境光遮蔽。
+	auto vegetationPass = std::make_unique<VegetationPass>(*vulkanDevice, *renderGraph,
+		*renderResources, descriptorManager->getGlobalSetLayout(),
+		gBuffers[0]->getDepth().format, scene.get());
 	auto ssaoPass = std::make_unique<SSAOPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	auto lightPass = std::make_unique<LightingPass>(*vulkanDevice, *gBuffers[0], *vulkanSwapchain,
@@ -884,6 +890,7 @@ streamingConfig.skirtsEnabled = false;
 
 	renderPipeline.addPass(std::move(shadowPass));
 	renderPipeline.addPass(std::move(geoPass));
+	renderPipeline.addPass(std::move(vegetationPass));
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
 	renderPipeline.addPass(std::move(cloudPass));
@@ -1077,6 +1084,42 @@ streamingConfig.skirtsEnabled = false;
 		std::cout << "[Cloud] demo scene ready | coverage=" << clouds.coverage
 			<< " base=" << clouds.baseHeight << " thickness=" << clouds.thickness
 			<< " steps=" << clouds.steps << std::endl;
+	}
+
+	// F6-07：植被目测场景。把相机贴近地形，草在近处、树在中景；
+	// 单独跑没有地形可长，所以帮助里建议配 --streaming-world 3。
+	if (options.vegetationDemo)
+	{
+		if (!scene->hasSceneComponent("scene.vegetation") &&
+			!scene->addSceneComponent("scene.vegetation"))
+			throw std::runtime_error("--vegetation-demo component creation failed");
+
+		auto& vegetation = scene->getRegistry().get<scene::SceneVegetationComponent>(
+			scene->getSceneSettingsEntity());
+		vegetation.enabled = true;
+		vegetation.grassDensity = 1.15f;
+		vegetation.grassDistance = 55.0f;
+		vegetation.grassHeight = 0.55f;
+		vegetation.treeDensity = 2.5f;
+		vegetation.treeDistance = 140.0f;
+		vegetation.treeHeight = 7.5f;
+		vegetation.windStrength = 0.7f;
+		vegetation.seed = 2024;
+		vegetation.grassColor = glm::vec4(0.22f, 0.34f, 0.09f, 1.0f);
+		vegetation.treeColor = glm::vec4(0.10f, 0.22f, 0.07f, 1.0f);
+		scene->syncSceneSettings();
+
+		float groundY = 6.0f;
+		scene->sampleTerrainGroundHeightWorld(0.0f, 20.0f, groundY);
+		TransformComponent& cameraTransform = scene->getCameraTransform();
+		cameraTransform.setTranslation(glm::vec3(0.0f, groundY + 16.0f, 20.0f));
+		cameraTransform.setEuler(glm::vec3(glm::radians(-12.0f), glm::radians(180.0f), 0.0f));
+		cameraTransform.setScale(glm::vec3(1.0f));
+		scene->markTransformDirty(scene->getCameraEntity());
+		std::cout << "[Vegetation] demo scene ready | groundY=" << groundY
+			<< " grassDensity=" << vegetation.grassDensity
+			<< " treeDensity=" << vegetation.treeDensity
+			<< " seed=" << vegetation.seed << std::endl;
 	}
 
 	// 太阳光晕目测场景：启用 scene.sun，并把方向光转到相机前方右上，

@@ -365,6 +365,10 @@ public:
     bool sampleTerrainGroundHeightWorld(float worldX, float worldZ,
                                         float& outHeight,
                                         entt::entity* outEntity = nullptr) const;
+    // F6-07：植被只长在地形上，不爬到体素方块或建筑上。只接受命中的
+    // TerrainComponent；体素地面即使更高也会返回 false。
+    bool sampleTerrainOnlyGroundHeightWorld(float worldX, float worldZ,
+                                            float& outHeight) const;
     bool raycastTerrain(entt::entity entity, const glm::vec3& rayOrigin,
                         const glm::vec3& rayDirection, glm::vec3& outHitPoint,
                         float& outDistance) const;

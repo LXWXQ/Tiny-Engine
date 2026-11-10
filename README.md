@@ -3,8 +3,8 @@
 一个面向**学习与工程验证**的 Vulkan 1.3 渲染器（Windows x64 / C++17 / MSVC）。
 重点不是堆功能，而是把**渲染同步、资源生命周期、自动化回归**做成可验证的工程基础。
 
-- 渲染主线：`G-Buffer -> SSAO -> Lighting(线性 HDR) -> Cloud -> PlanarReflection -> SSR -> Glass -> Water -> Particle -> TAA -> Bloom -> Present(ACES+gamma+ImGui)`
-- 一条命令完成：依赖准备 -> 全新 configure/build -> 78 项回归
+- 渲染主线：`G-Buffer -> Vegetation -> SSAO -> Lighting(线性 HDR) -> Cloud -> PlanarReflection -> SSR -> Glass -> Water -> Particle -> TAA -> Bloom -> Present(ACES+gamma+ImGui)`
+- 一条命令完成：依赖准备 -> 全新 configure/build -> 79 项回归
 - 验收基线：**退出码 0** + **stderr 0 字节** + `[Validation] errors=0 warnings=0`
 
 > 本文件是仓库根目录**唯一**的文档。所有细节在 [`docs/`](docs/README.md) 下，按类型分层。
@@ -67,22 +67,23 @@ cmake --build build --config Debug
 | **距离雾** | 指数距离雾（默认 80m 起、密度 0.00045，约 1km 处 34%、4km 处 83%）；雾色取环境图地平线 LOD3，地形/水面/玻璃共用，天空不参与；`config/engine.json` 的 `fog` 节点 + 运行时 ImGui；编辑器参数在 `scene.fog` 场景组件中，无命令行开关 | [water](docs/30-systems/water.md) |
 | **太阳与镜头光晕** | 场景级 `scene.sun` 组件（8 个参数，Inspector 可添加/启用/调参/移除）：方向与光色跟随 `scene.environment` 的方向光（`toSun = -normalize(lightDirection)`），日盘按世界空间视线与太阳夹角绘制、两段日冕，5 点 G-Buffer 深度判定太阳是否被地形/建筑遮挡；镜头鬼影沿“太阳 -> 屏幕中心”镜像、柔和圆形散景 + 冷暖色散 + 横向光条，太阳在背后或移出画面时不产生鬼影；TAA 后、Bloom 前以纯加色写 `taaOutput`（保留 alpha），读 `gbDepth`；`engine.json` 的 `sun` 节点 + 场景 v4 `sceneComponents` 持久化，默认关闭；`--sun-demo` 演示 | [pass-order](docs/20-pipeline/pass-order.md) / [scene-ecs](docs/30-systems/scene-ecs.md) |
 | IBL split-sum | irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙 | [ibl](docs/20-pipeline/ibl.md) |
-| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 8 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow/Particle）+ 9 个原生组件描述（Name/Transform/Hierarchy 必需，Character/Render Tag 可添加，Camera/Terrain/Streaming/Voxel 为创建菜单托管）；属性带范围/拖动速度/悬停提示与单属性重置，组件可跨实体复制/粘贴/重置；预制体保存/实例化走同一描述层；另有 11 个场景级组件（Environment/Shadows/Bloom/SSAO/SSR/MotionBlur/TAA/Water/Fog/Clouds/Sun，scope=Scene，挂在隐藏设置实体，添加/启用/调参/移除即功能开关），共 28 个描述符 | [scene-ecs](docs/30-systems/scene-ecs.md) |
+| EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 8 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow/Particle）+ 9 个原生组件描述（Name/Transform/Hierarchy 必需，Character/Render Tag 可添加，Camera/Terrain/Streaming/Voxel 为创建菜单托管）；属性带范围/拖动速度/悬停提示与单属性重置，组件可跨实体复制/粘贴/重置；预制体保存/实例化走同一描述层；另有 12 个场景级组件（Environment/Shadows/Bloom/SSAO/SSR/MotionBlur/TAA/Water/Fog/Clouds/Sun/Vegetation，scope=Scene，挂在隐藏设置实体，添加/启用/调参/移除即功能开关），共 29 个描述符 | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | 空间索引 + 视锥剔除 | 均匀网格 broad phase + Transform/Bounds 私有字段/dirty + 增量 AABB upsert + XZ region bucket + frustum-AABB | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | CPU JobSystem | worker pool + `submit()`/`parallelFor()` + 异常传播 | [jobsystem](docs/30-systems/jobsystem.md) |
 | 窗口缩放 + 动态分辨率 | swapchain 原地重建；中间目标按 renderScale 缩放 | [synchronization](docs/10-architecture/synchronization.md) |
 | 版本化配置 v2 | 显式 v0->v1->v2 迁移、备份、损坏/未来版本保护 | [config](docs/30-systems/config.md) |
-| **场景编辑器** | Hierarchy / Inspector / Console 面板，菜单栏 + 播放状态机；多选（Ctrl/Shift）、`Ctrl+D` 复制、`Delete` 批量删除、`Ctrl+A` 全选、`F` 聚焦、多选一起拖拽（E2）、层级搜索、材质参数可撤销（E3）、未保存提示与文档标题（E4）、偏好持久化与最近场景（E4-b）、快捷键速查与中文字形（E4-c）、工具栏/状态栏与 Gizmo 吸附（E5-a）、编辑/运行模式合并为视口左上角徽标、渲染设置面板（E5-b，保留 engine.json 默认值与 GPU 批调试）、空场景三处引导（B2）、错误三处可见 + 打开失败重试（B3）、菜单补齐四项 + 快捷键单一数据源 + 面板可拖动（B4）、界面中文统一 + Console 时间列/过滤/复制/搜索 + 状态栏三段 + 诊断复制（B5/B6）、地形生成两阶段提示与 DPI 缩放（B6）、资产拖拽入视口 + 材质贴图选择 + Inspector 数值行重置（E6）、地形异步生成（E7/TD-24）、帮助 → 示例预设一键加载（E10）、Hierarchy 父子树（体素 chunk 归入 Voxel World 子树）、ECS 通用组件 Inspector（Add Component 搜索 / 属性范围与提示 / 复制粘贴 / 重置 / 删除 / 撤销）、场景组件 Inspector（无选中时 Add Scene Component，场景环境/阴影/Bloom/SSAO/SSR/运动模糊/TAA/水面/雾/体积云/太阳光晕，可添加启用调参移除）、预制体保存/实例化（`--editor`） | [editor](docs/90-editor/README.md) |
+| **场景编辑器** | Hierarchy / Inspector / Console 面板，菜单栏 + 播放状态机；多选（Ctrl/Shift）、`Ctrl+D` 复制、`Delete` 批量删除、`Ctrl+A` 全选、`F` 聚焦、多选一起拖拽（E2）、层级搜索、材质参数可撤销（E3）、未保存提示与文档标题（E4）、偏好持久化与最近场景（E4-b）、快捷键速查与中文字形（E4-c）、工具栏/状态栏与 Gizmo 吸附（E5-a）、编辑/运行模式合并为视口左上角徽标、渲染设置面板（E5-b，保留 engine.json 默认值与 GPU 批调试）、空场景三处引导（B2）、错误三处可见 + 打开失败重试（B3）、菜单补齐四项 + 快捷键单一数据源 + 面板可拖动（B4）、界面中文统一 + Console 时间列/过滤/复制/搜索 + 状态栏三段 + 诊断复制（B5/B6）、地形生成两阶段提示与 DPI 缩放（B6）、资产拖拽入视口 + 材质贴图选择 + Inspector 数值行重置（E6）、地形异步生成（E7/TD-24）、帮助 → 示例预设一键加载（E10）、Hierarchy 父子树（体素 chunk 归入 Voxel World 子树）、ECS 通用组件 Inspector（Add Component 搜索 / 属性范围与提示 / 复制粘贴 / 重置 / 删除 / 撤销）、场景组件 Inspector（无选中时 Add Scene Component，场景环境/阴影/Bloom/SSAO/SSR/运动模糊/TAA/水面/雾/体积云/太阳光晕/植被，可添加启用调参移除）、预制体保存/实例化（`--editor`） | [editor](docs/90-editor/README.md) |
 | **撤销 / 重做** | 命令栈 + 拖拽合并窗口；删除实体可完整撤销（含子树与父子关系、通用元数据组件；体素世界的专用组件快照仍未覆盖） | [commands](docs/90-editor/commands.md) |
-| **场景存读** | `*.scene.json`（v4）；实体 `components` + 顶层 `sceneComponents`（11 个场景功能组件）；旧文件缺字段按当前引擎默认初始化，v4 空数组表示全部移除/关闭；预制体为单根子树的 `*.prefab.json`，只存实体，不携带场景功能；存语义（路径/参数）与已注册元数据组件，不存 GPU 句柄 | [serialization](docs/90-editor/serialization.md) / [prefabs](docs/90-editor/prefabs.md) |
+| **场景存读** | `*.scene.json`（v4）；实体 `components` + 顶层 `sceneComponents`（12 个场景功能组件）；旧文件缺字段按当前引擎默认初始化，v4 空数组表示全部移除/关闭；预制体为单根子树的 `*.prefab.json`，只存实体，不携带场景功能；存语义（路径/参数）与已注册元数据组件，不存 GPU 句柄 | [serialization](docs/90-editor/serialization.md) / [prefabs](docs/90-editor/prefabs.md) |
 | **离屏视口** | 3D 渲染到纹理后作为 ImGui 图片嵌入面板；相机纵横比按视口算 | [viewport](docs/90-editor/viewport.md) |
 | **程序化地形** | 257² 默认精度；单实体/独立 chunk 流送；chunk 区域索引查询；4 层 albedo/normal、height/roughness 打包纹理（tileable mip 按纹理尺寸环绕生成，降低平铺接缝；低频 macro/patch 色斑已收敛）、最多 4 个 Set2 材质集（按需外部 16 PNG/程序化回退、materialSetIndex 序列化、按批次重绑）、Surface Style、height/slope 混合（高度层权重用全局 `baseHeight`/`heightScale`，流送 chunk 边界无材质断层）、Set2 材质；chunk/LOD 子网格、逐块剔除、滞回选层、抖动 cross-fade、可选裙边回退、稳定帧 indirect 合批、GPU compute 高度场、拓扑级 LOD 缝合、GPU selection/indirect count；单 chunk GPU 顶点/索引组装 + device-local Model 接管 + 4 槽异步 GPU mesh submit/poll + worker picking mirror，多 chunk CPU fallback；CPU 高度采样/射线查询、kinematic 角色控制器（贴地/重力/跳跃/step/slope）、区域限定运行期雕刻（Alt+LMB；不写 JSON）+ GPU/JobSystem 异步 Generate + 可撤销重建 + 场景存读 | [terrain](docs/30-systems/terrain.md) |
 | **级联阴影** | 3 级 CSM（每级 2048²，2D 数组 3 层）、纹素吸附、AABB 8 角点剔除、3x3 PCF、法线偏移 + 斜率 bias；`--no-shadows` 关掉；场景功能由 `scene.shadows` 场景组件控制。**默认场景阴影偏淡**：IBL 占主导，方向光只占约 5% 亮度（室内/压低环境光后非常明显） | [shadow](docs/20-pipeline/shadow.md) |
 | **运行模式角色** | 第三人称角色 + 骨骼动画：`Resources/Models/Character/Character.glb`（Quaternius，CC0，4 蒙皮网格 / 29 骨骼 / 18 动画），CPU 蒙皮 + 3 帧环形动态顶点缓冲，Idle/Walk/Run/Jump/Jump_Idle/Jump_Land 状态机，视线地面 ray-march 出生，`Shift` 跑、`Space` 跳，`--runtime-mode` 启动直达 | [character](docs/30-systems/character.md) |
+| **地形植被** | 场景级 `scene.vegetation` 组件（12 个参数，Inspector 可添加/启用/调参/移除）：围绕相机的确定性抖动网格放置程序化草簇（3 张 60° 交叉卡片，片元 5 叶 alpha-test discard）与低模松树（6 棱柱树干 + 3 层 8 边锥形树冠），按地形高度/坡度筛选、水面以下不长，风摆在顶点着色器；`VegetationPass` 在 Geometry 后、SSAO 前以实例化绘制写 G-Buffer 四颜色+深度（LOAD、LESS_OR_EQUAL、depthWrite ON），因此接收 SSAO/级联阴影/延迟光照；草/树不投自身阴影；相机移动 >6m 或地形签名稳定 0.5s 后重排，`engine.json` 的 `vegetation` 节点 + 场景 v4 持久化，默认关闭；`--vegetation-demo` 演示 | [vegetation](docs/30-systems/vegetation.md) |
 | **方块体素** | 32³ chunk、面剔除 + 贪心合并 + 顶点 AO、程序化 512 图集（每格 64px 内容 + 32px edge-clamp gutter，UV 编码图块 id）、Amanatides-Woo DDA 拾取、挖/放（Alt 挖 / Alt+Shift 放；Ctrl+左键仍是多选）与逐格撤销、`queryGroundAtWorld` 叠加体素分支让角色站上方块（运行模式接管角色：`WASD` 走、`Space` 跳、中键拖动看）；`--voxel-world [r]` 启动世界（半径 1..12，几何在 JobSystem 后台生成、逐帧上传；不透明几何拷进与地形共用的 `TerrainMeshArena`，可见 chunk 用专用实例表 + 一条 `vkCmdDrawIndexedIndirect` 提交）；编辑/运行模式分离（`F8`，运行模式左键挖、右键放）；场景存档只记 seed + 差分区（改动格）；玻璃走独立 `GlassPass`（Lighting 后、Bloom 前，按面质心排序混合，glass-only chunk 免 Model），`--voxel-glass-demo` 摆叠放场景 | [voxel](docs/30-systems/voxel.md) |
 | 调试剖析基础设施 | `--build-info` / `--gpu-timing` / `--screenshot` / 验证层增强 / RenderDoc / Tracy | [debug](docs/60-debug-profiling/README.md) |
 
-**已知边界**：SSR 只服务水面近场（半分辨率、屏幕空间）；折射 / 水下后处理 / 自动曝光 / 点光源阴影 / 音频未做；水面有半分辨率平面反射（只含不透明几何，玻璃/水面/粒子不进倒影）与半分辨率 SSR（屏幕外/超过 200m 回退），且只在有地形/体素块时启用；距离雾是均匀指数雾，没有高度衰减/体积光/太阳散射，天空不参与；体积云是单层全屏 raymarch（64³ 静态噪声、无时域重投影/云阴影/二次散射），不进入平面反射与阴影，默认关闭；太阳盘与镜头光晕是屏幕空间后效：体积云不写深度，日盘会叠在云层上；鬼影不参与逐像素遮挡，只受太阳整体可见度调制；太阳不进平面反射/SSR，也不参与 TAA（放在 TAA 之后避免转镜拖影）；角色动画是单角色 CPU 蒙皮，无动画混合、动画事件、IK 或动画编辑器；TAA 只有相机重投影、没有运动向量（物体运动不会单独补偿）；体素存档只记 seed + 差分区（改动格），无 LOD（面剔除已升级为贪心合并 + 顶点 AO，贴图集为程序化生成）；预制体只支持单根普通实体子树（无嵌套/变体，不存地形/体素/相机）；场景组件仍编译期注册，不支持脚本/热插拔；跨队列资源走 `CONCURRENT` sharing；
+**已知边界**：SSR 只服务水面近场（半分辨率、屏幕空间）；折射 / 水下后处理 / 自动曝光 / 点光源阴影 / 音频未做；水面有半分辨率平面反射（只含不透明几何，玻璃/水面/粒子不进倒影）与半分辨率 SSR（屏幕外/超过 200m 回退），且只在有地形/体素块时启用；距离雾是均匀指数雾，没有高度衰减/体积光/太阳散射，天空不参与；体积云是单层全屏 raymarch（64³ 静态噪声、无时域重投影/云阴影/二次散射），不进入平面反射与阴影，默认关闭；太阳盘与镜头光晕是屏幕空间后效：体积云不写深度，日盘会叠在云层上；鬼影不参与逐像素遮挡，只受太阳整体可见度调制；太阳不进平面反射/SSR，也不参与 TAA（放在 TAA 之后避免转镜拖影）；地形植被是程序化草/树，没有 LOD 与外部资产，草/树不投自身阴影、不进入平面反射；角色动画是单角色 CPU 蒙皮，无动画混合、动画事件、IK 或动画编辑器；TAA 只有相机重投影、没有运动向量（物体运动不会单独补偿）；体素存档只记 seed + 差分区（改动格），无 LOD（面剔除已升级为贪心合并 + 顶点 AO，贴图集为程序化生成）；预制体只支持单根普通实体子树（无嵌套/变体，不存地形/体素/相机）；场景组件仍编译期注册，不支持脚本/热插拔；跨队列资源走 `CONCURRENT` sharing；
 glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`docs/70-status/known-limits.md`](docs/70-status/known-limits.md)。
 
 ---
@@ -108,6 +109,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | `--particle-demo` | 空场景创建一个粒子喷泉（rate=220、max=1500、Kenney `fire_01` sprite），用于粒子截图/回归 |
 | `--cloud-demo` | 空场景创建/启用 `scene.clouds` 并把相机放到云层取景位；配合 `--empty-scene --selftest` / `--screenshot` 做云截图与回归 |
 | `--sun-demo` | 空场景创建/启用 `scene.sun`，把方向光转到相机前方右上并放到水面取景位；建议配合 `--streaming-world` / `--screenshot` 做太阳与光晕截图 |
+| `--vegetation-demo` | 空场景创建/启用 `scene.vegetation` 并把相机放到地形上方；建议配合 `--streaming-world 3`，否则没有地形可长 |
 | `--terrain-test` | 启动时创建持久地形 + 流送/雕刻/角色 smoke，校验 GPU 高度场、GPU mesh parity、GPU selection 过渡、区域限定重建与截图路径（常配合 `--empty-scene --selftest`） |
 
 构建同时产出 `build/<Config>/TinyEditor.exe`，双击即进编辑器，无需敲参数。
@@ -134,7 +136,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/20-pipeline/`](docs/20-pipeline/README.md) | Pass 顺序、G-Buffer/中间目标、IBL、Shader 清单 | 改 `src/Render/` 或 `shaders/` |
 | [`docs/30-systems/`](docs/30-systems/README.md) | ECS/场景、JobSystem、配置、ImGui | 改 `src/Scene/`、`src/Core/` 对应模块 |
 | [`docs/40-build/`](docs/40-build/README.md) | 依赖版本、构建运行、排障 | 构建失败 / 换机器 |
-| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、78 项回归矩阵、验收标准 | 加测试 / 定位回归 |
+| [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、79 项回归矩阵、验收标准 | 加测试 / 定位回归 |
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
 | [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
@@ -167,7 +169,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/DocCheck.ps1
 
 | 项 | 值 |
 |---|---|
-| 回归 | `tools/Validate.ps1`：**78 项全 PASS**，stderr 全 0 字节 |
+| 回归 | `tools/Validate.ps1`：**79 项全 PASS**，stderr 全 0 字节 |
 | 启动排错 | 交互式启动失败先弹原生 MessageBox（阶段 / 原因 / 日志路径 / `--help` / Vulkan 下一步），点确定后退出；日志仍追加到可执行文件旁的 `startup-error.log`。`--hidden` / `--selftest` / 截图等无人值守路径只写日志、不弹窗；窗口尺寸按显示器工作区 92% 收敛 |
 | 快捷键 | 只有一份 `kShortcutEntries`：速查表、`handleShortcuts()` 分发都读它；自检扫键位冲突（`entries=20 conflicts=0`，B4） |
 | 验证层 | `[Validation] errors=0 warnings=0`（含 `--validation-features sync`） |

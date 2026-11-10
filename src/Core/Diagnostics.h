@@ -88,6 +88,9 @@ bool cloudDemo = false;
 // --sun-demo：启用太阳盘与镜头光晕，并把方向光/相机调到能看见太阳的
 // 角度（配合 --streaming-world 可同时看到地形轮廓）。
 bool sunDemo = false;
+// --vegetation-demo：启用 scene.vegetation，把相机贴近地面看草与树
+// （建议配合 --streaming-world 3，否则空场景没有地形可长）。
+bool vegetationDemo = false;
 int32_t streamingRadius = 3;
 // --streaming-fly [speed]：自检/无人值守时让相机沿圆周自动飞行，
 // 用来验证 chunk 的加载与卸载（不飞就只会在原地加载一圈）。

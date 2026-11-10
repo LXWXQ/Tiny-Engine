@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1200 行
+size: ~1270 行
 updated: 2026-11-10
 ---
 
@@ -1222,3 +1222,23 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 **后续观感修复（2026-11-10）**：用户反馈镜头光晕的六边形鬼影像贴图。`sunflare.frag` 删除 `hexDistance()`，改用圆形 `bokeh`（disc + core + rim、三通道半径差、落点/大小确定性抖动）；同时把 `push.color.a`（`inFront`）接入 `sunVisibility()`：太阳在相机背后时 CPU 保留的默认屏幕中心 UV 不再生成鬼影，太阳出画时按 `sourceFade` 淡出。`--sun-demo` 相机背后实测 `inFront=0`、画面无鬼影；全量回归 ALL PASS（含 `f6-sun`），验证日志 `build/validation/20261110-163759`；DocCheck PASS。
 
 **边界**：屏幕空间后效，不是天空盒里的真实太阳；方向/光色只跟随 `scene.environment`，不能单独移动；5 点深度只判断日盘整体可见度，鬼影不逐像素遮挡，也不进 TAA 历史；云不写深度，日盘会叠在云层上；太阳不进平面反射/SSR，默认关闭。
+
+## F6-07：地形植被（2026-11-10）
+
+**问题**：地形只有裸网格与材质层，没有任何草或树；画面缺少近景尺度参照，地形起伏也看不出来。需要一套不依赖外部模型/贴图、可在 Inspector 调参并随场景存读的草/树系统，同时不能破坏 SSAO、级联阴影与延迟光照链路。
+
+**实现**：
+- 新增场景级 `scene.vegetation`（`SceneVegetationComponent`，分类“地形”）12 个属性：`enabled`（默认 false）、`grassDensity` 0.8、`grassDistance` 50、`grassHeight` 0.55、`treeDensity` 1.2、`treeDistance` 120、`treeHeight` 7、`windStrength` 0.6、`seed` 1337、`grassColor` / `treeColor` / `trunkColor`；Inspector 可添加/启用/调参/移除，随场景 v4 `sceneComponents` 存读，`engine.json` 使用独立 `vegetation` 节点。
+- 新增 `src/Vegetation/VegetationGenerator.{h,cpp}`：CPU 确定性抖动网格放置草/树，只采样 `TerrainComponent`，水面以下跳过，坡度草 >38°/树 >32° 跳过，树距相机 <3m 跳过；草 spacing=1/sqrt(grassDensity)，树 spacing=sqrt(1000/treeDensity)，圆盘抖动 + 随机旋转/缩放；上限草 49152、树 4096。
+- 程序化网格：草 3 张 60° 交叉 quad（12 顶点/18 索引），片元 5 叶 alpha-test discard；树 6 棱柱树干 + 3 层 8 边锥形树冠（96 顶点/108 索引），顶点色 r 区分树干/树冠。
+- 新增 `src/Render/VegetationPass.{h,cpp}` 与 `shaders/vegetation.vert/.frag`：在 Geometry 之后、SSAO 之前，LOAD 四张 G-Buffer + 深度，深度 `LESS_OR_EQUAL` 且写开、无混合；每帧一份 48B 实例缓冲，草/树各一次实例化 draw；风摆在顶点着色器，push constant 64B。
+- 重排去抖：相机移动 >6m、参数变化或地形签名变化且稳定 0.5s 才重新放置，避免流送逐 chunk 到达时反复重采样上万株草；草/树不投自身阴影，也不进平面反射与 SSR。
+- `--vegetation-demo` 在空场景创建/启用组件，草密度 1.15、草距离 55、树密度 2.5、树距离 140、seed 2024，相机贴近地面；场景自检 29 个描述符、12 个场景组件。
+
+**测试**：
+- `TinyEngine.exe --selftest 90 --empty-scene --streaming-world 3 --vegetation-demo`：`[Vegetation] meshes | grassVerts=12 grassIndices=18 treeVerts=96 treeIndices=108 maxGrass=49152 maxTrees=4096`、`demo scene ready | groundY=0 grassDensity=1.15 treeDensity=2.5 seed=2024`、`placed | grass=10930 trees=117 grassRadius=55 treeRadius=140 seed=2024`、`first draw | grass=10930 trees=117 draws=2`；90 帧 2.45926 s（36.60 FPS），`[Streaming] chunks=49 loaded=49 unloaded=0 budgetHits=0`，`[Validation] errors=0 warnings=0`。
+- 1920x1080 截图 `build/vegetation_demo4.png` 可见近景草毯、117 棵低模松树和云层天空。
+- 新增 `f6-vegetation` 用例（参数同上），断言 meshes / demo scene ready / placed / first draw / Validation 0/0。
+- 全套回归 **79 项** ALL PASS（含 `f6-vegetation`），stderr 全 0，验证日志 `build/validation/20261110-174339`；DocCheck PASS（documents=69 lines=12542）。
+
+**边界**：纯程序化草/树，没有外部资产、LOD、风场贴图或季节变化；草是 3 张交叉卡片、树是 3 层锥体，近看能辨认低模；草/树不投自身阴影，也不进平面反射/SSR；只长在 `TerrainComponent` 上，不覆盖体素世界；整批重排会造成一次可感的 CPU 峰值；默认关闭。

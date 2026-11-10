@@ -326,6 +326,22 @@ struct EngineSettings
 	int   sunFlareGhosts = 7;
 	bool  sunOcclusion = true;
 	glm::vec4 sunColor{ 1.0f, 0.96f, 0.88f, 1.0f };
+
+	// F6-07：地形植被。默认关闭 —— 草和树会显著改变地形外观，也会带来额外
+	// 的实例生成/绘制开销；需要时在 Inspector 添加「植被」场景组件。
+	// grassDensity 是每平方米草簇数，treeDensity 是每 1000 平方米树数。
+	bool  vegetationEnabled = false;
+	float vegetationGrassDensity = 0.8f;
+	float vegetationGrassDistance = 50.0f;
+	float vegetationGrassHeight = 0.55f;
+	float vegetationTreeDensity = 1.2f;
+	float vegetationTreeDistance = 120.0f;
+	float vegetationTreeHeight = 7.0f;
+	float vegetationWindStrength = 0.6f;
+	int   vegetationSeed = 1337;
+	glm::vec4 vegetationGrassColor{ 0.24f, 0.36f, 0.10f, 1.0f };
+	glm::vec4 vegetationTreeColor{ 0.12f, 0.24f, 0.08f, 1.0f };
+	glm::vec4 vegetationTrunkColor{ 0.22f, 0.14f, 0.08f, 1.0f };
 };
 
 struct RenderTelemetry

@@ -1484,7 +1484,7 @@ bool Scene::selfTest()
         scene.getRegistry();
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
-        if (componentCount != 28 || systemCount != 8)
+        if (componentCount != 29 || systemCount != 8)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;
@@ -1901,7 +1901,7 @@ bool Scene::selfTest()
             if (scene.hasSceneComponent(descriptor.type))
                 ++mountedSceneComponents;
         }
-        if (sceneDescriptorCount != 11 || mountedSceneComponents != 11 ||
+        if (sceneDescriptorCount != 12 || mountedSceneComponents != 12 ||
             settingsEntity == entt::null || !testRegistry.valid(settingsEntity) ||
             testRegistry.any_of<TransformComponent>(settingsEntity) ||
             testRegistry.any_of<HierarchyComponent>(settingsEntity) ||
@@ -2019,7 +2019,23 @@ bool Scene::selfTest()
             ok = false;
         }
 
-        // 整场景导出：sceneComponents 总是 authored，且包含全部 11 项。
+        if (!scene.removeSceneComponent("scene.vegetation") ||
+            scene.getSettings().vegetationEnabled ||
+            !scene.addSceneComponent("scene.vegetation") ||
+            !scene.getSettings().vegetationEnabled)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene vegetation add/remove semantics mismatch\n";
+            ok = false;
+        }
+
+        const auto defaultVegetation = scene.defaultComponentRecord("scene.vegetation");
+        if (!defaultVegetation || defaultVegetation->properties.size() != 12)
+        {
+            std::cerr << "[Scene] selfTest FAIL: scene vegetation default record mismatch\n";
+            ok = false;
+        }
+
+        // 整场景导出：sceneComponents 总是 authored，且包含全部 12 项。
         const scene::SceneDescription captured = scene.captureDescription();
         bool capturedExposure = false;
         for (const scene::ComponentRecord& record : captured.sceneComponents)
@@ -2030,7 +2046,7 @@ bool Scene::selfTest()
             capturedExposure = exposure &&
                                std::abs(exposure->value.asFloat() - 1.75f) < 1e-4f;
         }
-        if (!captured.sceneComponentsAuthored || captured.sceneComponents.size() != 11 ||
+        if (!captured.sceneComponentsAuthored || captured.sceneComponents.size() != 12 ||
             !capturedExposure)
         {
             std::cerr << "[Scene] selfTest FAIL: scene component capture mismatch | authored="
@@ -2052,7 +2068,7 @@ bool Scene::selfTest()
         // 从一份真实的 engine.json 默认值恢复（clear 已把当前 settings 改成全关）。
         scene.getSettings() = EngineSettings{};
         scene.resetSceneComponentsFromSettings();
-        if (scene.captureSceneComponents().size() != 11 ||
+        if (scene.captureSceneComponents().size() != 12 ||
             !scene.getSettings().shadowEnabled || !scene.getSettings().bloomEnabled ||
             !scene.getSettings().fogEnabled)
         {
@@ -4932,6 +4948,18 @@ bool Scene::queryGroundAtWorld(float worldX, float worldZ, float& outHeight,
             field.sizeX <= 0.0f || field.sizeZ <= 0.0f)
             continue;
 
+        // 49 个流送 chunk 时，逐点求逆会很贵；先用保守包围球剔除。
+        const glm::vec3 worldCenter = glm::vec3(world.matrix[3]);
+        const float radiusX = field.sizeX * 0.5f *
+            glm::length(glm::vec3(world.matrix[0]));
+        const float radiusZ = field.sizeZ * 0.5f *
+            glm::length(glm::vec3(world.matrix[2]));
+        const float boundRadius = std::sqrt(radiusX * radiusX +
+                                            radiusZ * radiusZ) + 0.01f;
+        if (std::abs(worldX - worldCenter.x) > boundRadius ||
+            std::abs(worldZ - worldCenter.z) > boundRadius)
+            continue;
+
         const glm::mat4 inverseWorld = glm::inverse(world.matrix);
         const glm::vec3 local = glm::vec3(inverseWorld *
             glm::vec4(worldX, 0.0f, worldZ, 1.0f));
@@ -5003,6 +5031,15 @@ bool Scene::sampleTerrainGroundHeightWorld(float worldX, float worldZ,
     if (outEntity)
         *outEntity = entity;
     return found;
+}
+
+bool Scene::sampleTerrainOnlyGroundHeightWorld(float worldX, float worldZ,
+                                               float& outHeight) const
+{
+    entt::entity entity = entt::null;
+    if (!queryGroundAtWorld(worldX, worldZ, outHeight, entity, nullptr))
+        return false;
+    return entity != entt::null && registry.all_of<TerrainComponent>(entity);
 }
 
 namespace

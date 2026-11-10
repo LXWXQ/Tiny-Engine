@@ -160,6 +160,22 @@ namespace
 		writeVec(sun, "color", s.sunColor);
 		j["sun"] = std::move(sun);
 
+		// F6-07：地形植被。程序化草/树，独立节点；enabled=false 时完全不影响画面。
+		json vegetation;
+		vegetation["enabled"] = s.vegetationEnabled;
+		vegetation["grassDensity"] = s.vegetationGrassDensity;
+		vegetation["grassDistance"] = s.vegetationGrassDistance;
+		vegetation["grassHeight"] = s.vegetationGrassHeight;
+		vegetation["treeDensity"] = s.vegetationTreeDensity;
+		vegetation["treeDistance"] = s.vegetationTreeDistance;
+		vegetation["treeHeight"] = s.vegetationTreeHeight;
+		vegetation["windStrength"] = s.vegetationWindStrength;
+		vegetation["seed"] = s.vegetationSeed;
+		writeVec(vegetation, "grassColor", s.vegetationGrassColor);
+		writeVec(vegetation, "treeColor", s.vegetationTreeColor);
+		writeVec(vegetation, "trunkColor", s.vegetationTrunkColor);
+		j["vegetation"] = std::move(vegetation);
+
 		json light;
 		writeVec(light, "direction", s.directionalLightDir);
 		writeVec(light, "color", s.directionalLightColor);
@@ -262,6 +278,23 @@ namespace
 			out.sunFlareGhosts = read(n, "flareGhosts", out.sunFlareGhosts, warnings);
 			out.sunOcclusion = read(n, "occlusion", out.sunOcclusion, warnings);
 			out.sunColor = readVec(n, "color", out.sunColor);
+		}
+
+		if (j.contains("vegetation") && j["vegetation"].is_object())
+		{
+			const json& n = j["vegetation"];
+			out.vegetationEnabled = read(n, "enabled", out.vegetationEnabled, warnings);
+			out.vegetationGrassDensity = read(n, "grassDensity", out.vegetationGrassDensity, warnings);
+			out.vegetationGrassDistance = read(n, "grassDistance", out.vegetationGrassDistance, warnings);
+			out.vegetationGrassHeight = read(n, "grassHeight", out.vegetationGrassHeight, warnings);
+			out.vegetationTreeDensity = read(n, "treeDensity", out.vegetationTreeDensity, warnings);
+			out.vegetationTreeDistance = read(n, "treeDistance", out.vegetationTreeDistance, warnings);
+			out.vegetationTreeHeight = read(n, "treeHeight", out.vegetationTreeHeight, warnings);
+			out.vegetationWindStrength = read(n, "windStrength", out.vegetationWindStrength, warnings);
+			out.vegetationSeed = read(n, "seed", out.vegetationSeed, warnings);
+			out.vegetationGrassColor = readVec(n, "grassColor", out.vegetationGrassColor);
+			out.vegetationTreeColor = readVec(n, "treeColor", out.vegetationTreeColor);
+			out.vegetationTrunkColor = readVec(n, "trunkColor", out.vegetationTrunkColor);
 		}
 
 		if (j.contains("lighting") && j["lighting"].is_object())

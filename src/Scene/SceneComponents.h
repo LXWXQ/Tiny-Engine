@@ -128,7 +128,25 @@ struct SceneSunComponent
     glm::vec4 color{ 1.0f, 0.96f, 0.88f, 1.0f };
 };
 
-// 注册 11 个 Scene scope 组件。Scene 构造时调用一次。
+// F6-07：地形植被。程序化草簇 + 低模树，由 VegetationPass 写入 G-Buffer；
+// 不依赖外部模型/贴图。草密度按平方米草簇数，树密度按每 1000 平方米树数。
+struct SceneVegetationComponent
+{
+    bool enabled = true;
+    float grassDensity = 0.8f;
+    float grassDistance = 50.0f;
+    float grassHeight = 0.55f;
+    float treeDensity = 1.2f;
+    float treeDistance = 120.0f;
+    float treeHeight = 7.0f;
+    float windStrength = 0.6f;
+    int seed = 1337;
+    glm::vec4 grassColor{ 0.24f, 0.36f, 0.10f, 1.0f };
+    glm::vec4 treeColor{ 0.12f, 0.24f, 0.08f, 1.0f };
+    glm::vec4 trunkColor{ 0.22f, 0.14f, 0.08f, 1.0f };
+};
+
+// 注册 12 个 Scene scope 组件。Scene 构造时调用一次。
 void registerSceneComponents(ComponentRegistry& registry);
 
 // 把当前挂载的场景组件写回渲染器缓存的 EngineSettings。

@@ -300,6 +300,44 @@ void registerSceneComponents(ComponentRegistry& registry)
                                              "日盘与光晕的色调；偏暖白适合日出/日落，纯白适合正午"),
         },
         sceneOptions));
+
+    registry.add(makeComponentDescriptor<SceneVegetationComponent>(
+        "scene.vegetation", "植被", "地形",
+        {
+            boolProperty<SceneVegetationComponent>("enabled", "启用", &SceneVegetationComponent::enabled,
+                                                   "在地形上程序化生成草簇与低模树，并写入 G-Buffer"),
+            floatProperty<SceneVegetationComponent>("grassDensity", "草密度", &SceneVegetationComponent::grassDensity,
+                                                    0.0f, 3.0f, 0.05f,
+                                                    "每平方米草簇数。0.8 约等于每 1.1m 一簇；0 关闭草"),
+            floatProperty<SceneVegetationComponent>("grassDistance", "草距离", &SceneVegetationComponent::grassDistance,
+                                                    10.0f, 80.0f, 1.0f,
+                                                    "草围绕相机的生成半径（米）。越小越省，但远处会露出裸地"),
+            floatProperty<SceneVegetationComponent>("grassHeight", "草高度", &SceneVegetationComponent::grassHeight,
+                                                    0.05f, 2.0f, 0.01f,
+                                                    "草簇的世界高度（米）"),
+            floatProperty<SceneVegetationComponent>("treeDensity", "树密度", &SceneVegetationComponent::treeDensity,
+                                                    0.0f, 8.0f, 0.1f,
+                                                    "每 1000 平方米树数。1.2 在 120m 半径内约 50 棵；0 关闭树"),
+            floatProperty<SceneVegetationComponent>("treeDistance", "树距离", &SceneVegetationComponent::treeDistance,
+                                                    20.0f, 200.0f, 5.0f,
+                                                    "树围绕相机的生成半径（米）。远处的树会逐渐稀疏"),
+            floatProperty<SceneVegetationComponent>("treeHeight", "树高度", &SceneVegetationComponent::treeHeight,
+                                                    1.0f, 20.0f, 0.1f,
+                                                    "树的世界高度（米）"),
+            floatProperty<SceneVegetationComponent>("windStrength", "风力", &SceneVegetationComponent::windStrength,
+                                                    0.0f, 2.0f, 0.01f,
+                                                    "草叶与树冠的摆动幅度；0 完全静止"),
+            intProperty<SceneVegetationComponent>("seed", "随机种子", &SceneVegetationComponent::seed,
+                                                  0, 999999,
+                                                  "改变草的分布与每簇的形态，不影响地形"),
+            colorProperty<SceneVegetationComponent>("grassColor", "草色", &SceneVegetationComponent::grassColor,
+                                                    "草叶基色；根部会自动压暗"),
+            colorProperty<SceneVegetationComponent>("treeColor", "树冠颜色", &SceneVegetationComponent::treeColor,
+                                                    "树冠的基色；树冠内部会根据法线产生明暗"),
+            colorProperty<SceneVegetationComponent>("trunkColor", "树干颜色", &SceneVegetationComponent::trunkColor,
+                                                    "树干与枝条的基色"),
+        },
+        sceneOptions));
 }
 
 void clearSceneComponents(entt::registry& registry, entt::entity settingsEntity)
@@ -317,6 +355,7 @@ void clearSceneComponents(entt::registry& registry, entt::entity settingsEntity)
     registry.remove<SceneFogComponent>(settingsEntity);
     registry.remove<SceneCloudsComponent>(settingsEntity);
     registry.remove<SceneSunComponent>(settingsEntity);
+    registry.remove<SceneVegetationComponent>(settingsEntity);
 }
 
 void resetSceneComponentsFromSettings(entt::registry& registry, entt::entity settingsEntity,
@@ -408,6 +447,21 @@ void resetSceneComponentsFromSettings(entt::registry& registry, entt::entity set
     sun.occlusion = settings.sunOcclusion;
     sun.color = settings.sunColor;
     registry.emplace<SceneSunComponent>(settingsEntity, sun);
+
+    SceneVegetationComponent vegetation;
+    vegetation.enabled = settings.vegetationEnabled;
+    vegetation.grassDensity = settings.vegetationGrassDensity;
+    vegetation.grassDistance = settings.vegetationGrassDistance;
+    vegetation.grassHeight = settings.vegetationGrassHeight;
+    vegetation.treeDensity = settings.vegetationTreeDensity;
+    vegetation.treeDistance = settings.vegetationTreeDistance;
+    vegetation.treeHeight = settings.vegetationTreeHeight;
+    vegetation.windStrength = settings.vegetationWindStrength;
+    vegetation.seed = settings.vegetationSeed;
+    vegetation.grassColor = settings.vegetationGrassColor;
+    vegetation.treeColor = settings.vegetationTreeColor;
+    vegetation.trunkColor = settings.vegetationTrunkColor;
+    registry.emplace<SceneVegetationComponent>(settingsEntity, vegetation);
 }
 
 void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
@@ -479,6 +533,19 @@ void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
     settings.sunFlareGhosts = defaults.sunFlareGhosts;
     settings.sunOcclusion = defaults.sunOcclusion;
     settings.sunColor = defaults.sunColor;
+
+    settings.vegetationEnabled = defaults.vegetationEnabled;
+    settings.vegetationGrassDensity = defaults.vegetationGrassDensity;
+    settings.vegetationGrassDistance = defaults.vegetationGrassDistance;
+    settings.vegetationGrassHeight = defaults.vegetationGrassHeight;
+    settings.vegetationTreeDensity = defaults.vegetationTreeDensity;
+    settings.vegetationTreeDistance = defaults.vegetationTreeDistance;
+    settings.vegetationTreeHeight = defaults.vegetationTreeHeight;
+    settings.vegetationWindStrength = defaults.vegetationWindStrength;
+    settings.vegetationSeed = defaults.vegetationSeed;
+    settings.vegetationGrassColor = defaults.vegetationGrassColor;
+    settings.vegetationTreeColor = defaults.vegetationTreeColor;
+    settings.vegetationTrunkColor = defaults.vegetationTrunkColor;
 
     if (const auto* environment = registry.try_get<SceneEnvironmentComponent>(settingsEntity);
         environment != nullptr && environment->enabled)
@@ -590,6 +657,23 @@ void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
         settings.sunFlareGhosts = sun->flareGhosts;
         settings.sunOcclusion = sun->occlusion;
         settings.sunColor = sun->color;
+    }
+
+    if (const auto* vegetation = registry.try_get<SceneVegetationComponent>(settingsEntity);
+        vegetation != nullptr && vegetation->enabled)
+    {
+        settings.vegetationEnabled = true;
+        settings.vegetationGrassDensity = vegetation->grassDensity;
+        settings.vegetationGrassDistance = vegetation->grassDistance;
+        settings.vegetationGrassHeight = vegetation->grassHeight;
+        settings.vegetationTreeDensity = vegetation->treeDensity;
+        settings.vegetationTreeDistance = vegetation->treeDistance;
+        settings.vegetationTreeHeight = vegetation->treeHeight;
+        settings.vegetationWindStrength = vegetation->windStrength;
+        settings.vegetationSeed = vegetation->seed;
+        settings.vegetationGrassColor = vegetation->grassColor;
+        settings.vegetationTreeColor = vegetation->treeColor;
+        settings.vegetationTrunkColor = vegetation->trunkColor;
     }
 }
 

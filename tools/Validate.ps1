@@ -337,7 +337,11 @@ $tests = @(
     # F6-06：太阳盘 + 镜头光晕。空场景创建 scene.sun，日盘按世界空间射线绘制，
     # 鬼影沿“太阳->屏幕中心”镜像；断言初始化、演示参数、首帧绘制与验证层零消息。
     @{ Name = "f6-sun"; Exe = "engine"; Args = @("--selftest", "30", "--empty-scene", "--sun-demo");
-       MustContain = @("[Sun] initialized |", "[Sun] demo scene ready |", "[Sun] first draw |", "[Validation] errors=0 warnings=0") }
+       MustContain = @("[Sun] initialized |", "[Sun] demo scene ready |", "[Sun] first draw |", "[Validation] errors=0 warnings=0") },
+    # F6-07：地形植被。空场景 + 流送地形生成草/树，VegetationPass 在 Geometry 后
+    # SSAO 前写 G-Buffer；断言网格、演示参数、放置、首帧与验证层零消息。
+    @{ Name = "f6-vegetation"; Exe = "engine"; Args = @("--selftest", "90", "--empty-scene", "--streaming-world", "3", "--vegetation-demo");
+       MustContain = @("[Vegetation] meshes |", "[Vegetation] demo scene ready |", "[Vegetation] placed | grass=", "[Vegetation] first draw |", "[Validation] errors=0 warnings=0") }
 )
 
 # Only meaningful for a profiling build (-EnableProfiling).
