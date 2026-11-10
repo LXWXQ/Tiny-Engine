@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cerrno>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -534,6 +535,22 @@ bool SceneSerializer::saveToFile(const scene::SceneDescription& description,
                                  const std::string& filepath,
                                  std::string& errorMessage)
 {
+    // 新建/另存时目标目录可能还不存在（例如默认的 Resources/Scenes）。
+    // 先补目录再打开文件，否则 Windows 上 ofstream 直接失败并报 errno 2。
+    const std::filesystem::path target(filepath);
+    const std::filesystem::path parent = target.parent_path();
+    if (!parent.empty())
+    {
+        std::error_code directoryError;
+        std::filesystem::create_directories(parent, directoryError);
+        if (directoryError)
+        {
+            errorMessage = "cannot create directory: " + parent.string() + " (" +
+                           directoryError.message() + ")";
+            return false;
+        }
+    }
+
     errno = 0;
     std::ofstream out(filepath, std::ios::binary | std::ios::trunc);
     if (!out)

@@ -1192,3 +1192,13 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 - 全套回归 **77 项** ALL PASS（含 `f6-clouds`），stderr 全 0，验证日志 `build/validation/20261110-140504`；`td03-window-resize` / `td03-render-scale` 均 PASS；DocCheck PASS（documents=68 lines=12275）。
 
 **边界**：单层均匀云壳、单次 raymarch，没有时域重投影/云阴影/二次散射/高度分层；64³ 噪声为启动时 CPU 生成、不支持运行时换图；云只进主 HDR，不进平面反射的第二套 Lighting，也不写 CSM 阴影；默认关闭，最远 6500，steps 上限 128。
+
+## 缺陷修复：场景保存自动创建父目录（2026-11-10）
+
+**问题**：编辑器启动时把默认文档路径设为 `Resources/Scenes/main.scene.json`，但全新检出里只有 `Resources/Models` 与 `Resources/Texture`，没有 `Resources/Scenes`。按 Ctrl+S 时 `SceneSerializer::saveToFile()` 直接打开文件，父目录缺失让 Windows 返回 `errno 2`，控制台显示 `保存失败：cannot open for writing ... (errno 2: No such file or directory)`。
+
+**修复**：`SceneSerializer::saveToFile()` 在打开文件前把 `filepath` 转成 `std::filesystem::path`，取非空 `parent_path()` 并调用 `create_directories()`；目录创建失败时返回 `cannot create directory: ...`，不再把目录问题误报成文件打开失败。场景保存、预制体另存（`Prefab.cpp` 复用同一入口）和自检落盘都会自动补目录。
+
+**测试**：编辑器 `selfTestWithScene` 增加“父目录不存在”用例：先 `remove_all` `.tmp/editor-save-nested`，再保存 `.tmp/editor-save-nested/scene.json`，断言文件生成后清理；`TinyEditor.exe --selftest 5 --empty-scene` 打印 `[Editor] scene save missing parent selfTest PASS | parent created`。全套 77 项 ALL PASS（使用仓库内 `config/engine.json`），stderr 全 0，日志 `build/validation/20261110-143356`；DocCheck PASS。注意：`f2b-terrain-batch` / `f2b-terrain-batch-off` 依赖相机看到地形，本地相机移开后这两项会缺少地形 marker，跑回归前先还原仓库配置。
+
+**边界**：只自动补目录，不改变保存格式、原子性或权限检查；父路径不可写、或是已存在的文件时，仍按原错误路径返回。

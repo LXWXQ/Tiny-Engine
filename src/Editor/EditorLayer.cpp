@@ -4029,6 +4029,31 @@ bool EditorLayer::selfTestWithScene()
         std::error_code removeError;
         std::filesystem::remove(scenePath, removeError);
 
+        // 父目录不存在时必须自动创建：编辑器默认文档路径是
+        // Resources/Scenes/main.scene.json，而全新检出里该目录并不存在。
+        {
+            const std::filesystem::path nestedParent = ".tmp/editor-save-nested";
+            std::error_code nestedErrorCode;
+            std::filesystem::remove_all(nestedParent, nestedErrorCode);
+            const std::filesystem::path nestedPath = nestedParent / "scene.json";
+
+            std::string nestedError;
+            if (!SceneSerializer::saveToFile(serialized, nestedPath.string(), nestedError))
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: save into missing parent -> "
+                          << nestedError << "\n";
+                return false;
+            }
+            if (!std::filesystem::exists(nestedPath))
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: missing parent save produced no file\n";
+                return false;
+            }
+            std::filesystem::remove_all(nestedParent, nestedErrorCode);
+            std::cout << "[Editor] scene save missing parent selfTest PASS | parent created"
+                      << std::endl;
+        }
+
         // Rebuild the scene from the serialized manager template. This clears
         // the old chunk set and must stream a fresh 3x3 set around the camera.
         const glm::vec3 movedCamera = scene.getCameraTransform().getTranslation();
