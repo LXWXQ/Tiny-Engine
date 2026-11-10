@@ -74,9 +74,15 @@ Simulation systems -> updateWorldTransforms() -> PostTransform systems -> refres
 | `effects.pulse` | Effects | `amplitude` / `frequency` / `phase` / `enabled` | 缩放脉冲，增量乘缩放以保留手动缩放 |
 | `effects.lookAt` | Motion | `target` / `up` / `turnSpeed` / `enabled` | 朝向 target；`turnSpeed=0` 瞬时，否则 slerp |
 | `effects.follow` | Motion | `target` / `speed` / `stopDistance` / `enabled` | 向 target 匀速靠近并在 stopDistance 停下 |
-| `effects.particles` | Effects | `enabled` / `emissionRate` / `maxParticles` / `direction` / `spreadAngle` / `emissionOffset` / `emissionRadius` / `lifetime` / `lifetimeVariation` / `initialSpeed` / `speedVariation` / `gravity` / `startSize` / `endSize` / `startColor` / `endColor`（16 个属性） | 每帧按世界变换发射并推进粒子；`enabled=false` 停止发射但存量走完寿命，移除组件立即清空。CPU 模拟，每发射器默认 512（属性上限 4096），全局上限 16384；渲染见 §1.3 |
+| `effects.particles` | Effects | `enabled` / `emissionRate` / `maxParticles` / `direction` / `spreadAngle` / `emissionOffset` / `emissionRadius` / `lifetime` / `lifetimeVariation` / `initialSpeed` / `speedVariation` / `gravity` / `startSize` / `endSize` / `startColor` / `endColor` / `texture`（17 个属性） | 每帧按世界变换发射并推进粒子；`enabled=false` 停止发射但存量走完寿命，移除组件立即清空。CPU 模拟，每发射器默认 512（属性上限 4096），全局上限 16384；渲染见 §1.3 |
 
 系统顺序为 Spin 100、Orbit 110、Bob 120、Sway 130、Pulse 140、Follow 150、Look At 160、Particle 200。
+
+粒子的 `texture` 存相对 `Resources/Texture` 的路径（例如
+`Particles/Kenney/fire_01.png`），空字符串表示程序化圆形。Inspector 只列
+`Texture/Particles` 下的 sprite，不能手输绝对路径；`ParticlePass` 在启动时递归
+预加载这些贴图（最多 64 张）并分配 bindless 材质槽位，新增/替换文件需要重启。
+缺少文件或未预加载的路径回退为程序化圆形，不会让整批粒子消失。
 Look At/Follow 的 target/up 是父空间坐标；顶层实体即世界坐标。它们都是可用的效果/运动，
 也是新组件的模板：注册组件 +（可选）注册系统，不需要改 Inspector、SceneSerializer 或 Commands。
 

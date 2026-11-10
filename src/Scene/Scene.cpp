@@ -1741,7 +1741,8 @@ bool Scene::selfTest()
             ok = false;
         }
         auto particleRecord = scene.readComponent(particleEntity, "effects.particles");
-        if (!particleRecord || particleRecord->properties.size() != 16)
+        if (!particleRecord || particleRecord->properties.size() != 17 ||
+            particleRecord->find("texture") == nullptr)
         {
             std::cerr << "[Scene] selfTest FAIL: Particle Emitter default record mismatch\n";
             ok = false;

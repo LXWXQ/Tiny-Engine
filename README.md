@@ -62,7 +62,7 @@ cmake --build build --config Debug
 | HDR + Bloom + ACES | 光照输出线性 HDR，tonemap 独立成 PresentPass；Bloom 关闭时真跳过 7 个 pass | [pass-order](docs/20-pipeline/pass-order.md) |
 | TAA 时域抗锯齿 | Halton(2,3) 抖动 + 未抖动 VP 反投影 + 3x3 邻域 AABB clamp；`--no-taa` 关闭，窗口 resize 重置历史 | [pass-order](docs/20-pipeline/pass-order.md) |
 | **水面** | 相机中心径向网格（160 圈 × 192 段，约 4km）跟随相机；4 个大波做顶点位移，近景细节用 1024x1024 无缝 FFT 法线贴图两层滚动（18m/42m，去掉 K<32 低频、`tileableMips`），大波按像素 footprint 逐波过滤，未解析能量转粗糙度/高光展宽；Fresnel + 半分辨率平面反射（镜像相机重画 960x540 G-Buffer 与延迟光照）+ 近场半分辨率 SSR（读 HDR/位置，48 步屏幕空间追踪，屏幕外/远处回退平面反射或 IBL）+ 按反射亮度最多补 34% 天空环境图底色（深水色提亮、远水 alpha 0.89，避免整片暗色平板）+ 用 G-Buffer 深度算厚度吸收/只贴岸线的泡沫（法线贴图低频噪声打散）；Lighting 后、TAA 前混合；只在有地形/体素块时启用，`--no-water` / `--no-ssr` 关闭；场景功能由 `scene.water` 场景组件控制，移除/禁用即关闭 | [water](docs/30-systems/water.md) |
-| **粒子** | 实体级 `effects.particles` 组件（16 个参数，Inspector 可调）：CPU 发射与模拟（每发射器默认 512、属性上限 4096，全局上限 16384），前向透明 billboard 写 HDR，排在 Lighting/Glass/Water 之后、TAA 之前；按相机距离排序、深度测试不写深度，`--particle-demo` 演示 | [scene-ecs](docs/30-systems/scene-ecs.md) |
+| **粒子** | 实体级 `effects.particles` 组件（17 个参数，Inspector 可调）：CPU 发射与模拟（每发射器默认 512、属性上限 4096，全局上限 16384），可选 Kenney CC0 sprite（`Resources/Texture/Particles/Kenney`，14 张，启动时预加载）；前向透明 billboard 写 HDR，排在 Lighting/Glass/Water 之后、TAA 之前；按相机距离排序、深度测试不写深度，`--particle-demo` 演示 | [scene-ecs](docs/30-systems/scene-ecs.md) |
 | **距离雾** | 指数距离雾（默认 80m 起、密度 0.00045，约 1km 处 34%、4km 处 83%）；雾色取环境图地平线 LOD3，地形/水面/玻璃共用，天空不参与；`config/engine.json` 的 `fog` 节点 + 运行时 ImGui；编辑器参数在 `scene.fog` 场景组件中，无命令行开关 | [water](docs/30-systems/water.md) |
 | IBL split-sum | irradiance / prefiltered / BRDF LUT 一次性 GPU 烘焙 | [ibl](docs/20-pipeline/ibl.md) |
 | EnTT ECS + Transform 层级 | parent/children、world/normal matrix 传播；元数据组件注册表（6 种属性类型）+ 系统调度（Simulation/PostTransform）；内置 8 个 `effects.*`（Spin/Orbit/Bob/Sway/Pulse/LookAt/Follow/Particle）+ 9 个原生组件描述（Name/Transform/Hierarchy 必需，Character/Render Tag 可添加，Camera/Terrain/Streaming/Voxel 为创建菜单托管）；属性带范围/拖动速度/悬停提示与单属性重置，组件可跨实体复制/粘贴/重置；预制体保存/实例化走同一描述层；另有 9 个场景级组件（Environment/Shadows/Bloom/SSAO/SSR/MotionBlur/TAA/Water/Fog，scope=Scene，挂在隐藏设置实体，添加/启用/调参/移除即功能开关），共 26 个描述符 | [scene-ecs](docs/30-systems/scene-ecs.md) |
@@ -103,7 +103,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | `--editor` | 以场景编辑器模式启动（默认关闭，运行时行为完全不变） |
 | `--runtime-mode` | 编辑器启动后直接进入运行模式（第三人称角色 + 动画；仅编辑器构建有效） |
 | `--voxel-world [r]` / `--voxel-glass-demo` | 生成方块体素世界（半径 1..12）/ 摆交叉玻璃墙做透明排序目测 |
-| `--particle-demo` | 空场景创建一个粒子喷泉（rate=220、max=1500），用于粒子截图/回归 |
+| `--particle-demo` | 空场景创建一个粒子喷泉（rate=220、max=1500、Kenney `fire_01` sprite），用于粒子截图/回归 |
 | `--terrain-test` | 启动时创建持久地形 + 流送/雕刻/角色 smoke，校验 GPU 高度场、GPU mesh parity、GPU selection 过渡、区域限定重建与截图路径（常配合 `--empty-scene --selftest`） |
 
 构建同时产出 `build/<Config>/TinyEditor.exe`，双击即进编辑器，无需敲参数。

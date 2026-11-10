@@ -148,6 +148,11 @@ struct ParticleEmitterComponent
     glm::vec4 startColor{ 1.0f, 0.55f, 0.15f, 1.0f };
     glm::vec4 endColor{ 1.0f, 0.10f, 0.02f, 0.0f };
 
+    // 粒子 sprite。存相对 Resources/Texture/ 的路径（例如
+    // "Particles/Kenney/fire_01.png"）；空字符串表示使用程序化圆形。
+    // ParticlePass 在启动时预加载 Texture/Particles 下的贴图，新增文件需重启。
+    std::string texture;
+
     // 运行期状态，不参与属性/序列化。
     std::vector<Particle> particles;
     float spawnAccumulator = 0.0f;

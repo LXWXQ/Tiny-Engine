@@ -14,7 +14,11 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
+
+class Scene;
 
 // F5：粒子前向混合通道。
 //
@@ -31,6 +35,7 @@ struct ParticleInstance
 {
     glm::vec4 positionSize{ 0.0f };   // xyz = 世界位置, w = 直径
     glm::vec4 color{ 0.0f };          // rgba
+    uint32_t materialId = 0xFFFFFFFFu; // 材质槽位；0xFFFFFFFF = 程序化圆形
 };
 
 class ParticlePass : public IRenderPass
@@ -38,7 +43,7 @@ class ParticlePass : public IRenderPass
 public:
     ParticlePass(Device& device, RenderGraph& graph, RenderResources& resources,
                  VkDescriptorSetLayout globalSetLayout, DescriptorManager* descriptorManager,
-                 VkFormat depthFormat);
+                 VkFormat depthFormat, Scene* scene = nullptr);
     ~ParticlePass() override;
 
     void init() override;
@@ -55,11 +60,13 @@ private:
     void createBuffers();
     void destroyBuffers();
     void createPipeline();
+    void loadParticleTextures();
     BuildResult buildInstances(FrameInfo& frameInfo, const glm::vec3& cameraPosition);
 
     Device& device;
     RenderGraph& renderGraph;
     RenderResources& resources;
+    Scene* scene = nullptr;
     DescriptorManager* descriptorManager = nullptr;
     VkDescriptorSetLayout globalSetLayout = VK_NULL_HANDLE;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
@@ -74,6 +81,10 @@ private:
 
     // 与 Scene::kMaxParticlesTotal 保持一致；模拟侧已先截断，这里只负责绘制。
     static constexpr uint32_t kMaxParticles = 16384;
+    static constexpr uint32_t kMaxParticleTextures = 64;
+
+    // key 是相对 Resources/Texture 的 generic 路径（Particles/Kenney/fire_01.png）。
+    std::unordered_map<std::string, uint32_t> textureSlots;
 
     std::vector<ParticleInstance> instances;
     std::chrono::steady_clock::time_point lastLogTime{};

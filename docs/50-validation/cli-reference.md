@@ -39,7 +39,7 @@ updated: 2026-11-10
 | `--no-ssr` | 关闭水面近场屏幕空间反射；SSR Pass 不注册，水面回退平面反射/环境图，日志 `ssr=0` |
 | `--voxel-world [r]` | 启动时生成方块体素世界（32³ chunk，半径 r = 1..12，默认 1（异步构建，逐帧上传）），相机自动摆到上方 |
 | `--voxel-glass-demo` | 配合 `--voxel-world`：在体素世界里摆交叉玻璃墙 + 近景相机（V-01 透明排序目测/回归）；单独使用会被忽略并打印提示 |
-| `--particle-demo` | 空场景创建一个粒子喷泉（rate=220、max=1500），相机自动取景；配合 `--empty-scene --selftest` / `--screenshot` 做粒子截图与回归 |
+| `--particle-demo` | 空场景创建一个粒子喷泉（rate=220、max=1500，贴图 `Particles/Kenney/fire_01.png`），相机自动取景；配合 `--empty-scene --selftest` / `--screenshot` 做粒子截图与回归 |
 | `--gpu-scene` | 忽略实例阈值，强制走 GPU 驱动提交（配合 `gpuSceneMinInstances` 默认 256） |
 | `--no-gpu-scene` | 关闭 GPU 驱动提交，完全回退 CPU 逐子网格路径 |
 | `--no-merged-buffers` | 整条 GPU 批退回 CPU 逐子网格路径（跨模型 single draw 依赖合并缓冲） |

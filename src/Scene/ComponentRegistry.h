@@ -40,6 +40,9 @@ struct PropertyDescriptor
     // <= 0 时按属性类型选默认拖动速度。
     float dragSpeed = 0.0f;
     std::string tooltip;
+    // true 时通用控件跳过该属性，由组件自己的专用控件绘制。
+    // 用于贴图这类需要资源选择器、不能手输路径的字段。
+    bool hidden = false;
 
     // void* 指向组件实例；由 makeProperty<T>() 做类型擦除。
     std::function<PropertyValue(const void*)> get;

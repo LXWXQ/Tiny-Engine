@@ -38,6 +38,10 @@ private:
     void drawTextureRow(EditorState& state, entt::entity entity, Material& material,
                         const char* label, SetMaterialTextureCommand::Slot slot, bool srgb);
 
+    // 粒子贴图：只列 Resources/Texture/Particles 下的 sprite，存相对路径；
+    // 不加载材质、不直接提交命令，由 drawComponents 统一走命令栈。
+    bool drawParticleTextureWidget(scene::ComponentRecord& record);
+
     TextureLibrary textures;
     bool texturesScanned = false;
     char textureFilter[64] = {};

@@ -324,10 +324,11 @@ $tests = @(
        MustContain = @("[Update] avg us |", "[Validation] errors=0 warnings=0") },
     @{ Name = "p2-device-fault"; Args = @("--device-fault-test");
        MustContain = @("[DeviceFault] selfTest PASS") },
-    # F5-07：粒子发射器。空场景建一个喷泉，CPU 模拟后由 ParticlePass 前向
-    # 透明绘制；断言发射器、存活粒子与一次 draw，验证层仍为零消息。
+    # F5-08：粒子发射器 + Kenney CC0 sprite。空场景建一个喷泉，启动时预加载
+    # Texture/Particles，CPU 模拟后由 ParticlePass 前向透明绘制；断言贴图预加载、
+    # 发射器、存活粒子与一次 draw，验证层仍为零消息。
     @{ Name = "f6-particles"; Exe = "engine"; Args = @("--selftest", "60", "--empty-scene", "--particle-demo");
-       MustContain = @("[Particle] demo emitter created |", "[Particle] emitters=1 alive=", "drawcalls=1", "[Validation] errors=0 warnings=0") }
+       MustContain = @("[Particle] textures=", "status=ready", "[Particle] demo emitter created |", "texture=Particles/Kenney/fire_01.png", "[Particle] emitters=1 alive=", "drawcalls=1", "[Validation] errors=0 warnings=0") }
 )
 
 # Only meaningful for a profiling build (-EnableProfiling).

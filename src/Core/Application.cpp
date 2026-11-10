@@ -836,7 +836,7 @@ streamingConfig.skirtsEnabled = false;
 	// 不写深度；实例缓冲由 ParticlePass 每帧按相机距离排序后上传。
 	auto particlePass = std::make_unique<ParticlePass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
-		gBuffers[0]->getDepth().format);
+		gBuffers[0]->getDepth().format, scene.get());
 	// TAA：必须在 Glass/Water 之后（要拿混合后的 HDR）、Bloom 之前（辉光作用在
 	// 抗锯齿后的画面上）。每帧都注册 —— 否则 Bloom/Present 会读到没人写的
 	// taaOutput，渲染图的写覆盖校验会直接报错。
@@ -1018,6 +1018,8 @@ streamingConfig.skirtsEnabled = false;
 		particles.endSize = 0.04f;
 		particles.startColor = glm::vec4(1.0f, 0.62f, 0.18f, 1.0f);
 		particles.endColor = glm::vec4(1.0f, 0.08f, 0.02f, 0.0f);
+		// Kenney CC0 火焰 sprite：alpha 已按亮度转换，shader 直接乘 alpha。
+		particles.texture = "Particles/Kenney/fire_01.png";
 		scene->markTransformDirty(emitter);
 
 		TransformComponent& cameraTransform = scene->getCameraTransform();
@@ -1026,7 +1028,8 @@ streamingConfig.skirtsEnabled = false;
 		cameraTransform.setScale(glm::vec3(1.0f));
 		scene->markTransformDirty(scene->getCameraEntity());
 		std::cout << "[Particle] demo emitter created | rate=" << particles.emissionRate
-			<< " max=" << particles.maxParticles << std::endl;
+			<< " max=" << particles.maxParticles
+			<< " texture=" << particles.texture << std::endl;
 	}
 
 	currentTime = std::chrono::high_resolution_clock::now();

@@ -1,19 +1,24 @@
 #include "ParticlePass.h"
 
 #include "AssetPaths.h"
+#include "Core/Material.h"
+#include "Core/MaterialSystem.h"
 #include "Scene/FeatureComponents.h"
+#include "Scene/Scene.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 
 static_assert(sizeof(ParticlePushConstantData) == 32,
               "particle push constant must stay 32 bytes");
-static_assert(sizeof(ParticleInstance) == 32,
-              "particle instance must stay 32 bytes");
+static_assert(sizeof(ParticleInstance) == 36,
+              "particle instance must stay 36 bytes (vec4 + vec4 + uint32)");
 
 namespace
 {
@@ -23,8 +28,9 @@ constexpr VkDeviceSize kInstanceBytes =
 
 ParticlePass::ParticlePass(Device& device, RenderGraph& graph, RenderResources& resources,
                            VkDescriptorSetLayout globalSetLayout,
-                           DescriptorManager* descriptorManager, VkFormat depthFormat)
-    : device(device), renderGraph(graph), resources(resources),
+                           DescriptorManager* descriptorManager, VkFormat depthFormat,
+                           Scene* scene)
+    : device(device), renderGraph(graph), resources(resources), scene(scene),
       descriptorManager(descriptorManager), globalSetLayout(globalSetLayout),
       depthFormat(depthFormat)
 {
@@ -41,6 +47,9 @@ ParticlePass::~ParticlePass()
 
 void ParticlePass::init()
 {
+    // 启动时预加载：帧中上传贴图会强制等待 GPU，且会让描述符集在录制命令时
+    // 发生变化。新增/替换文件后需要重启（Inspector 会提示）。
+    loadParticleTextures();
     createBuffers();
     createPipeline();
 }
@@ -90,9 +99,91 @@ void ParticlePass::destroyBuffers()
     }
 }
 
+void ParticlePass::loadParticleTextures()
+{
+    if (scene == nullptr || descriptorManager == nullptr ||
+        descriptorManager->getMaterialSet() == VK_NULL_HANDLE)
+    {
+        std::cout << "[Particle] textures=0 (no scene/descriptor manager)\n";
+        return;
+    }
+
+    const std::filesystem::path textureRoot =
+        std::filesystem::path(TINY_RESOURCE_DIR) / "Texture";
+    const std::filesystem::path particleRoot = textureRoot / "Particles";
+
+    std::error_code ec;
+    if (!std::filesystem::is_directory(particleRoot, ec))
+    {
+        std::cout << "[Particle] textures=0 root=" << particleRoot.generic_string()
+                  << " (missing)\n";
+        return;
+    }
+
+    std::vector<std::filesystem::path> files;
+    for (std::filesystem::recursive_directory_iterator it(particleRoot, ec), end;
+         it != end; it.increment(ec))
+    {
+        if (ec)
+            break;
+        std::error_code fileEc;
+        if (!it->is_regular_file(fileEc) || fileEc)
+            continue;
+        std::string ext = it->path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" &&
+            ext != ".tga" && ext != ".bmp")
+            continue;
+        files.push_back(it->path());
+    }
+    std::sort(files.begin(), files.end());
+
+    size_t failed = 0;
+    for (const std::filesystem::path& file : files)
+    {
+        if (textureSlots.size() >= kMaxParticleTextures)
+            break;
+
+        std::error_code relEc;
+        std::filesystem::path rel = std::filesystem::relative(file, textureRoot, relEc);
+        if (relEc)
+            rel = file.lexically_relative(textureRoot);
+        const std::string key = rel.generic_string();
+
+        std::shared_ptr<Texture> texture = scene->loadMaterialTexture(file.string(), true);
+        if (!texture)
+        {
+            ++failed;
+            std::cout << "[Particle] texture load failed: " << key << "\n";
+            continue;
+        }
+
+        // 粒子只采 albedo；其它贴图槽由 Material 的默认替身补齐。
+        auto material = std::make_shared<Material>();
+        material->name = "Particle/" + key;
+        material->albedoMap = texture;
+        scene->getMaterialSystem().buildMaterialDescriptor(material, *descriptorManager);
+        textureSlots.emplace(key, material->descriptorSetIndex);
+    }
+
+    const char* status = (!textureSlots.empty() && failed == 0) ? "ready" : "fallback";
+    std::cout << "[Particle] textures=" << textureSlots.size()
+              << " failed=" << failed
+              << " status=" << status
+              << " root=" << particleRoot.generic_string() << "\n";
+}
+
 void ParticlePass::createPipeline()
 {
-    VkDescriptorSetLayout setLayouts[] = { globalSetLayout };
+    if (descriptorManager == nullptr ||
+        descriptorManager->getMaterialSet() == VK_NULL_HANDLE)
+        throw std::runtime_error("ParticlePass: material descriptor set is required");
+
+    // set 0 = 帧全局；set 1 = bindless 材质数组（albedo/normal/metal/rough）。
+    VkDescriptorSetLayout setLayouts[] = {
+        globalSetLayout, descriptorManager->getMaterialSetLayout()
+    };
 
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -101,7 +192,7 @@ void ParticlePass::createPipeline()
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
+    layoutInfo.setLayoutCount = 2;
     layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
@@ -114,7 +205,7 @@ void ParticlePass::createPipeline()
     binding.stride = sizeof(ParticleInstance);
     binding.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
 
-    std::array<VkVertexInputAttributeDescription, 2> attributes{};
+    std::array<VkVertexInputAttributeDescription, 3> attributes{};
     attributes[0].location = 0;
     attributes[0].binding = 0;
     attributes[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -123,6 +214,10 @@ void ParticlePass::createPipeline()
     attributes[1].binding = 0;
     attributes[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
     attributes[1].offset = offsetof(ParticleInstance, color);
+    attributes[2].location = 2;
+    attributes[2].binding = 0;
+    attributes[2].format = VK_FORMAT_R32_UINT;
+    attributes[2].offset = offsetof(ParticleInstance, materialId);
 
     PipelineConfigInfo config{};
     Pipeline::defaultPipelineConfigInfo(config, WIDTH, HEIGHT);
@@ -147,7 +242,7 @@ void ParticlePass::createPipeline()
     config.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
     config.bindingDescriptions = { binding };
-    config.attributeDescriptions = { attributes[0], attributes[1] };
+    config.attributeDescriptions = { attributes[0], attributes[1], attributes[2] };
 
     particlePipeline = std::make_unique<Pipeline>(
         device, TINY_SHADER_DIR "particle.vert.spv",
@@ -165,6 +260,23 @@ ParticlePass::BuildResult ParticlePass::buildInstances(FrameInfo& frameInfo,
     {
         (void)entity;
         ++result.emitters;
+
+        // 路径统一成 generic 形式；空 = 程序化圆形。找不到（例如序列化后
+        // 文件被删）也回退圆形，避免整批粒子消失。
+        std::string textureKey = emitter.texture;
+        for (char& c : textureKey)
+        {
+            if (c == '\\')
+                c = '/';
+        }
+        uint32_t materialId = 0xFFFFFFFFu;
+        if (!textureKey.empty())
+        {
+            const auto slot = textureSlots.find(textureKey);
+            if (slot != textureSlots.end())
+                materialId = slot->second;
+        }
+
         for (const scene::Particle& particle : emitter.particles)
         {
             if (particle.lifetime <= 0.0f)
@@ -182,7 +294,7 @@ ParticlePass::BuildResult ParticlePass::buildInstances(FrameInfo& frameInfo,
             if (size <= 0.0001f)
                 continue;
 
-            instances.push_back({ glm::vec4(particle.position, size), color });
+            instances.push_back({ glm::vec4(particle.position, size), color, materialId });
         }
     }
 
@@ -242,8 +354,10 @@ void ParticlePass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         particlePipeline->bind(cmd);
 
         VkDescriptorSet globalSet = frameInfo.descriptorManager->getGlobalSet(frame);
+        VkDescriptorSet materialSet = descriptorManager->getMaterialSet();
+        VkDescriptorSet sets[] = { globalSet, materialSet };
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0,
-                                1, &globalSet, 0, nullptr);
+                                2, sets, 0, nullptr);
 
         const ParticlePushConstantData push{
             glm::vec4(cameraRight, 0.0f),

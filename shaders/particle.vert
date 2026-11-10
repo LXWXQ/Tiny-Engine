@@ -4,9 +4,11 @@
 // 6 个顶点由 gl_VertexIndex 生成，不占几何缓冲。
 layout(location = 0) in vec4 inPositionSize;   // xyz = 世界位置, w = 直径
 layout(location = 1) in vec4 inColor;
+layout(location = 2) in uint inMaterialId;    // 0xFFFFFFFF = 程序化圆形
 
 layout(location = 0) out vec2 fragUV;
 layout(location = 1) out vec4 fragColor;
+layout(location = 2) flat out uint fragMaterialId;
 
 layout(set = 0, binding = 0) uniform GlobalUbo
 {
@@ -37,4 +39,5 @@ void main()
     gl_Position = ubo.projectionView * vec4(world, 1.0);
     fragUV = corner;
     fragColor = inColor;
+    fragMaterialId = inMaterialId;
 }

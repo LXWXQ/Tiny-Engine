@@ -111,6 +111,24 @@ PropertyDescriptor makeIntProperty(const char* name, const char* label,
     return property;
 }
 
+template <typename T>
+PropertyDescriptor makeStringProperty(const char* name, const char* label,
+                                      std::string T::*member, const char* tooltip = nullptr,
+                                      bool hidden = false)
+{
+    PropertyDescriptor property = makeProperty<T>(
+        name, label, PropertyType::String,
+        [member](const T& component) { return PropertyValue::fromString(component.*member); },
+        [member](T& component, const PropertyValue& value)
+        {
+            component.*member = value.asString();
+        });
+    if (tooltip != nullptr)
+        property.tooltip = tooltip;
+    property.hidden = hidden;
+    return property;
+}
+
 float sinePhase(float timeSeconds, float frequency, float phaseDegrees)
 {
     return glm::radians(phaseDegrees) +
@@ -717,7 +735,12 @@ void registerFeatureComponents(ComponentRegistry& registry)
               "出生颜色；alpha 决定初始不透明度"),
           makeColorProperty<ParticleEmitterComponent>(
               "endColor", "End Color", &ParticleEmitterComponent::endColor,
-              "寿命结束颜色；alpha 通常设 0 让粒子淡出") }));
+              "寿命结束颜色；alpha 通常设 0 让粒子淡出"),
+          // 贴图用 Inspector 专用资源选择器绘制（hidden），避免手输绝对路径。
+          makeStringProperty<ParticleEmitterComponent>(
+              "texture", "Particle Texture", &ParticleEmitterComponent::texture,
+              "粒子 sprite，空表示程序化圆形；路径相对 Resources/Texture，启动时预加载",
+              true) }));
 }
 
 void registerFeatureSystems(SystemScheduler& scheduler)

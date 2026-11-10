@@ -1156,3 +1156,21 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 - 全套回归 **76 项** ALL PASS（含 `f6-particles`），stderr 全 0，验证日志 `build/validation/20261110-113649`；DocCheck PASS（documents=68 lines=12213）。
 
 **边界**：只有单一 CPU 发射器，没有碰撞、子发射器、寿命曲线、GPU 模拟、软粒子或阴影；粒子不写 G-Buffer、不进平面反射/阴影、不提供 TAA 运动向量；每发射器默认 512（属性上限 4096），全局 16384。
+
+## F5-08：粒子 sprite 资源与贴图选择（2026-11-10）
+
+**问题**：F5-07 的粒子只能用 shader 里的程序化圆形软遮罩，用户无法在 Inspector 选择或替换外观；需要一套许可清晰、可扩展的 sprite 资源，以及从编辑器选择到 bindless 采样的完整链路。
+
+**实现**：
+- 引入 Kenney Particle Pack（CC0 1.0）14 张 512x512 sprite，放在 `Resources/Texture/Particles/Kenney/`，附 `License.txt` 与 `README.md`（来源、许可、用途、alpha 转换脚本）；上游黑底灰度就地转 RGBA，保留 RGB、令 A=亮度，使 shader 直接按 alpha 混合。
+- `ParticleEmitterComponent` 增加 `std::string texture`（`effects.particles` 第 17 个属性），存相对 `Resources/Texture` 的路径，空字符串表示程序化圆形；`PropertyDescriptor::hidden` 让通用属性控件跳过它，改由 `InspectorPanel::drawParticleTextureWidget` 画“粒子贴图 / 选择… / 清除”，弹窗只列 `Particles/` 前缀、支持过滤与重新扫描；选中/清除写回 `PropertyValue`，仍由 `SetComponentRecordCommand` 提交撤销。
+- `ParticlePass` 启动时递归扫描 `TINY_RESOURCE_DIR/Texture/Particles`（png/jpg/jpeg/tga/bmp，最多 64 张），逐张 `Scene::loadMaterialTexture` + `MaterialSystem::buildMaterialDescriptor` 建 bindless 材质槽；实例结构增加到 36B（`materialId`），pipeline 增加 set1 材质数组，shader 以 `0xFFFFFFFF` 回退程序化圆形，否则采样 sprite（手动翻转 v）。
+- `--particle-demo` 改用 `Particles/Kenney/fire_01.png`，日志追加 `texture=...`；新增或替换贴图需要重启，`ParticlePass` 不做运行时热加载。
+
+**测试**：
+- `[Particle] textures=14 failed=0 status=ready root=...`；`[Particle] demo emitter created | rate=220 max=1500 texture=Particles/Kenney/fire_01.png`；`f6-particles` 60 帧断言这些行、`emitters=1 alive=`、`drawcalls=1` 与 0/0。
+- 240 帧截图 `build/particle_texture.png`：`[Particle] emitters=1 alive=376`、`draw calls 2`、`triangles 8950`、`[Validation] errors=0 warnings=0`；画面上是可见的竖直火焰柱，确认 sprite 已替换程序化圆形。
+- `[Scene] ECS component selfTest PASS | components=26 | systems=8`：`effects.particles` 记录 17 属性且 `find("texture")` 非空。
+- 全套回归 **76 项** ALL PASS（含 `f6-particles`），stderr 全 0，验证日志 `build/validation/20261110-124840`；DocCheck 通过。
+
+**边界**：每次启动预加载最多 64 张，每个发射器只能选一张，空/失效路径回退圆形；新增或替换贴图需要重启，不支持热重载、逐粒子旋转、图集动画或独立 alpha 通道（alpha 由亮度生成）。粒子仍不进 G-Buffer/平面反射/阴影，TAA 没有粒子运动向量。

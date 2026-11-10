@@ -85,6 +85,10 @@ bool drawPropertyWidgets(scene::ComponentRecord& record,
         scene::NamedProperty* value = record.find(property.name);
         if (value == nullptr)
             continue;
+        // 贴图等资源字段由组件自己的专用控件绘制，通用控件不重复出现，
+        // 也不允许手输绝对路径。
+        if (property.hidden)
+            continue;
 
         ImGui::PushID(property.name.c_str());
         const scene::NamedProperty* defaultValue =
@@ -684,9 +688,12 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
                 const std::optional<scene::ComponentRecord> defaults =
                     scene->defaultComponentRecord(descriptor.type);
                 bool changed = false;
+                // 粒子贴图是资源选择器，不是普通字符串输入；放在参数最上面。
+                if (descriptor.type == "effects.particles")
+                    changed |= drawParticleTextureWidget(afterRecord);
 
-                changed = drawPropertyWidgets(afterRecord, descriptor,
-                                              defaults ? &*defaults : nullptr);
+                changed |= drawPropertyWidgets(afterRecord, descriptor,
+                                               defaults ? &*defaults : nullptr);
 
                 if (changed && !afterRecord.equivalentTo(*beforeRecord))
                 {
@@ -1287,6 +1294,114 @@ void InspectorPanel::drawTextureRow(EditorState& state, entt::entity entity, Mat
     }
 
     ImGui::PopID();
+}
+
+bool InspectorPanel::drawParticleTextureWidget(scene::ComponentRecord& record)
+{
+    scene::NamedProperty* value = record.find("texture");
+    if (value == nullptr)
+        return false;
+
+    ImGui::PushID("texture");
+    std::string current = value->value.asString();
+    std::string currentGeneric = current;
+    std::replace(currentGeneric.begin(), currentGeneric.end(), '\\', '/');
+    const std::string currentName = currentGeneric.empty()
+        ? std::string("(程序化圆形)")
+        : std::filesystem::path(currentGeneric).filename().string();
+
+    ImGui::TextUnformatted("粒子贴图");
+    ImGui::SameLine(92.0f);
+    ImGui::TextDisabled("%s", currentName.c_str());
+    if (!currentGeneric.empty() && ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s\n空表示程序化圆形；启动时预加载，新增文件需重启", currentGeneric.c_str());
+
+    ImGui::SameLine();
+    bool pickClicked = ImGui::SmallButton("选择…");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("从 Resources/Texture/Particles 选择粒子 sprite");
+    if (!currentGeneric.empty())
+    {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("清除"))
+        {
+            value->value = scene::PropertyValue::fromString(std::string());
+            ImGui::PopID();
+            return true;
+        }
+    }
+
+    if (pickClicked)
+    {
+        if (!texturesScanned)
+        {
+            textures.refresh();
+            texturesScanned = true;
+        }
+        textureFilter[0] = '\0';
+        ImGui::OpenPopup("##particle_texture_picker");
+    }
+
+    bool changed = false;
+    std::string chosen;
+    if (ImGui::BeginPopup("##particle_texture_picker"))
+    {
+        size_t particleCount = 0;
+        for (const TextureEntry& entry : textures.entries())
+        {
+            std::string rel = entry.displayName;
+            std::replace(rel.begin(), rel.end(), '\\', '/');
+            if (rel.rfind("Particles/", 0) == 0)
+                ++particleCount;
+        }
+
+        ImGui::TextDisabled("Particles · %zu 张 · %s", particleCount,
+                            textures.scannedRoot().c_str());
+        ImGui::SetNextItemWidth(320.0f);
+        ImGui::InputTextWithHint("##particle_tex_filter", "过滤…", textureFilter,
+                                 IM_ARRAYSIZE(textureFilter));
+        if (ImGui::Button("重新扫描"))
+            textures.refresh();
+
+        ImGui::BeginChild("##particle_tex_list", ImVec2(360.0f, 260.0f));
+        std::string filter = textureFilter;
+        std::transform(filter.begin(), filter.end(), filter.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        size_t listed = 0;
+        for (const TextureEntry& entry : textures.entries())
+        {
+            std::string rel = entry.displayName;
+            std::replace(rel.begin(), rel.end(), '\\', '/');
+            if (rel.rfind("Particles/", 0) != 0)
+                continue;
+            if (!filter.empty())
+            {
+                std::string lower = rel;
+                std::transform(lower.begin(), lower.end(), lower.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (lower.find(filter) == std::string::npos)
+                    continue;
+            }
+            ++listed;
+            const bool selected = rel == currentGeneric;
+            if (ImGui::Selectable(rel.c_str(), selected))
+                chosen = rel;
+        }
+        if (listed == 0)
+            ImGui::TextDisabled("没有匹配的粒子贴图。");
+        ImGui::EndChild();
+        ImGui::EndPopup();
+    }
+
+    if (!chosen.empty())
+    {
+        value->value = scene::PropertyValue::fromString(chosen);
+        changed = true;
+    }
+
+    ImGui::PopID();
+    return changed;
 }
 
 void InspectorPanel::drawRenderTag(EditorState& state, entt::entity entity)

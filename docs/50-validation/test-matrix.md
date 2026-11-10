@@ -102,7 +102,7 @@ updated: 2026-11-10
 | 71 | `f3v-water-off` | 水面关闭路径 | `TinyEngine.exe --selftest 20 --voxel-world 1 --no-water` | `[Water] disabled`、`[Validation] errors=0 warnings=0` | 与 TAA 不同：Water 是"真跳过"，因为下游没有任何 pass 固定读它的输出 |
 | 72 | `f3v-ssr` | 水面近场 SSR：半分辨率 48 步屏幕空间追踪，结果经 Set0 binding13 混入水面反射；主路径注册在 Water 之前 | `TinyEngine.exe --selftest 20 --voxel-world 1` | `[SSR] initialized \|`、`[SSR] first draw \|`、`[Water] first draw \|`、`ssr=1`、`[Validation] errors=0 warnings=0` | 只在水面启用、场景有地形/体素块时注册；屏幕外/超过 `ssrMaxDistance` 回退平面反射/IBL；关闭时 binding13 必须回退环境图 |
 | 73 | `f3v-ssr-off` | SSR 关闭路径：Pass 不注册，水面仍能画，日志 `ssr=0` | `TinyEngine.exe --selftest 20 --voxel-world 1 --no-ssr` | `[SSR] disabled`、`[Water] first draw \|`、`ssr=0`、`[Validation] errors=0 warnings=0` | 与 `--no-water` 不同：只关 SSR，水面/平面反射继续；Water 的 `params3.y` 分支必须跳过采样 |
-| 74 | `f6-particles` | 粒子发射器：空场景创建 `effects.particles` 喷泉，CPU 发射/模拟后由 `ParticlePass` 前向透明绘制 | `TinyEngine.exe --selftest 60 --empty-scene --particle-demo` | `[Particle] demo emitter created \|`、`[Particle] emitters=1 alive=`、`drawcalls=1`、`[Validation] errors=0 warnings=0` | 粒子不进 G-Buffer；Pass 在 Water 后、TAA 前，LOAD HDR + 深度、`depthWrite = FALSE`、按相机距离排序；`enabled=false` 停发但存量走完寿命 |
+| 74 | `f6-particles` | 粒子发射器 + Kenney sprite：空场景创建 `effects.particles` 喷泉，启动预加载 `Texture/Particles`，CPU 发射/模拟后由 `ParticlePass` 前向透明绘制 | `TinyEngine.exe --selftest 60 --empty-scene --particle-demo` | `[Particle] textures=`、`status=ready`、`[Particle] demo emitter created \|`、`texture=Particles/Kenney/fire_01.png`、`[Particle] emitters=1 alive=`、`drawcalls=1`、`[Validation] errors=0 warnings=0` | 粒子不进 G-Buffer；Pass 在 Water 后、TAA 前，LOAD HDR + 深度、`depthWrite = FALSE`、按相机距离排序；set1 bindless 材质数组，空/失效路径回退圆形；新增贴图需重启；`enabled=false` 停发但存量走完寿命 |
 
 ## 3. 工具自测
 
