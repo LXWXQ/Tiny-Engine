@@ -341,7 +341,12 @@ $tests = @(
     # F6-07：地形植被。空场景 + 流送地形生成草/树，VegetationPass 在 Geometry 后
     # SSAO 前写 G-Buffer；断言网格、演示参数、放置、首帧与验证层零消息。
     @{ Name = "f6-vegetation"; Exe = "engine"; Args = @("--selftest", "90", "--empty-scene", "--streaming-world", "3", "--vegetation-demo");
-       MustContain = @("[Vegetation] meshes |", "[Vegetation] demo scene ready |", "[Vegetation] placed | grass=", "[Vegetation] first draw |", "[Validation] errors=0 warnings=0") }
+       MustContain = @("[Vegetation] meshes |", "[Vegetation] demo scene ready |", "[Vegetation] placed | grass=", "[Vegetation] first draw |", "[Validation] errors=0 warnings=0") },
+    # F6-08：可放置的局部体积雾。实体 Transform 定义盒体，FogVolumePass 在
+    # Cloud 后、Reflection 前全屏 raymarch，读 G-Buffer 位置截断并预乘混进 HDR；
+    # 断言初始化、演示盒、首帧与验证层零消息。
+    @{ Name = "f6-fog-volume"; Exe = "engine"; Args = @("--selftest", "70", "--empty-scene", "--streaming-world", "3", "--fog-demo");
+       MustContain = @("[FogVolume] initialized | noise=32^3", "[FogVolume] demo volume created |", "[FogVolume] first draw |", "[Validation] errors=0 warnings=0") }
 )
 
 # Only meaningful for a profiling build (-EnableProfiling).

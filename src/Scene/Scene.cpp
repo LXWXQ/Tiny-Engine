@@ -1484,7 +1484,7 @@ bool Scene::selfTest()
         scene.getRegistry();
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
-        if (componentCount != 29 || systemCount != 8)
+        if (componentCount != 30 || systemCount != 8)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;
@@ -1531,6 +1531,26 @@ bool Scene::selfTest()
             characterHeight->tooltip.empty())
         {
             std::cerr << "[Scene] selfTest FAIL: native property metadata mismatch\n";
+            ok = false;
+        }
+
+        // F6-08：雾盒是实体组件，属性必须完整暴露给 Inspector；默认值也要
+        // 与 shader/Pass 的语义一致（density=0.02 表示 1/m 消光）。
+        const scene::PropertyDescriptor* fogDensity =
+            findProperty(scene.getComponentRegistry(), "effects.fogVolume", "density");
+        if (fogDensity == nullptr || !fogDensity->hasRange ||
+            fogDensity->minimum != 0.0f || fogDensity->maximum != 0.2f ||
+            fogDensity->tooltip.empty())
+        {
+            std::cerr << "[Scene] selfTest FAIL: fog volume property metadata mismatch\n";
+            ok = false;
+        }
+        const auto fogDefaults = scene.defaultComponentRecord("effects.fogVolume");
+        if (!fogDefaults || fogDefaults->properties.size() != 11 ||
+            !fogDefaults->find("density") ||
+            fogDefaults->find("density")->value.asFloat() != 0.02f)
+        {
+            std::cerr << "[Scene] selfTest FAIL: fog volume default record mismatch\n";
             ok = false;
         }
 
@@ -1602,6 +1622,23 @@ bool Scene::selfTest()
         {
             std::cerr << "[Scene] selfTest FAIL: removeComponent semantics mismatch\n";
             ok = false;
+        }
+
+        // 雾盒走同一条 addComponent/readComponent 路径，确保编辑器里能添加。
+        if (!scene.addComponent(testEntity, "effects.fogVolume") ||
+            !scene.hasComponent(testEntity, "effects.fogVolume"))
+        {
+            std::cerr << "[Scene] selfTest FAIL: fog volume addComponent failed\n";
+            ok = false;
+        }
+        else
+        {
+            const auto fog = scene.readComponent(testEntity, "effects.fogVolume");
+            if (!fog || !fog->find("density") || fog->find("density")->value.asFloat() != 0.02f)
+            {
+                std::cerr << "[Scene] selfTest FAIL: fog volume readComponent mismatch\n";
+                ok = false;
+            }
         }
 
         // 第一批效果组件：每个系统跑一个完整周期，验证动作发生且能回到原位。

@@ -5,7 +5,7 @@ type: pipeline
 scope: src/Render, shaders
 read-when: 修改 Pass 顺序、着色器、G-Buffer 或中间目标
 size: ~50 行
-updated: 2026-10-30
+updated: 2026-11-11
 ---
 
 # 20-pipeline 渲染管线

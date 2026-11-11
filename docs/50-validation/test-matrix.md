@@ -5,13 +5,13 @@ type: validation
 scope: tools/Validate.ps1
 read-when: 加/改回归项，或某项失败需要知道它在测什么
 size: ~200 行
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **77 项引擎/编辑器用例 + 2 项工具自测 = 79 项**；
-加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`（第 80 项）。
+`tools/Validate.ps1` 默认跑 **78 项引擎/编辑器用例 + 2 项工具自测 = 80 项**；
+加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`（第 81 项）。
 
 ## 1. 每项的判据（统一）
 
@@ -106,14 +106,15 @@ updated: 2026-11-10
 | 75 | `f6-clouds` | 体积云：空场景创建 `scene.clouds`，启动生成 64³ RGBA8 可平铺噪声，`CloudPass` 在 Lighting 后全屏 raymarch，读 G-Buffer 世界位置截断，预乘混合进 HDR | `TinyEngine.exe --selftest 30 --empty-scene --cloud-demo` | `[Cloud] initialized`、`[Cloud] demo scene ready`、`[Cloud] first draw`、`[Validation] errors=0 warnings=0` | 云默认关闭（`cloudEnabled=false`），只有 `scene.clouds` 存在且启用时才注册；无深度附件、不写 G-Buffer；4 步太阳自阴影、`maxDistance=6500`、步骤上限 128；`--cloud-demo` 设 coverage=.55、base=200、thickness=120、steps=56；云不进平面反射/阴影，也没有时域重投影 |
 | 76 | `f6-sun` | 太阳盘 + 镜头光晕：空场景创建 `scene.sun` 与 `scene.environment`，`SunFlarePass` 在 TAA 后、Bloom 前读深度、纯加色写 `taaOutput`；日盘按世界空间射线夹角绘制，鬼影沿太阳-屏幕中心镜像 | `TinyEngine.exe --selftest 30 --empty-scene --sun-demo` | `[Sun] initialized \|`、`[Sun] demo scene ready \|`、`[Sun] first draw \|`、`[Validation] errors=0 warnings=0` | 太阳默认关闭（`sunEnabled=false`），只有 `scene.sun` 存在且启用时才注册；方向/光色跟随 `scene.environment`，不单独存太阳方向；5 点深度只决定日盘可见度，鬼影不逐像素遮挡；放在 TAA 后避免拖影、Bloom 前让日盘参与辉光；云不写深度所以日盘会叠在云上；太阳不进平面反射/SSR |
 | 77 | `f6-vegetation` | 地形植被：空场景 + 流送地形生成程序化草/树，`VegetationPass` 在 Geometry 后、SSAO 前写 G-Buffer；草/树各一次实例化 draw | `TinyEngine.exe --selftest 90 --empty-scene --streaming-world 3 --vegetation-demo` | `[Vegetation] meshes \|`、`[Vegetation] demo scene ready \|`、`[Vegetation] placed \| grass=`、`[Vegetation] first draw \|`、`[Validation] errors=0 warnings=0` | 默认关闭（`vegetationEnabled=false`），只有 `scene.vegetation` 存在且启用时才放置/绘制；只采样地形、跳过水面与陡坡；放置去抖：相机>6m、参数变化或地形签名稳定 0.5s；不投自身阴影、不进平面反射；无 LOD/外部资产，实例上限草 49152 / 树 4096 |
+| 78 | `f6-fog-volume` | 局部体积雾：空场景 + 流送地形创建一个 `effects.fogVolume` 雾盒，`FogVolumePass` 在 Cloud 后、反射/透明前逐盒 raymarch，读 G-Buffer 世界位置截断，预乘混合进 HDR | `TinyEngine.exe --selftest 70 --empty-scene --streaming-world 3 --fog-demo` | `[FogVolume] initialized \| noise=32^3`、`[FogVolume] demo volume created \|`、`[FogVolume] first draw \|`、`[Validation] errors=0 warnings=0` | 默认不添加，只有存在且启用的 `effects.fogVolume` 实体才注册 Pass；Transform 的 scale 为全尺寸、最多 8 个；32³ 静态噪声、单盒 steps 1..32；无深度附件、不写 G-Buffer，雾不进平面反射/CSM 阴影；`--fog-demo` 用固定 `groundY=10`，流送 chunk 创建时尚未落地 |
 
 ## 3. 工具自测
 
 | # | 名称 | 内容 |
 |---|---|---|
-| 78 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
-| 79 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
-| 80 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 79 项不含它） |
+| 79 | `p3-baseline-diff` | 先 `Baseline.ps1 -Action Save` 再 `-Action Diff`，三维度（GPU 时间 / 验证层 / 视觉）自动判回归 |
+| 80 | `p3-debug-bundle` | `DebugBundle.ps1` 轻量版（跳过深度校验与基线 diff）产出证据包 |
+| 81 | `p1-profiling-enabled` | 仅 `-EnableProfiling` 时追加：`--capture-frame 10` 抓帧路径（默认 80 项不含它） |
 
 ## 4. 文档一致性检查
 

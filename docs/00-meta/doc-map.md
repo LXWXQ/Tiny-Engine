@@ -47,6 +47,7 @@ updated: 2026-11-10
 | `VegetationPass.*` / `vegetation.vert` / `vegetation.frag` | 实例化草/树写 G-Buffer（Geometry 后、SSAO 前），地形高度/坡度放置、风摆、草片元 alpha-test discard | [vegetation](../30-systems/vegetation.md)、[pass-order](../20-pipeline/pass-order.md) | vegetation、pass-order |
 | `ParticlePass.*` / `particle.vert` / `particle.frag` | 每帧 host-visible 粒子实例、billboard、圆形软遮罩，Water 后/TAA 前前向混合 HDR，按相机距离排序 | [scene-ecs](../30-systems/scene-ecs.md)、[pass-order](../20-pipeline/pass-order.md) | scene-ecs、pass-order |
 | `CloudPass.*` / `cloud.frag` | 全屏体积云：读 G-Buffer 世界位置截断 + 64³ 3D 噪声，4 步太阳自阴影，预乘 alpha 写 HDR；Lighting 后/反射前 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
+| `FogVolumePass.*` / `fog_volume.frag` | 可摆放局部体积雾：逐实体雾盒（最多 8 个）slab 相交 + 盒内步进，32³ 3D 噪声/高度衰减/边缘淡出/HG 相函数，预乘 alpha 写 HDR；Cloud 后/反射前 | [fog-volume](../30-systems/fog-volume.md)、[pass-order](../20-pipeline/pass-order.md) | fog-volume、pass-order |
 | `SunFlarePass.*` / `sunflare.frag` | 太阳盘 + 镜头光晕：方向跟随场景方向光，世界空间射线夹角画日盘，5 点深度可见度，圆形散景鬼影/色散/光条（太阳在背后/出画不产生）；TAA 后/Bloom 前纯加色写 HDR | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `BloomPass.*` | Bright + 3 down + 3 up 金字塔 | [intermediate](../20-pipeline/intermediate.md) | intermediate |
 | `PresentPass.*` | 双路径（Bloom/NoBloom）、ACES、ImGui 叠加 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
@@ -107,6 +108,7 @@ updated: 2026-11-10
 | `lighting.frag/.vert` | HDR 光照 | [pass-order](../20-pipeline/pass-order.md) |
 | `ssr.frag` | 半分辨率水面屏幕空间反射 | [pass-order](../20-pipeline/pass-order.md) |
 | `cloud.frag` | 全屏体积云 raymarch（64³ 噪声 + 4 步太阳自阴影） | [pass-order](../20-pipeline/pass-order.md) |
+| `fog_volume.frag` | 局部雾盒 raymarch：读 G-Buffer 位置截断、逐盒 slab、32³ 噪声、高度衰减与 HG 相函数 | [fog-volume](../30-systems/fog-volume.md)、[pass-order](../20-pipeline/pass-order.md) |
 | `sunflare.frag` | 太阳盘 + 镜头鬼影/色散/光条，读深度做 5 点遮挡 | [pass-order](../20-pipeline/pass-order.md) |
 | `vegetation.vert/.frag` | 植被实例变换、风摆、草叶 alpha-test、G-Buffer 四输出 | [vegetation](../30-systems/vegetation.md)、[pass-order](../20-pipeline/pass-order.md) |
 | `particle.vert` / `particle.frag` | 粒子 billboard 与圆形软遮罩、前向透明混合 | [pass-order](../20-pipeline/pass-order.md) |
@@ -125,7 +127,7 @@ updated: 2026-11-10
 | `CMakeLists.txt` | 依赖检查、shader 编译 + `spirv-val`、`TINY_ENABLE_*` 开关 | [build](../40-build/build.md)、[dependencies](../40-build/dependencies.md) | build、dependencies |
 | `cmake/AssetPaths.h.in` | 资源绝对路径注入 | [build](../40-build/build.md) | build |
 | `main.cpp` | 全部 CLI 参数解析 | [cli-reference](../50-validation/cli-reference.md) | cli-reference |
-| `tools/Validate.ps1` | 主回归（79 项 + 文档检查） | [test-matrix](../50-validation/test-matrix.md) | test-matrix |
+| `tools/Validate.ps1` | 主回归（80 项 + 文档检查） | [test-matrix](../50-validation/test-matrix.md) | test-matrix |
 | `tools/SetupDependencies.ps1` | 8 个依赖的固定版本安装 | [dependencies](../40-build/dependencies.md) | dependencies |
 | `tools/DocCheck.ps1` | 本文档系统的自动校验 | [doc-rules](doc-rules.md) | doc-rules |
 | `tools/Baseline.ps1` / `DebugBundle.ps1` / `DeepValidation.ps1` / `Screenshot.ps1` / `Capture.ps1` / `Profile.ps1` | 剖析与证据收集 | [tools](../60-debug-profiling/tools.md) | tools |

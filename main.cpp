@@ -102,6 +102,7 @@ const UsageLine kUsageLines[] = {
     { "地形", "--cloud-demo", "启用体积云并把相机放到云层下方（建议配 --streaming-world）" },
     { "地形", "--sun-demo", "启用太阳盘与镜头光晕（建议配 --streaming-world）" },
     { "地形", "--vegetation-demo", "在地形上种草与树，相机贴近地面（建议配 --streaming-world 3）" },
+    { "地形", "--fog-demo", "在相机前方放一个局部体积雾盒（建议配 --streaming-world 3）" },
     { "地形", "--streaming-fly [speed]", "沿 +X 直线飞行，用于流送/卸载回归" },
     { "地形", "--streaming-fly-radius <r>", "绕圆飞行半径（0 = 直线）" },
     { "地形", "--streaming-budget <ms>", "每帧地形生成预算（毫秒）" },
@@ -298,6 +299,10 @@ int main(int argc, char** argv)
         else if (arg == "--vegetation-demo")
         {
             diagOptions.vegetationDemo = true;
+        }
+        else if (arg == "--fog-demo")
+        {
+            diagOptions.fogDemo = true;
         }
         else if (arg == "--streaming-fly")
         {

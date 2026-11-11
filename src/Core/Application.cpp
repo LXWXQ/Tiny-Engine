@@ -22,6 +22,7 @@
 #include "Render/GeometryPass.h"
 #include "Render/LightingPass.h"
 #include "Render/CloudPass.h"
+#include "Render/FogVolumePass.h"
 #include "Render/BloomPass.h"
 #include "Render/PresentPass.h"
 #include "Render/UiCompositePass.h"
@@ -820,6 +821,11 @@ streamingConfig.skirtsEnabled = false;
 	auto cloudPass = std::make_unique<CloudPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
 		renderer->getCommandPool());
+	// F6-08：局部体积雾。排在 Cloud 之后 —— 近处雾要盖住远景云；排在
+	// Reflection/SSR/Glass/Water 之前 —— 水面/玻璃要看到雾中的 HDR。
+	auto fogVolumePass = std::make_unique<FogVolumePass>(*vulkanDevice, *renderGraph, *renderResources,
+		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
+		renderer->getCommandPool());
 	// C1：平面反射用镜像相机把水面以上的几何重画到半分辨率 G-Buffer，再跑一遍
 	// 光照。必须排在 Lighting 之后（LightingPass::init 先建好 hdrScene，反射
 	// 据此决定分辨率），Glass/Water 之前（水面要读反射颜色）。
@@ -894,6 +900,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(ssaoPass));
 	renderPipeline.addPass(std::move(lightPass));
 	renderPipeline.addPass(std::move(cloudPass));
+	renderPipeline.addPass(std::move(fogVolumePass));
 	renderPipeline.addPass(std::move(reflectionPass));
 	renderPipeline.addPass(std::move(ssrPass));
 	renderPipeline.addPass(std::move(glassPass));
@@ -1120,6 +1127,48 @@ streamingConfig.skirtsEnabled = false;
 			<< " grassDensity=" << vegetation.grassDensity
 			<< " treeDensity=" << vegetation.treeDensity
 			<< " seed=" << vegetation.seed << std::endl;
+	}
+
+	// F6-08：局部体积雾目测场景。盒体就是实体的 Transform：这里放一个
+	// 30x10x36 的雾盒在相机前方，相机从盒外看进去，能看到边缘淡出和高度衰减。
+	// 没有地形时背景是黑的，所以帮助里建议配 --streaming-world 3。
+	if (options.fogDemo)
+	{
+		const entt::entity fogEntity = scene->createEntity();
+		scene->getRegistry().emplace<NameComponent>(fogEntity, "局部雾盒（Fog Demo）");
+		if (!scene->addComponent(fogEntity, "effects.fogVolume"))
+			throw std::runtime_error("--fog-demo component creation failed");
+
+		auto& fog = scene->getRegistry().get<scene::FogVolumeComponent>(fogEntity);
+		fog.enabled = true;
+		fog.density = 0.045f;
+		fog.color = glm::vec4(0.62f, 0.72f, 0.86f, 1.0f);
+		fog.heightFalloff = 0.12f;
+		fog.noiseStrength = 0.82f;
+		fog.noiseScale = 0.085f;
+		fog.wind = glm::vec3(0.55f, 0.0f, 0.18f);
+		fog.edgeSoftness = 0.34f;
+		fog.anisotropy = 0.55f;
+		fog.ambient = 0.55f;
+		fog.steps = 24;
+
+		// 流送 chunk 在 demo 创建时还没落地，采样会拿到 0；直接用高于地形的
+		// 固定站位（地形 heightScale=12），避免相机被埋进地面。
+		const float groundY = 10.0f;
+
+		TransformComponent& fogTransform = scene->getRegistry().get<TransformComponent>(fogEntity);
+		fogTransform.setTranslation(glm::vec3(-6.0f, groundY, -10.0f));
+		fogTransform.setScale(glm::vec3(30.0f, 10.0f, 36.0f));
+		scene->markTransformDirty(fogEntity);
+
+		TransformComponent& cameraTransform = scene->getCameraTransform();
+		cameraTransform.setTranslation(glm::vec3(0.0f, groundY + 8.0f, 28.0f));
+		cameraTransform.setEuler(glm::vec3(glm::radians(-8.0f), glm::radians(180.0f), 0.0f));
+		cameraTransform.setScale(glm::vec3(1.0f));
+		scene->markTransformDirty(scene->getCameraEntity());
+		std::cout << "[FogVolume] demo volume created | density=" << fog.density
+			<< " scale=" << fogTransform.getScale().x << "x" << fogTransform.getScale().y
+			<< "x" << fogTransform.getScale().z << " steps=" << fog.steps << std::endl;
 	}
 
 	// 太阳光晕目测场景：启用 scene.sun，并把方向光转到相机前方右上，

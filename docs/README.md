@@ -5,7 +5,7 @@ type: meta
 scope: docs/
 read-when: 第一次接触本项目、或要新增/移动/删除文档
 size: ~200 行
-updated: 2026-11-05
+updated: 2026-11-11
 ---
 # 文档系统总纲
 
@@ -15,7 +15,7 @@ updated: 2026-11-05
 ## 0. 为什么要有这一层
 
 本项目由 LLM 驱动开发：每次新对话的上下文是**有限预算**，而代码规模（约 100 个源文件、
-51KB 的 `RenderGraph.cpp`、29 个 shader）远超一次能全读的量。
+51KB 的 `RenderGraph.cpp`、47 个 shader）远超一次能全读的量。
 
 所以文档系统的首要目标不是"写得多"，而是：
 
@@ -76,7 +76,7 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     │   ├── gbuffer.md           5 个 G-Buffer 附件与格式选择
     │   ├── intermediate.md      中间目标 / Bloom 金字塔 / HDR
     │   ├── ibl.md               split-sum 烘焙三步
-    │   └── shaders.md           29 个 shader 清单与编译管线
+    │   └── shaders.md           47 个 shader 清单与编译管线
     ├── 30-systems/
     │   ├── README.md
     │   ├── scene-ecs.md         EnTT / Transform 层级 / 空间索引
@@ -86,6 +86,9 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     │   ├── terrain.md           程序化地形：参数 / 生成 / 渲染 / 存读
     │   ├── terrain-materials.md 地形 Set2：四层 PBR / 材质集 / Surface Style
     │   ├── character.md         运行模式角色：glTF 蒙皮 / 动画状态机 / CPU skinning
+    │   ├── vegetation.md        地形植被：程序化草/树 / 放置规则 / 实例化
+    │   ├── voxel.md             方块体素：chunk / 贪心网格 / 挖放 / 玻璃
+    │   ├── fog-volume.md        局部体积雾：雾盒摆放 / raymarch / 噪声 / 调参
     │   └── water.md             水面：径向网格 / footprint 波浪过滤 / 反射 / 泡沫 / 距离雾
     ├── 40-build/
     │   ├── README.md
@@ -96,7 +99,7 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     ├── 50-validation/
     │   ├── README.md
     │   ├── cli-reference.md     全部命令行参数
-    │   ├── test-matrix.md       21 项回归矩阵与判据
+    │   ├── test-matrix.md       80 项回归矩阵与判据
     │   └── acceptance.md        验收标准与"结果可信度"三规则
     ├── 60-debug-profiling/
     │   ├── README.md
@@ -206,6 +209,9 @@ updated: 2026-10-30
 | systems | [config](30-systems/config.md) | 改可调参数 / 配置格式 |
 | systems | [imgui](30-systems/imgui.md) | 改面板 |
 | systems | [terrain](30-systems/terrain.md) | 改地形生成 / 网格 / 顶点色 / 地形存读 |
+| systems | [vegetation](30-systems/vegetation.md) | 改草/树分布、外观、风摆 |
+| systems | [voxel](30-systems/voxel.md) | 改体素网格、挖放、玻璃透明 |
+| systems | [fog-volume](30-systems/fog-volume.md) | 摆放局部雾、调浓度/高度/噪声/风 |
 | systems | [water](30-systems/water.md) | 改水面外观 / 波浪过滤 / 反射 / 距离雾 |
 | build | [dependencies](40-build/dependencies.md) | 换机器 / 加依赖 |
 | build | [build](40-build/build.md) | 每次构建 |

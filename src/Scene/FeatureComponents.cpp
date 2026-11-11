@@ -741,6 +741,44 @@ void registerFeatureComponents(ComponentRegistry& registry)
               "texture", "Particle Texture", &ParticleEmitterComponent::texture,
               "粒子 sprite，空表示程序化圆形；路径相对 Resources/Texture，启动时预加载",
               true) }));
+
+    // 局部体积雾：Transform 的 position/rotation/scale 就是盒体，属性只暴露
+    // 渲染参数。默认关闭由“不添加组件”表达，添加后默认 enabled 方便立即看到。
+    registry.add(makeComponentDescriptor<FogVolumeComponent>(
+        "effects.fogVolume", "Fog Volume", "Effects",
+        { makeBoolProperty<FogVolumeComponent>(
+              "enabled", "Enabled", &FogVolumeComponent::enabled,
+              "关闭后不参与体积雾计算，保留所有设置"),
+          makeFloatProperty<FogVolumeComponent>(
+              "density", "Density (1/m)", &FogVolumeComponent::density,
+              0.0f, 0.2f, "消光系数；越大越浓，20 米厚时 0.02 约 33% 不透", 0.0005f),
+          makeColorProperty<FogVolumeComponent>(
+              "color", "Scatter Color", &FogVolumeComponent::color,
+              "雾的散射色调；alpha 不参与计算"),
+          makeFloatProperty<FogVolumeComponent>(
+              "heightFalloff", "Height Falloff (1/m)", &FogVolumeComponent::heightFalloff,
+              0.0f, 0.5f, "从盒体中心向上衰减；0 表示整盒均匀", 0.001f),
+          makeFloatProperty<FogVolumeComponent>(
+              "noiseStrength", "Noise Strength", &FogVolumeComponent::noiseStrength,
+              0.0f, 1.0f, "0=均匀雾，1=强团块/丝缕", 0.005f),
+          makeFloatProperty<FogVolumeComponent>(
+              "noiseScale", "Noise Scale (1/m)", &FogVolumeComponent::noiseScale,
+              0.005f, 0.5f, "3D 噪声的世界尺度；越小团块越大", 0.001f),
+          makeVec3Property<FogVolumeComponent>(
+              "wind", "Wind (m/s)", &FogVolumeComponent::wind, 0.01f,
+              "世界空间风速；噪声随时间沿该方向移动"),
+          makeFloatProperty<FogVolumeComponent>(
+              "edgeSoftness", "Edge Softness", &FogVolumeComponent::edgeSoftness,
+              0.01f, 0.5f, "盒体边缘淡出宽度（局部空间，0.5=整个盒体）", 0.002f),
+          makeFloatProperty<FogVolumeComponent>(
+              "anisotropy", "Anisotropy", &FogVolumeComponent::anisotropy,
+              -0.9f, 0.9f, "Henyey-Greenstein 相函数；正值让逆光方向更亮", 0.005f),
+          makeFloatProperty<FogVolumeComponent>(
+              "ambient", "Ambient", &FogVolumeComponent::ambient,
+              0.0f, 2.0f, "环境散射强度；影响背光面亮度", 0.005f),
+          makeIntProperty<FogVolumeComponent>(
+              "steps", "Steps", &FogVolumeComponent::steps,
+              1, 32, "每像素光线步数；越大越平滑，也越贵", 0.5f) }));
 }
 
 void registerFeatureSystems(SystemScheduler& scheduler)

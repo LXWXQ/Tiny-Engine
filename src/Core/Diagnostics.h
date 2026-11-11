@@ -91,6 +91,9 @@ bool sunDemo = false;
 // --vegetation-demo：启用 scene.vegetation，把相机贴近地面看草与树
 // （建议配合 --streaming-world 3，否则空场景没有地形可长）。
 bool vegetationDemo = false;
+// --fog-demo：在相机前方放一个可放置的局部体积雾盒（effects.fogVolume），
+// 用来目测盒体边缘、噪声与高度衰减（建议配合 --streaming-world 3）。
+bool fogDemo = false;
 int32_t streamingRadius = 3;
 // --streaming-fly [speed]：自检/无人值守时让相机沿圆周自动飞行，
 // 用来验证 chunk 的加载与卸载（不飞就只会在原地加载一圈）。

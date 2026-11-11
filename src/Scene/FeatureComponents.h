@@ -14,6 +14,7 @@
 //   effects.lookAt   朝向一个局部空间目标点
 //   effects.follow   以固定速度靠近一个局部空间目标点
 //   effects.particles 粒子发射器（唯一例外：粒子由 ParticlePass 前向绘制）
+//   effects.fogVolume 可放置的局部体积雾（由 FogVolumePass 前向绘制）
 //
 // LookAt / Follow 的 target 是父空间坐标；实体没有父节点时就是世界坐标。
 // ===========================================================================
@@ -157,6 +158,30 @@ struct ParticleEmitterComponent
     std::vector<Particle> particles;
     float spawnAccumulator = 0.0f;
     uint32_t randomState = 0;
+};
+
+// 场景里可放置的局部体积雾（盒形）。
+//
+// 实体 Transform 定义盒体：position=盒心，rotation=朝向，scale=全尺寸。
+// FogVolumePass 每帧把最多 8 个组件打包进 UBO，在 Lighting 之后做全屏
+// raymarch。雾只影响渲染，不写深度、不进 G-Buffer，也不参与阴影/SSAO。
+struct FogVolumeComponent
+{
+    bool enabled = true;
+
+    // 消光系数（1/米）。20 米厚的雾在 density=0.02 时约 33% 不透。
+    float density = 0.02f;
+    glm::vec4 color{ 0.78f, 0.84f, 0.92f, 1.0f };
+
+    // 从盒体中心向上的高度衰减（1/米）；0 表示整盒均匀。
+    float heightFalloff = 0.08f;
+    float noiseStrength = 0.55f;     // 0=均匀雾，1=强团块/丝缕
+    float noiseScale = 0.08f;        // 噪声世界尺度（1/米）
+    glm::vec3 wind{ 0.35f, 0.0f, 0.12f }; // 米/秒
+    float edgeSoftness = 0.18f;      // 局部盒体边缘淡出宽度（0..0.5）
+    float anisotropy = 0.55f;        // HG 相函数，越大越向前散射
+    float ambient = 0.35f;           // 环境散射强度
+    int steps = 12;                  // 每像素步数，1..32
 };
 
 // 注册全部效果组件的元数据。重复调用是安全的：ComponentRegistry::add

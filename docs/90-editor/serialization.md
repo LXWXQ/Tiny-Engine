@@ -95,7 +95,7 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 | 1 | 实体、变换、父子、网格、材质 | — |
 | 2 | 新增可选 `voxelWorlds`（seed + 差分） | 旧文件缺省为空 |
 | 3 | 每个实体新增可选 `components`（元数据注册实体组件；`native.*` 不写入） | 旧文件缺省为空；未知组件/属性跳过 |
-| 4 | 顶层新增 `sceneComponents`（当前 11 个 `scene.*` 场景功能组件，`scope=Scene`） | 旧文件缺字段时按当前 `EngineSettings` 重建；空数组表示全部移除/关闭 |
+| 4 | 顶层新增 `sceneComponents`（当前 12 个 `scene.*` 场景功能组件，`scope=Scene`） | 旧文件缺字段时按当前 `EngineSettings` 重建；空数组表示全部移除/关闭 |
 
 `terrain` / `terrainWorld` / `character` / `components` / `sceneComponents` 都是**可选字段**，所以旧场景
 不需要迁移；读取端不按版本号拒绝，只有写入端跟 `kCurrentVersion`（当前 4）升版本。
@@ -208,9 +208,9 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 与 `equivalentTo()`；同时比较顶层 `sceneComponents` 的数量与内容。删除撤销、复制实体也会带走
 实体 record，见 [commands](commands.md)。
 
-### 场景级组件与 `sceneComponents`（v4，F5-06；F6-05 扩到 10 个）
+### 场景级组件与 `sceneComponents`（v4，F5-06；F6-05~F6-07 扩到 12 个）
 
-10 个渲染功能组件（environment/shadows/bloom/ssao/ssr/motionBlur/taa/water/fog/clouds）挂在
+12 个渲染功能组件（environment/shadows/bloom/ssao/ssr/motionBlur/taa/water/fog/clouds/sun/vegetation）挂在
 `Scene` 的隐藏设置实体上，存盘写在**顶层**：
 
 ```json
@@ -224,12 +224,13 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 
 - 容器复用 `ComponentRecord` 格式，`type` / `properties` 规则与实体组件相同。
 - `SceneDescription::sceneComponentsAuthored` 区分“旧文件没有字段”和“v4 空数组”：前者按当前
-  `EngineSettings` 调 `resetSceneComponentsFromSettings()` 重建 9 个组件；后者保留空容器，
+  `EngineSettings` 调 `resetSceneComponentsFromSettings()` 重建 12 个组件；后者保留空容器，
   等于用户把功能全部移除。
 - `captureDescription()` 总是把 `sceneComponentsAuthored` 置 true；`toJson` 总是写数组（可为空）。
 - 加载时逐条校验 `scope=Scene`，`scene.*` 写进实体 `components` 会被警告并跳过；
   实体组件写进 `sceneComponents` 同样拒绝。
 - 预制体只捕获子树实体，顶层数组为空，不把当前场景的阴影/雾等设置带进预制体。
+- 局部体积雾是**实体组件** `effects.fogVolume`（带 Transform 的普通实体），走实体 `components` 数组，不进 `sceneComponents`；一个场景可以有多个雾盒，Transform 定义盒体，见 [fog-volume](../30-systems/fog-volume.md)。
 
 ### 原生组件与 `components` 去重（v3+，F5-04）
 
