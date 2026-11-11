@@ -593,6 +593,16 @@ void particleSystem(entt::registry& registry, float deltaSeconds)
 
 } // namespace
 
+glm::mat4 FogVolumeComponent::localMatrix() const
+{
+    glm::mat4 matrix = glm::translate(glm::mat4(1.0f), center);
+    const glm::quat orientation =
+        TransformComponent::quatFromEuler(glm::radians(rotation));
+    matrix *= glm::mat4_cast(orientation);
+    // 负尺寸会让行列式变号、盒体翻面；这里给一个最小厚度兜底。
+    return glm::scale(matrix, glm::max(size, glm::vec3(0.01f)));
+}
+
 void registerFeatureComponents(ComponentRegistry& registry)
 {
     registry.add(makeComponentDescriptor<SpinComponent>(
@@ -742,11 +752,29 @@ void registerFeatureComponents(ComponentRegistry& registry)
               "粒子 sprite，空表示程序化圆形；路径相对 Resources/Texture，启动时预加载",
               true) }));
 
-    // 局部体积雾：Transform 的 position/rotation/scale 就是盒体，属性只暴露
-    // 渲染参数。默认关闭由“不添加组件”表达，添加后默认 enabled 方便立即看到。
+    // 局部体积雾：placement（center/size/rotation）由组件自己保存，渲染时再乘
+    // 实体 WorldTransform。这样 Inspector 可以直接调“位置 / 体积大小”，不再
+    // 依赖用户去 Transform 面板找 Scale。专用面板绘制（drawProperties=false）。
+    scene::ComponentOptions fogOptions;
+    fogOptions.drawProperties = false;
+    fogOptions.requiresTransform = true;
+    fogOptions.description =
+        "可放置的局部体积雾盒：在 Inspector 里调中心、尺寸与旋转；"
+        "实体 Transform 可整体移动/旋转雾盒。最多同时渲染 8 个。";
     registry.add(makeComponentDescriptor<FogVolumeComponent>(
         "effects.fogVolume", "Fog Volume", "Effects",
-        { makeBoolProperty<FogVolumeComponent>(
+        { makeVec3Property<FogVolumeComponent>(
+              "center", "Center (local)", &FogVolumeComponent::center, 0.05f,
+              "盒心相对实体原点的局部偏移（米）"),
+          withRange(makeVec3Property<FogVolumeComponent>(
+                        "size", "Size (m)", &FogVolumeComponent::size, 0.1f,
+                        "盒体全尺寸（米）；XYZ 可分别调整"),
+                    0.05f, 2000.0f, 0.1f),
+          withRange(makeVec3Property<FogVolumeComponent>(
+                        "rotation", "Rotation (deg)", &FogVolumeComponent::rotation, 0.5f,
+                        "局部欧拉角（度）；与 Transform 的旋转顺序一致"),
+                    -360.0f, 360.0f, 0.5f),
+          makeBoolProperty<FogVolumeComponent>(
               "enabled", "Enabled", &FogVolumeComponent::enabled,
               "关闭后不参与体积雾计算，保留所有设置"),
           makeFloatProperty<FogVolumeComponent>(
@@ -778,7 +806,8 @@ void registerFeatureComponents(ComponentRegistry& registry)
               0.0f, 2.0f, "环境散射强度；影响背光面亮度", 0.005f),
           makeIntProperty<FogVolumeComponent>(
               "steps", "Steps", &FogVolumeComponent::steps,
-              1, 32, "每像素光线步数；越大越平滑，也越贵", 0.5f) }));
+              1, 32, "每像素光线步数；越大越平滑，也越贵", 0.5f) },
+        fogOptions));
 }
 
 void registerFeatureSystems(SystemScheduler& scheduler)

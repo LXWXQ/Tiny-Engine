@@ -1,9 +1,12 @@
 #include "Editor/panels/RenderSettingsPanel.h"
 #include "Editor/EditorState.h"
+#include "Editor/Commands.h"
 #include "Scene/Scene.h"
 
 #include <imgui.h>
 #include <cstdio>
+#include <optional>
+#include <string>
 
 namespace editor
 {
@@ -54,8 +57,7 @@ void RenderSettingsPanel::draw(EditorState& state)
 
     ImGui::TextWrapped(
         "曝光、阴影、Bloom、SSAO、雾、水面、TAA、运动模糊、SSR、方向光已改为"
-        "场景级组件。在 Inspector 没有选中对象时（或点下面的按钮）可以添加、"
-        "启用、调参、移除：移除组件即关闭该功能，并随场景文档保存与撤销。");
+        "场景级组件。这里可以快速启用/添加；详细参数在 Inspector 中编辑。");
 
     ImGui::Spacing();
     if (ImGui::Button("在 Inspector 中编辑场景组件"))
@@ -67,23 +69,118 @@ void RenderSettingsPanel::draw(EditorState& state)
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("清空选择后，Inspector 显示当前场景的功能组件");
 
-    // 只统计，不在这里改：所有场景功能都走组件 UI，避免两套控件写同一份值。
+    ImGui::Separator();
+    ImGui::TextDisabled("场景组件（勾选启用；右键移除；编辑看 Inspector）");
+
+    // Render 窗口保留自己的场景组件入口：这里只做“启用/添加/移除”，
+    // 具体参数仍由 Inspector 的同一张组件卡片绘制，避免两套控件写同一份值。
     if (Scene* scene = state.services.scene)
     {
         entt::registry* registry = state.services.registry;
-        if (registry != nullptr && registry->valid(scene->getSceneSettingsEntity()))
+        const entt::entity settingsEntity = scene->getSceneSettingsEntity();
+        if (registry != nullptr && registry->valid(settingsEntity))
         {
+            auto setEnabled = [](scene::ComponentRecord& record, bool value)
+            {
+                if (scene::NamedProperty* property = record.find("enabled"))
+                    property->value = scene::PropertyValue::fromBool(value);
+            };
+
             int mounted = 0;
+            std::string lastCategory;
             for (const scene::ComponentDescriptor& descriptor :
                  scene->getComponentRegistry().descriptors())
             {
-                if (descriptor.scope != scene::ComponentScope::Scene)
+                if (descriptor.scope != scene::ComponentScope::Scene || !descriptor.exposed)
                     continue;
-                if (descriptor.has(*registry, scene->getSceneSettingsEntity()))
+
+                const bool isMounted = descriptor.has(*registry, settingsEntity);
+                if (isMounted)
                     ++mounted;
+
+                if (descriptor.category != lastCategory)
+                {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("%s", descriptor.category.c_str());
+                    lastCategory = descriptor.category;
+                }
+
+                std::optional<scene::ComponentRecord> record;
+                bool enabled = false;
+                if (isMounted)
+                {
+                    record = scene->readComponent(settingsEntity, descriptor.type);
+                    if (record)
+                    {
+                        if (const scene::NamedProperty* property = record->find("enabled"))
+                            enabled = property->value.asBool();
+                    }
+                }
+
+                ImGui::PushID(descriptor.type.c_str());
+                if (ImGui::Checkbox(descriptor.label.c_str(), &enabled))
+                {
+                    if (!isMounted)
+                    {
+                        // 未挂载时勾选 = 添加组件并启用；走命令栈，可撤销。
+                        std::optional<scene::ComponentRecord> after =
+                            scene->defaultComponentRecord(descriptor.type);
+                        if (after)
+                        {
+                            setEnabled(*after, true);
+                            state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                                *scene, settingsEntity, descriptor.type, std::nullopt,
+                                std::move(after), "Add Scene Component"));
+                            state.markDirty();
+                        }
+                    }
+                    else if (record)
+                    {
+                        scene::ComponentRecord after = *record;
+                        setEnabled(after, enabled);
+                        state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                            *scene, settingsEntity, descriptor.type, std::move(record),
+                            std::move(after), "Toggle Scene Component"));
+                        state.markDirty();
+                    }
+                }
+                if (ImGui::IsItemHovered() && !descriptor.description.empty())
+                    ImGui::SetTooltip("%s", descriptor.description.c_str());
+
+                if (ImGui::BeginPopupContextItem("##scene_component_menu"))
+                {
+                    if (isMounted && ImGui::MenuItem("移除组件"))
+                    {
+                        std::optional<scene::ComponentRecord> before =
+                            scene->readComponent(settingsEntity, descriptor.type);
+                        if (before)
+                        {
+                            state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                                *scene, settingsEntity, descriptor.type, std::move(before),
+                                std::nullopt, "Remove Scene Component"));
+                            state.markDirty();
+                        }
+                    }
+                    if (!descriptor.description.empty())
+                    {
+                        ImGui::Separator();
+                        ImGui::TextDisabled("%s", descriptor.description.c_str());
+                    }
+                    ImGui::EndPopup();
+                }
+
+                ImGui::SameLine();
+                if (ImGui::SmallButton("编辑"))
+                {
+                    state.selection.clear();
+                    state.notify(LogEntry::Level::Info,
+                                 "[Render] 在 Inspector 中编辑：" + descriptor.label);
+                }
+                ImGui::PopID();
             }
-            ImGui::TextDisabled("场景组件：%d 个已挂载（启用开关在 Inspector 中编辑）",
-                                mounted);
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("已挂载 %d 个场景组件", mounted);
         }
     }
 

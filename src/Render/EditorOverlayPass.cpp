@@ -2,6 +2,7 @@
 #include "AssetPaths.h"
 
 #include "Scene/Components.h"
+#include "Scene/FeatureComponents.h"
 
 #include <glm/glm.hpp>
 #include <stdexcept>
@@ -98,7 +99,8 @@ void EditorOverlayPass::init()
 
     createPipeline(colorFormat, depthFormat);
 
-    constexpr VkDeviceSize bufferSize = sizeof(glm::vec3) * 24;
+    // 选中包围盒 + 体积雾盒，最多两个盒子。
+    constexpr VkDeviceSize bufferSize = sizeof(glm::vec3) * 48;
     static const char* const names[kFramesInFlight] = { "EditorOverlayVtx.Frame0", "EditorOverlayVtx.Frame1" };
 
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
@@ -130,64 +132,96 @@ void EditorOverlayPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         return;
 
     const uint32_t frame = frameInfo.frameInFlightIndex;
-
-    // 只有选中了带包围盒的实体才需要画
     const entt::entity selected = frameInfo.editorSelection;
-    const WorldBoundsComponent* worldBounds = nullptr;
-    if (selected != entt::null && frameInfo.registry.valid(selected))
-        worldBounds = frameInfo.registry.try_get<WorldBoundsComponent>(selected);
 
-    // 选中框优先用**局部包围盒 × 世界矩阵**（OBB）：
-    // 物体旋转/缩放时框必须跟着一起转，不能用一个世界 AABB 把旋转"包大"。
-    // 没有局部包围盒时才退回世界 AABB。
-    const BoundsComponent* localBounds = nullptr;
-    const WorldTransformComponent* worldTransform = nullptr;
+    // 每个盒子 24 个顶点；最多同时画选中包围盒 + 体积雾盒。
+    constexpr uint32_t kVerticesPerBox = 24;
+    constexpr uint32_t kMaxBoxes = 2;
+    glm::vec3 vertices[kVerticesPerBox * kMaxBoxes];
+    uint32_t vertexCount = 0;
+    uint32_t obbFirst = 0;
+    uint32_t obbCount = 0;
+    uint32_t fogFirst = 0;
+    uint32_t fogCount = 0;
+
+    auto appendBox = [&](const glm::vec3 corners[8], uint32_t& first, uint32_t& count)
+    {
+        first = vertexCount;
+        for (int e = 0; e < 12; ++e)
+        {
+            vertices[vertexCount++] = corners[kBoxEdges[e][0]];
+            vertices[vertexCount++] = corners[kBoxEdges[e][1]];
+        }
+        count = kVerticesPerBox;
+    };
+
     if (selected != entt::null && frameInfo.registry.valid(selected))
     {
-        localBounds = frameInfo.registry.try_get<BoundsComponent>(selected);
-        worldTransform = frameInfo.registry.try_get<WorldTransformComponent>(selected);
+        const WorldBoundsComponent* worldBounds =
+            frameInfo.registry.try_get<WorldBoundsComponent>(selected);
+        const BoundsComponent* localBounds =
+            frameInfo.registry.try_get<BoundsComponent>(selected);
+        const WorldTransformComponent* worldTransform =
+            frameInfo.registry.try_get<WorldTransformComponent>(selected);
+
+        // 选中框优先用**局部包围盒 × 世界矩阵**（OBB）：
+        // 物体旋转/缩放时框必须跟着一起转，不能用一个世界 AABB 把旋转"包大"。
+        glm::vec3 corners[8];
+        bool hasObb = false;
+        if (localBounds != nullptr && localBounds->getLocal().valid && worldTransform != nullptr)
+        {
+            const AABB& box = localBounds->getLocal();
+            const glm::vec3 localCorners[8] = {
+                { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
+                { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
+                { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
+                { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z },
+            };
+            for (int i = 0; i < 8; ++i)
+                corners[i] = glm::vec3(worldTransform->matrix * glm::vec4(localCorners[i], 1.0f));
+            hasObb = true;
+        }
+        else if (worldBounds != nullptr && worldBounds->world.valid)
+        {
+            const AABB& box = worldBounds->world;
+            const glm::vec3 worldCorners[8] = {
+                { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
+                { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
+                { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
+                { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z },
+            };
+            for (int i = 0; i < 8; ++i)
+                corners[i] = worldCorners[i];
+            hasObb = true;
+        }
+        if (hasObb)
+            appendBox(corners, obbFirst, obbCount);
+
+        // 体积雾盒：与 FogVolumePass 共用 localMatrix()，线框必须和实际盒体
+        // 完全一致。单位立方体 [-0.5, 0.5] 经 world × local 变换。
+        const auto* fog = frameInfo.registry.try_get<scene::FogVolumeComponent>(selected);
+        if (fog != nullptr && fog->enabled && worldTransform != nullptr && worldTransform->valid)
+        {
+            const glm::mat4 boxMatrix = worldTransform->matrix * fog->localMatrix();
+            const glm::vec3 unitCorners[8] = {
+                { -0.5f, -0.5f, -0.5f }, { 0.5f, -0.5f, -0.5f },
+                { -0.5f,  0.5f, -0.5f }, { 0.5f,  0.5f, -0.5f },
+                { -0.5f, -0.5f,  0.5f }, { 0.5f, -0.5f,  0.5f },
+                { -0.5f,  0.5f,  0.5f }, { 0.5f,  0.5f,  0.5f },
+            };
+            glm::vec3 fogCorners[8];
+            for (int i = 0; i < 8; ++i)
+                fogCorners[i] = glm::vec3(boxMatrix * glm::vec4(unitCorners[i], 1.0f));
+            appendBox(fogCorners, fogFirst, fogCount);
+        }
     }
 
-    glm::vec3 corners[8];
-    if (localBounds != nullptr && localBounds->getLocal().valid && worldTransform != nullptr)
-    {
-        const AABB& box = localBounds->getLocal();
-        const glm::vec3 localCorners[8] = {
-            { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
-            { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
-            { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
-            { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z },
-        };
-        for (int i = 0; i < 8; ++i)
-            corners[i] = glm::vec3(worldTransform->matrix * glm::vec4(localCorners[i], 1.0f));
-    }
-    else if (worldBounds != nullptr && worldBounds->world.valid)
-    {
-        const AABB& box = worldBounds->world;
-        const glm::vec3 worldCorners[8] = {
-            { box.min.x, box.min.y, box.min.z }, { box.max.x, box.min.y, box.min.z },
-            { box.min.x, box.max.y, box.min.z }, { box.max.x, box.max.y, box.min.z },
-            { box.min.x, box.min.y, box.max.z }, { box.max.x, box.min.y, box.max.z },
-            { box.min.x, box.max.y, box.max.z }, { box.max.x, box.max.y, box.max.z },
-        };
-        for (int i = 0; i < 8; ++i)
-            corners[i] = worldCorners[i];
-    }
-    else
-    {
+    if (vertexCount == 0)
         return;
-    }
 
-    // 12 条棱 -> 24 个世界空间顶点
-    glm::vec3 vertices[24];
-    for (int e = 0; e < 12; ++e)
-    {
-        vertices[e * 2 + 0] = corners[kBoxEdges[e][0]];
-        vertices[e * 2 + 1] = corners[kBoxEdges[e][1]];
-    }
-
-    std::memcpy(vertexMapped[frame], vertices, sizeof(vertices));
-    vmaFlushAllocation(device.getVmaAllocator(), vertexAllocations[frame], 0, sizeof(vertices));
+    const VkDeviceSize vertexBytes = sizeof(glm::vec3) * vertexCount;
+    std::memcpy(vertexMapped[frame], vertices, vertexBytes);
+    vmaFlushAllocation(device.getVmaAllocator(), vertexAllocations[frame], 0, vertexBytes);
 
     auto& pass = graph.addGraphicsPass("EditorOverlay");
 
@@ -200,17 +234,32 @@ void EditorOverlayPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
 
     Push push{};
     push.viewProjection = frameInfo.projectionMatrix * frameInfo.viewMatrix;
-    push.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+    Push obbPush = push;
+    obbPush.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+    Push fogPush = push;
+    fogPush.color = glm::vec4(0.30f, 0.85f, 1.0f, 1.0f);
 
     const VkBuffer vbo = vertexBuffers[frame];
-    pass.execute([this, push, vbo](VkCommandBuffer cmd)
+    pass.execute([this, obbPush, fogPush, vbo, obbFirst, obbCount, fogFirst, fogCount](VkCommandBuffer cmd)
     {
         pipeline->bind(cmd);
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &vbo, &offset);
-        vkCmdPushConstants(cmd, pipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(push), &push);
-        vkCmdDraw(cmd, 24, 1, 0, 0);
+
+        if (obbCount > 0)
+        {
+            vkCmdPushConstants(cmd, pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(obbPush), &obbPush);
+            vkCmdDraw(cmd, obbCount, 1, obbFirst, 0);
+        }
+        if (fogCount > 0)
+        {
+            vkCmdPushConstants(cmd, pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(fogPush), &fogPush);
+            vkCmdDraw(cmd, fogCount, 1, fogFirst, 0);
+        }
     });
 }

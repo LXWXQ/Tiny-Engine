@@ -1129,9 +1129,10 @@ streamingConfig.skirtsEnabled = false;
 			<< " seed=" << vegetation.seed << std::endl;
 	}
 
-	// F6-08：局部体积雾目测场景。盒体就是实体的 Transform：这里放一个
-	// 30x10x36 的雾盒在相机前方，相机从盒外看进去，能看到边缘淡出和高度衰减。
-	// 没有地形时背景是黑的，所以帮助里建议配 --streaming-world 3。
+	// F6-08：局部体积雾目测场景。盒体尺寸/中心现在由组件自己的 placement
+	// 决定（Inspector 里可直接调），实体 Transform 只负责整体移动。
+	// 这里放一个 30x10x36 的雾盒在相机前方，相机从盒外看进去，能看到
+	// 边缘淡出和高度衰减。没有地形时背景是黑的，建议配 --streaming-world 3。
 	if (options.fogDemo)
 	{
 		const entt::entity fogEntity = scene->createEntity();
@@ -1151,14 +1152,17 @@ streamingConfig.skirtsEnabled = false;
 		fog.anisotropy = 0.55f;
 		fog.ambient = 0.55f;
 		fog.steps = 24;
+		fog.center = glm::vec3(-6.0f, 10.0f, -10.0f);
+		fog.size = glm::vec3(30.0f, 10.0f, 36.0f);
+		fog.rotation = glm::vec3(0.0f);
 
 		// 流送 chunk 在 demo 创建时还没落地，采样会拿到 0；直接用高于地形的
 		// 固定站位（地形 heightScale=12），避免相机被埋进地面。
 		const float groundY = 10.0f;
 
 		TransformComponent& fogTransform = scene->getRegistry().get<TransformComponent>(fogEntity);
-		fogTransform.setTranslation(glm::vec3(-6.0f, groundY, -10.0f));
-		fogTransform.setScale(glm::vec3(30.0f, 10.0f, 36.0f));
+		fogTransform.setTranslation(glm::vec3(0.0f));
+		fogTransform.setScale(glm::vec3(1.0f));
 		scene->markTransformDirty(fogEntity);
 
 		TransformComponent& cameraTransform = scene->getCameraTransform();
@@ -1167,8 +1171,9 @@ streamingConfig.skirtsEnabled = false;
 		cameraTransform.setScale(glm::vec3(1.0f));
 		scene->markTransformDirty(scene->getCameraEntity());
 		std::cout << "[FogVolume] demo volume created | density=" << fog.density
-			<< " scale=" << fogTransform.getScale().x << "x" << fogTransform.getScale().y
-			<< "x" << fogTransform.getScale().z << " steps=" << fog.steps << std::endl;
+			<< " center=" << fog.center.x << "," << fog.center.y << "," << fog.center.z
+			<< " size=" << fog.size.x << "x" << fog.size.y << "x" << fog.size.z
+			<< " steps=" << fog.steps << std::endl;
 	}
 
 	// 太阳光晕目测场景：启用 scene.sun，并把方向光转到相机前方右上，

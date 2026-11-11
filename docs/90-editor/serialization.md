@@ -230,7 +230,7 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 - 加载时逐条校验 `scope=Scene`，`scene.*` 写进实体 `components` 会被警告并跳过；
   实体组件写进 `sceneComponents` 同样拒绝。
 - 预制体只捕获子树实体，顶层数组为空，不把当前场景的阴影/雾等设置带进预制体。
-- 局部体积雾是**实体组件** `effects.fogVolume`（带 Transform 的普通实体），走实体 `components` 数组，不进 `sceneComponents`；一个场景可以有多个雾盒，Transform 定义盒体，见 [fog-volume](../30-systems/fog-volume.md)。
+- 局部体积雾是**实体组件** `effects.fogVolume`（带 Transform 的普通实体），走实体 `components` 数组，不进 `sceneComponents`；一个场景可以有多个雾盒。组件的 `center`/`size`/`rotation` 定义局部盒体，再乘实体 WorldTransform；旧场景缺这三个字段时按默认值 (0,0,0)/(20,8,20)/(0,0,0) 补齐，见 [fog-volume](../30-systems/fog-volume.md)。
 
 ### 原生组件与 `components` 去重（v3+，F5-04）
 

@@ -100,6 +100,11 @@ public:
     void syncSceneSettings();
 
     bool addComponent(entt::entity entity, const std::string& type);
+    // Add 菜单 / 粘贴前的兼容性检查。false 时 reason 给出可显示的中文原因。
+    bool canAddComponent(entt::entity entity, const std::string& type) const;
+    std::string componentAddBlockReason(entt::entity entity, const std::string& type) const;
+    // 地形 / 流送地形 / 体素世界等由专用面板管理的对象。
+    bool isTerrainManagedEntity(entt::entity entity) const;
     bool removeComponent(entt::entity entity, const std::string& type);
     bool hasComponent(entt::entity entity, const std::string& type) const;
     std::optional<scene::ComponentRecord> readComponent(entt::entity entity,

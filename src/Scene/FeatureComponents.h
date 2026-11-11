@@ -162,12 +162,19 @@ struct ParticleEmitterComponent
 
 // 场景里可放置的局部体积雾（盒形）。
 //
-// 实体 Transform 定义盒体：position=盒心，rotation=朝向，scale=全尺寸。
+// 盒体由组件自己的 center / size / rotation 定义（局部空间），再乘实体
+// WorldTransform。这样即使实体本身没有缩放（或组件挂在一个空实体上），
+// 也能在 Inspector 里直接调位置和体积；实体 Transform 仍然可以整体移动/旋转。
 // FogVolumePass 每帧把最多 8 个组件打包进 UBO，在 Lighting 之后做全屏
 // raymarch。雾只影响渲染，不写深度、不进 G-Buffer，也不参与阴影/SSAO。
 struct FogVolumeComponent
 {
     bool enabled = true;
+
+    // ---- 放置（局部空间；实体 Transform 之下）----
+    glm::vec3 center{ 0.0f, 0.0f, 0.0f };   // 盒心相对实体原点的偏移
+    glm::vec3 size{ 20.0f, 8.0f, 20.0f };   // 盒体全尺寸（米）
+    glm::vec3 rotation{ 0.0f, 0.0f, 0.0f }; // 欧拉角（度），与 Transform 同一顺序
 
     // 消光系数（1/米）。20 米厚的雾在 density=0.02 时约 33% 不透。
     float density = 0.02f;
@@ -182,6 +189,9 @@ struct FogVolumeComponent
     float anisotropy = 0.55f;        // HG 相函数，越大越向前散射
     float ambient = 0.35f;           // 环境散射强度
     int steps = 12;                  // 每像素步数，1..32
+
+    // T(center) * R(rotation) * S(size)。渲染与视口线框共用，避免两处算法漂移。
+    glm::mat4 localMatrix() const;
 };
 
 // 注册全部效果组件的元数据。重复调用是安全的：ComponentRegistry::add

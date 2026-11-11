@@ -4,6 +4,8 @@
 #include "Scene/Components.h"
 #include "Scene/FeatureComponents.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -332,16 +334,19 @@ void FogVolumePass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         if (!component.enabled || !world.valid || component.density <= 0.0f || component.steps <= 0)
             continue;
 
-        const float determinant = glm::determinant(world.matrix);
+        // 盒体 = 实体世界矩阵 × 组件局部 placement。用户可在 Inspector 里直接
+        // 调 center/size/rotation；实体 Transform 仍然可以整体移动/旋转。
+        const glm::mat4 volumeWorld = world.matrix * component.localMatrix();
+        const float determinant = glm::determinant(volumeWorld);
         if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-8f)
             continue;
 
         GpuVolume& volume = ubo.volumes[count];
-        volume.world = world.matrix;
-        volume.inverseWorld = glm::inverse(world.matrix);
+        volume.world = volumeWorld;
+        volume.inverseWorld = glm::inverse(volumeWorld);
         volume.params0 = glm::vec4(component.density, component.heightFalloff,
                                    component.noiseStrength, component.noiseScale);
-        volume.params1 = glm::vec4(world.matrix[3][1], component.edgeSoftness,
+        volume.params1 = glm::vec4(volumeWorld[3][1], component.edgeSoftness,
                                    component.anisotropy, component.ambient);
         volume.color = glm::vec4(component.color.r, component.color.g, component.color.b,
                                  static_cast<float>(component.steps));

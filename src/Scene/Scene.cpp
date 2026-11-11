@@ -582,12 +582,63 @@ void Scene::syncSceneSettings()
     scene::syncSceneSettings(registry, sceneSettingsEntity, engineSettings);
 }
 
-bool Scene::addComponent(entt::entity entity, const std::string& type)
+bool Scene::isTerrainManagedEntity(entt::entity entity) const
+{
+    if (!registry.valid(entity))
+        return false;
+    // 地形与体素世界都不是普通“可自由挂组件”的对象：它们由 Terrain / Voxel
+    // 专用面板管理，Add Component 里出现 Effects 组件只会让用户误操作。
+    return registry.any_of<TerrainComponent>(entity) ||
+           registry.any_of<TerrainStreamingComponent>(entity) ||
+           registry.any_of<TerrainChunkComponent>(entity) ||
+           registry.any_of<VoxelWorldComponent>(entity) ||
+           registry.any_of<VoxelChunkComponent>(entity);
+}
+
+bool Scene::canAddComponent(entt::entity entity, const std::string& type) const
 {
     if (!registry.valid(entity))
         return false;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
     if (!descriptor || !descriptor->addable || !acceptsComponentTarget(entity, *descriptor))
+        return false;
+    // 已经挂载的组件允许重复调用 addComponent（幂等），也允许继续编辑。
+    if (descriptor->has(registry, entity))
+        return true;
+    if (descriptor->requiresTransform && !registry.all_of<TransformComponent>(entity))
+        return false;
+    if (!descriptor->allowOnTerrain && isTerrainManagedEntity(entity))
+        return false;
+    return true;
+}
+
+std::string Scene::componentAddBlockReason(entt::entity entity, const std::string& type) const
+{
+    if (!registry.valid(entity))
+        return "无效实体";
+    const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
+    if (descriptor == nullptr)
+        return "未知组件";
+    if (!descriptor->addable)
+        return descriptor->unavailableReason.empty() ? "该组件不能单独添加"
+                                                     : descriptor->unavailableReason;
+    if (!acceptsComponentTarget(entity, *descriptor))
+        return "该组件不能挂到这个对象上";
+    if (descriptor->has(registry, entity))
+        return {};
+    if (descriptor->requiresTransform && !registry.all_of<TransformComponent>(entity))
+        return "该对象没有 Transform，不能添加此组件";
+    if (!descriptor->allowOnTerrain && isTerrainManagedEntity(entity))
+        return "地形 / 体素对象由专用面板管理，不能挂载通用组件";
+    return {};
+}
+
+bool Scene::addComponent(entt::entity entity, const std::string& type)
+{
+    if (!canAddComponent(entity, type))
+        return false;
+    const scene::ComponentDescriptor* descriptor = componentRegistry.find(type);
+    if (descriptor == nullptr)
         return false;
     descriptor->addDefault(registry, entity);
     if (descriptor->scope == scene::ComponentScope::Scene)
@@ -654,6 +705,9 @@ bool Scene::applyComponentRecord(entt::entity entity, const scene::ComponentReco
         return false;
     const scene::ComponentDescriptor* descriptor = componentRegistry.find(record.type);
     if (!descriptor || !acceptsComponentTarget(entity, *descriptor))
+        return false;
+    // 粘贴 / 反序列化也是“添加”路径：组件还不存在时同样要过兼容性检查。
+    if (!descriptor->has(registry, entity) && !canAddComponent(entity, record.type))
         return false;
     descriptor->write(registry, entity, record);
     if (descriptor->scope == scene::ComponentScope::Scene)
@@ -1546,9 +1600,23 @@ bool Scene::selfTest()
             ok = false;
         }
         const auto fogDefaults = scene.defaultComponentRecord("effects.fogVolume");
-        if (!fogDefaults || fogDefaults->properties.size() != 11 ||
-            !fogDefaults->find("density") ||
-            fogDefaults->find("density")->value.asFloat() != 0.02f)
+        const scene::NamedProperty* fogDefaultDensity =
+            fogDefaults ? fogDefaults->find("density") : nullptr;
+        const scene::NamedProperty* fogDefaultCenter =
+            fogDefaults ? fogDefaults->find("center") : nullptr;
+        const scene::NamedProperty* fogDefaultSize =
+            fogDefaults ? fogDefaults->find("size") : nullptr;
+        const scene::NamedProperty* fogDefaultRotation =
+            fogDefaults ? fogDefaults->find("rotation") : nullptr;
+        const auto nearlyEqual = [](const glm::vec3& a, const glm::vec3& b)
+        {
+            return glm::length(a - b) < 1e-5f;
+        };
+        if (!fogDefaults || fogDefaults->properties.size() != 14 ||
+            !fogDefaultDensity || fogDefaultDensity->value.asFloat() != 0.02f ||
+            !fogDefaultCenter || !nearlyEqual(fogDefaultCenter->value.asVec3(), glm::vec3(0.0f)) ||
+            !fogDefaultSize || !nearlyEqual(fogDefaultSize->value.asVec3(), glm::vec3(20.0f, 8.0f, 20.0f)) ||
+            !fogDefaultRotation || !nearlyEqual(fogDefaultRotation->value.asVec3(), glm::vec3(0.0f)))
         {
             std::cerr << "[Scene] selfTest FAIL: fog volume default record mismatch\n";
             ok = false;
@@ -1634,12 +1702,39 @@ bool Scene::selfTest()
         else
         {
             const auto fog = scene.readComponent(testEntity, "effects.fogVolume");
-            if (!fog || !fog->find("density") || fog->find("density")->value.asFloat() != 0.02f)
+            const scene::NamedProperty* fogDensityValue = fog ? fog->find("density") : nullptr;
+            const scene::NamedProperty* fogSizeValue = fog ? fog->find("size") : nullptr;
+            if (!fogDensityValue || fogDensityValue->value.asFloat() != 0.02f ||
+                !fogSizeValue ||
+                glm::length(fogSizeValue->value.asVec3() - glm::vec3(20.0f, 8.0f, 20.0f)) > 1e-5f)
             {
                 std::cerr << "[Scene] selfTest FAIL: fog volume readComponent mismatch\n";
                 ok = false;
             }
         }
+
+        // 编辑器兼容性门禁：地形/体素对象由专用面板管理，不能挂通用效果；
+        // 需要 Transform 的组件（如雾盒）也不能加到没有 Transform 的实体上。
+        const entt::entity terrainTestEntity = testRegistry.create();
+        testRegistry.emplace<TransformComponent>(terrainTestEntity);
+        testRegistry.emplace<TerrainComponent>(terrainTestEntity);
+        if (!scene.isTerrainManagedEntity(terrainTestEntity) ||
+            scene.canAddComponent(terrainTestEntity, "effects.spin") ||
+            scene.componentAddBlockReason(terrainTestEntity, "effects.spin").empty())
+        {
+            std::cerr << "[Scene] selfTest FAIL: terrain component compatibility mismatch\n";
+            ok = false;
+        }
+
+        const entt::entity noTransformEntity = testRegistry.create();
+        if (scene.canAddComponent(noTransformEntity, "effects.fogVolume") ||
+            scene.componentAddBlockReason(noTransformEntity, "effects.fogVolume").empty())
+        {
+            std::cerr << "[Scene] selfTest FAIL: transform requirement mismatch\n";
+            ok = false;
+        }
+        testRegistry.destroy(terrainTestEntity);
+        testRegistry.destroy(noTransformEntity);
 
         // 第一批效果组件：每个系统跑一个完整周期，验证动作发生且能回到原位。
         const auto makeEffectEntity = [&testRegistry]()

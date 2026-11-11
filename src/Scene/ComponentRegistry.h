@@ -71,6 +71,13 @@ struct ComponentOptions
     bool drawProperties = true;
     bool serialized = true;
     bool required = false;
+    // 兼容性：需要实体已有 TransformComponent 才能添加（例如体积雾盒）。
+    bool requiresTransform = false;
+    // 地形 / 流送地形 / 体素世界由专用面板管理，默认不允许挂通用组件。
+    // 个别组件确实需要时显式设为 true。
+    bool allowOnTerrain = false;
+    // 一句话说明，显示在 Add Component 的 tooltip / 组件卡片里。
+    std::string description;
     std::string unavailableReason;
 };
 
@@ -92,6 +99,13 @@ struct ComponentDescriptor
     bool serialized = true;
     // Name / Transform / Hierarchy 这类场景必需组件：不可加、不可删。
     bool required = false;
+    // 需要实体已有 TransformComponent；无 Transform 的对象（例如隐藏的场景
+    // 设置实体）不能添加这类组件。
+    bool requiresTransform = false;
+    // false 时地形 / 流送地形 / 体素世界不能通过通用 Add 菜单挂载。
+    bool allowOnTerrain = false;
+    // 一句话说明，供 Add Component 与组件卡片显示。
+    std::string description;
     std::string unavailableReason;
 
     std::vector<PropertyDescriptor> properties;
@@ -207,6 +221,9 @@ ComponentDescriptor makeComponentDescriptor(std::string type,
     descriptor.drawProperties = options.drawProperties;
     descriptor.serialized = options.serialized;
     descriptor.required = options.required;
+    descriptor.requiresTransform = options.requiresTransform;
+    descriptor.allowOnTerrain = options.allowOnTerrain;
+    descriptor.description = std::move(options.description);
     descriptor.unavailableReason = std::move(options.unavailableReason);
     descriptor.properties = std::move(properties);
 

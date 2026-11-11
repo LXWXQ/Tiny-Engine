@@ -2,9 +2,9 @@
 id: systems/fog-volume
 title: 局部体积雾（Fog Volume）
 type: system
-scope: src/Render/FogVolumePass.*, src/Scene/FeatureComponents.*, shaders/fog_volume.frag
-read-when: 在场景里摆放局部雾、调雾的浓度/高度/噪声/风，或修改体积雾 Pass
-size: ~150 行
+scope: src/Render/FogVolumePass.*, src/Scene/FeatureComponents.*, src/Editor/panels/InspectorPanel.cpp, shaders/fog_volume.frag
+read-when: 在场景里摆放局部雾、调雾的位置/体积/浓度/高度/噪声/风，或修改体积雾 Pass
+size: ~180 行
 updated: 2026-11-11
 ---
 
@@ -14,7 +14,9 @@ updated: 2026-11-11
 
 场景里需要一团**可以摆放**的雾：山谷的晨雾、林间的薄雾、洞口涌出的冷气，而不是全屏统一的距离雾。距离雾（`scene.fog`）跟着相机做全局指数衰减，无法只覆盖一块区域，也无法做高度分层和风吹流动。
 
-体积雾是一个**实体组件** `effects.fogVolume`：把它挂到任意有 Transform 的实体上，Transform 的 position/rotation/scale 就定义了一个雾盒，雾只在这个盒子里累积。一个场景最多同时渲染 8 个雾盒。
+体积雾是一个**实体组件** `effects.fogVolume`：把它挂到任意有 Transform 的实体上，组件自带的 `center`/`size`/`rotation` 定义局部雾盒，实体的 WorldTransform 再整体移动/旋转/缩放这个盒子，雾只在盒子里累积。一个场景最多同时渲染 8 个雾盒。
+
+组件在 Inspector 里有专用 **Fog Volume** 面板（不是通用属性列表）：Placement 直接调中心、尺寸、旋转，并提供 20×8×20 / 40×12×40 / 80×20×80 三个尺寸预设；Appearance / Lighting / Quality 分组调浓度、颜色、噪声、风、相函数和步数。视口里用青色线框显示实际盒体。
 
 它和 `scene.fog` 是两套东西，可以同时开：`scene.fog` 负责远处整体空气感，`effects.fogVolume` 负责近处可摆放的局部雾团。
 
@@ -25,6 +27,9 @@ updated: 2026-11-11
 | 属性 | 默认值 | 范围 | 说明 |
 |---|---|---|---|
 | `enabled` | true | — | 关闭后该雾盒不参与渲染 |
+| `center` | (0, 0, 0) | — | 盒心相对实体的局部坐标（m） |
+| `size` | (20, 8, 20) | 0.05 ~ 2000 | 盒体**全尺寸**（m），不是半尺寸 |
+| `rotation` | (0, 0, 0) | -360 ~ 360 | 盒体局部旋转（度），顺序与 Transform 一致 |
 | `density` | 0.02 | 0 ~ 0.2 | 基础消光系数（1/m）；越大越浓 |
 | `color` | (0.78, 0.84, 0.92, 1) | — | 散射色调，不是"雾的颜色"而是被照亮后散射出来的颜色 |
 | `heightFalloff` | 0.08 | 0 ~ 0.5 | 高于盒心后的高度衰减（1/m）；0 表示整盒均匀 |
@@ -40,12 +45,12 @@ updated: 2026-11-11
 
 | 项 | 规则 |
 |---|---|
-| 盒体中心 | Transform 的 position |
-| 盒体朝向 | Transform 的 rotation |
-| 盒体尺寸 | Transform 的 scale 就是**全尺寸**（不是半尺寸），例如 (30, 10, 36) 表示 30m × 10m × 36m |
-| 高度基准 | `params1.x = world.matrix[3][1]`，即盒心的世界 Y；`heightFalloff` 只作用于盒心以上 |
+| 局部盒体 | `T(center) * R(rotation) * S(size)`；`size` 是**全尺寸**，例如 (30, 10, 36) 表示 30m × 10m × 36m |
+| 最终盒体 | 实体 WorldTransform × 局部盒体；移动实体会整体移动雾盒，实体缩放会再乘到尺寸上 |
+| 高度基准 | `params1.x = volumeWorld[3][1]`，即最终盒心的世界 Y；`heightFalloff` 只作用于盒心以上 |
 | 无效实体 | 没有 `WorldTransformComponent`、`world.valid=false`、`density<=0`、`steps<=0` 或变换行列式接近 0 的实体直接跳过 |
 | 数量上限 | 8 个；超过的部分不进入 GPU 缓冲，日志只报告实际提交数 |
+| 地形/体素 | 地形、流送地形、体素世界/chunk 由专用面板管理，`canAddComponent` 会拒绝 `effects.*`；需要雾盒时先创建空实体 |
 
 ### 渲染路径
 
@@ -76,7 +81,7 @@ updated: 2026-11-11
 
 ## 为什么这样（取舍）
 
-**为什么是盒体而不是球体/任意 SDF？** 盒体用 Transform 的 scale 就能直观摆放和拉伸，slab 相交只有 6 次除法，CPU/GPU 都便宜；球体不适合做长条山谷雾，SDF 则要额外资产和烘焙。代价是雾的形状永远是长方体，靠噪声和边缘淡出掩盖硬边。
+**为什么是盒体而不是球体/任意 SDF？** 盒体用 `center`/`size`/`rotation` 就能直观摆放和拉伸，slab 相交只有 6 次除法，CPU/GPU 都便宜；球体不适合做长条山谷雾，SDF 则要额外资产和烘焙。代价是雾的形状永远是长方体，靠噪声和边缘淡出掩盖硬边。
 
 **为什么读 G-Buffer 截断射线？** 全屏体积雾最容易犯的错是"雾穿过墙/地形"。用 `gbPosition` 把步进截到最近不透明表面之前，雾就会被地形、建筑、角色正确遮挡，而不需要额外的深度预渲染。天空没有有效位置（`dot(scenePos,scenePos)<=1e-6`）时用逆 VP 还原远平面方向，雾仍能铺到天际线。
 
@@ -93,10 +98,12 @@ updated: 2026-11-11
 - **修改 GPU 布局必须同步三处**：`FogVolumePass.h` 的 `PushConstants/GpuVolume/VolumeUbo`、`static_assert`、`fog_volume.frag` 的对应结构体；错位不会编译报错，只会画面错乱。
 - **新增参数要同时改**：`FogVolumeComponent` 字段、`FeatureComponents.cpp` 的 `addComponentDescriptor`、`FogVolumePass::addToGraph` 的打包、shader 使用点、`Scene.cpp` 的自检属性计数。
 - **resize 必须重绑 `gbPosition`**：G-Buffer 在窗口尺寸变化时会重建视图，`FogVolumePass::resize()` 要重写 set1 binding2，否则 resize 后读到已销毁的 view。
-- **实体没有 Transform 就不会渲染**：雾盒依赖 `WorldTransformComponent`，只加 `effects.fogVolume` 不加 Transform 的实体不会出现在 `volumes` 计数里。
-- **scale 不是半尺寸**：Inspector 里把 scale 从 1 改到 30，盒体是 30m 宽，不是 15m。
+- **实体必须有 Transform**：雾盒依赖 `WorldTransformComponent`，只加 `effects.fogVolume` 不加 Transform 的实体会被 `canAddComponent` 拒绝；已挂载但 Transform 被移除的旧场景实体不会出现在 `volumes` 计数里。
+- **size 不是半尺寸**：Inspector 里把 size.x 从 20 改到 30，盒体是 30m 宽，不是 15m。
+- **位置/体积改组件，不要只改 Transform**：`center`/`size`/`rotation` 是雾盒自身的局部 placement；Transform 的 position/rotation/scale 是整体变换。只改 Transform 的 scale 会把整个实体（包括子物体）一起缩放。
 - **雾不影响阴影/SSAO/反射**：它只混合 HDR 颜色，不写深度、不进 G-Buffer；需要雾在阴影里也可见时调 `ambient`。
 - **默认不添加**：新建场景没有雾盒，只有显式添加 `effects.fogVolume` 或使用 `--fog-demo` 才生效。
+- **Render 窗口只做快捷开关**：场景组件的启用/添加/移除可以在 Render 窗口完成，详细参数仍在 Inspector 的 Fog Volume 面板编辑；两边写的是同一份 `ComponentRecord`，不会出现两套值。
 
 ## 相关
 

@@ -214,6 +214,33 @@ bool drawPropertyWidgets(scene::ComponentRecord& record,
     return changed;
 }
 
+// 从完整组件描述里裁出一个分组（只保留指定属性），复用同一套控件与默认值
+// 重置逻辑。体积雾的专用面板用它把 14 个字段分成 Placement/Appearance/...
+scene::ComponentDescriptor makePropertyGroup(const scene::ComponentDescriptor& descriptor,
+                                             std::initializer_list<const char*> names)
+{
+    scene::ComponentDescriptor group = descriptor;
+    group.properties.clear();
+    for (const char* name : names)
+    {
+        for (const scene::PropertyDescriptor& property : descriptor.properties)
+        {
+            if (property.name == name)
+            {
+                group.properties.push_back(property);
+                break;
+            }
+        }
+    }
+    return group;
+}
+
+void setVec3Property(scene::ComponentRecord& record, const char* name, const glm::vec3& value)
+{
+    if (scene::NamedProperty* property = record.find(name))
+        property->value = scene::PropertyValue::fromVec3(value);
+}
+
 // 组件剪贴板是纯数据快照，不绑定实体。复制不算场景修改，粘贴/重置才进命令栈。
 void copyComponent(EditorState& state, entt::entity entity,
                    const scene::ComponentDescriptor& descriptor)
@@ -236,7 +263,8 @@ bool canPasteComponent(const EditorState& state, const Scene& scene, entt::entit
 {
     if (!state.componentClipboard || state.componentClipboard->type != descriptor.type)
         return false;
-    if (!descriptor.has(*state.services.registry, entity) && !descriptor.addable)
+    if (!descriptor.has(*state.services.registry, entity) &&
+        !scene.canAddComponent(entity, descriptor.type))
         return false;
     const std::optional<scene::ComponentRecord> before =
         scene.readComponent(entity, descriptor.type);
@@ -253,10 +281,11 @@ bool pasteComponent(EditorState& state, entt::entity entity,
 
     std::optional<scene::ComponentRecord> before =
         scene->readComponent(entity, descriptor.type);
-    if (!before && !descriptor.addable)
+    if (!before && !scene->canAddComponent(entity, descriptor.type))
     {
+        const std::string reason = scene->componentAddBlockReason(entity, descriptor.type);
         state.notify(LogEntry::Level::Warning,
-                     "该组件不能单独添加：" + descriptor.label);
+                     "不能添加 " + descriptor.label + "：" + reason);
         return false;
     }
     if (before && before->equivalentTo(*state.componentClipboard))
@@ -496,6 +525,7 @@ void InspectorPanel::draw(EditorState& state)
     ImGui::Separator();
 
     drawTransform(state, entity);
+    drawFogVolume(state, entity);
     drawCharacter(state, entity);
     drawTerrain(state, entity);
     drawStreamingTerrain(state, entity);
@@ -531,6 +561,19 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
         ImGui::TextDisabled("ECS Components");
     }
 
+    // 地形/体素对象由专用面板管理：它们不是“自由实体”，Add Component
+    // 里出现旋转、体积雾等通用效果只会让用户误操作。已有组件仍然列出，
+    // 方便移除旧场景里遗留的挂载。
+    const bool terrainManaged = !sceneScope && scene->isTerrainManagedEntity(entity);
+    if (terrainManaged)
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.35f, 1.0f),
+                           "地形 / 体素对象由专用面板管理");
+        ImGui::TextDisabled("这里不能添加通用组件；请在 Terrain / Voxel 面板里编辑。");
+        ImGui::TextDisabled("需要体积雾、旋转等效果时，先创建一个空实体再挂组件。");
+    }
+    else
+    {
     // 添加入口放在列表顶部：组件越多，越不应该滚到底部才能加。
     if (ImGui::Button(sceneScope ? "+ Add Scene Component" : "+ Add Component"))
     {
@@ -593,7 +636,11 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
                 first = false;
             }
 
-            const bool addable = descriptor.addable;
+            // 不只检查 addable：还要检查 Transform / 地形兼容性。禁用时
+            // tooltip 直接说明“为什么不能加”，而不是只置灰。
+            const std::string blockReason =
+                scene->componentAddBlockReason(entity, descriptor.type);
+            const bool addable = blockReason.empty();
             if (ImGui::MenuItem(descriptor.label.c_str(), nullptr, false, addable))
             {
                 std::optional<scene::ComponentRecord> after =
@@ -606,8 +653,13 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
                     state.markDirty();
                 }
             }
-            if (!addable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("%s", descriptor.unavailableReason.c_str());
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                if (!blockReason.empty())
+                    ImGui::SetTooltip("%s", blockReason.c_str());
+                else if (!descriptor.description.empty())
+                    ImGui::SetTooltip("%s", descriptor.description.c_str());
+            }
             any = true;
         }
 
@@ -618,6 +670,7 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
         }
         ImGui::EndPopup();
     }
+    } // !terrainManaged
 
     bool drewAny = false;
     for (const scene::ComponentDescriptor& descriptor : components.descriptors())
@@ -713,6 +766,107 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
         ImGui::TextDisabled("当前场景没有功能组件，渲染使用引擎默认。");
         ImGui::TextDisabled("点上面的 + Add Scene Component 添加阴影、Bloom、雾等。");
     }
+}
+
+void InspectorPanel::drawFogVolume(EditorState& state, entt::entity entity)
+{
+    Scene* scene = state.services.scene;
+    if (scene == nullptr || state.services.registry == nullptr)
+        return;
+
+    entt::registry& registry = *state.services.registry;
+    const scene::ComponentDescriptor* descriptor =
+        scene->getComponentRegistry().find("effects.fogVolume");
+    if (descriptor == nullptr || !descriptor->has(registry, entity))
+        return;
+
+    if (!ImGui::CollapsingHeader("Fog Volume", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    std::optional<scene::ComponentRecord> before =
+        scene->readComponent(entity, descriptor->type);
+    if (!before)
+        return;
+    scene::ComponentRecord after = *before;
+    const std::optional<scene::ComponentRecord> defaults =
+        scene->defaultComponentRecord(descriptor->type);
+    const scene::ComponentRecord* defaultRecord = defaults ? &*defaults : nullptr;
+
+    bool changed = false;
+
+    // 顶部只放启用开关，避免和 Placement 的大段参数混在一起。
+    const scene::ComponentDescriptor enabledGroup =
+        makePropertyGroup(*descriptor, { "enabled" });
+    changed |= drawPropertyWidgets(after, enabledGroup, defaultRecord);
+    ImGui::SameLine();
+    ImGui::TextDisabled("局部体积雾盒");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", descriptor->description.c_str());
+
+    ImGui::TextWrapped("%s", descriptor->description.c_str());
+
+    if (ImGui::CollapsingHeader("Placement", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        const scene::ComponentDescriptor placement =
+            makePropertyGroup(*descriptor, { "center", "size", "rotation" });
+        changed |= drawPropertyWidgets(after, placement, defaultRecord);
+
+        ImGui::TextDisabled("Size presets");
+        struct SizePreset { const char* label; glm::vec3 size; };
+        static const SizePreset presets[] = {
+            { "20 x 8 x 20", glm::vec3(20.0f, 8.0f, 20.0f) },
+            { "40 x 12 x 40", glm::vec3(40.0f, 12.0f, 40.0f) },
+            { "80 x 20 x 80", glm::vec3(80.0f, 20.0f, 80.0f) },
+        };
+        for (int i = 0; i < 3; ++i)
+        {
+            if (i > 0)
+                ImGui::SameLine();
+            ImGui::PushID(i);
+            if (ImGui::Button(presets[i].label))
+            {
+                setVec3Property(after, "size", presets[i].size);
+                changed = true;
+            }
+            ImGui::PopID();
+        }
+
+        ImGui::TextDisabled("Center / Size / Rotation 是相对实体的局部空间；");
+        ImGui::TextDisabled("整体移动或旋转请用上面的 Transform。视口里青色线框就是实际盒体。");
+    }
+
+    if (ImGui::CollapsingHeader("Appearance", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        const scene::ComponentDescriptor appearance = makePropertyGroup(
+            *descriptor,
+            { "density", "color", "heightFalloff", "noiseStrength",
+              "noiseScale", "wind", "edgeSoftness" });
+        changed |= drawPropertyWidgets(after, appearance, defaultRecord);
+    }
+
+    if (ImGui::CollapsingHeader("Lighting"))
+    {
+        const scene::ComponentDescriptor lighting =
+            makePropertyGroup(*descriptor, { "anisotropy", "ambient" });
+        changed |= drawPropertyWidgets(after, lighting, defaultRecord);
+    }
+
+    if (ImGui::CollapsingHeader("Quality"))
+    {
+        const scene::ComponentDescriptor quality =
+            makePropertyGroup(*descriptor, { "steps" });
+        changed |= drawPropertyWidgets(after, quality, defaultRecord);
+    }
+
+    if (changed && !after.equivalentTo(*before))
+    {
+        state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+            *scene, entity, descriptor->type, std::move(before), std::move(after),
+            "Modify Fog Volume"));
+        state.markDirty();
+    }
+
+    drawNativeComponentFooter(state, entity, descriptor->type.c_str(), "Fog Volume");
 }
 
 void InspectorPanel::drawTransform(EditorState& state, entt::entity entity)

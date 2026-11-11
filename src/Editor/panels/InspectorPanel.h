@@ -20,6 +20,7 @@ public:
 
 private:
     void drawTransform(EditorState& state, entt::entity entity);
+    void drawFogVolume(EditorState& state, entt::entity entity);
     void drawCharacter(EditorState& state, entt::entity entity);
     void drawTerrain(EditorState& state, entt::entity entity);
     void drawStreamingTerrain(EditorState& state, entt::entity entity);

@@ -41,7 +41,7 @@ updated: 2026-11-11
 | `--voxel-glass-demo` | 配合 `--voxel-world`：在体素世界里摆交叉玻璃墙 + 近景相机（V-01 透明排序目测/回归）；单独使用会被忽略并打印提示 |
 | `--particle-demo` | 空场景创建一个粒子喷泉（rate=220、max=1500，贴图 `Particles/Kenney/fire_01.png`），相机自动取景；配合 `--empty-scene --selftest` / `--screenshot` 做粒子截图与回归 |
 | `--cloud-demo` | 空场景创建或启用 `scene.clouds`，设 coverage=.55、base=200、thickness=120、steps=56，相机放到 (0,35,80)、pitch=-7°；配合 `--empty-scene --selftest` / `--screenshot` 做体积云截图与回归 |
-| `--fog-demo` | 空场景创建一个局部雾盒（`effects.fogVolume`，density=0.045、steps=24、盒体 30x10x36、中心 (-6,10,-10)），相机放到 (0,18,28)、pitch=-8°；建议配合 `--streaming-world 3`，否则没有地形可衬托 |
+| `--fog-demo` | 空场景创建一个局部雾盒（`effects.fogVolume`，density=0.045、steps=24、组件 center=(-6,10,-10)、size=30x10x36、rotation=0），相机放到 (0,18,28)、pitch=-8°；建议配合 `--streaming-world 3`，否则没有地形可衬托。演示实体的 Transform 保持单位变换，盒体完全由组件 placement 定义 |
 | `--gpu-scene` | 忽略实例阈值，强制走 GPU 驱动提交（配合 `gpuSceneMinInstances` 默认 256） |
 | `--no-gpu-scene` | 关闭 GPU 驱动提交，完全回退 CPU 逐子网格路径 |
 | `--no-merged-buffers` | 整条 GPU 批退回 CPU 逐子网格路径（跨模型 single draw 依赖合并缓冲） |

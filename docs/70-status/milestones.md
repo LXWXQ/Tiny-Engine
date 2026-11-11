@@ -1266,17 +1266,25 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 **问题**：场景里只有全屏统一的距离雾（`scene.fog`），只能整体调浓度/高度，无法在山谷、林间或洞口单独摆一团雾；需要一种可添加、可摆位、可调参、随场景存读，并且不破坏延迟渲染链路的局部体积雾。
 
 **实现**：
-- 新增实体级 `effects.fogVolume`（`FogVolumeComponent`，分类“效果”）11 个属性：`enabled`（默认 true）、`density` 0.02、`color` (0.78,0.84,0.92,1)、`heightFalloff` 0.08、`noiseStrength` 0.55、`noiseScale` 0.08、`wind` (0.35,0,0.12)、`edgeSoftness` 0.18、`anisotropy` 0.55、`ambient` 0.35、`steps` 12；Inspector 可添加/启用/调参/移除，随场景 v4 实体 `components` 存读。
-- 雾盒由实体的 `WorldTransformComponent` 定义：position 是盒心、rotation 是朝向、scale 是**全尺寸**；一个场景最多 8 个。没有世界变换、`world.valid=false`、`density<=0`、`steps<=0` 或行列式接近 0 的实体直接跳过。
+- 新增实体级 `effects.fogVolume`（`FogVolumeComponent`，分类“效果”）14 个属性：`enabled`（默认 true）、`center` (0,0,0)、`size` (20,8,20，**全尺寸**)、`rotation` (0,0,0，度)、`density` 0.02、`color` (0.78,0.84,0.92,1)、`heightFalloff` 0.08、`noiseStrength` 0.55、`noiseScale` 0.08、`wind` (0.35,0,0.12)、`edgeSoftness` 0.18、`anisotropy` 0.55、`ambient` 0.35、`steps` 12；随场景 v4 实体 `components` 存读。
+- 雾盒 = 实体 `WorldTransformComponent` × 组件局部矩阵 `T(center) * R(rotation) * S(size)`；一个场景最多 8 个。没有世界变换、`world.valid=false`、`density<=0`、`steps<=0` 或行列式接近 0 的实体直接跳过。
 - 新增 `src/Render/FogVolumePass.{h,cpp}` 与 `shaders/fog_volume.frag`：插在 `CloudPass` 之后、`PlanarReflection`/SSR/Glass/Water 之前，LOAD HDR、无深度附件、预乘 alpha（`src=ONE`、`dst=ONE_MINUS_SRC_ALPHA`、`srcAlpha=ZERO`、`dstAlpha=ONE`）写回 `hdrScene`，因此水面、玻璃和 SSR 读到的 HDR 带雾。
 - 着色：读 G-Buffer 世界位置把步进截到最近不透明表面之前（最多 500m）；逐盒做世界空间 slab 相交，盒内按 `steps`（1..32）步进并加交错梯度抖动，叠加边缘 `smoothstep` 淡出、盒心以上高度衰减、32³ RGBA8 可平铺噪声（R 低频团/G 中频/B 高频）与 HG 相函数，透射率低于 0.02 提前退出。
 - 噪声在 CPU 生成 32³ RGBA8 并走新增的 `Texture3D` 上传；描述符 set0 GlobalUbo、set1 binding0 雾盒 UBO（`vec4 header + GpuVolume[8]`，1552 B）、binding1 sampler3D、binding2 `gbPosition`；`resize()` 重绑位置视图。
-- `--fog-demo` 在空场景 + 流送地形上创建实体“局部雾盒（Fog Demo）”：density=0.045、heightFalloff=0.12、noiseStrength=0.82、noiseScale=0.085、wind=(0.55,0,0.18)、edgeSoftness=0.34、ambient=0.55、steps=24，盒心 (-6,10,-10)、scale (30,10,36)，相机 (0,18,28)、pitch=-8°；因流送 chunk 创建时尚未落地，演示固定 `groundY=10`。
+- `--fog-demo` 在空场景 + 流送地形上创建实体“局部雾盒（Fog Demo）”：density=0.045、heightFalloff=0.12、noiseStrength=0.82、noiseScale=0.085、wind=(0.55,0,0.18)、edgeSoftness=0.34、ambient=0.55、steps=24，组件 center=(-6,10,-10)、size=(30,10,36)、rotation=0，实体 Transform 保持单位变换；相机 (0,18,28)、pitch=-8°；因流送 chunk 创建时尚未落地，演示固定 `groundY=10`。
 
-**测试**：
+**测试（初版）**：
 - `TinyEngine.exe --selftest 70 --empty-scene --streaming-world 3 --fog-demo`：`[Scene] ECS component selfTest PASS | components=30 | systems=8`、`[FogVolume] initialized | noise=32^3 maxVolumes=8`、`[FogVolume] demo volume created | density=0.045 scale=30x10x36 steps=24`、`[FogVolume] first draw | volumes=1 density=0.045 steps=24`、`[Validation] errors=0 warnings=0`；70 帧 0.831671 s（84.17 FPS，Debug）。
 - 1920x1080 截图 `build/fog_demo5.png`：相机位于地形上方，画面中下方出现蓝灰色低雾带，树根被雾遮住，雾盒边缘无明显硬切。
 - 新增 `f6-fog-volume` 用例（参数同上），断言初始化 / 演示雾盒创建 / 首绘 / Validation 0-0。
 - 全套回归 **80 项** ALL PASS（含 `f6-fog-volume`），stderr 全 0，验证日志 `build/validation/20261111-121011`；DocCheck PASS（documents=70 lines=12744）。
+
+**后续可用性改造（2026-11-11）**：
+- 用户反馈体积雾“很难用”、地形也能添加组件、组件界面与 Render 窗口不一致；要求保留 Render 的场景组件系统，同时让雾的位置和体积可调。
+- `ComponentDescriptor` 新增 `description`/`requiresTransform`/`allowOnTerrain` 三个元数据；`Scene` 新增 `canAddComponent`/`componentAddBlockReason`/`isTerrainManagedEntity`，`addComponent`/`applyComponentRecord` 共用同一门禁：地形/流送地形/体素对象禁止 `effects.*`，无 Transform 的实体禁止需要 Transform 的组件；Add 菜单置灰并显示原因，地形对象隐藏 Add/Paste 入口。
+- `FogVolumeComponent` 从 11 属性扩到 14：新增 `center`/`size`/`rotation`，最终盒体 = 实体 WorldTransform × `T(center) * R(rotation) * S(size)`；`FogVolumePass` 用 `volumeWorld` 打包，`--fog-demo` 改为组件 placement、实体 Transform 保持单位变换。
+- Inspector 新增专用 Fog Volume 面板：Placement（center/size/rotation + 3 个尺寸预设）、Appearance、Lighting、Quality，并保留通用组件的复制/粘贴/重置/移除；Render 窗口保留场景组件快捷开关。`EditorOverlayPass` 在选中雾盒时画青色盒体线框（48 顶点双盒）。
+- `src/Scene/Scene.cpp` 自检断言 14 属性默认值、add/read 与地形/无 Transform 兼容性；`tools/Validate.ps1` 的 `f6-fog-volume` 断言精确 placement 日志。
+- 验证：`TinyEngine.exe --selftest 70 --empty-scene --streaming-world 3 --fog-demo` 0-0，截图 `build/fog_ui_clean.png`；`TinyEditor.exe --selftest 30 --empty-scene --hidden --screenshot build/editor_ui_check.png` 0-0；全套回归 **80 项** ALL PASS（含 `f6-fog-volume`），stderr 全 0，验证日志 `build/validation/20261111-152921`；DocCheck PASS（documents=70 lines=12771）。
 
 **边界**：雾盒只能是长方体，靠噪声和边缘淡出掩盖硬边；同时最多 8 个，单盒 steps 上限 32；噪声是静态 32³ 体素，没有时域重投影/降噪/体积阴影/二次散射；雾只影响主 HDR，不进平面反射、SSR 反射与 CSM 阴影；不写深度、不进 G-Buffer，因此不参与 SSAO 与延迟光照；默认不添加任何雾盒。
