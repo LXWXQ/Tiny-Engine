@@ -4,8 +4,8 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1270 行
-updated: 2026-11-10
+size: ~1300 行
+updated: 2026-11-11
 ---
 
 # 里程碑与实测基线
@@ -37,7 +37,7 @@ updated: 2026-11-10
 
 | 项 | 值 | 证据来源 |
 |---|---|---|
-| 回归 | 78 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
+| 回归 | 79 项全 PASS，stderr 全 0 字节 | `tools/Validate.ps1` |
 | 验证层 | `errors=0 warnings=0` | 每次运行退出打印 |
 | syncval | 0 errors / 0 warnings | `--validation-features sync` |
 | 场景 | 103 子网格 + 天空盒；CPU 路径 `draw calls 104`，F1-b 合并模式 `draw calls 2`（1 次 multidraw + 球体仍走旧路径）（相机朝向 Sponza 时；无头自检的默认视角由 `config/engine.json` 决定） | `[Perf]` 行 |
@@ -1242,3 +1242,21 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 - 全套回归 **79 项** ALL PASS（含 `f6-vegetation`），stderr 全 0，验证日志 `build/validation/20261110-174339`；DocCheck PASS（documents=69 lines=12542）。
 
 **边界**：纯程序化草/树，没有外部资产、LOD、风场贴图或季节变化；草是 3 张交叉卡片、树是 3 层锥体，近看能辨认低模；草/树不投自身阴影，也不进平面反射/SSR；只长在 `TerrainComponent` 上，不覆盖体素世界；整批重排会造成一次可感的 CPU 峰值；默认关闭。
+
+## R-11：G-Buffer 世界位置精度修复（2026-11-11）
+
+**问题**：用户报告第三人称角色的背部、耳朵和四肢出现大片黑色花瓣状斑块，只在开启 SSAO 时出现。角色世界坐标约 `(-142, 15, -112)`，离原点 142~180 单位；同一机位关掉 SSAO 后角色完全干净，把相机和角色挪到原点附近伪影也消失。
+
+**根因**：G-Buffer Position 用 `R16G16B16A16_SFLOAT` 存绝对世界坐标。half 只有 10 位尾数，在 `|x|≈144` 处 ULP 已经是 `0.125`；SSAO 默认 `bias=0.047`、`radius=0.33`，位置量化误差比 bias 还大，`sampleViewZ >= samplePos.z + bias` 的深度比较会把同一表面判成前后错开，64 个核样本里出现大量假遮挡。原点附近 ULP 只有毫米级，所以完全正常。不是法线、蒙皮或 SSAO 采样方向错误。
+
+**修复**：
+- `src/RHI/GBuffer.h` 的 `GBufferFormat::Position` 改为 `VK_FORMAT_R32G32B32A32_SFLOAT`，并加 `static_assert` 锁住格式；normal / albedo 仍保持 RGBA16F。
+- G-Buffer 采样器本来就是 `NEAREST`、附件不混合，32F 不需要线性过滤能力；代价是 Position 从 8 B/px 涨到 16 B/px（1920×1080 多约 16.6 MB）。
+- `docs/20-pipeline/gbuffer.md` 增加 §1.1 记录精度预算；`docs/60-debug-profiling/pitfalls.md` 新增坑 38。
+
+**测试**：
+- 用户原机位、原 SSAO 参数（`radius=0.33`、`bias=0.047`、`kernelSize=16`）：修复前 `build/ssao_repro_on.png` 有大片黑色花瓣，修复后 `build/ssao_r11_after.png` 角色干净、无花瓣；日志 `[Runtime] spawn=-142.7,14.8706,-112.372 onGround=0`。
+- 对照：关 SSAO（`build/ssao_repro_off.png`）花瓣消失；挪到原点（`build/ssao_origin.png`）也消失；Position 临时改 32F（`build/ssao_pos32f.png`）同机位消失。
+- 全量回归 **79 项** ALL PASS（含 `f6-vegetation`、`f6-sun`、`td03-window-resize`），stderr 全 0，验证日志 `build/validation/20261111-103956`；DocCheck PASS（documents=69 lines=12592）。
+
+**边界**：Position 附件显存/带宽翻倍；32F 只解决位置量化，不改变地形 `Normal.w=0` 跳过 SSAO 的既有策略，也不提供地形接触阴影；SSAO 的 screen-space 性质、半分辨率与不保边模糊保持不变。

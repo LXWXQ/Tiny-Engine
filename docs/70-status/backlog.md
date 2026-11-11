@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
 size: ~340 行
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 # 后续任务台账
@@ -261,6 +261,7 @@ updated: 2026-11-10
 | R-08 | 已完成 | 水面发暗/发绿观感（平面反射暗部最多补 34% 天空环境底色；深水色提亮约 2 倍；远水 alpha 0.92→0.89） | — | 低机位同机位暗水区域 luma 76.2→81.8、蓝色 94.2→99.6，岛影仍可见；diff>2 共 840553 像素；75 项 ALL PASS（日志 `build/validation/20261106-164734`） |
 | R-09 | 已完成 | 低渲染倍率水面平铺亮暗格（18m 法线低频；改为高通 K>=32 法线贴图） | — | 0.37x 同机位网格消失、全 1920 正常；对比 `build/water_grid_fix_compare.png`；75 项 ALL PASS（日志 `build/validation/20261106-173309`） |
 | R-10 | 已完成 | 高角度水面泡沫规则菱格（波峰项铺满水面 + 双正弦乘积；改为岸边门控 + 法线贴图低频噪声） | — | 高角度同机位泡沫菱格消失、水面只剩连续波纹/云影；低角度水面无规则格、泡沫不再铺满水面；75 项 ALL PASS（日志 `build/validation/20261106-180307`） |
+| R-11 | 已完成 | 人物 SSAO 黑色花瓣（G-Buffer Position 从 RGBA16F 改为 RGBA32F，消除远坐标量化误差） | — | 用户原机位、原 SSAO 参数下角色干净；关 SSAO / 原点对照 / 32F 对照三组截图一致；79 项 ALL PASS（日志 `build/validation/20261111-103956`） |
 | V-02 | 未开始 | 体素网格化的每帧预算与取消（当前每块一个 job，`processVoxelChunkBuilds()` 每帧最多上传 4 块，但提交阶段没有总预算） | V-04、JobSystem | 半径 12 首帧提交仍有 7.9 ms（Release），要压到 <2 ms；取消后不再上传 |
 | V-03 | 未开始 | 体素 LOD（远距离 chunk 粗网格） | V-02 | 半径 24 的 triangles 显著下降，近处不糊 |
 | V-04 | 已完成 | 体素几何走 `TerrainMeshArena` / 间接合批（每 chunk 一份 `Model` + 一次 bind -> 共享 arena + 专用实例表） | F1 合批路径 | 625 块整批只占 1 条 `vkCmdDrawIndexedIndirect`；半径 12 的 arena 725888 顶点 / 1088832 索引不溢出，验证 0/0（日志 `build/validation/20261106-102034`） |
@@ -335,6 +336,8 @@ updated: 2026-11-10
 
 > R-09 低渲染倍率水面平铺亮暗格已完成（2026-11-06）：根因是 18m 法线贴图的低频脊线（K<32）在 `--render-scale 0.37`（用户 1536x864 窗口、约 710px 宽的 3D 视口）下每块只占约 43px，随平铺重复成规则的斜向亮暗格；1920 全分辨率看不出来，也不是 SSR/平面反射/TAA 缺陷。修复是把 `Resources/Texture/Water/water_normal.png` 换成高通 FFT 法线（K>=32，1024²、cutoff=32、exponent=1.9、slope_rms=0.22、seed=44），只保留 18m 平铺里约 0.56m 以下的细纹，低频形状交给 4 个解析大波；`shaders/water.frag` 未改。新增 `tools/GenerateWaterNormal.py` 可复现（重新生成与仓库内文件逐字节一致）。0.37x 前后图 `build/grid_before_lowres.png` / `build/grid_hp32_head_lowres.png`，全 1920 `build/grid_hp32_head_full.png`，对比 `build/water_grid_fix_compare.png`。详见 [milestones](milestones.md#r-09低渲染倍率水面平铺亮暗格2026-11-06)，验证日志 `build/validation/20261106-173309`。
 
+> R-11 人物 SSAO 黑色花瓣已完成（2026-11-11）：角色世界坐标约 `(-142, 15, -112)`，G-Buffer Position 的 RGBA16F 在 `|x|≈144` 处 ULP 为 `0.125`，大于 SSAO 的 `bias=0.047`，深度比较把同一表面判成互相遮挡，形成黑色花瓣；关 SSAO、挪到原点、Position 临时改 32F 三组对照均消失。修复为 `GBufferFormat::Position = VK_FORMAT_R32G32B32A32_SFLOAT` 并加 `static_assert`，采样器本来就是 NEAREST，代价是每像素多 8 字节。同机位 before/after 见 `build/ssao_repro_on.png` / `build/ssao_r11_after.png`；79 项 ALL PASS，验证日志 `build/validation/20261111-103956`；详见 [milestones](milestones.md#r-11g-buffer-世界位置精度修复2026-11-11) 与 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 38。
+>
 > R-10 高角度水面泡沫规则菱格已完成（2026-11-06）：红框里的亮暗格不是 SSAO/反射/背景，也不是 18m 法线（R-09 已换高通）；逐项禁用后确认只要关掉 `foam` 混合水面就完全平滑。根因在 `shaders/water.frag` 的旧泡沫：`crest` 项没有乘 `shore`、铺满整个水面，且图案是 `sin(p.x*1.7)*sin(p.y*2.1)` 的乘积，俯视时形成规则菱形棋盘格。修复为 `shore = 1-smoothstep(0,1.8,thickness)` 门控、`crest=smoothstep(0.10,0.30,bigWaveHeight)`，噪声改采 `waterNormalMap` 的 LOD1.5 低频（`foamMask=smoothstep(0.34,0.74,noise)`），`foam=clamp(shore*foamMask*(0.75+0.25*crest),0,1)`；深水不再产生泡沫。同机位 before/after 见 `build/highgrid_C_before_samecamera.png` / `build/highgrid_C_after_samecamera.png`，对比图 `build/foam_grid_compare.png`；验证日志 `build/validation/20261106-180307`。经验归档见 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 36；详见 [milestones](milestones.md#r-10高角度水面泡沫规则菱格2026-11-06)。
 
 ## 更新方式

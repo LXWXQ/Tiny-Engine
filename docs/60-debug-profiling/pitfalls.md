@@ -4,8 +4,8 @@ title: 已踩过的坑
 type: debug
 scope: 空（跨代码库）
 read-when: 改任何代码之前；或遇到"看起来不可能"的怪异现象时
-size: ~560 行
-updated: 2026-11-10
+size: ~585 行
+updated: 2026-11-11
 ---
 
 # 已踩过的坑
@@ -552,3 +552,15 @@ vec2 sampleSphericalMap(vec3 v) {
 - **判据**：`[Sun] first draw` 里 `inFront=0`，画面中心仍有鬼影；把 `occlusion` 关掉也不能消除（`sunVisibility()` 在 occlusion 关闭时会直接返回 1）。
 - **修法**：`sunVisibility()` 第一件事就检查 `push.color.a`（CPU 写入的 `inFront`），为 0 时直接返回 0；再对太阳 UV 出界返回 0；太阳贴近画面边缘时用 `sourceFade = smoothstep(0.0, 0.06, edge)` 把鬼影与光条一起淡出。
 - **通用教训**：屏幕空间伪影的“源点”必须同时满足“在相机前方”和“在画面内”。只检查 UV 范围不够，因为 UV 在源点投影失败时仍有默认值。
+
+## 38. 远离世界原点时人物身上出现 SSAO 黑色花瓣
+
+- **现象**：第三人称角色（约 0.9m 高、世界坐标约 `(-142, 15, -112)`）的背部、耳朵和四肢出现大片边缘锐利的黑色花瓣/条带，看起来像法线翻折或阴影 acne；关闭 SSAO 后完全消失，把相机和角色挪到原点附近也不再出现。
+- **原因**：G-Buffer Position 用 `R16G16B16A16_SFLOAT` 存**绝对世界坐标**。half 在 `|x|≈144` 处的 ULP 是 `0.125`，而 SSAO 默认 `bias=0.047`、`radius=0.33`：位置量化误差比 bias 还大，`sampleViewZ >= samplePos.z + bias` 这类深度比较会把同一块表面判成前后错开，采样核里大量假遮挡。离原点越远越严重，原点附近完全正常。
+- **判据**：
+  1. 关 `ssao.enabled`，花瓣立刻消失；
+  2. 只把相机/角色移到原点附近（SSAO 参数不变），伪影也消失；
+  3. 把 Position 附件临时改成 `R32G32B32A32_SFLOAT`，同机位伪影消失——三条同时成立即可锁定精度，而不是法线/蒙皮问题。
+- **不要这样修**：把 `ssao.bias` 提到 0.15 也能让花瓣消失，但这是用更大的深度容差掩盖量化误差，接触阴影会被一起抹掉；`radius` 调小只能让花瓣变小，不能消除。
+- **修法**：`src/RHI/GBuffer.h` 的 `GBufferFormat::Position` 改为 `VK_FORMAT_R32G32B32A32_SFLOAT`，并加 `static_assert` 锁住；`docs/20-pipeline/gbuffer.md` §1.1 记录原因。G-Buffer 采样器是 `NEAREST`，32F 不需要线性过滤支持；代价是每像素多 8 字节。
+- **通用教训**：世界空间 G-buffer 的精度要按**最远世界坐标**估 ULP，不能按原点附近的直觉选格式；half 适合方向、颜色、归一化量，不适合绝对位置。屏幕空间 AO 的 `bias` 与位置量化误差必须放在同一量级比较，否则“算法正确”也会产生结构性伪影。

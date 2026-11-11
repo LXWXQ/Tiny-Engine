@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 判断某个需求现在能不能做
 size: ~100 行
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 # 已知边界
@@ -138,6 +138,7 @@ updated: 2026-11-10
 - 地形片元当前约 16 次纹理采样/像素（8 albedo + 4 normal + 4 packed height/roughness）；
   后续可把四层 albedo 收进 texture array 或降低双尺度采样。
 - 地形 Normal.w=0，不参与 SSAO；局部接触阴影留待后续。
+- G-Buffer Position 用 `R32G32B32A32_SFLOAT`（16 B/px）：绝对世界坐标在远距离需要 32F 精度，16F 会让 SSAO 在 |x|≈144 处产生黑色花瓣（见 pitfalls 坑 38）。这是显存/带宽换正确性的取舍。
 - 地形高度场可由 GPU compute 生成；单 chunk 网格组装也在 GPU，但多 chunk
   仍由 CPU builder 生成。CPU 侧保留全分辨率 picking mirror 和 HeightField
   collision 源。B-07 已接入 kinematic 角色控制器与运行期雕刻：角色用局部包围盒

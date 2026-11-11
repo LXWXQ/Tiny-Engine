@@ -4,8 +4,8 @@ title: G-Buffer 布局
 type: pipeline
 scope: src/RHI/GBuffer.h, shaders/mrt.frag, shaders/grid_mrt.*, shaders/skybox_mrt.*
 read-when: 修改 G-Buffer 附件、格式，或改几何着色器输出
-size: ~120 行
-updated: 2026-11-01
+size: ~140 行
+updated: 2026-11-11
 ---
 
 # G-Buffer 布局
@@ -16,11 +16,27 @@ updated: 2026-11-01
 
 | 附件 | 格式 | 内容 | 谁写 | 谁读 |
 |---|---|---|---|---|
-| Position | `R16G16B16A16_SFLOAT` | 世界空间位置，`.w = 1` | mrt / grid_mrt / skybox_mrt | SSAO, Lighting |
+| Position | `R32G32B32A32_SFLOAT` | 世界空间位置，`.w = 1` | mrt / grid_mrt / skybox_mrt | SSAO, Lighting, SSR, Water, Cloud |
 | Normal | `R16G16B16A16_SFLOAT` | 世界空间法线；`.w` 是 SSAO policy mask（1=参与，0=跳过）；**天空盒 xyz 写 `(0,0,0)`** | 同上 | SSAO, Lighting |
 | Albedo | `R16G16B16A16_SFLOAT` | 线性基础色；**天空盒往这里写线性 HDR 辐照度（可 > 1）** | 同上 | Lighting（透传） |
 | Pbr | `R8G8B8A8_UNORM` | `.r` = 金属度（取 metallicRoughness 的 `.b`），`.g` = 粗糙度（取 `.g`） | mrt / grid_mrt | Lighting |
 | Depth | `findDepthFormat()` -> 首选 `D32_SFLOAT` | 深度 | Geometry | 深度测试 |
+
+### 1.1 为什么 Position 必须是 32F
+
+Position 存的是**绝对世界坐标**，精度需求随离原点的距离增长。`R16G16B16A16_SFLOAT`
+只有 10 位尾数，在 `|x|≈144` 处 ULP 已经是 `0.125`；而 SSAO 默认 `bias=0.047`、
+`radius=0.33`，量化误差和 bias 同量级，深度比较会把同一块表面判成互相遮挡，
+角色/远处物体上出现大片黑色花瓣或条带。相机挪到原点附近时伪影会消失，正是
+“绝对坐标越大越严重”的判据。
+
+改成 `R32G32B32A32_SFLOAT` 后 ULP 降到微米级，SSAO 在世界任意位置都稳定。
+代价是每像素从 8 字节涨到 16 字节（1920×1080 多约 16.6 MB）；G-Buffer 采样器
+是 `NEAREST`、附件也不混合，所以不需要 16F 的线性过滤能力，32F 只多占显存/带宽。
+`src/RHI/GBuffer.h` 里用 `static_assert` 锁住格式，避免以后为了省显存改回 16F。
+
+> 不要用“把 SSAO bias 调大”来掩盖：bias 调到 0.15 确实能压掉花瓣，但接触阴影
+> 也会一起消失。详见 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 38。
 
 ## 2. 为什么 Albedo 是 16F
 
