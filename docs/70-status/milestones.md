@@ -1295,5 +1295,6 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 - `src/Scene/Scene.cpp` 自检断言 14 属性默认值、add/read 与地形/无 Transform 兼容性；`tools/Validate.ps1` 的 `f6-fog-volume` 断言精确 placement 日志。
 - 验证：`TinyEngine.exe --selftest 70 --empty-scene --streaming-world 3 --fog-demo` 0-0，截图 `build/fog_ui_clean.png`；`TinyEditor.exe --selftest 30 --empty-scene --hidden --screenshot build/editor_ui_check.png` 0-0；全套回归 **80 项** ALL PASS（含 `f6-fog-volume`），stderr 全 0，验证日志 `build/validation/20261111-152921`；DocCheck PASS（documents=70 lines=12771）。
 - 2026-11-12：Add 弹窗改为完整分类目录后，体积雾在“体积效果”下可直接发现；地形/体素入口保留并可新建空实体。详见 [F5-05 的后续目录改造](#f5-05组件编辑工作流2026-11-10)。
+- 2026-11-12（再次反馈“UI 上找不到体积雾”）：无选中对象时 Inspector 的 `Scene Components` 旁新增「创建体积雾对象」按钮，直接新建 `Fog Volume` 实体、挂上 `effects.fogVolume`、放到相机前方 18m 并选中；Scene scope 的 Add 弹窗同时提示“体积雾 / 粒子是对象组件，不在这个列表里”。编辑器自检截图 `build/editor_fog_entry.png` 可见入口。
 
 **边界**：雾盒只能是长方体，靠噪声和边缘淡出掩盖硬边；同时最多 8 个，单盒 steps 上限 32；噪声是静态 32³ 体素，没有时域重投影/降噪/体积阴影/二次散射；雾只影响主 HDR，不进平面反射、SSR 反射与 CSM 阴影；不写深度、不进 G-Buffer，因此不参与 SSAO 与延迟光照；默认不添加任何雾盒。

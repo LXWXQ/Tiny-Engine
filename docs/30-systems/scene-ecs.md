@@ -156,6 +156,7 @@ Add 弹窗对不可用项置灰并显示原因，而不是只给一个灰条。
 
 - Inspector 先画固定原生面板（Transform/Character/Terrain/Streaming/Mesh/Material/Render Tag），
   再显示已挂载且 `drawProperties` 的注册组件。组件区顶部是 `+ Add Component` 与剪贴板粘贴按钮；
+  没有选中对象时，场景组件区还会显示「创建体积雾对象」，一键新建实体、挂 `effects.fogVolume` 并放到相机前方，避免用户把“对象组件不在场景组件列表里”误判成组件不存在。
   Add 弹窗支持按名称/分类/id 搜索，组件头默认展开。
 - 属性控件按注册表元数据设置范围、拖动速度和悬停提示；右键属性可单独“重置为默认值”。
   组件头右键与原生面板底部提供复制 / 粘贴 / 重置 / 移除，全部走 `SetComponentRecordCommand`，可撤销。

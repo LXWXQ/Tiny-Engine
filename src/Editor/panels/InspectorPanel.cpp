@@ -2,6 +2,7 @@
 #include "Editor/EditorState.h"
 #include "Editor/Commands.h"
 #include "Scene/Components.h"
+#include "Scene/FeatureComponents.h"
 #include "Scene/Scene.h"
 
 #include <imgui.h>
@@ -537,6 +538,50 @@ void InspectorPanel::draw(EditorState& state)
     ImGui::End();
 }
 
+void InspectorPanel::createFogVolumeEntity(EditorState& state)
+{
+    Scene* scene = state.services.scene;
+    if (scene == nullptr || state.services.registry == nullptr)
+        return;
+
+    entt::registry& registry = *state.services.registry;
+    const entt::entity created = scene->createEntity();
+    registry.emplace_or_replace<NameComponent>(created, NameComponent{ "Fog Volume" });
+
+    // 放在相机前方而不是原点：空场景里原点常常在地底/画面外，用户会以为
+    // 按钮没生效。距离取 18m，正好落在默认视距内。
+    if (auto* transform = registry.try_get<TransformComponent>(created))
+    {
+        glm::vec3 position{ 0.0f, 5.0f, 0.0f };
+        const entt::entity cameraEntity = scene->getCameraEntity();
+        if (cameraEntity != entt::null && registry.valid(cameraEntity))
+        {
+            const TransformComponent& camera = scene->getCameraTransform();
+            const glm::vec3 forward =
+                camera.getOrientation() * glm::vec3(0.0f, 0.0f, -1.0f);
+            position = camera.getTranslation() + forward * 18.0f;
+        }
+        transform->setTranslation(position);
+    }
+
+    const std::optional<scene::ComponentRecord> record =
+        scene->defaultComponentRecord("effects.fogVolume");
+    if (record)
+        scene->applyComponentRecord(created, *record);
+
+    // 默认盒体偏小、偏淡；新建时给一个更容易看见的尺寸和密度，用户再按需调。
+    if (auto* fog = registry.try_get<scene::FogVolumeComponent>(created))
+    {
+        fog->size = glm::vec3(30.0f, 12.0f, 30.0f);
+        fog->density = 0.035f;
+    }
+
+    state.selection.select(created);
+    state.markDirty();
+    state.pushLog(LogEntry::Level::Info,
+                  "[Editor] 已创建体积雾对象（Fog Volume）；参数在 Inspector 的 Fog Volume 面板里调。");
+}
+
 void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
                                     scene::ComponentScope scope)
 {
@@ -588,6 +633,14 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
     {
         componentFilter[0] = '\0';
         ImGui::OpenPopup("##add_component");
+    }
+    if (sceneScope)
+    {
+        ImGui::SameLine();
+        if (ImGui::Button("创建体积雾对象"))
+            createFogVolumeEntity(state);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("体积雾是对象组件：新建一个空实体、挂上 Fog Volume，并放到相机前方。");
     }
 
     const scene::ComponentDescriptor* clipboardDescriptor = nullptr;
@@ -647,6 +700,13 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
         else if (sceneScope)
         {
             ImGui::TextDisabled("✓ = 场景里已经启用；参数在下方组件列表里编辑。");
+            ImGui::TextWrapped(
+                "体积雾 / 粒子是对象组件，不在这个列表里：先选中普通实体，"
+                "或关闭弹窗后点「创建体积雾对象」。");
+        }
+        else
+        {
+            ImGui::TextDisabled("✓ = 已挂载；体积雾在「体积效果」分类下。");
         }
 
         if (matches.empty())
@@ -804,7 +864,8 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
     if (!drewAny && sceneScope)
     {
         ImGui::TextDisabled("当前场景没有功能组件，渲染使用引擎默认。");
-        ImGui::TextDisabled("点上面的 + Add Scene Component 添加阴影、Bloom、雾等。");
+        ImGui::TextDisabled("点上面的 + Add Scene Component 添加阴影、Bloom、距离雾等。");
+        ImGui::TextDisabled("体积雾是对象组件：用上面的「创建体积雾对象」。");
     }
 }
 

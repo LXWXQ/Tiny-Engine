@@ -21,6 +21,10 @@ public:
 private:
     void drawTransform(EditorState& state, entt::entity entity);
     void drawFogVolume(EditorState& state, entt::entity entity);
+    // 无选中对象时的快捷入口：新建一个空实体并挂上体积雾，放到相机前方。
+    // 体积雾是对象组件，不在 Scene Components 列表里，光有 Add Component
+    // 弹窗会让用户以为“组件不存在”。
+    void createFogVolumeEntity(EditorState& state);
     void drawCharacter(EditorState& state, entt::entity entity);
     void drawTerrain(EditorState& state, entt::entity entity);
     void drawStreamingTerrain(EditorState& state, entt::entity entity);
