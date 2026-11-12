@@ -41,6 +41,10 @@ ImGuiSystem::ImGuiSystem(GLFWwindow* window, Device& device, VkFormat swapchainF
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO(); (void)io;
+	// 编辑器面板使用 ImGui docking 分支：允许面板停靠、分屏与保存布局。
+	// 只启用 docking，不启用多平台 viewport（后者会把 ImGui 窗口拆成独立原生窗口，
+	// 与当前 Vulkan 交换链/编辑器渲染路径耦合较重）。
+	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	// 窗口布局持久化到 config/imgui.ini。
 // 为什么不放默认的 imgui.ini（工作目录）：
 //   1. 仓库根目录只允许出现 README.md；

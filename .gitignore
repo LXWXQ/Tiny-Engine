@@ -33,3 +33,7 @@ config/editor.json
 
 # 启动失败日志（运行时产物）
 startup-error.log
+
+# 本地临时文件 / 编辑器布局备份
+/tmp_*
+config/*.ini.bak

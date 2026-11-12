@@ -25,6 +25,7 @@ std::string toJson(const EditorPreferences& prefs)
     root["panels"] = panels;
     root["gizmoMode"] = prefs.gizmoMode;
     root["recentScenes"] = prefs.recentScenes;
+    root["lastScenePath"] = prefs.lastScenePath;
     return root.dump(2);
 }
 
@@ -67,6 +68,9 @@ bool fromJson(const std::string& text, EditorPreferences& out, std::string& erro
     if (const auto mode = root.find("gizmoMode"); mode != root.end() && mode->is_number_integer())
         out.gizmoMode = std::clamp(mode->get<int>(), 0, 2);
 
+    if (const auto lastScene = root.find("lastScenePath");
+        lastScene != root.end() && lastScene->is_string())
+        out.lastScenePath = lastScene->get<std::string>();
     if (const auto recent = root.find("recentScenes"); recent != root.end() && recent->is_array())
     {
         out.recentScenes.clear();
@@ -148,6 +152,7 @@ bool EditorPreferences::selfTest()
     EditorPreferences prefs;
     prefs.setPanelVisible("Console", false);
     prefs.gizmoMode = 2;
+    prefs.lastScenePath = "scenes/current.scene.json";
     prefs.pushRecent("a.scene.json");
     prefs.pushRecent("b.scene.json");
     prefs.pushRecent("a.scene.json");          // 重复 -> 置顶且不产生第二条
@@ -160,7 +165,8 @@ bool EditorPreferences::selfTest()
         return false;
     }
     if (loaded.panelVisible("Console") || !loaded.panelVisible("Inspector") ||
-        loaded.gizmoMode != 2 || loaded.recentScenes.size() != 2 ||
+        loaded.gizmoMode != 2 || loaded.lastScenePath != "scenes/current.scene.json" ||
+        loaded.recentScenes.size() != 2 ||
         loaded.recentScenes[0] != "a.scene.json")
     {
         std::cerr << "[Editor] preferences selfTest FAIL: values lost in round trip" << std::endl;

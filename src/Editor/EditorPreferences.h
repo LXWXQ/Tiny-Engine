@@ -29,6 +29,9 @@ struct EditorPreferences
     std::vector<std::string> recentScenes;         // 队首最新
     static constexpr size_t kMaxRecentScenes = 8;
 
+    // last scene path
+    std::string lastScenePath;
+
     bool panelVisible(const std::string& name) const;
     void setPanelVisible(const std::string& name, bool visible);
 

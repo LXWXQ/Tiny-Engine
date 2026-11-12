@@ -2,19 +2,25 @@
 
 #include "Editor/EditorPanel.h"
 #include "Core/FrameInfo.h"
+#include "Scene/ComponentTypes.h"
+#include "Scene/ComponentRegistry.h"
+
+#include <glm/glm.hpp>
+
+#include <string>
+
+class Scene;
 
 namespace editor
 {
 
-// 渲染设置面板：场景渲染功能已经全部迁移到“场景组件”
-// （Inspector 没有选中对象时显示，或从这里一键跳过去）。
+// 组件目录 / 创建向导。
 //
-// 这个面板现在只负责两件事：
-//   1. EngineSettings 的引擎级默认值（config/engine.json 的保存 / 重载）；
-//   2. 不属于场景内容的提交路径调试开关（GPU batch / Hi-Z / terrain batch）。
-//
-// 场景里实际启用哪些功能、每个功能怎么调参，全部由 SceneComponents 决定；
-// 不要在别处再加一套曝光/阴影/Bloom 控件，否则两套 UI 会写同一份值。
+// 面板名仍然是「Render」（EditorLayer 的布局与快捷键都按这个名字找），但职责
+// 已经从「渲染开关」升级为「按特效类型浏览并创建全部组件」：
+//   - ComponentScope::Scene  = 单一性组件：每个场景一份，没有 Transform；
+//   - ComponentScope::Entity = 对象组件：创建时新建一个带 Transform 的对象。
+// 具体参数控件复用 Editor/ComponentWidgets.h，和 Inspector 是同一套行为。
 class RenderSettingsPanel : public EditorPanel
 {
 public:
@@ -28,7 +34,28 @@ public:
     static bool selfTest();
 
 private:
+    void drawCatalog(EditorState& state, Scene& scene);
+    void drawWizard(EditorState& state, Scene& scene);
+    void openWizard(EditorState& state, Scene& scene,
+                    const scene::ComponentDescriptor& descriptor);
     void drawAdvanced(EngineSettings& settings);
+
+    // ---- 目录筛选 ----
+    char search_[128] = {};
+
+    // ---- 创建向导的临时状态 ----
+    // 只保存类型 id，不保存 descriptor 指针：组件注册表理论上可以在运行期
+    // 增删条目，向导跨帧打开时指针可能失效。
+    std::string pendingType_;
+    bool wizardRequested_ = false;
+
+    scene::ComponentRecord draft_;
+    scene::ComponentRecord defaults_;
+
+    char nameBuffer_[128] = {};
+    glm::vec3 spawnPosition_{ 0.0f };
+    glm::vec3 spawnEuler_{ 0.0f };   // 度（UI），创建时转弧度
+    glm::vec3 spawnScale_{ 1.0f };
 };
 
 } // namespace editor

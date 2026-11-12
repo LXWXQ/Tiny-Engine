@@ -1615,13 +1615,27 @@ void FirstApp::recreateSwapchain(VkExtent2D framebufferExtent)
 	renderer->onSwapchainRecreated();
 	screenshotCapture.onResize(vulkanSwapchain->getSwapChainExtent());
 
-	// ImGui's Vulkan backend caches image count and output format. Rebuild it
-	// only with the swapchain; dynamic resolution keeps the same backend.
-	imguiSystem.reset();
-	imguiSystem = std::make_unique<ImGuiSystem>(window, *vulkanDevice,
-	vulkanSwapchain->getSwapChainImageFormat(), vulkanSwapchain->imageCount(),
-	renderer->getCommandPool());
-	presentPassPtr->setImGuiSystem(imguiSystem.get());
+    // ImGui's Vulkan backend caches image count and output format. Rebuild it
+    // only with the swapchain; dynamic resolution keeps the same backend.
+    // Editor viewport textures live in ImGui's descriptor pool. Detach them
+    // before destroying the old backend/pool; otherwise the next frame's UI
+    // would sample a descriptor set owned by a destroyed pool.
+    // The new ImGui context also has an empty texture registry, so the
+    // viewport must be re-registered before getViewportTextureId() is used.
+    const bool recreateEditorViewportImGuiTextures = editorViewportTexturesCreated;
+    if (recreateEditorViewportImGuiTextures)
+        removeEditorViewportImGuiTextures();
+
+    imguiSystem.reset();
+    imguiSystem = std::make_unique<ImGuiSystem>(window, *vulkanDevice,
+        vulkanSwapchain->getSwapChainImageFormat(), vulkanSwapchain->imageCount(),
+        renderer->getCommandPool());
+    presentPassPtr->setImGuiSystem(imguiSystem.get());
+    if (uiCompositePassPtr != nullptr)
+        uiCompositePassPtr->setImGuiSystem(imguiSystem.get());
+
+    if (recreateEditorViewportImGuiTextures)
+        createEditorViewportTextures(renderResources->editorViewportExtent);
 
 	const VkExtent2D renderExtent = getDesiredRenderExtent();
 	for (auto& gBuffer : gBuffers)
@@ -2441,18 +2455,42 @@ void FirstApp::initEditor()
             glfwSetWindowShouldClose(window, GLFW_TRUE);
     };
 
-    services.openFileDialog = [](const char* filter, const char* title) -> std::string
+    services.openFileDialog = [](const char* filter, const char* title,
+                                 const std::string& initialPath) -> std::string
     {
         const std::wstring filterBlock = buildFilterBlock(filter);
         const std::wstring wideTitle = toWide(title);
 
         wchar_t buffer[MAX_PATH] = { 0 };
+        std::wstring initialDir;
+        if (!initialPath.empty())
+        {
+            const std::filesystem::path requested(initialPath);
+            std::error_code pathError;
+            if (std::filesystem::is_directory(requested, pathError))
+            {
+                initialDir = requested.wstring();
+            }
+            else if (requested.has_filename())
+            {
+                const std::wstring fileName = requested.filename().wstring();
+                wcsncpy_s(buffer, MAX_PATH, fileName.c_str(), _TRUNCATE);
+                initialDir = requested.parent_path().wstring();
+            }
+            else
+            {
+                initialDir = requested.wstring();
+            }
+        }
+
         OPENFILENAMEW ofn{};
         ofn.lStructSize = sizeof(ofn);
         ofn.lpstrFilter = filterBlock.c_str();
         ofn.lpstrFile = buffer;
         ofn.nMaxFile = MAX_PATH;
         ofn.lpstrTitle = wideTitle.c_str();
+        if (!initialDir.empty())
+            ofn.lpstrInitialDir = initialDir.c_str();
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
         if (!GetOpenFileNameW(&ofn))
@@ -2460,18 +2498,42 @@ void FirstApp::initEditor()
         return fromWide(buffer);
     };
 
-    services.saveFileDialog = [](const char* filter, const char* title) -> std::string
+    services.saveFileDialog = [](const char* filter, const char* title,
+                                 const std::string& initialPath) -> std::string
     {
         const std::wstring filterBlock = buildFilterBlock(filter);
         const std::wstring wideTitle = toWide(title);
 
         wchar_t buffer[MAX_PATH] = { 0 };
+        std::wstring initialDir;
+        if (!initialPath.empty())
+        {
+            const std::filesystem::path requested(initialPath);
+            std::error_code pathError;
+            if (std::filesystem::is_directory(requested, pathError))
+            {
+                initialDir = requested.wstring();
+            }
+            else if (requested.has_filename())
+            {
+                const std::wstring fileName = requested.filename().wstring();
+                wcsncpy_s(buffer, MAX_PATH, fileName.c_str(), _TRUNCATE);
+                initialDir = requested.parent_path().wstring();
+            }
+            else
+            {
+                initialDir = requested.wstring();
+            }
+        }
+
         OPENFILENAMEW ofn{};
         ofn.lStructSize = sizeof(ofn);
         ofn.lpstrFilter = filterBlock.c_str();
         ofn.lpstrFile = buffer;
         ofn.nMaxFile = MAX_PATH;
         ofn.lpstrTitle = wideTitle.c_str();
+        if (!initialDir.empty())
+            ofn.lpstrInitialDir = initialDir.c_str();
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
         ofn.lpstrDefExt = L"json";
 
@@ -2479,7 +2541,6 @@ void FirstApp::initEditor()
             return {};
         return fromWide(buffer);
     };
-
     // 编辑器只"报尺寸"，引擎在帧首统一重建 —— 不能在 UI 构建期做，
     // 那时命令缓冲已在录制，vkDeviceWaitIdle 会死锁。
     services.requestViewportSize = [this](uint32_t width, uint32_t height)

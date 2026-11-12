@@ -131,8 +131,8 @@ struct EngineServices
 
     // 打开一个原生文件对话框（返回空串表示取消）。
     // 由引擎侧实现，因为要用 Win32 API，编辑器层不应直接依赖 windows.h。
-    std::function<std::string(const char* filter, const char* title)> openFileDialog;
-    std::function<std::string(const char* filter, const char* title)> saveFileDialog;
+    std::function<std::string(const char* filter, const char* title, const std::string& initialPath)> openFileDialog;
+    std::function<std::string(const char* filter, const char* title, const std::string& initialPath)> saveFileDialog;
 
     // ---- TD-09：离屏视口 ----
     // 编辑器"报"它想要的视口像素尺寸；引擎在下一帧开头统一重建离屏纹理。

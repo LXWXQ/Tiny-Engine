@@ -313,6 +313,38 @@ private:
 };
 
 
+// 从「组件创建向导」创建的对象：空实体 + Name/Transform + 一组组件。
+//
+// 与 CreateEntityCommand 的区别：这里不加载任何网格，创建的是承载效果组件的
+// 逻辑对象（粒子发射器、体积雾、Spin/Orbit…）。撤销时销毁实体，重做时按同样
+// 的位姿与组件记录重建 —— EnTT 的实体 ID 会变，所以外部只能通过
+// currentEntity() 重新取句柄。
+class CreateComponentEntityCommand : public Command
+{
+public:
+    CreateComponentEntityCommand(Scene& scene, std::string name,
+                                 const glm::vec3& translation,
+                                 const glm::vec3& eulerRadians,
+                                 const glm::vec3& scale,
+                                 std::vector<scene::ComponentRecord> components);
+
+    void apply() override;
+    void revert() override;
+    const char* name() const override { return "Create Component Object"; }
+
+    // 当前实体（revert 之后为 entt::null）。
+    entt::entity currentEntity() const { return entity; }
+
+private:
+    Scene& scene;
+    std::string entityName;
+    glm::vec3 translation{ 0.0f };
+    glm::vec3 euler{ 0.0f };   // 弧度
+    glm::vec3 scale{ 1.0f };
+    std::vector<scene::ComponentRecord> components;
+    entt::entity entity = entt::null;
+};
+
 // Creates a terrain through Scene::createTerrainEntity. Redo reuses the
 // MeshComponent/TerrainComponent snapshots instead of regenerating noise or
 // re-uploading GPU buffers.

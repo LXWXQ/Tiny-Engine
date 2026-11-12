@@ -23,10 +23,10 @@ $dependencies = @(
        Url = "https://github.com/g-truc/glm/archive/refs/tags/1.0.3.zip";
        SourceEntry = "glm/glm.hpp";
        Files = @("CMakeLists.txt", "glm/glm.hpp") },
-    @{ Name = "imgui"; Version = "1.92.6"; Target = "imgui";
-       Url = "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.6.zip";
+    @{ Name = "imgui"; Version = "1.92.6-docking"; Target = "imgui";
+       Url = "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.6-docking.zip";
        SourceEntry = "imgui.cpp";
-       Files = @("imgui.cpp", "imgui.h", "backends/imgui_impl_vulkan.cpp") },
+       Files = @("imgui.cpp", "imgui.h", "imgui_internal.h", "backends/imgui_impl_vulkan.cpp") },
     @{ Name = "stb"; Version = "f4a71b1"; Target = "stb";
        Url = "https://github.com/nothings/stb/archive/f4a71b13373436a2866c5d68f8f80ac6f0bc1ffe.zip";
        SourceEntry = "stb_image.h";

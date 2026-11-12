@@ -18,6 +18,7 @@
 #include "Core/Material.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include "AssetPaths.h"
 #include <iostream>
 #include <cmath>
@@ -38,7 +39,7 @@ EditorLayer::~EditorLayer() = default;
 void EditorLayer::initialize(const EngineServices& services, const std::string& defaultScenePath)
 {
     state.services = services;
-    state.documentPath = defaultScenePath;
+    state.documentPath.clear();
     state.playState = PlayState::Editing;
     state.documentDirty = false;
     // 视口左上角的模式徽标通过这个回调切换，确保仍走 setEditorMode() 的
@@ -66,6 +67,9 @@ void EditorLayer::initialize(const EngineServices& services, const std::string& 
 
     // 必须等面板建好之后再套：applyPreferences() 按名字找面板，先套等于没有面板可套。
     applyPreferences();
+
+    // 恢复上次退出时的场景；没有记录或文件缺失时回退到默认场景。
+    restoreInitialScene(defaultScenePath);
 
     state.pushLog(LogEntry::Level::Info, "[Editor] initialized");
     if (!defaultScenePath.empty())
@@ -106,11 +110,16 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
 {
     if (!initialized || !active)
         return;
+    // F2：快速重命名当前场景（不抢占输入框的键盘）。
+    if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F2, false) &&
+        state.documentWritable() && !state.documentPath.empty())
+    {
+        requestRenameScene();
+    }
 
     lastFrameDelta = dt;
     state.viewportHovered = viewportHovered;
 
-    // ImGui 已经算出"这次输入该归 UI 还是归 3D 场景"。
     // 用它来门控快捷键，避免"在 InputText 里打字触发 Delete 删除实体"这种事故。
     ImGuiIO& io = ImGui::GetIO();
     state.wantsKeyboard = io.WantTextInput;
@@ -627,6 +636,9 @@ void EditorLayer::drawUI()
     drawAboutWindow();
 
     // 未保存确认放在所有面板之后：它要盖在最上层，且本帧的改动要先算进 dirty。
+    drawRenameScenePrompt();
+
+    // 未保存确认放在所有面板之后：它要盖在最上层，且本帧的改动要先算进 dirty。
     drawUnsavedPrompt();
 
     // 本帧有面板改过变换 -> 在提交渲染之前把世界变换与包围盒算准。
@@ -665,6 +677,8 @@ void EditorLayer::drawMenuBar()
         ImGui::Separator();
         if (ImGui::MenuItem("保存", "Ctrl+S", false, writable)) saveScene();
         if (ImGui::MenuItem("另存为...", nullptr, false, writable)) saveSceneAs();
+        if (ImGui::MenuItem("重命名场景...", "F2", false, writable && !state.documentPath.empty()))
+            requestRenameScene();
         if (ImGui::MenuItem("保存选中为预制体...", nullptr, false,
                             writable && state.services.scene != nullptr && !state.selection.empty()))
             savePrefabFromSelection();
@@ -781,10 +795,16 @@ void EditorLayer::drawMenuBar()
         if (auto* panel = findPanel("History"))
             ImGui::MenuItem("History", nullptr, &panel->visible);
         if (auto* panel = findPanel("Render"))
-            ImGui::MenuItem("渲染设置", nullptr, &panel->visible);
+        {
+            if (ImGui::MenuItem("渲染设置", nullptr, &panel->visible) && panel->visible)
+                focusRenderPanel = true;
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("重置布局"))
+        {
             layoutNeedsReset = true;
+            forceDockLayoutReset = true;
+        }
         ImGui::EndMenu();
     }
 
@@ -958,7 +978,7 @@ const ImGuiWindowFlags kBarFlags =
     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
-    ImGuiWindowFlags_NoNav;
+    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoNav;
 
 // 一枚"当前生效"按钮：生效时用按下配色，鼠标停上去给说明。
 // 用法上它自己吃掉一个 SameLine，所以调用后可以直接画下一个。
@@ -1063,7 +1083,11 @@ void EditorLayer::drawToolbar()
                           "体素笔刷：Alt+左键挖掉方块，Alt+Shift+左键放置方块（Ctrl+左键始终是多选）"))
                 state.voxelBrushEnabled = !state.voxelBrushEnabled;
             if (barToggle("渲染", renderPanel->visible, "渲染设置：曝光 / Bloom / SSAO / 方向光"))
+            {
                 renderPanel->visible = !renderPanel->visible;
+                if (renderPanel->visible)
+                    focusRenderPanel = true;
+            }
         }
 
         // ---- 聚焦 / 撤销 ----
@@ -1403,84 +1427,91 @@ void EditorLayer::drawAboutWindow()
 }
 void EditorLayer::drawPanels()
 {
-    // 关键约束：ImGui::SetNextWindowPos/Size 是**单槽位**的 ——
-    // 连续调用多次只有最后一次生效，而且会被"下一个 Begin 的窗口"消费。
-    // 所以绝不能先把三个面板的位置都设置一遍再统一绘制
-    // （那样 Console 的矩形会套到 Hierarchy 上，另外两个面板退回默认位置）。
-    // 正确做法：在**每个面板 Begin 之前紧邻**设置它自己的矩形。
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 dockPos(viewport->WorkPos.x, viewport->WorkPos.y + toolbarHeight());
+    const ImVec2 dockSize(viewport->WorkSize.x,
+                          viewport->WorkSize.y - toolbarHeight() - statusBarHeight());
 
-    // UX-19：侧栏宽度也跟字体缩放走，150% 下中文才不会被挤成两行。
-    const float leftWidth = 280.0f * uiScaleFactor();
-    const float rightWidth = 340.0f * uiScaleFactor();
-    const float bottomHeight = 200.0f;
+    ImGui::SetNextWindowPos(dockPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(dockSize, ImGuiCond_Always);
 
-    const float top = viewport->WorkPos.y + toolbarHeight();
-    const float availableWidth = viewport->WorkSize.x;
-    const float availableHeight = viewport->WorkSize.y - toolbarHeight() - statusBarHeight();
+    const ImGuiWindowFlags hostFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground;
 
-    const ImGuiCond cond = layoutNeedsReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("##DockHost", nullptr, hostFlags);
+    ImGui::PopStyleVar(3);
+
+    const ImGuiID dockspaceId = ImGui::GetID("TinyEditorDockSpace");
+    if (!dockLayoutChecked)
+    {
+        dockLayoutChecked = true;
+        hasSavedDockLayout = ImGui::DockBuilderGetNode(dockspaceId) != nullptr;
+    }
+    const bool shouldBuildLayout = forceDockLayoutReset ||
+        (layoutNeedsReset && !hasSavedDockLayout);
+
+    // 菜单栏会在第一帧把主视口 WorkPos 下推；等它稳定后再建 dock 节点，
+    // 否则节点尺寸会按"菜单栏还没有占位"的错误高度来计算。
+    if (shouldBuildLayout && viewport->WorkPos.y > 0.5f)
+    {
+        ImGui::DockBuilderRemoveNode(dockspaceId);
+        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetContentRegionAvail());
+
+        ImGuiID center = dockspaceId;
+        ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.21f, nullptr, &center);
+        const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.40f, nullptr, &left);
+        ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.25f, nullptr, &center);
+        const ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.34f, nullptr, &right);
+        const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.24f, nullptr, &center);
+
+        ImGui::DockBuilderDockWindow("Hierarchy", left);
+        ImGui::DockBuilderDockWindow("Assets", leftBottom);
+        ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("Render", right);
+        ImGui::DockBuilderDockWindow("History", rightBottom);
+        ImGui::DockBuilderDockWindow("Console", bottom);
+        ImGui::DockBuilderDockWindow("Viewport", center);
+        ImGui::DockBuilderFinish(dockspaceId);
+        focusRenderPanel = true;
+
+        forceDockLayoutReset = false;
+        layoutNeedsReset = false;
+    }
+    else if (viewport->WorkPos.y > 0.5f)
+    {
+        layoutNeedsReset = false;
+    }
+
+    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f),
+                     ImGuiDockNodeFlags_PassthruCentralNode |
+                     ImGuiDockNodeFlags_AutoHideTabBar);
+    ImGui::End();
 
     for (auto& panel : panels)
     {
-        if (!panel->visible)
-            continue;
-
-        // 按名字给每个内置面板指定默认矩形；未知面板（用户新增的）交给 ImGui 自行摆放。
-        const std::string panelName = panel->name();
-        if (panelName == "Viewport")
-        {
-            // 中央区域：左右让给 Hierarchy / Inspector，底部让给 Console。
-            //
-            // UX-14：和其他面板一样用 cond（首帧 / 重置布局时落位），之后允许拖动与缩放，
-            // 位置由 imgui.ini 记住。View -> Reset Layout 会把 layoutNeedsReset 置真，
-            // 下一帧用 Always 重新铺一遍。
-            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + leftWidth, top), cond);
-            ImGui::SetNextWindowSize(ImVec2(availableWidth - leftWidth - rightWidth,
-                                            availableHeight - bottomHeight), cond);
-        }
-        else if (panelName == "Assets")
-        {
-            // 左栏下半部分。Hierarchy 占上 60%，Assets 占下 40%。
-            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x,
-                                           top + availableHeight * 0.6f), cond);
-            ImGui::SetNextWindowSize(ImVec2(leftWidth, availableHeight * 0.4f), cond);
-        }
-        else if (panelName == "Hierarchy")
-        {
-            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, top), cond);
-            ImGui::SetNextWindowSize(ImVec2(leftWidth, availableHeight * 0.6f), cond);
-        }
-        else if (panelName == "Inspector")
-        {
-            // 右栏上 65%：属性。剩下 35% 留给 History。
-            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + availableWidth - rightWidth, top), cond);
-            ImGui::SetNextWindowSize(ImVec2(rightWidth, availableHeight * 0.65f), cond);
-        }
-        else if (panelName == "History")
-        {
-            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + availableWidth - rightWidth,
-                                           top + availableHeight * 0.65f), cond);
-            ImGui::SetNextWindowSize(ImVec2(rightWidth, availableHeight * 0.35f), cond);
-        }
-        else if (panelName == "Console")
-        {
-            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + leftWidth,
-                                           top + availableHeight - bottomHeight), cond);
-            ImGui::SetNextWindowSize(ImVec2(availableWidth - leftWidth - rightWidth, bottomHeight), cond);
-        }
-
-        panel->draw(state);
+        if (panel->visible)
+            panel->draw(state);
     }
 
-    // 首帧的视口矩形初值；真正绘制后由 ViewportPanel 用窗口实际矩形覆盖（UX-14 起视口可拖动）。
-    // 现在 3D 画面铺满整个交换链，这块矩形只是给扩展留的锚点。
-    state.viewportX = viewport->WorkPos.x + leftWidth;
-    state.viewportY = top;
-    state.viewportWidth = availableWidth - leftWidth - rightWidth;
-    state.viewportHeight = availableHeight - bottomHeight;
-}
+    if (focusRenderPanel)
+    {
+        ImGui::SetWindowFocus("Render");
+        focusRenderPanel = false;
+    }
 
+    // 视口面板绘制后会用自己的实际矩形覆盖这四个值；这里只是首帧兜底。
+    state.viewportX = dockPos.x;
+    state.viewportY = dockPos.y;
+    state.viewportWidth = dockSize.x;
+    state.viewportHeight = dockSize.y;
+}
 void EditorLayer::endFrame()
 {
     if (!initialized || !active)
@@ -1496,6 +1527,49 @@ void EditorLayer::endFrame()
         if (preferencesSaveDelay >= 0.75f)
             savePreferences();
     }
+}
+
+void EditorLayer::restoreInitialScene(const std::string& fallbackPath)
+{
+    std::string lastError;
+    const auto tryLoad = [&](const std::string& path, bool recordRecent) -> bool
+    {
+        if (path.empty())
+            return false;
+
+        std::error_code existsError;
+        if (!std::filesystem::is_regular_file(path, existsError))
+        {
+            lastError = "文件不存在: " + path;
+            return false;
+        }
+
+        std::string loadError;
+        if (!loadSceneFromPath(path, loadError, recordRecent))
+        {
+            lastError = loadError;
+            state.pushLog(LogEntry::Level::Error,
+                          "[Editor] 恢复场景失败 " + path + ": " + loadError);
+            return false;
+        }
+
+        state.pushLog(LogEntry::Level::Info, "[Editor] restored scene: " + path);
+        return true;
+    };
+
+    if (tryLoad(preferences.lastScenePath, true))
+        return;
+
+    if (!fallbackPath.empty() && fallbackPath != preferences.lastScenePath &&
+        tryLoad(fallbackPath, true))
+        return;
+
+    state.documentPath.clear();
+    if (!lastError.empty())
+        state.pushLog(LogEntry::Level::Warning,
+                      "[Editor] 没有可恢复的场景，已新建空场景（" + lastError + "）");
+    else
+        state.pushLog(LogEntry::Level::Info, "[Editor] 没有可恢复的场景，已新建空场景");
 }
 
 // ---------------------------------------------------------------------------
@@ -1678,14 +1752,31 @@ bool EditorLayer::saveSceneAs()
     if (!state.services.saveFileDialog)
         return false;
 
+    const std::filesystem::path initialDirectory =
+        std::filesystem::path(TINY_RESOURCE_DIR) / "Scenes";
+    const std::string initialName = state.documentPath.empty()
+        ? std::string("untitled.scene.json")
+        : std::filesystem::path(state.documentPath).filename().string();
     const std::string path = state.services.saveFileDialog(
         "Tiny Engine Scene (*.scene.json)\0*.scene.json\0All Files (*.*)\0*.*\0",
-        "Save Scene As");
+        "Save Scene As", (initialDirectory / initialName).string());
     if (path.empty())
         return false;
 
-    state.documentPath = path;
-    return saveScene();
+    const std::string previousPath = state.documentPath;
+    state.documentPath = std::filesystem::path(path).generic_string();
+    if (!saveScene())
+    {
+        state.documentPath = previousPath;
+        return false;
+    }
+
+    preferences.lastScenePath = state.documentPath;
+    preferences.pushRecent(state.documentPath);
+    state.recentScenes = preferences.recentScenes;
+    preferencesDirty = true;
+    preferencesSaveDelay = 0.0f;
+    return true;
 }
 
 bool EditorLayer::openSceneDialog()
@@ -1695,7 +1786,7 @@ bool EditorLayer::openSceneDialog()
 
     const std::string path = state.services.openFileDialog(
         "Tiny Engine Scene (*.scene.json)\0*.scene.json\0All Files (*.*)\0*.*\0",
-        "Open Scene");
+        "Open Scene", (std::filesystem::path(TINY_RESOURCE_DIR) / "Scenes").string());
     if (path.empty())
         return false;
 
@@ -1721,7 +1812,7 @@ bool EditorLayer::savePrefabFromSelection()
 
     const std::string path = state.services.saveFileDialog(
         "Tiny Engine Prefab (*.prefab.json)\0*.prefab.json\0All Files (*.*)\0*.*\0",
-        "Save Prefab As");
+        "Save Prefab As", {});
     if (path.empty())
         return false;
 
@@ -1748,7 +1839,7 @@ bool EditorLayer::instantiatePrefabDialog()
 
     const std::string path = state.services.openFileDialog(
         "Tiny Engine Prefab (*.prefab.json)\0*.prefab.json\0All Files (*.*)\0*.*\0",
-        "Instantiate Prefab");
+        "Instantiate Prefab", {});
     if (path.empty())
         return false;
 
@@ -1808,8 +1899,9 @@ bool EditorLayer::loadSceneFromPath(const std::string& path, std::string& errorM
         return false;
     }
 
+    const std::string normalizedPath = std::filesystem::path(path).generic_string();
     scene::SceneDescription description;
-    if (!SceneSerializer::loadFromFile(path, description, errorMessage))
+    if (!SceneSerializer::loadFromFile(normalizedPath, description, errorMessage))
         return false;
 
     if (!state.services.scene->buildFromDescription(description, errorMessage))
@@ -1817,12 +1909,13 @@ bool EditorLayer::loadSceneFromPath(const std::string& path, std::string& errorM
 
     state.selection.clear();
     state.commands.clear();
-    state.documentPath = path;
+    state.documentPath = normalizedPath;
     state.documentDirty = false;
 
     if (recordRecent)
     {
-        preferences.pushRecent(path);
+        preferences.lastScenePath = normalizedPath;
+        preferences.pushRecent(normalizedPath);
         state.recentScenes = preferences.recentScenes;
         preferencesDirty = true;
         preferencesSaveDelay = 0.0f;
@@ -2105,6 +2198,16 @@ void EditorLayer::requestDocumentAction(EditorState::PendingDocumentAction actio
     if (action == EditorState::PendingDocumentAction::None)
         return;
 
+
+    // 退出时自动保存当前场景，避免用户忘了按 Ctrl+S。
+    // 保存失败或另存为对话框被取消时不退出，避免静默丢改动。
+    if (action == EditorState::PendingDocumentAction::Exit &&
+        state.documentDirty && state.documentWritable())
+    {
+        if (!saveScene())
+            return;
+    }
+
     if (!state.documentDirty || !state.documentWritable())
     {
         performDocumentAction(action);
@@ -2159,6 +2262,7 @@ void EditorLayer::performDocumentAction(EditorState::PendingDocumentAction actio
         break;
     }
     case EditorState::PendingDocumentAction::Exit:
+        savePreferences();
         if (state.services.requestExit)
             state.services.requestExit();
         break;
@@ -2281,6 +2385,207 @@ void EditorLayer::drawUnsavedPrompt()
     ImGui::EndPopup();
 }
 
+// ---------------------------------------------------------------------------
+// 场景文件重命名
+// ---------------------------------------------------------------------------
+
+void EditorLayer::requestRenameScene()
+{
+    if (state.documentPath.empty())
+    {
+        state.notify(LogEntry::Level::Warning, "当前场景还没有保存，先保存再重命名");
+        return;
+    }
+    if (!state.documentWritable())
+    {
+        state.notify(LogEntry::Level::Warning, "播放中不能重命名场景：先按 F7 停止");
+        return;
+    }
+
+    std::string name = std::filesystem::path(state.documentPath).filename().string();
+    constexpr const char* kSceneSuffix = ".scene.json";
+    constexpr size_t kSuffixLength = 11; // strlen(".scene.json")
+    if (name.size() > kSuffixLength &&
+        name.compare(name.size() - kSuffixLength, kSuffixLength, kSceneSuffix) == 0)
+        name.resize(name.size() - kSuffixLength);
+
+    std::snprintf(renameSceneBuffer, sizeof(renameSceneBuffer), "%s", name.c_str());
+    renameSceneError.clear();
+    renameSceneRequested = true;
+}
+
+bool EditorLayer::renameCurrentScene(const std::string& requestedName, std::string& errorMessage)
+{
+    std::string name = requestedName;
+    const size_t first = name.find_first_not_of(" \t\r\n");
+    const size_t last = name.find_last_not_of(" \t\r\n");
+    if (first == std::string::npos)
+    {
+        errorMessage = "文件名不能为空";
+        return false;
+    }
+    name = name.substr(first, last - first + 1);
+
+    if (name == "." || name == "..")
+    {
+        errorMessage = "文件名不合法";
+        return false;
+    }
+    if (name.find_first_of("\\/:*?\"<>|") != std::string::npos)
+    {
+        errorMessage = "文件名不能包含 \\ / : * ? \" < > |";
+        return false;
+    }
+
+    constexpr const char* kSceneSuffix = ".scene.json";
+    constexpr size_t kSuffixLength = 11;
+    if (name.size() <= kSuffixLength ||
+        name.compare(name.size() - kSuffixLength, kSuffixLength, kSceneSuffix) != 0)
+        name += kSceneSuffix;
+
+    if (state.documentPath.empty())
+    {
+        errorMessage = "当前场景还没有保存";
+        return false;
+    }
+    if (!state.documentWritable())
+    {
+        errorMessage = "播放中不能重命名场景";
+        return false;
+    }
+
+    const std::filesystem::path oldPath(state.documentPath);
+    if (!std::filesystem::is_regular_file(oldPath))
+    {
+        // 路径存在但文件还没落盘：先保存一次，保证 rename 有源文件。
+        if (!saveScene())
+        {
+            errorMessage = "当前场景保存失败，无法重命名";
+            return false;
+        }
+    }
+    else if (state.documentDirty && !saveScene())
+    {
+        errorMessage = "当前场景保存失败，无法重命名";
+        return false;
+    }
+
+    const std::filesystem::path directory =
+        std::filesystem::path(TINY_RESOURCE_DIR) / "Scenes";
+    std::error_code directoryError;
+    std::filesystem::create_directories(directory, directoryError);
+    if (directoryError)
+    {
+        errorMessage = "无法创建场景目录：" + directoryError.message();
+        return false;
+    }
+
+    const std::filesystem::path target = directory / name;
+    if (target.lexically_normal() == oldPath.lexically_normal())
+    {
+        errorMessage = "文件名没有变化";
+        return false;
+    }
+
+    std::error_code existsError;
+    if (std::filesystem::exists(target, existsError))
+    {
+        errorMessage = "同名场景已存在：" + target.filename().string();
+        return false;
+    }
+
+    std::error_code renameError;
+    std::filesystem::rename(oldPath, target, renameError);
+    if (renameError)
+    {
+        errorMessage = "重命名失败：" + renameError.message();
+        return false;
+    }
+
+    state.documentPath = target.generic_string();
+    preferences.lastScenePath = state.documentPath;
+
+    auto& recent = preferences.recentScenes;
+    recent.erase(std::remove(recent.begin(), recent.end(), oldPath.generic_string()), recent.end());
+    preferences.pushRecent(state.documentPath);
+    state.recentScenes = preferences.recentScenes;
+    preferencesDirty = true;
+    preferencesSaveDelay = 0.0f;
+    savePreferences();
+    updateWindowTitle();
+
+    state.notifySuccess("场景已重命名为 " + target.filename().string());
+    return true;
+}
+
+void EditorLayer::drawRenameScenePrompt()
+{
+    constexpr const char* kPopupId = "重命名场景";
+
+    if (renameSceneRequested)
+    {
+        ImGui::OpenPopup(kPopupId);
+        renameSceneRequested = false;
+    }
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal(kPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    ImGui::TextUnformatted("输入新的场景文件名（自动补 .scene.json）：");
+    ImGui::SetNextItemWidth(360.0f);
+    if (ImGui::IsWindowAppearing())
+        ImGui::SetKeyboardFocusHere();
+    const bool submitted = ImGui::InputText("##scene_name", renameSceneBuffer,
+                                            sizeof(renameSceneBuffer),
+                                            ImGuiInputTextFlags_EnterReturnsTrue);
+
+    if (!renameSceneError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", renameSceneError.c_str());
+
+    std::string targetPreview;
+    char previewBuffer[320];
+    if (renameSceneBuffer[0] != '\0')
+    {
+        std::string previewName(renameSceneBuffer);
+        constexpr const char* kPreviewSuffix = ".scene.json";
+        if (previewName.size() < 11 ||
+            previewName.compare(previewName.size() - 11, 11, kPreviewSuffix) != 0)
+            previewName += kPreviewSuffix;
+        std::snprintf(previewBuffer, sizeof(previewBuffer),
+                      "目标：Resources/Scenes/%s", previewName.c_str());
+        targetPreview = previewBuffer;
+    }
+    if (!targetPreview.empty())
+        ImGui::TextDisabled("%s", targetPreview.c_str());
+
+    const bool renameClicked = ImGui::Button("重命名", ImVec2(120.0f, 0.0f));
+    ImGui::SameLine();
+    const bool cancelClicked = ImGui::Button("取消", ImVec2(120.0f, 0.0f));
+
+    if (renameClicked || submitted)
+    {
+        std::string error;
+        if (renameCurrentScene(renameSceneBuffer, error))
+        {
+            renameSceneError.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        else
+        {
+            renameSceneError = error;
+        }
+    }
+    else if (cancelClicked)
+    {
+        renameSceneError.clear();
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
 // ---- E4-b：偏好 ------------------------------------------------------------
 //
 // 单向同步：EditorState 是"现在是什么样子"，EditorPreferences 是"上次存下来的样子"。
@@ -2325,6 +2630,12 @@ void EditorLayer::syncPreferencesFromState()
     if (preferences.gizmoMode != mode)
     {
         preferences.gizmoMode = mode;
+        changed = true;
+    }
+
+    if (preferences.lastScenePath != state.documentPath)
+    {
+        preferences.lastScenePath = state.documentPath;
         changed = true;
     }
 

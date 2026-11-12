@@ -96,6 +96,14 @@ private:
     // 首帧强制套用默认布局。之后用户拖动过的位置由 imgui.ini 决定。
     // 菜单 View -> Reset Layout 会把它重新置位。
     bool layoutNeedsReset = true;
+    // 仅 View -> Reset Layout 需要强制重建 dock 节点；首次启动只有在 ini 里没有
+    // dock 布局时才铺默认布局，避免每次启动覆盖用户自己拖好的停靠。
+    bool forceDockLayoutReset = false;
+    // 首帧在 DockSpace 创建根节点之前检测一次：ini 里是否已有可复用的 dock 树。
+    bool dockLayoutChecked = false;
+    bool hasSavedDockLayout = false;
+    // Render 与 Inspector 共用右侧节点；首次建布局/点击工具栏「渲染」时把 Render 页签切到前台。
+    bool focusRenderPanel = false;
 
     void handleShortcuts();
 
@@ -105,6 +113,16 @@ private:
     void drawUnsavedPrompt();
     void updateWindowTitle();
     void cancelPendingDocumentAction();
+    void restoreInitialScene(const std::string& fallbackPath);
+
+    // ---- 场景文件重命名 ----
+    void drawRenameScenePrompt();
+    void requestRenameScene();
+    bool renameCurrentScene(const std::string& requestedName, std::string& errorMessage);
+    bool renameSceneRequested = false;
+    char renameSceneBuffer[256] = {};
+    std::string renameSceneError;
+
 
     // ---- E4-c：快捷键速查（Help 菜单 / ? 键） ----
     void drawShortcutSheet();

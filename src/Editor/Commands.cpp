@@ -731,6 +731,51 @@ void CreateEntityCommand::revert()
 
 
 // ---------------------------------------------------------------------------
+// CreateComponentEntityCommand
+// ---------------------------------------------------------------------------
+CreateComponentEntityCommand::CreateComponentEntityCommand(
+    Scene& scene, std::string name, const glm::vec3& translation,
+    const glm::vec3& eulerRadians, const glm::vec3& scale,
+    std::vector<scene::ComponentRecord> components)
+    : scene(scene), entityName(std::move(name)), translation(translation),
+      euler(eulerRadians), scale(scale), components(std::move(components))
+{
+}
+
+void CreateComponentEntityCommand::apply()
+{
+    entt::registry& registry = scene.getRegistry();
+    entity = scene.createEntity();
+    if (entity == entt::null)
+        return;
+
+    // 先落位姿，再挂组件：体积雾/粒子等组件的默认值可能按实体当前位置解释。
+    if (auto* transform = registry.try_get<TransformComponent>(entity))
+    {
+        transform->setPose(translation, euler, scale,
+                           TransformComponent::quatFromEuler(euler));
+    }
+
+    if (auto* name = registry.try_get<NameComponent>(entity))
+        name->name = entityName;
+    else
+        registry.emplace<NameComponent>(entity, NameComponent{ entityName });
+
+    for (const scene::ComponentRecord& record : components)
+        scene.applyComponentRecord(entity, record);
+
+    scene.markTransformDirty(entity);
+    scene.markSpatialDirty(entity);
+}
+
+void CreateComponentEntityCommand::revert()
+{
+    if (entity != entt::null && scene.getRegistry().valid(entity))
+        scene.destroyEntity(entity);
+    entity = entt::null;
+}
+
+// ---------------------------------------------------------------------------
 // Terrain commands
 // ---------------------------------------------------------------------------
 CreateTerrainCommand::CreateTerrainCommand(entt::registry& registry, Scene& scene,

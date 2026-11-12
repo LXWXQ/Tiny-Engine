@@ -168,8 +168,7 @@ void ViewportPanel::draw(EditorState& state)
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoSavedSettings;
+        ImGuiWindowFlags_NoResize;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
