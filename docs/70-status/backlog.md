@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
 size: ~340 行
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # 后续任务台账
@@ -273,7 +273,7 @@ updated: 2026-11-11
 | F6-05 | 已完成 | 体积云（场景级 `scene.clouds` 组件 + 全屏 raymarch `CloudPass`） | F6 | coverage/密度/高度/厚度可调；透明表面读到带云 HDR；`f6-clouds` 通过；云不进平面反射/阴影作为边界 |
 | F6-06 | 已完成 | 太阳盘 + 镜头光晕（场景级 `scene.sun` 组件 + 全屏后效 `SunFlarePass`） | F6、F5-06 | 8 参数可调；方向/光色跟随 `scene.environment`；5 点深度判定日盘遮挡；圆形散景鬼影/色散/光条（太阳在背后/出画不产生）；TAA 后 Bloom 前纯加色；`f6-sun` 通过；默认关闭，云遮挡为边界 |
 | F6-07 | 已完成 | 地形植被（场景级 `scene.vegetation` 组件 + 程序化草/树 + `VegetationPass`） | F5-06、F3 | 12 参数可调；Geometry 后 SSAO 前写 G-Buffer；草/树各一次实例化 draw、验证层 0/0；不投自身阴影、不进平面反射为边界；`f6-vegetation` 通过；默认关闭 |
-| F6-08 | 已完成 | 局部体积雾（实体级 `effects.fogVolume` 组件 + 盒形 raymarch `FogVolumePass`） | F5-06、F6-05 | 11 参数可调；Transform 定义雾盒、最多 8 个；Lighting/Cloud 后、反射/透明前预乘 alpha 写 HDR；读 G-Buffer 位置截断、32³ 噪声、高度衰减/边缘淡出/HG 相函数；`f6-fog-volume` 通过；默认不添加 |
+| F6-08 | 已完成 | 局部体积雾（实体级 `effects.fogVolume` 组件 + 盒形 raymarch `FogVolumePass`） | F5-06、F6-05 | 14 参数可调；`+ Add Component` → “体积效果”可发现；组件 `center`/`size`/`rotation` 定义雾盒、最多 8 个；Lighting/Cloud 后、反射/透明前预乘 alpha 写 HDR；读 G-Buffer 位置截断、32³ 噪声、高度衰减/边缘淡出/HG 相函数；`f6-fog-volume` 通过；默认不添加 |
 | F4-01 | 未开始 | glTF 保留 node 层级（决策 13 的翻转）、primitive 独立变换、异步加载 | — | 载入后可改任意 node 局部变换并实时可见 |
 | F4-02 | 未开始 | 模型 LOD 链（GPU 端 LOD 选级的前置，见 F1 剩余项） | F4-01 | 同一模型可切 2~3 级，切换无跳变 |
 | F1-R1 | 已取代 | 粒子不接入 `ExternalInstance`：改由 F5-07 的独立组件与 `ParticlePass` 落地 | F5-07 | 不再以复用 ExternalInstance 为目标；粒子独立缓冲、独立前向 Pass |
@@ -286,6 +286,7 @@ updated: 2026-11-11
 | F5-06 | 已完成 | 场景级组件系统：阴影/Bloom/SSAO/SSR/运动模糊/TAA/水面/雾/环境作为 scope=Scene 组件，可添加/启用/调参/移除，v4 序列化 | F5-05 | Inspector 无选中可管理；旧场景兼容；场景存读保留；自检断言 25 描述符与 sync |
 | F5-07 | 已完成 | 粒子组件：实体级 CPU 发射器（16 属性）+ 独立前向透明 `ParticlePass` | F5-06 | `--particle-demo` 空场景可发射；Water 后/TAA 前按距离排序混合；26 描述符/8 系统；`f6-particles` 与 240 帧 `alive=376` 验证层 0/0 |
 | F5-08 | 已完成 | 粒子 sprite 资源与贴图选择：Kenney CC0 14 张转 RGBA，`effects.particles.texture`（第 17 属性）+ Inspector 选择器，`ParticlePass` 启动 bindless 预加载 | F5-07 | Inspector 可选/清除贴图并撤销；启动日志 `textures=14 failed=0 status=ready`；`f6-particles` 断言 `texture=Particles/Kenney/fire_01.png`；空/失效回退圆形；新增贴图需重启 |
+| F5-09 | 已完成 | 组件目录完整分类与可发现性：Add 弹窗列出全部 exposed 组件（含已挂载打勾）、中文分类、地形/体素保留入口并可新建空实体 | F5-05、F5-06 | 场景/实体 scope 弹窗不再为空；体积雾在“体积效果”下可发现；截图 `build/editor_component_catalog.png` / `editor_scene_catalog.png`；编辑器自检 0/0 |
 
 > V-01 已完成（2026-11-04）：玻璃拆独立网格 + `GlassPass`（Lighting 后、Bloom 前，按面质心远→近混合），glass-only chunk 免 Model；`--voxel-glass-demo` 与 `f3-voxel-glass` 覆盖。实现细节见 [milestones](milestones.md#v-01体素玻璃透明排序glasspass)，验证日志 `build/validation/20261104-162505`。
 >
@@ -329,9 +330,11 @@ updated: 2026-11-11
 >
 > F5-08 粒子 sprite 资源与贴图选择已完成（2026-11-10）：引入 Kenney Particle Pack（CC0）14 张 512x512 sprite 到 `Resources/Texture/Particles/Kenney/`，上游黑底灰度就地转 RGBA（A=亮度）；`effects.particles` 增加第 17 个属性 `texture`（相对 `Resources/Texture`，空=程序化圆形），Inspector 用专用选择器只列 `Particles/` 下的 sprite，支持过滤/重新扫描/清除，写入仍走 `SetComponentRecordCommand`。`ParticlePass` 启动时递归预加载贴图（最多 64 张）并分配 bindless 材质槽，实例增加 `materialId`，shader 未命中时回退程序化圆形；`--particle-demo` 改用 `Particles/Kenney/fire_01.png`。验证：`[Particle] textures=14 failed=0 status=ready`、`[Particle] demo emitter created | ... texture=Particles/Kenney/fire_01.png`、240 帧截图 `build/particle_texture.png` 可见火焰柱；全套 76 项 ALL PASS，验证日志 `build/validation/20261110-124840`。详见 [milestones](milestones.md#f5-08粒子-sprite-资源与贴图选择2026-11-10)。
 >
+> F5-09 组件目录完整分类已完成（2026-11-12）：用户反馈“添加组件的窗口啥都没有、找不到体积雾”。根因是旧 Add 弹窗跳过已挂载组件，而场景组件默认全部挂在隐藏设置实体上，所以 Scene Components 弹窗恒为空；地形/体素分支又直接隐藏入口。现在弹窗先收集当前 scope 全部 `exposed` 组件（包括已挂载），按中文分类用分隔标题聚合；已挂载项打勾置灰并提示“参数在下方组件列表里编辑”，未挂载项走 `componentAddBlockReason` 显示禁用原因。地形/体素保留 Add 入口，提示先“新建空实体并选中”，再添加体积雾等通用组件。分类本地化为 效果/运动/体积效果/角色/渲染/托管。截图 `build/editor_component_catalog.png`（实体 scope，体积雾在“体积效果”下）与 `build/editor_scene_catalog.png`（场景 scope，全部场景组件打勾）。
+>
 > F6-05 体积云组件已完成（2026-11-10）：新增场景级 `scene.clouds`（10 属性，默认关闭）与 `CloudPass`，插在 Lighting 后、PlanarReflection/SSR/Glass/Water 前，读 G-Buffer 位置在 64³ 四通道噪声里 raymarch，4 步太阳自阴影、预乘 alpha 写 HDR、无深度附件；云层随场景 v4 `sceneComponents` 存读，`engine.json` 独立 `clouds` 节点。`--cloud-demo` 空场景一键出云；`f6-clouds` 断言初始化/首绘/0-0，全套 77 项 ALL PASS（日志 `build/validation/20261110-140504`，含 resize 后重绑 `gbPosition` 的 td03 用例）。云只进主 HDR，不进平面反射与 CSM 阴影，单层无时域。详见 [milestones](milestones.md#f6-05体积云组件2026-11-10)。
 >
-> F6-08 局部体积雾已完成（2026-11-11）：新增实体级 `effects.fogVolume`（14 属性）与 `FogVolumePass`。组件的 `center`/`size`/`rotation` 定义局部盒体（size 为全尺寸），再乘实体 WorldTransform，一个场景最多 8 个；Inspector 提供专用 Fog Volume 面板（Placement/Appearance/Lighting/Quality + 尺寸预设 + 视口青色线框），Render 窗口保留场景组件快捷开关。地形/流送地形/体素对象通过 `canAddComponent` 禁止挂通用组件，Add 弹窗显示禁用原因。Pass 插在 Cloud 后、PlanarReflection/SSR/Glass/Water 前，读 G-Buffer 世界位置把步进截到最近不透明表面，盒内做高度衰减、边缘淡出、32³ 可平铺噪声与 HG 相函数，预乘 alpha 写 HDR，无深度附件、不写 G-Buffer；`--fog-demo` 空场景 + 流送地形一键出雾，`f6-fog-volume` 断言初始化/创建/首绘/0-0。雾只进主 HDR，不进平面反射与 CSM 阴影，单盒步数上限 32，作为已知边界。详见 [milestones](milestones.md#f6-08局部体积雾2026-11-11)。
+> F6-08 局部体积雾已完成（2026-11-11）：新增实体级 `effects.fogVolume`（14 属性）与 `FogVolumePass`。组件的 `center`/`size`/`rotation` 定义局部盒体（size 为全尺寸），再乘实体 WorldTransform，一个场景最多 8 个；Inspector 提供专用 Fog Volume 面板（Placement/Appearance/Lighting/Quality + 尺寸预设 + 视口青色线框），Render 窗口保留场景组件快捷开关。地形/流送地形/体素对象通过 `canAddComponent` 禁止挂通用组件；Add 弹窗完整分类、已挂载打勾，地形保留入口并可新建空实体。Pass 插在 Cloud 后、PlanarReflection/SSR/Glass/Water 前，读 G-Buffer 世界位置把步进截到最近不透明表面，盒内做高度衰减、边缘淡出、32³ 可平铺噪声与 HG 相函数，预乘 alpha 写 HDR，无深度附件、不写 G-Buffer；`--fog-demo` 空场景 + 流送地形一键出雾，`f6-fog-volume` 断言初始化/创建/首绘/0-0。雾只进主 HDR，不进平面反射与 CSM 阴影，单盒步数上限 32，作为已知边界。详见 [milestones](milestones.md#f6-08局部体积雾2026-11-11)。
 >
 > F6-07 地形植被已完成（2026-11-10）：新增场景级 `scene.vegetation`（12 参数，默认关闭）与程序化 `VegetationGenerator`/`VegetationPass`，草为 3 张 60° 交叉卡片、树为 6 棱柱树干 + 3 层 8 边锥形树冠；Pass 插在 Geometry 后、SSAO 前，LOAD 四张 G-Buffer + 深度并写开，草/树各一次实例化 draw，因此参与 SSAO/级联阴影/延迟光照。`--vegetation-demo` 空场景 + 流送地形一键出草树，90 帧日志 `grass=10930 trees=117 draws=2`、`[Validation] errors=0 warnings=0`；新增 `f6-vegetation`，全套 79 项 ALL PASS（日志 `build/validation/20261110-174339`），DocCheck PASS。草/树不投自身阴影、不进平面反射，且为程序化低模，作为已知边界。详见 [milestones](milestones.md#f6-07地形植被2026-11-10)。
 >

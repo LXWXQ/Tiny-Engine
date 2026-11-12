@@ -5,7 +5,7 @@ type: architecture
 scope: CommandStack 的语义、合并窗口、以及"必须走命令"的硬规则
 read-when: 加任何会修改场景的交互；或撤销结果不对、撤销后数据损坏
 size: ~160 行
-updated: 2026-11-06
+updated: 2026-11-12
 ---
 
 # 撤销 / 重做
@@ -109,9 +109,11 @@ stack.execute(std::make_unique<CompositeCommand>("Delete Entities", std::move(ch
 - `DeleteEntityCommand` 快照也带 `components`，覆盖删除后撤销；`DuplicateEntityCommand`
   在 `copyDataComponents()` 之后逐条 apply record，覆盖复制。
 
-Inspector 的 `+ Add Component` 菜单列出 `descriptor.exposed` 且当前未挂载的类型：
-`addable` 的项可点击；`addable == false` 的托管项（Camera/Terrain/Streaming/Voxel）
-仍显示但置灰，悬停给出 `unavailableReason` 指向创建菜单。移除走组件标题右键菜单，
+Inspector 的 `+ Add Component` 菜单列出当前 scope 下全部 `descriptor.exposed` 类型，
+并按分类用分隔标题聚合；**已挂载的项不隐藏**，而是打勾置灰并提示“参数在下方组件列表里编辑”。
+`addable` 且未挂载的项可点击；`addable == false` 的托管项（Camera/Terrain/Streaming/Voxel）
+仍显示但置灰，悬停给出 `unavailableReason` 指向创建菜单。地形/体素对象也保留 Add 入口，
+先提示“新建空实体并选中”，避免用户以为没有体积雾。移除走组件标题右键菜单，
 或原生组件固定面板底部的 `Remove Component`；两者都受 `removable` / `canRemove` 约束
 （例如地形实体的 Render Tag 不可移除）。这些路径都 `state.markDirty()` 并经过命令栈。
 

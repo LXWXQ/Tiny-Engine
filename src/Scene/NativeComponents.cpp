@@ -63,7 +63,7 @@ ComponentDescriptor makeRequiredDescriptor(std::string type, std::string label)
     ComponentDescriptor descriptor;
     descriptor.type = std::move(type);
     descriptor.label = std::move(label);
-    descriptor.category = "Core";
+    descriptor.category = "核心";
     descriptor.exposed = false;
     descriptor.addable = false;
     descriptor.removable = false;
@@ -92,7 +92,7 @@ ComponentDescriptor makeCameraDescriptor()
     ComponentDescriptor descriptor;
     descriptor.type = "native.camera";
     descriptor.label = "Camera";
-    descriptor.category = "Managed";
+    descriptor.category = "托管";
     descriptor.exposed = options.exposed;
     descriptor.addable = options.addable;
     descriptor.removable = options.removable;
@@ -125,7 +125,7 @@ ComponentDescriptor makeManagedDescriptor(std::string type, std::string label,
     options.unavailableReason = std::move(reason);
 
     ComponentDescriptor descriptor = makeComponentDescriptor<T>(
-        std::move(type), std::move(label), "Managed", {}, options);
+        std::move(type), std::move(label), "托管", {}, options);
     // 托管组件的生命周期由创建流程负责，通用删除入口不应碰它。
     descriptor.canRemove = [](const entt::registry&, entt::entity) { return false; };
     return descriptor;
@@ -186,7 +186,7 @@ void registerNativeComponents(ComponentRegistry& registry)
         "贴地检测距离；防止下坡时反复离地", 0.01f));
 
     registry.add(makeComponentDescriptor<CharacterControllerComponent>(
-        "native.characterController", "Character Controller", "Scene",
+        "native.characterController", "Character Controller", "角色",
         std::move(characterProperties), characterOptions));
 
     ComponentOptions renderTagOptions;
@@ -206,7 +206,7 @@ void registerNativeComponents(ComponentRegistry& registry)
         "把该实体当作世界网格渲染（编辑辅助）"));
 
     ComponentDescriptor renderTag = makeComponentDescriptor<RenderTagComponent>(
-        "native.renderTag", "Render Tag", "Scene", std::move(renderTagProperties),
+        "native.renderTag", "Render Tag", "渲染", std::move(renderTagProperties),
         renderTagOptions);
     renderTag.canRemove = [](const entt::registry& registry, entt::entity entity)
     {

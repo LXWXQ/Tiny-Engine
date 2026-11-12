@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
 size: ~1300 行
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # 里程碑与实测基线
@@ -1039,6 +1039,14 @@ updated: 2026-11-11
 **边界**：属性元数据只服务 Inspector，不进场景/预制体 JSON；剪贴板不持久化、跨编辑器会话丢失；
 不支持数组/曲线/对象引用属性，也没有脚本或热重载；组件仍只能挂一个实例。
 
+**后续目录改造（2026-11-12）**：
+- 用户反馈“添加组件的窗口啥都没有、找不到体积雾”，要求把所有组件分类列出来自己选。根因是旧 Add 弹窗用 `descriptor.has(registry, entity)` 跳过已挂载组件，而 12 个场景组件默认全部挂在隐藏设置实体上，所以 `+ Add Scene Component` 恒为空；地形/体素分支又直接隐藏 Add 按钮，体积雾作为 Entity scope 组件在未选中普通实体时完全不可见。
+- `InspectorPanel::drawComponents` 改为先收集当前 scope 下全部 `exposed` 且匹配搜索的 descriptor（包括已挂载），按分类用 `ImGui::SeparatorText` 聚合；已挂载项用 `MenuItem(label, "已添加", true, false)` 打勾置灰，tooltip 提示“参数在下方组件列表里编辑”；未挂载项用 `scene->componentAddBlockReason()` 判可加，禁用时显示原因；搜索无结果提示“试试「雾」或「fog」”。
+- 分类本地化：Effects→效果、Motion→运动、`effects.fogVolume`→体积效果、Core→核心、Character Controller→角色、Render Tag→渲染、Camera/Managed→托管。体积雾标签改为“体积雾 (Fog Volume)”。
+- 地形/流送地形/体素对象不再隐藏 Add 入口：显示黄色提示和“新建空实体并选中”按钮，创建空实体、命名 `Empty`、选中并置脏，日志 `[Editor] 已创建空实体；现在可以 Add Component → 体积雾`。
+- 验证截图：`build/editor_component_catalog.png` 显示实体 scope 目录“效果 / 运动 / 体积效果 / 角色 / 渲染 / 托管”，体积雾在“体积效果”下可点，Camera 显示勾选+“已添加”；`build/editor_scene_catalog.png` 显示场景 scope 的全部场景组件均已打勾。
+- 边界：目录只列 `exposed` 组件，必需/内部描述符（Name/Transform/Hierarchy）不出现；标签保留引擎英文名，分类用中文；UI 行为由编辑器自检与人工截图覆盖，未新增独立 Validate 用例。
+
 ## R-08：水面暗反射补天空底色（2026-11-06）
 
 **问题**：用户标注的远水区域整体发暗、偏绿，像一块没有细节的暗色平板（水面区域 mean RGB≈(100,117,117)，天空≈(133,143,154)）。先怀疑平面反射没有写天空 alpha，做了“反射 G-Buffer 天空 alpha=0 + 水面按 alpha 混合”的修复；但在 streaming 高机位、voxel 低机位和“反射跳过 skybox”三组对照下，开/关都只有 UI 区域差异（最多 2537 像素，水面 0 像素），说明反射 G-Buffer 里天空并不是黑的，这条路径是 no-op，已完整回退。
@@ -1266,7 +1274,7 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 **问题**：场景里只有全屏统一的距离雾（`scene.fog`），只能整体调浓度/高度，无法在山谷、林间或洞口单独摆一团雾；需要一种可添加、可摆位、可调参、随场景存读，并且不破坏延迟渲染链路的局部体积雾。
 
 **实现**：
-- 新增实体级 `effects.fogVolume`（`FogVolumeComponent`，分类“效果”）14 个属性：`enabled`（默认 true）、`center` (0,0,0)、`size` (20,8,20，**全尺寸**)、`rotation` (0,0,0，度)、`density` 0.02、`color` (0.78,0.84,0.92,1)、`heightFalloff` 0.08、`noiseStrength` 0.55、`noiseScale` 0.08、`wind` (0.35,0,0.12)、`edgeSoftness` 0.18、`anisotropy` 0.55、`ambient` 0.35、`steps` 12；随场景 v4 实体 `components` 存读。
+- 新增实体级 `effects.fogVolume`（`FogVolumeComponent`，分类“体积效果”）14 个属性：`enabled`（默认 true）、`center` (0,0,0)、`size` (20,8,20，**全尺寸**)、`rotation` (0,0,0，度)、`density` 0.02、`color` (0.78,0.84,0.92,1)、`heightFalloff` 0.08、`noiseStrength` 0.55、`noiseScale` 0.08、`wind` (0.35,0,0.12)、`edgeSoftness` 0.18、`anisotropy` 0.55、`ambient` 0.35、`steps` 12；随场景 v4 实体 `components` 存读。
 - 雾盒 = 实体 `WorldTransformComponent` × 组件局部矩阵 `T(center) * R(rotation) * S(size)`；一个场景最多 8 个。没有世界变换、`world.valid=false`、`density<=0`、`steps<=0` 或行列式接近 0 的实体直接跳过。
 - 新增 `src/Render/FogVolumePass.{h,cpp}` 与 `shaders/fog_volume.frag`：插在 `CloudPass` 之后、`PlanarReflection`/SSR/Glass/Water 之前，LOAD HDR、无深度附件、预乘 alpha（`src=ONE`、`dst=ONE_MINUS_SRC_ALPHA`、`srcAlpha=ZERO`、`dstAlpha=ONE`）写回 `hdrScene`，因此水面、玻璃和 SSR 读到的 HDR 带雾。
 - 着色：读 G-Buffer 世界位置把步进截到最近不透明表面之前（最多 500m）；逐盒做世界空间 slab 相交，盒内按 `steps`（1..32）步进并加交错梯度抖动，叠加边缘 `smoothstep` 淡出、盒心以上高度衰减、32³ RGBA8 可平铺噪声（R 低频团/G 中频/B 高频）与 HG 相函数，透射率低于 0.02 提前退出。
@@ -1281,10 +1289,11 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 
 **后续可用性改造（2026-11-11）**：
 - 用户反馈体积雾“很难用”、地形也能添加组件、组件界面与 Render 窗口不一致；要求保留 Render 的场景组件系统，同时让雾的位置和体积可调。
-- `ComponentDescriptor` 新增 `description`/`requiresTransform`/`allowOnTerrain` 三个元数据；`Scene` 新增 `canAddComponent`/`componentAddBlockReason`/`isTerrainManagedEntity`，`addComponent`/`applyComponentRecord` 共用同一门禁：地形/流送地形/体素对象禁止 `effects.*`，无 Transform 的实体禁止需要 Transform 的组件；Add 菜单置灰并显示原因，地形对象隐藏 Add/Paste 入口。
+- `ComponentDescriptor` 新增 `description`/`requiresTransform`/`allowOnTerrain` 三个元数据；`Scene` 新增 `canAddComponent`/`componentAddBlockReason`/`isTerrainManagedEntity`，`addComponent`/`applyComponentRecord` 共用同一门禁：地形/流送地形/体素对象禁止 `effects.*`，无 Transform 的实体禁止需要 Transform 的组件；Add 菜单置灰并显示原因。地形对象保留 Add 入口（先新建空实体），Paste 仍按门禁置灰。
 - `FogVolumeComponent` 从 11 属性扩到 14：新增 `center`/`size`/`rotation`，最终盒体 = 实体 WorldTransform × `T(center) * R(rotation) * S(size)`；`FogVolumePass` 用 `volumeWorld` 打包，`--fog-demo` 改为组件 placement、实体 Transform 保持单位变换。
 - Inspector 新增专用 Fog Volume 面板：Placement（center/size/rotation + 3 个尺寸预设）、Appearance、Lighting、Quality，并保留通用组件的复制/粘贴/重置/移除；Render 窗口保留场景组件快捷开关。`EditorOverlayPass` 在选中雾盒时画青色盒体线框（48 顶点双盒）。
 - `src/Scene/Scene.cpp` 自检断言 14 属性默认值、add/read 与地形/无 Transform 兼容性；`tools/Validate.ps1` 的 `f6-fog-volume` 断言精确 placement 日志。
 - 验证：`TinyEngine.exe --selftest 70 --empty-scene --streaming-world 3 --fog-demo` 0-0，截图 `build/fog_ui_clean.png`；`TinyEditor.exe --selftest 30 --empty-scene --hidden --screenshot build/editor_ui_check.png` 0-0；全套回归 **80 项** ALL PASS（含 `f6-fog-volume`），stderr 全 0，验证日志 `build/validation/20261111-152921`；DocCheck PASS（documents=70 lines=12771）。
+- 2026-11-12：Add 弹窗改为完整分类目录后，体积雾在“体积效果”下可直接发现；地形/体素入口保留并可新建空实体。详见 [F5-05 的后续目录改造](#f5-05组件编辑工作流2026-11-10)。
 
 **边界**：雾盒只能是长方体，靠噪声和边缘淡出掩盖硬边；同时最多 8 个，单盒 steps 上限 32；噪声是静态 32³ 体素，没有时域重投影/降噪/体积阴影/二次散射；雾只影响主 HDR，不进平面反射、SSR 反射与 CSM 阴影；不写深度、不进 G-Buffer，因此不参与 SSAO 与延迟光照；默认不添加任何雾盒。

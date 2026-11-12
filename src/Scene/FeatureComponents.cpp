@@ -606,14 +606,14 @@ glm::mat4 FogVolumeComponent::localMatrix() const
 void registerFeatureComponents(ComponentRegistry& registry)
 {
     registry.add(makeComponentDescriptor<SpinComponent>(
-        "effects.spin", "Spin", "Effects",
+        "effects.spin", "Spin", "效果",
         { withTooltip(makeSpinAxisProperty(), "局部旋转轴；零向量表示不旋转"),
           withTooltip(withRange(makeSpinSpeedProperty(), -3600.0f, 3600.0f, 0.5f),
                       "局部空间自转速度，单位度/秒；负值反向"),
           withTooltip(makeSpinEnabledProperty(), "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<OrbitComponent>(
-        "effects.orbit", "Orbit", "Effects",
+        "effects.orbit", "Orbit", "效果",
         { withTooltip(makeOrbitCenterProperty(), "父空间里的轨道中心"),
           withTooltip(withRange(makeOrbitRadiusProperty(), 0.0f, 1000.0f, 0.05f),
                       "父空间轨道半径；0 表示绕中心原地旋转"),
@@ -624,7 +624,7 @@ void registerFeatureComponents(ComponentRegistry& registry)
           withTooltip(makeOrbitEnabledProperty(), "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<BobComponent>(
-        "effects.bob", "Bob", "Effects",
+        "effects.bob", "Bob", "效果",
         { makeVec3Property<BobComponent>("axis", "Axis", &BobComponent::axis, 0.05f,
                                          "位移轴；零向量表示不动"),
           makeFloatProperty<BobComponent>("amplitude", "Amplitude",
@@ -640,7 +640,7 @@ void registerFeatureComponents(ComponentRegistry& registry)
                                          "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<PulseComponent>(
-        "effects.pulse", "Pulse", "Effects",
+        "effects.pulse", "Pulse", "效果",
         { makeFloatProperty<PulseComponent>("amplitude", "Amplitude",
                                             &PulseComponent::amplitude, -0.95f, 10.0f,
                                             "缩放增量；-0.95 表示最小缩到 5%", 0.005f),
@@ -654,7 +654,7 @@ void registerFeatureComponents(ComponentRegistry& registry)
                                            "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<SwayComponent>(
-        "effects.sway", "Sway", "Effects",
+        "effects.sway", "Sway", "效果",
         { makeVec3Property<SwayComponent>("axis", "Axis", &SwayComponent::axis, 0.05f,
                                           "局部旋转轴；零向量表示不摆动"),
           makeFloatProperty<SwayComponent>("amplitudeDegrees", "Amplitude (deg)",
@@ -670,7 +670,7 @@ void registerFeatureComponents(ComponentRegistry& registry)
                                           "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<LookAtComponent>(
-        "effects.lookAt", "Look At", "Motion",
+        "effects.lookAt", "Look At", "运动",
         { makeVec3Property<LookAtComponent>("target", "Target", &LookAtComponent::target, 0.05f,
                                             "父空间目标点；局部 -Z 轴对准它"),
           makeVec3Property<LookAtComponent>("up", "Up", &LookAtComponent::up, 0.05f,
@@ -682,7 +682,7 @@ void registerFeatureComponents(ComponentRegistry& registry)
                                             "关闭后系统跳过该组件，但保留设置") }));
 
     registry.add(makeComponentDescriptor<FollowComponent>(
-        "effects.follow", "Follow", "Motion",
+        "effects.follow", "Follow", "运动",
         { makeVec3Property<FollowComponent>("target", "Target", &FollowComponent::target, 0.05f,
                                             "父空间目标点"),
           makeFloatProperty<FollowComponent>("speed", "Speed",
@@ -697,7 +697,7 @@ void registerFeatureComponents(ComponentRegistry& registry)
     // F5：粒子发射器。属性只暴露可序列化的发射/外观参数；particles 数组
     // 是运行期状态，复制组件或撤销时由默认构造重置，不会把旧粒子带过去。
     registry.add(makeComponentDescriptor<ParticleEmitterComponent>(
-        "effects.particles", "Particle Emitter", "Effects",
+        "effects.particles", "Particle Emitter", "效果",
         { makeBoolProperty<ParticleEmitterComponent>(
               "enabled", "Enabled", &ParticleEmitterComponent::enabled,
               "关闭后停止发射，已有粒子会走完寿命；移除组件立即消失"),
@@ -762,7 +762,7 @@ void registerFeatureComponents(ComponentRegistry& registry)
         "可放置的局部体积雾盒：在 Inspector 里调中心、尺寸与旋转；"
         "实体 Transform 可整体移动/旋转雾盒。最多同时渲染 8 个。";
     registry.add(makeComponentDescriptor<FogVolumeComponent>(
-        "effects.fogVolume", "Fog Volume", "Effects",
+        "effects.fogVolume", "体积雾 (Fog Volume)", "体积效果",
         { makeVec3Property<FogVolumeComponent>(
               "center", "Center (local)", &FogVolumeComponent::center, 0.05f,
               "盒心相对实体原点的局部偏移（米）"),

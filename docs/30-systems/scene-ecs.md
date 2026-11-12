@@ -5,7 +5,7 @@ type: system
 scope: src/Scene/Scene.h, src/Scene/Scene.cpp, src/Scene/Components.h, src/Scene/ComponentTypes.h, src/Scene/ComponentRegistry.h, src/Scene/SystemScheduler.h, src/Scene/FeatureComponents.h, src/Scene/NativeComponents.h, src/Scene/SceneComponents.h, src/Scene/SceneComponents.cpp, src/Scene/SpatialIndex.h, src/Scene/GLTFLoader.cpp, src/Scene/Model.cpp
 read-when: 修改场景结构、增删组件、注册新组件/系统、改变换传播或剔除逻辑
 size: ~430 行
-updated: 2026-11-10
+updated: 2026-11-12
 ---
 
 # 场景、ECS、Transform 层级与空间索引
@@ -67,15 +67,15 @@ Simulation systems -> updateWorldTransforms() -> PostTransform systems -> refres
 
 | 组件 id | 分类 | 属性 | 系统行为 |
 |---|---|---|---|
-| `effects.spin` | Effects | `axis` / `degreesPerSecond` / `enabled` | 每帧绕本地轴累乘四元数 |
-| `effects.orbit` | Effects | `center` / `radius` / `degreesPerSecond` / `angle` / `enabled` | 累加角度并写世界平移 |
-| `effects.bob` | Effects | `axis` / `amplitude` / `frequency` / `phase` / `enabled` | 沿轴正弦浮动，增量写平移以保留手动拖动 |
-| `effects.sway` | Effects | `axis` / `amplitudeDegrees` / `frequency` / `phase` / `enabled` | 绕轴正弦摆动，增量乘四元数 |
-| `effects.pulse` | Effects | `amplitude` / `frequency` / `phase` / `enabled` | 缩放脉冲，增量乘缩放以保留手动缩放 |
-| `effects.lookAt` | Motion | `target` / `up` / `turnSpeed` / `enabled` | 朝向 target；`turnSpeed=0` 瞬时，否则 slerp |
-| `effects.follow` | Motion | `target` / `speed` / `stopDistance` / `enabled` | 向 target 匀速靠近并在 stopDistance 停下 |
-| `effects.particles` | Effects | `enabled` / `emissionRate` / `maxParticles` / `direction` / `spreadAngle` / `emissionOffset` / `emissionRadius` / `lifetime` / `lifetimeVariation` / `initialSpeed` / `speedVariation` / `gravity` / `startSize` / `endSize` / `startColor` / `endColor` / `texture`（17 个属性） | 每帧按世界变换发射并推进粒子；`enabled=false` 停止发射但存量走完寿命，移除组件立即清空。CPU 模拟，每发射器默认 512（属性上限 4096），全局上限 16384；渲染见 §1.3 |
-| `effects.fogVolume` | Effects | `enabled` / `center` / `size` / `rotation` / `density` / `color` / `heightFalloff` / `noiseStrength` / `noiseScale` / `wind` / `edgeSoftness` / `anisotropy` / `ambient` / `steps`（14 个属性） | 不挂系统；`FogVolumePass` 每帧读取实体 `WorldTransformComponent`，最终盒体 = WorldTransform × `T(center) * R(rotation) * S(size)`（size 为全尺寸），最多 8 个；Inspector 有专用 Fog Volume 面板；渲染见 §1.3 |
+| `effects.spin` | 效果 | `axis` / `degreesPerSecond` / `enabled` | 每帧绕本地轴累乘四元数 |
+| `effects.orbit` | 效果 | `center` / `radius` / `degreesPerSecond` / `angle` / `enabled` | 累加角度并写世界平移 |
+| `effects.bob` | 效果 | `axis` / `amplitude` / `frequency` / `phase` / `enabled` | 沿轴正弦浮动，增量写平移以保留手动拖动 |
+| `effects.sway` | 效果 | `axis` / `amplitudeDegrees` / `frequency` / `phase` / `enabled` | 绕轴正弦摆动，增量乘四元数 |
+| `effects.pulse` | 效果 | `amplitude` / `frequency` / `phase` / `enabled` | 缩放脉冲，增量乘缩放以保留手动缩放 |
+| `effects.lookAt` | 运动 | `target` / `up` / `turnSpeed` / `enabled` | 朝向 target；`turnSpeed=0` 瞬时，否则 slerp |
+| `effects.follow` | 运动 | `target` / `speed` / `stopDistance` / `enabled` | 向 target 匀速靠近并在 stopDistance 停下 |
+| `effects.particles` | 效果 | `enabled` / `emissionRate` / `maxParticles` / `direction` / `spreadAngle` / `emissionOffset` / `emissionRadius` / `lifetime` / `lifetimeVariation` / `initialSpeed` / `speedVariation` / `gravity` / `startSize` / `endSize` / `startColor` / `endColor` / `texture`（17 个属性） | 每帧按世界变换发射并推进粒子；`enabled=false` 停止发射但存量走完寿命，移除组件立即清空。CPU 模拟，每发射器默认 512（属性上限 4096），全局上限 16384；渲染见 §1.3 |
+| `effects.fogVolume` | 体积效果 | `enabled` / `center` / `size` / `rotation` / `density` / `color` / `heightFalloff` / `noiseStrength` / `noiseScale` / `wind` / `edgeSoftness` / `anisotropy` / `ambient` / `steps`（14 个属性） | 不挂系统；`FogVolumePass` 每帧读取实体 `WorldTransformComponent`，最终盒体 = WorldTransform × `T(center) * R(rotation) * S(size)`（size 为全尺寸），最多 8 个；Inspector 有专用 Fog Volume 面板；渲染见 §1.3 |
 
 系统顺序为 Spin 100、Orbit 110、Bob 120、Sway 130、Pulse 140、Follow 150、Look At 160、Particle 200。
 
@@ -94,13 +94,13 @@ F5-04 把已有原生组件也纳入同一张描述表，但**不复制它们的
 
 | 描述符 | 分类 | 可添加 | 说明 |
 |---|---|---|---|
-| `native.name` / `native.transform` / `native.hierarchy` | Core | 否 | 必需组件，始终存在，只读；`required=true` |
-| `native.characterController` | Scene | 是 | 8 个 Float 属性（radius/height/moveSpeed/jumpSpeed/gravity/maxSlopeAngle/stepHeight/groundSnapDistance），固定 Inspector 面板绘制 |
-| `native.renderTag` | Scene | 是 | `skybox` / `grid` 两个 Bool；`isTerrain` 是派生只读，地形实体禁止移除 |
-| `native.camera` | Managed | 否 | 唯一相机，随场景创建；菜单中置灰并说明原因 |
-| `native.terrain` | Managed | 否 | 用 创建 → 地形 创建；裸加组件无法生成网格 |
-| `native.terrainStreaming` | Managed | 否 | 用 创建 → 流送地形 创建 |
-| `native.voxelWorld` | Managed | 否 | 用 创建 → 体素世界 创建 |
+| `native.name` / `native.transform` / `native.hierarchy` | 核心 | 否 | 必需组件，始终存在，只读；`required=true` |
+| `native.characterController` | 角色 | 是 | 8 个 Float 属性（radius/height/moveSpeed/jumpSpeed/gravity/maxSlopeAngle/stepHeight/groundSnapDistance），固定 Inspector 面板绘制 |
+| `native.renderTag` | 渲染 | 是 | `skybox` / `grid` 两个 Bool；`isTerrain` 是派生只读，地形实体禁止移除 |
+| `native.camera` | 托管 | 否 | 唯一相机，随场景创建；菜单中置灰并说明原因 |
+| `native.terrain` | 托管 | 否 | 用 创建 → 地形 创建；裸加组件无法生成网格 |
+| `native.terrainStreaming` | 托管 | 否 | 用 创建 → 流送地形 创建 |
+| `native.voxelWorld` | 托管 | 否 | 用 创建 → 体素世界 创建 |
 
 描述符新增八个标志/字段，含义是：
 
@@ -116,16 +116,19 @@ F5-04 把已有原生组件也纳入同一张描述表，但**不复制它们的
 `Scene::canAddComponent(e, type)` 统一判断 scope、`addable`、`requiresTransform` 与 `allowOnTerrain`；
 `componentAddBlockReason(e, type)` 返回可直接展示给用户的中文原因；
 `isTerrainManagedEntity(e)` 识别地形/体素宿主。`addComponent` 与 `applyComponentRecord` 都走同一道门禁，
-所以 Add 菜单、粘贴、序列化恢复不会各写一套规则。Inspector 在地形/体素对象上直接隐藏 Add/Paste，
-但仍列出已挂载组件，方便清理旧场景；Add 弹窗对不可用项置灰并显示原因，而不是只给一个灰条。
+所以 Add 菜单、粘贴、序列化恢复不会各写一套规则。Inspector 在地形/体素对象上仍保留 Add 入口：先点「新建空实体并选中」，再到新实体上添加体积雾等通用组件；
+Add 弹窗对不可用项置灰并显示原因，而不是只给一个灰条。
 
 属性描述符另带一组**纯 UI 元数据**（F5-05，不写入 JSON）：`hasRange` / `minimum` / `maximum` /
 `dragSpeed` / `tooltip`。注册时用 `withRange()` / `withTooltip()` 链式附加，例如
 `withTooltip(withRange(makeSpinSpeedProperty(), -3600, 3600, 0.5f), "局部自转速度")`；
 `makeFloatProperty` 同时把范围用于 setter clamp。Inspector 只消费这些字段，不再为每个组件写一套控件。
 
-因此在普通实体上，`+ Add Component` 的可选项是 9 个 `effects.*` + Character Controller + Render Tag；
-Camera/Terrain/Streaming/Voxel 以置灰项出现。地形/流送地形/体素对象不显示 Add/Paste，已挂载组件仍可移除。
+因此在普通实体上，`+ Add Component` 按分类列出全部 exposed 组件：效果（7 个：Spin/Orbit/Bob/Pulse/Sway/Particles/FogVolume）、
+运动（2 个：Look At/Follow）、角色（Character Controller）、渲染（Render Tag）；Camera/Terrain/Streaming/Voxel
+在“托管”分类以置灰项出现。弹窗不再隐藏已挂载项，而是打勾置灰并提示“参数在下方组件列表里编辑”，
+所以场景组件弹窗也不会是空列表。地形/流送地形/体素对象保留 Add 入口，但会先提示新建空实体；
+已挂载组件仍可移除。
 另有 12 个 `scene.*` 场景组件，只出现在无选中实体的 Scene Components 区，见 §1.2；Render 窗口提供
 同一批场景组件的启用/添加/移除快捷列表，详细参数仍在 Inspector 编辑。Character 面板的 8 个参数与 Render Tag 的移除按钮
 都走 `SetComponentRecordCommand`，可撤销。`DeleteEntityCommand` 为 Character 增加显式快照，
@@ -158,7 +161,7 @@ Camera/Terrain/Streaming/Voxel 以置灰项出现。地形/流送地形/体素�
   组件头右键与原生面板底部提供复制 / 粘贴 / 重置 / 移除，全部走 `SetComponentRecordCommand`，可撤销。
   剪贴板是跨实体的纯数据快照，复制不置脏；粘贴要求同类型、目标可添加且值不同，
   重置使用 `defaultComponentRecord(type)`。
-- `+ Add Component` 按分类列出未挂载且 `exposed` 的组件，不可添加的托管项置灰并显示原因。
+- `+ Add Component` 按分类列出当前 scope 下全部 `exposed` 组件（包括已挂载；已挂载项打勾置灰），不可添加的托管项置灰并显示原因。
 - `SceneSerializer` 从 **version 4** 起把场景组件写进顶层 `sceneComponents`；实体 `components`
   仍从 v3 起（格式见 [serialization](../90-editor/serialization.md)）。`Scene::captureDescription()`
   只捕获已注册且 `serialized` 的组件；场景组件走 `captureSceneComponents()`，只允许 Scene scope。

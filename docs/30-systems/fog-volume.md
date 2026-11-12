@@ -5,7 +5,7 @@ type: system
 scope: src/Render/FogVolumePass.*, src/Scene/FeatureComponents.*, src/Editor/panels/InspectorPanel.cpp, shaders/fog_volume.frag
 read-when: 在场景里摆放局部雾、调雾的位置/体积/浓度/高度/噪声/风，或修改体积雾 Pass
 size: ~180 行
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # 局部体积雾（Fog Volume）
@@ -15,6 +15,8 @@ updated: 2026-11-11
 场景里需要一团**可以摆放**的雾：山谷的晨雾、林间的薄雾、洞口涌出的冷气，而不是全屏统一的距离雾。距离雾（`scene.fog`）跟着相机做全局指数衰减，无法只覆盖一块区域，也无法做高度分层和风吹流动。
 
 体积雾是一个**实体组件** `effects.fogVolume`：把它挂到任意有 Transform 的实体上，组件自带的 `center`/`size`/`rotation` 定义局部雾盒，实体的 WorldTransform 再整体移动/旋转/缩放这个盒子，雾只在盒子里累积。一个场景最多同时渲染 8 个雾盒。
+
+入口：选中一个有 Transform 的实体 → `+ Add Component` → “体积效果”分类 → “体积雾 (Fog Volume)”。如果选中的是地形/流送地形/体素对象，Inspector 会提示先点“新建空实体并选中”，再到新实体上添加；弹窗会列出全部组件并给已挂载项打勾，不会出现空列表。
 
 组件在 Inspector 里有专用 **Fog Volume** 面板（不是通用属性列表）：Placement 直接调中心、尺寸、旋转，并提供 20×8×20 / 40×12×40 / 80×20×80 三个尺寸预设；Appearance / Lighting / Quality 分组调浓度、颜色、噪声、风、相函数和步数。视口里用青色线框显示实际盒体。
 

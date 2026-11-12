@@ -562,18 +562,27 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
     }
 
     // 地形/体素对象由专用面板管理：它们不是“自由实体”，Add Component
-    // 里出现旋转、体积雾等通用效果只会让用户误操作。已有组件仍然列出，
-    // 方便移除旧场景里遗留的挂载。
+    // 里出现旋转、体积雾等通用效果只会让用户误操作。但入口仍然保留：
+    // 组件目录要完整可见，用户才知道“有体积雾，只是不能挂在地形上”。
     const bool terrainManaged = !sceneScope && scene->isTerrainManagedEntity(entity);
     if (terrainManaged)
     {
         ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.35f, 1.0f),
                            "地形 / 体素对象由专用面板管理");
-        ImGui::TextDisabled("这里不能添加通用组件；请在 Terrain / Voxel 面板里编辑。");
-        ImGui::TextDisabled("需要体积雾、旋转等效果时，先创建一个空实体再挂组件。");
+        ImGui::TextDisabled("通用组件需要普通实体。可以在这里新建一个空实体：");
+        if (ImGui::Button("新建空实体并选中"))
+        {
+            const entt::entity created = scene->createEntity();
+            registry.emplace_or_replace<NameComponent>(created, NameComponent{"Empty"});
+            state.selection.select(created);
+            state.markDirty();
+            state.pushLog(LogEntry::Level::Info,
+                          "[Editor] 已创建空实体；现在可以 Add Component → 体积雾");
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("然后添加体积雾等组件。");
     }
-    else
-    {
+
     // 添加入口放在列表顶部：组件越多，越不应该滚到底部才能加。
     if (ImGui::Button(sceneScope ? "+ Add Scene Component" : "+ Add Component"))
     {
@@ -604,8 +613,8 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
 
     if (ImGui::BeginPopup("##add_component"))
     {
-        ImGui::TextDisabled("添加组件");
-        ImGui::SetNextItemWidth(300.0f);
+        ImGui::TextDisabled(sceneScope ? "添加场景组件" : "添加对象组件");
+        ImGui::SetNextItemWidth(320.0f);
         // 打开就聚焦搜索框：组件多时直接输入比滚动更快。
         if (ImGui::IsWindowAppearing())
             ImGui::SetKeyboardFocusHere();
@@ -614,63 +623,94 @@ void InspectorPanel::drawComponents(EditorState& state, entt::entity entity,
         ImGui::Separator();
 
         const std::string query = lowercase(componentFilter);
-        std::string lastCategory;
-        bool first = true;
-        bool any = false;
 
+        // 先收集当前 scope 下所有 exposed 组件，包括已经挂载的。已挂载项
+        // 不隐藏，而是打勾置灰：这样弹窗同时是一张完整的组件目录，不会
+        // 出现“点开什么都没有”的空白窗口，也方便用户发现体积雾。
+        std::vector<const scene::ComponentDescriptor*> matches;
         for (const scene::ComponentDescriptor& descriptor : components.descriptors())
         {
-            if (descriptor.scope != scope)
-                continue;
-            if (!descriptor.exposed || descriptor.has(registry, entity))
+            if (descriptor.scope != scope || !descriptor.exposed)
                 continue;
             if (!matchesComponentFilter(descriptor, query))
                 continue;
-
-            if (first || descriptor.category != lastCategory)
-            {
-                if (!first)
-                    ImGui::Separator();
-                ImGui::TextDisabled("%s", descriptor.category.c_str());
-                lastCategory = descriptor.category;
-                first = false;
-            }
-
-            // 不只检查 addable：还要检查 Transform / 地形兼容性。禁用时
-            // tooltip 直接说明“为什么不能加”，而不是只置灰。
-            const std::string blockReason =
-                scene->componentAddBlockReason(entity, descriptor.type);
-            const bool addable = blockReason.empty();
-            if (ImGui::MenuItem(descriptor.label.c_str(), nullptr, false, addable))
-            {
-                std::optional<scene::ComponentRecord> after =
-                    scene->defaultComponentRecord(descriptor.type);
-                if (after)
-                {
-                    state.commands.execute(std::make_unique<SetComponentRecordCommand>(
-                        *scene, entity, descriptor.type, std::nullopt, std::move(after),
-                        "Add Component"));
-                    state.markDirty();
-                }
-            }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            {
-                if (!blockReason.empty())
-                    ImGui::SetTooltip("%s", blockReason.c_str());
-                else if (!descriptor.description.empty())
-                    ImGui::SetTooltip("%s", descriptor.description.c_str());
-            }
-            any = true;
+            matches.push_back(&descriptor);
         }
 
-        if (!any)
+        if (terrainManaged)
         {
-            ImGui::TextDisabled(query.empty() ? "没有可添加的组件。"
-                                              : "没有匹配的组件。");
+            ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.35f, 1.0f),
+                               "当前对象是地形 / 体素；灰色项不能挂到这里。");
+            ImGui::TextDisabled("先点上面的「新建空实体并选中」，再添加体积雾。");
+            ImGui::Separator();
+        }
+        else if (sceneScope)
+        {
+            ImGui::TextDisabled("✓ = 场景里已经启用；参数在下方组件列表里编辑。");
+        }
+
+        if (matches.empty())
+        {
+            ImGui::TextDisabled(query.empty() ? "没有可显示的组件。"
+                                              : "没有匹配的组件。试试「雾」或「fog」。");
+        }
+        else
+        {
+            // 按分类聚合，而不是只合并相邻项：注册顺序变化时分类仍然完整。
+            std::vector<std::string> categories;
+            for (const scene::ComponentDescriptor* descriptor : matches)
+            {
+                if (std::find(categories.begin(), categories.end(), descriptor->category) ==
+                    categories.end())
+                    categories.push_back(descriptor->category);
+            }
+
+            for (const std::string& category : categories)
+            {
+                ImGui::SeparatorText(category.c_str());
+                for (const scene::ComponentDescriptor* descriptor : matches)
+                {
+                    if (descriptor->category != category)
+                        continue;
+
+                    ImGui::PushID(descriptor->type.c_str());
+                    const bool mounted = descriptor->has(registry, entity);
+                    // 已挂载项不再问 canAddComponent（它对已挂载返回 true），
+                    // 直接显示为打勾置灰，避免用户重复点。
+                    const std::string blockReason = mounted
+                        ? std::string()
+                        : scene->componentAddBlockReason(entity, descriptor->type);
+                    const bool addable = !mounted && blockReason.empty();
+
+                    if (ImGui::MenuItem(descriptor->label.c_str(),
+                                        mounted ? "已添加" : nullptr,
+                                        mounted, addable))
+                    {
+                        std::optional<scene::ComponentRecord> after =
+                            scene->defaultComponentRecord(descriptor->type);
+                        if (after)
+                        {
+                            state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                                *scene, entity, descriptor->type, std::nullopt,
+                                std::move(after), "Add Component"));
+                            state.markDirty();
+                        }
+                    }
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    {
+                        if (mounted)
+                            ImGui::SetTooltip("已添加；在下方组件列表里编辑参数。");
+                        else if (!blockReason.empty())
+                            ImGui::SetTooltip("%s", blockReason.c_str());
+                        else if (!descriptor->description.empty())
+                            ImGui::SetTooltip("%s", descriptor->description.c_str());
+                    }
+                    ImGui::PopID();
+                }
+            }
         }
         ImGui::EndPopup();
     }
-    } // !terrainManaged
 
     bool drewAny = false;
     for (const scene::ComponentDescriptor& descriptor : components.descriptors())
