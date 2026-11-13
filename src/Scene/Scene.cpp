@@ -1033,9 +1033,8 @@ void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCa
             std::chrono::steady_clock::now() - streamingStart).count();
 
         const auto worldStart = std::chrono::steady_clock::now();
-        systemScheduler.run(registry, scene::SystemPhase::Simulation, dt);
-        updateWorldTransforms();
-        systemScheduler.run(registry, scene::SystemPhase::PostTransform, dt);
+        if (!simulationDrivenExternally_)
+            stepSimulation(dt);
         worldMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - worldStart).count();
 
@@ -1057,13 +1056,19 @@ void Scene::update(float dt, GLFWwindow* window, float aspectRatio, bool allowCa
     refreshStreamingTerrain();
     processVoxelChunkBuilds();
 
+    if (!simulationDrivenExternally_)
+        stepSimulation(dt);
+    refreshSpatialIndex();
+    updateVisibility(camera.getProjection() * camera.getView());
+}
+
+void Scene::stepSimulation(float dt)
+{
     // 效果系统（Spin / Orbit…）先改局部 Transform，再统一刷新世界矩阵。
     // PostTransform 预留给依赖世界坐标的系统（当前无内置系统）。
     systemScheduler.run(registry, scene::SystemPhase::Simulation, dt);
     updateWorldTransforms();
     systemScheduler.run(registry, scene::SystemPhase::PostTransform, dt);
-    refreshSpatialIndex();
-    updateVisibility(camera.getProjection() * camera.getView());
 }
 
 void Scene::markTransformDirty(entt::entity entity)

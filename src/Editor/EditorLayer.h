@@ -21,6 +21,7 @@
 #include "Editor/EditorState.h"
 #include "Editor/EditorPanel.h"
 #include "Editor/EditorPreferences.h"
+#include "Scene/SimulationClock.h"
 
 #include <memory>
 #include <string>
@@ -184,6 +185,8 @@ private:
     bool active = false;
     bool initialized = false;
     float lastFrameDelta = 0.0f;
+    // M1-C1b：播放/运行模式的模拟时钟（固定 1/60 tick）。
+    scene::SimulationClock simulationClock;
 
     template <typename T>
     T* registerPanel()

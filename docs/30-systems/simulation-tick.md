@@ -93,25 +93,39 @@ class SimulationClock
 成功输出（稳定标记，Validate 用例 `m1-c1-tick-clock` 依赖它）：
 
 ```
-[Sim] clockSelfTest PASS | cases=8 fixed=1/60 max-steps=8 jump-latch=ok
+[Sim] clockSelfTest PASS | cases=9 fixed=1/60 max-steps=8 jump-latch=ok replay=ok
 ```
 
-8 组用例覆盖：默认 1/60、一秒 60 tick、抖动帧只由总时间决定、不足一 tick
+9 组用例覆盖：默认 1/60、一秒 60 tick、抖动帧只由总时间决定、不足一 tick
 的帧不推进且 `alpha ∈ (0,1)`、跳跃锁存恰好消费一次、卡顿帧被 8 tick 截断
-并记 dropped、步长可配 + reset 语义、回调 tick 号与时钟一致。
+并记 dropped、步长可配 + reset 语义、回调 tick 号与时钟一致，以及**重放
+一致性**：同一段时间线用 60fps 与 144fps 抖动帧各跑一遍，tick 序列逐项
+相同（2 秒的 float 帧序列可能差 1 个 tick，用例允许末尾差一个），单次跳跃
+边沿在两种帧率下都只被消费一次。
 
 ## 7. 接入现状
 
 - **C1a（已完成）**：`SimulationClock` + `--tick-test` + Validate 用例。
-- **C1b（进行中）**：`EditorLayer::beginFrame` 推进时钟，`updatePlayState`
-  与 `updateRuntimeMode` 的输入采样抽成 `sampleInputCmd`，模拟放进 tick
-  回调；`Scene` 增加 `stepSimulation(fixedDt)`，把 `Scene.cpp:1062-1064`
-  的三行包进"未被外部驱动"的条件。
+- **C1b（已完成）**：
+  - `EditorLayer::beginFrame` 每帧设 `Scene::setSimulationDrivenExternally()`
+    —— 只有 `Editing` 且非 Runtime 时为 false，其余（Playing / Paused /
+    Runtime）由编辑器驱动；
+  - `updatePlayState` 与 `updateRuntimeMode` 把输入采样成 `InputCmd`
+    （moveWorld 已按相机/runtimeYaw 转成世界方向、jump 是边沿、sprint 是
+    电平），交给 `simulationClock.advance()`，在 tick 回调里用固定 `1/60`
+    调 `updateCharacterController()` 再调 `Scene::stepSimulation(fixedDt)`；
+  - `Scene::stepSimulation()` 只跑 SystemScheduler 两相 + 世界矩阵刷新，
+    `Scene::update` 在"被外部驱动"时跳过这三行（相机、流送、可见性仍在
+    帧上跑）；
+  - `startPlay` / `pausePlay` / `resumePlay` / `stopPlay` 都 `reset()` 时钟。
 - **C1c（未开始）**：渲染插值用 `alpha()` 在上一 tick 与当前 tick 的
   变换之间插值。
 
 ## 8. 限制
 
 - 只做主线程推进，没有多线程确定性保证。
+- 重放一致性目前只覆盖"输入投递"这一层：角色位移/重力仍写在
+  `Scene::updateCharacterController()` 里（依赖地形查询），要等 D2 把它抽成
+  纯函数后才能断言"逐位相同的轨迹"。
 - 时钟本身不记录输入，录制/回放是 D2 的事。
 - 流送中的地面变化不参与 tick 内确定性（见风险 3）。

@@ -120,6 +120,16 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
     lastFrameDelta = dt;
     state.viewportHovered = viewportHovered;
 
+    // M1-C1b：播放/暂停与运行模式由编辑器按固定 tick 驱动模拟，编辑态仍走
+    // Scene::update 的可变 dt 路径（回归用例全在编辑态，行为不变）。
+    if (state.services.scene != nullptr)
+    {
+        const bool drivenByEditor = state.playState != PlayState::Editing || state.isRuntime();
+        state.services.scene->setSimulationDrivenExternally(drivenByEditor);
+        if (!drivenByEditor)
+            simulationClock.reset();
+    }
+
     // 用它来门控快捷键，避免"在 InputText 里打字触发 Delete 删除实体"这种事故。
     ImGuiIO& io = ImGui::GetIO();
     state.wantsKeyboard = io.WantTextInput;
@@ -584,12 +594,24 @@ void EditorLayer::updatePlayState(float dt)
 
     const bool jump = !io.WantTextInput &&
                       ImGui::IsKeyPressed(ImGuiKey_Space, false);
-    CharacterMoveResult result;
-    if (state.services.scene->updateCharacterController(
-            controlled, move, jump, dt, result))
-    {
-        state.transformRefreshPending = true;
-    }
+
+    // M1-C1b：帧间隔只决定这一帧跑几个 tick，模拟本身恒用 1/60。
+    scene::InputCmd cmd;
+    cmd.moveWorld = move;
+    cmd.jump = jump;
+
+    Scene* scene = state.services.scene;
+    simulationClock.advance(dt, cmd,
+        [&](const scene::InputCmd& current, float fixedDt)
+        {
+            CharacterMoveResult result;
+            if (scene->updateCharacterController(controlled, current.moveWorld,
+                                                 current.jump, fixedDt, result))
+            {
+                state.transformRefreshPending = true;
+            }
+            scene->stepSimulation(fixedDt);
+        });
 }
 
 void EditorLayer::drawUI()
@@ -2116,10 +2138,22 @@ void EditorLayer::updateRuntimeMode(float dt)
     const bool sprint = !io.WantTextInput &&
         (io.KeyShift || ImGui::IsKeyDown(ImGuiKey_LeftShift) ||
          ImGui::IsKeyDown(ImGuiKey_RightShift));
+    // M1-C1b：与播放态同一套时钟；鼠标转向仍按帧更新（相机不进 tick）。
+    scene::InputCmd cmd;
+    cmd.moveWorld = move;
+    cmd.jump = jump;
+    cmd.sprint = sprint;
+
+    const float speedMultiplier = sprint ? 1.35f : 0.55f;
     CharacterMoveResult result;
-    if (scene->updateCharacterController(state.runtimeCharacter, move, jump, dt, result,
-                                         sprint ? 1.35f : 0.55f))
-        state.transformRefreshPending = true;
+    simulationClock.advance(dt, cmd,
+        [&](const scene::InputCmd& current, float fixedDt)
+        {
+            if (scene->updateCharacterController(state.runtimeCharacter, current.moveWorld,
+                                                 current.jump, fixedDt, result, speedMultiplier))
+                state.transformRefreshPending = true;
+            scene->stepSimulation(fixedDt);
+        });
 
     applyRuntimeCameraPose();
 
@@ -2144,6 +2178,7 @@ void EditorLayer::enterPlay()
     state.playSnapshot = state.services.scene->captureDescription();
     state.hasPlaySnapshot = true;
     state.playState = PlayState::Playing;
+    simulationClock.reset();
     state.commands.clear();          // 运行期的操作不该能撤销回编辑态
     state.notify(LogEntry::Level::Info, "开始播放（F7 停止并恢复）");
 }
@@ -2153,6 +2188,7 @@ void EditorLayer::pausePlay()
     if (state.playState != PlayState::Playing)
         return;
     state.playState = PlayState::Paused;
+    simulationClock.reset();          // 决策 5：暂停清空 accumulator，恢复后不追帧
     state.pushLog(LogEntry::Level::Info, "[Editor] paused");
 }
 
@@ -2161,6 +2197,7 @@ void EditorLayer::resumePlay()
     if (state.playState != PlayState::Paused)
         return;
     state.playState = PlayState::Playing;
+    simulationClock.reset();
     state.pushLog(LogEntry::Level::Info, "[Editor] resumed");
 }
 
@@ -2176,6 +2213,7 @@ void EditorLayer::stopPlay()
             state.pushLog(LogEntry::Level::Error, "[Editor] stop failed to restore: " + error);
     }
 
+    simulationClock.reset();
     state.hasPlaySnapshot = false;
     state.playSnapshot = scene::SceneDescription{};
     state.playState = PlayState::Editing;

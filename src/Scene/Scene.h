@@ -62,6 +62,13 @@ public:
     // allowCameraInput=false 时相机不接受键鼠输入（编辑器在鼠标位于面板上、
     // 正在输入文字、或正在拖 gizmo 时用）。仍然会把内部状态写回 transform。
     void update(float dt, GLFWwindow* window, float aspectRatio, bool allowCameraInput = true);
+
+    // M1-C1b：编辑器把模拟切成固定 tick 后，Scene::update 不再自己跑系统相，
+    // 改由 stepSimulation() 在 tick 回调里推进（默认 false，回归路径不变）。
+    void setSimulationDrivenExternally(bool driven) { simulationDrivenExternally_ = driven; }
+    bool simulationDrivenExternally() const { return simulationDrivenExternally_; }
+    // 只推进一次模拟：SystemScheduler 两相 + 世界矩阵刷新；不碰相机、流送、可见性。
+    void stepSimulation(float dt);
     void cleanup();
 
     entt::entity createEntity();
@@ -501,6 +508,8 @@ private:
     int64_t lastStreamingCenterX = INT64_MIN;
     int64_t lastStreamingCenterZ = INT64_MIN;
     int32_t lastStreamingRadius = -1;
+
+    bool simulationDrivenExternally_ = false;
 
     // --update-profile：只累加 double，不做字符串与分配。
     bool updateProfiling = false;

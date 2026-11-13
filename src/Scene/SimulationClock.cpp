@@ -190,8 +190,67 @@ bool simulationClockSelfTest()
                     "callback tick numbers match the clock") && ok;
     }
 
+    // 9) 重放一致性（纯函数版）：同一段时间线，用 60fps 与 144fps 抖动帧各跑
+    //    一遍，回调收到的 tick 序列必须逐项相同 —— 这正是 D2 需要的"输入与
+    //    帧率解耦"。物理积分仍在 Scene 里，等 D2 抽成纯函数后再接。
+    {
+        const auto run = [](const std::vector<float>& frames, std::vector<uint32_t>& ticks,
+                            int& jumps)
+        {
+            SimulationClock clock;
+            float elapsed = 0.0f;
+            bool wasInWindow = false;
+            for (const float frame : frames)
+            {
+                // 1 秒处按一次跳：只在进入窗口的第一帧产生边沿（模拟
+                // IsKeyPressed），按住不重复触发。
+                const bool inWindow = elapsed >= 0.999f && elapsed < 1.2f;
+                InputCmd cmd;
+                cmd.jump = inWindow && !wasInWindow;
+                wasInWindow = inWindow;
+                elapsed += frame;
+                clock.advance(frame, cmd,
+                              [&](const InputCmd& current, float)
+                              {
+                                  ticks.push_back(current.tick);
+                                  if (current.jump)
+                                      ++jumps;
+                              });
+            }
+        };
+
+        std::vector<float> sixtyFrames(120, 1.0f / 60.0f);
+        std::vector<float> fastFrames;
+        for (int i = 0; i < 288; ++i)
+            fastFrames.push_back(1.0f / 144.0f);
+
+        std::vector<uint32_t> at60;
+        std::vector<uint32_t> at144;
+        int jumps60 = 0;
+        int jumps144 = 0;
+        run(sixtyFrames, at60, jumps60);
+        run(fastFrames, at144, jumps144);
+
+        // 2 秒的 float 帧序列不可能精确等于 2.0，两种帧率的 tick 总数可能差 1；
+        // 真正要守的是"公共前缀逐项相同"，差值只允许落在末尾一个 tick 上。
+        const std::size_t common = at60.size() < at144.size() ? at60.size() : at144.size();
+        bool same = common > 100;
+        for (std::size_t i = 0; same && i < common; ++i)
+        {
+            if (at60[i] != at144[i])
+                same = false;
+        }
+        const std::size_t diff = at60.size() > at144.size()
+                                     ? at60.size() - at144.size()
+                                     : at144.size() - at60.size();
+        ok = expect(same, "60fps and 144fps replay the same tick stream") && ok;
+        ok = expect(diff <= 1u, "tick totals differ by at most one at a float boundary") && ok;
+        ok = expect(jumps60 == 1 && jumps144 == 1,
+                    "the single jump edge is consumed exactly once at both rates") && ok;
+    }
+
     if (ok)
-        std::cout << "[Sim] clockSelfTest PASS | cases=8 fixed=1/60 max-steps=8 jump-latch=ok\n";
+        std::cout << "[Sim] clockSelfTest PASS | cases=9 fixed=1/60 max-steps=8 jump-latch=ok replay=ok\n";
     return ok;
 }
 
