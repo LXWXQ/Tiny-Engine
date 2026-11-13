@@ -4,8 +4,8 @@ title: 构建与运行故障排查
 type: build
 scope: 空（症状 -> 原因 -> 修法）
 read-when: 构建失败、启动失败、或回归莫名失败时
-size: ~180 行
-updated: 2026-11-05
+size: ~190 行
+updated: 2026-11-13
 ---
 
 # 故障排查
@@ -40,8 +40,11 @@ updated: 2026-11-05
 
 ### 2.2 链接期 `unresolved external symbol`（新加了 `.cpp`）
 
-- **原因**：没重新 configure，源文件 glob 没更新。
-- **修法**：重跑 `cmake -S . -B build ...`。
+- **现象**：新增一个 `.cpp` 并在 `main.cpp` 里调用后，**第一次** `cmake --build` 报 `main.obj : error LNK2019: 无法解析的外部符号 ...`，但源码本身没错，**再跑一次同一条命令就成功**。这是已知行为，不是代码坏了。
+- **原因**：`CMakeLists.txt:60` 的 `file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")` 发现 glob 变化会触发 CMake 重新生成；重新配置与本次构建交叉进行，静态库 `tiny_core` 的归档早于新 `.cpp` 的 obj 入档，链接时自然看不到新符号。
+- **修法**：再跑一次 `cmake --build build --config Debug`。不要删构建目录，不要改参数。
+- **确认符号真的编出来了**：在 `build\` 下找到该 `.cpp` 对应的 `.obj`（在 `*_core.dir\Debug\` 之类的目录里），`dumpbin /symbols <obj> | findstr <函数名>`。
+- **另一种情况**：只有把 `CONFIGURE_DEPENDS` 去掉时，才会退化成"glob 没更新"，那时才需要手动重跑 `cmake -S . -B build ...`。
 
 ### 2.3 一屏看不懂的 C++ 错误（中文注释处）
 
