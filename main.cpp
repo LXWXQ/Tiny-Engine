@@ -2,6 +2,7 @@
 #include "src/Core/JobSystem.h"
 #include "src/Core/Diagnostics.h"
 #include "src/Core/StartupLog.h"
+#include "src/Scene/EntityHandle.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
@@ -117,6 +118,7 @@ const UsageLine kUsageLines[] = {
     { "自检", "--diagnostics-test [path]", "诊断管线自检（合成消息 -> 计数 + JSONL）" },
     { "自检", "--device-fault-test", "VK_EXT_device_fault 自检" },
     { "自检", "--jobtest", "JobSystem 自检" },
+    { "自检", "--handle-test", "实体句柄契约自检（不需要 Vulkan / 窗口）" },
     { "剖析", "--build-info", "打印本二进制的调试能力后退出" },
     { "剖析", "--gpu-timing", "每 pass GPU 计时，退出时写 gpu_timing.csv" },
     { "剖析", "--gpu-timing-csv <path>", "指定计时 CSV 路径（隐含 --gpu-timing）" },
@@ -180,6 +182,7 @@ int main(int argc, char** argv)
     float streamingFlyRadius = 0.0f;
     float streamingBudgetMs = 0.0f;
     bool jobTest = false;
+    bool handleTest = false;
     bool crossQueueTest = false;
     bool resizeTest = false;
     bool materialStress = false;
@@ -347,6 +350,7 @@ int main(int argc, char** argv)
             }
         }
         else if (arg == "--jobtest")  jobTest = true;
+        else if (arg == "--handle-test") handleTest = true;
         else if (arg == "--cross-queue-test") crossQueueTest = true;
         else if (arg == "--resize-test") resizeTest = true;
         else if (arg == "--material-stress") materialStress = true;
@@ -474,6 +478,9 @@ int main(int argc, char** argv)
             JobSystem jobSystem;
             return jobSystem.selfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
         }
+
+        if (handleTest)
+            return scene::entityHandleSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 
         diag::configureValidationLog(diagOptions.validationJsonlPath);
 
