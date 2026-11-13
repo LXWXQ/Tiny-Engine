@@ -96,6 +96,32 @@ if ($straySpv.Count -gt 0) {
 }
 Write-Host "[validate] TD-08 dead-file guard PASS"
 
+# M1-A2 ECS destruction gate: teardown has to go through Scene::destroyEntity, which
+# retires terrain/voxel arena slices, hierarchy links, spatial index entries and model
+# resources (src/Scene/Scene.cpp:880-977). A raw registry.destroy() skips all of it, so
+# every exception below is spelled out with its reason; anything else fails the run.
+$destroyExempt = @{
+    "src\Scene\Scene.cpp"        = "Scene::destroyEntity itself + scene self tests"
+    "src\Scene\EntityHandle.cpp" = "handle contract self test owns a throwaway registry"
+    "src\Editor\Commands.cpp"    = "scene == nullptr fallback used by editor self tests"
+    "src\Editor\EditorLayer.cpp" = "editor self tests own a standalone registry (B-06)"
+    "src\Core\Application.cpp"   = "not ECS: gpuTimer / renderDoc / screenshot objects"
+}
+$destroyViolations = @()
+foreach ($sourceFile in (Get-ChildItem -LiteralPath (Join-Path $repoRoot "src") -Recurse -Filter "*.cpp" -File)) {
+    $relative = $sourceFile.FullName.Substring($repoRoot.Length).TrimStart("\", "/")
+    if ($destroyExempt.ContainsKey($relative)) { continue }
+    $hits = Select-String -LiteralPath $sourceFile.FullName -Pattern "registry(\.|->)destroy\("
+    foreach ($hit in $hits) {
+        $destroyViolations += ("{0}:{1}" -f $relative, $hit.LineNumber)
+    }
+}
+if ($destroyViolations.Count -gt 0) {
+    throw ("M1-A2: raw registry.destroy() outside Scene::destroyEntity:`n  " + ($destroyViolations -join "`n  ") +
+           "`nRoute destruction through Scene::destroyEntity, or add the file to `$destroyExempt with a reason.")
+}
+Write-Host "[validate] M1-A2 destruction gate PASS"
+
 # DocCheck: the documentation system is a verified artifact (docs/00-meta/doc-rules.md).
 # A new conversation has to reconstruct project state from a limited context window,
 # so stale/missing docs cost more than a failed build.
@@ -165,6 +191,8 @@ $tests = @(
        MustContain = @("[Config] selfTest PASS") },
     @{ Name = "m1-handle-contract"; Args = @("--handle-test");
        MustContain = @("[Handle] selfTest PASS") },
+    @{ Name = "m1-trace-contract"; Args = @("--trace-test");
+       MustContain = @("[Trace] selfTest PASS") },
     @{ Name = "selftest-default"; Args = @("--selftest", "$Frames");
        MustContain = @("[Scene] ECS/spatial selfTest PASS", "[Scene] ECS component selfTest PASS", "[TD07] ComputeProbe disabled: no probe dispatches or CPU readback", "[SelfTest]") },
     @{ Name = "selftest-no-bloom"; Args = @("--selftest", "$Frames", "--no-bloom");
@@ -406,7 +434,7 @@ foreach ($test in $tests) {
     # P0: every test that creates a Vulkan device must report zero validation messages.
     # (jobtest / config-test / --build-info / --diagnostics-test return before the Vulkan device exists.)
     $needsValidationMarker = -not $test.SkipValidationMarker -and
-        $test.Name -notin @('jobtest', 'td09-config-migration', 'p0-build-info', 'p0-diagnostics-selftest', 'f2e-terrain-picking', 'm1-handle-contract')
+        $test.Name -notin @('jobtest', 'td09-config-migration', 'p0-build-info', 'p0-diagnostics-selftest', 'f2e-terrain-picking', 'm1-handle-contract', 'm1-trace-contract')
     if ($needsValidationMarker) {
         if ($stdout.IndexOf("[Validation] errors=0 warnings=0", [StringComparison]::OrdinalIgnoreCase) -lt 0) {
             $reasons += "missing zero-validation marker '[Validation] errors=0 warnings=0'"
