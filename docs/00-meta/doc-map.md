@@ -4,8 +4,8 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~150 行
-updated: 2026-11-10
+size: ~180 行
+updated: 2026-11-13
 ---
 
 # 代码 <-> 文档反查表
@@ -60,12 +60,12 @@ updated: 2026-11-10
 
 | 源文件 | 内容 | 必读文档 | 回写 |
 |---|---|---|---|
-| `Application.h/.cpp` (39KB) | 唯一创建顺序、帧循环、自检入口、resize | [layering](../10-architecture/layering.md)、[resource-lifetime](../10-architecture/resource-lifetime.md) | layering、resource-lifetime |
+| `Application.h/.cpp` (39KB) | 唯一创建顺序、帧循环、自检入口、resize/交换链重建与 ImGui 纹理重注册 | [layering](../10-architecture/layering.md)、[resource-lifetime](../10-architecture/resource-lifetime.md)、[viewport](../90-editor/viewport.md) | layering、resource-lifetime、viewport |
 | `DescriptorManager.h/.cpp` | Set0 全局 + Set1 bindless 材质槽位 + Set2 地形纹理 + 延迟回收 | [descriptors](../10-architecture/descriptors.md) | descriptors |
 | `EngineConfig.h/.cpp` | v2 配置、迁移、备份、原子写 | [config](../30-systems/config.md) | config |
 | `Diagnostics.h/.cpp` | 验证层结构化计数、JSONL、`--build-info`、自检 | [diagnostics](../60-debug-profiling/diagnostics.md) | diagnostics |
 | `JobSystem.h/.cpp` | worker pool、`submit`、`parallelFor` | [jobsystem](../30-systems/jobsystem.md) | jobsystem |
-| `ImGuiSystem.h/.cpp` | 后端初始化、面板、ASCII 约束 | [imgui](../30-systems/imgui.md) | imgui |
+| `ImGuiSystem.h/.cpp` | 后端初始化（docking）、面板、ASCII 约束、交换链重建时与 PresentPass/UiCompositePass 的指针同步 | [imgui](../30-systems/imgui.md)、[viewport](../90-editor/viewport.md) | imgui、viewport |
 | `FrameInfo.h` / `FrameInFlight.h` | 每帧数据总线、`kFramesInFlight` | [synchronization](../10-architecture/synchronization.md) | synchronization |
 | `Material.h` / `MaterialSystem.*` / `MaterialSlot.h` | 材质数据、槽位哨兵 `kInvalidMaterialSlot` | [descriptors](../10-architecture/descriptors.md) | descriptors |
 | `Profiler.h` | Tracy CPU zone 宏（关闭时展开为 `(void)0`） | [zero-overhead](../60-debug-profiling/zero-overhead.md) | zero-overhead |
@@ -76,7 +76,8 @@ updated: 2026-11-10
 |---|---|---|---|
 | `Scene.h/.cpp` | `entt::registry`、setParent、世界变换传播、visibleEntities、地形异步请求/主线程上传 | [scene-ecs](../30-systems/scene-ecs.md)、[terrain](../30-systems/terrain.md) | scene-ecs、terrain |
 | `Components.h` | 全部 component 定义（含 `TerrainComponent::generating` / `isTerrain`） | [scene-ecs](../30-systems/scene-ecs.md)、[terrain](../30-systems/terrain.md) | scene-ecs、terrain |
-| `FeatureComponents.*` / `SceneComponents.*` | 实体组件与系统（`effects.*`，含 Particle 200）、12 个 `scene.*` 场景组件（含 Vegetation）与 `syncSceneSettings` | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
+| `ComponentTypes.h` / `ComponentRegistry.h` | 属性值、`ComponentDescriptor`、`PropertyDescriptor.enumLabels` / `withEnumOptions()` 元数据 | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
+| `FeatureComponents.*` / `SceneComponents.*` | 实体组件与系统（`effects.*`，含 Particle 200）、12 个 `scene.*` 场景组件（含 Vegetation、`shadows.filterMode`）与 `syncSceneSettings` | [scene-ecs](../30-systems/scene-ecs.md)、[vegetation](../30-systems/vegetation.md) | scene-ecs |
 | `SpatialIndex.h/.cpp` | 均匀网格 broad phase，entity cell 记录与增量 upsert/remove | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
 | `GLTFLoader.h/.cpp` | glTF 导入（几何烘焙到世界空间） | [scene-ecs](../30-systems/scene-ecs.md)、[known-limits](../70-status/known-limits.md) | scene-ecs |
 | `Model.h/.cpp` | 顶点/索引上传、子网格、OBJ | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
@@ -97,7 +98,7 @@ updated: 2026-11-10
 
 | 源文件 | 内容 | 必读文档 | 回写 |
 |---|---|---|---|
-| `VegetationGenerator.*` | 纯 CPU：确定性抖动网格放置、地形高度/坡度/水面筛选、草/树程序化网格 | [vegetation](../30-systems/vegetation.md) | vegetation |
+| `VegetationGenerator.*` | 纯 CPU：确定性抖动网格放置、树根邻点最低高度、草/针叶/阔叶三套程序化网格与接触圆盘 | [vegetation](../30-systems/vegetation.md) | vegetation |
 
 ## 5. Shader（`shaders/`）
 
@@ -105,12 +106,13 @@ updated: 2026-11-10
 |---|---|---|
 | `mrt.vert/.frag`、`grid_mrt.*`、`skybox_mrt.*` | 写 G-Buffer 的几何路径；`mrt.*` 含地形四层 PBR 纹理、Surface Style、Set2 法线与 Normal.w SSAO mask | [gbuffer](../20-pipeline/gbuffer.md)、[terrain-materials](../30-systems/terrain-materials.md) |
 | `ssao.frag`、`ssao_blur.frag` | SSAO 与模糊 | [pass-order](../20-pipeline/pass-order.md) |
-| `lighting.frag/.vert` | HDR 光照 | [pass-order](../20-pipeline/pass-order.md) |
+| `lighting.frag/.vert` | HDR 光照、5x5 PCF / blocker-search PCSS 阴影滤波分派 | [pass-order](../20-pipeline/pass-order.md)、[shadow](../20-pipeline/shadow.md) |
 | `ssr.frag` | 半分辨率水面屏幕空间反射 | [pass-order](../20-pipeline/pass-order.md) |
 | `cloud.frag` | 全屏体积云 raymarch（64³ 噪声 + 4 步太阳自阴影） | [pass-order](../20-pipeline/pass-order.md) |
 | `fog_volume.frag` | 局部雾盒 raymarch：读 G-Buffer 位置截断、逐盒 slab、32³ 噪声、高度衰减与 HG 相函数 | [fog-volume](../30-systems/fog-volume.md)、[pass-order](../20-pipeline/pass-order.md) |
 | `sunflare.frag` | 太阳盘 + 镜头鬼影/色散/光条，读深度做 5 点遮挡 | [pass-order](../20-pipeline/pass-order.md) |
-| `vegetation.vert/.frag` | 植被实例变换、风摆、草叶 alpha-test、G-Buffer 四输出 | [vegetation](../30-systems/vegetation.md)、[pass-order](../20-pipeline/pass-order.md) |
+| `vegetation.vert/.frag` | 植被实例变换、风摆、草叶 alpha-test、树冠 shade/接触圆盘、G-Buffer 四输出 | [vegetation](../30-systems/vegetation.md)、[pass-order](../20-pipeline/pass-order.md) |
+| `vegetation_shadow.vert` | 树木深度-only 阴影；复用实例变换/风公式，只输出 `lightVP * world` | [shadow](../20-pipeline/shadow.md)、[vegetation](../30-systems/vegetation.md) |
 | `particle.vert` / `particle.frag` | 粒子 billboard 与圆形软遮罩、前向透明混合 | [pass-order](../20-pipeline/pass-order.md) |
 | `bloom_bright/down/up.frag` | Bloom 金字塔 | [intermediate](../20-pipeline/intermediate.md) |
 | `present.frag`、`present_no_bloom.frag` | tonemap + ImGui 前合成 | [pass-order](../20-pipeline/pass-order.md) |
@@ -143,18 +145,20 @@ updated: 2026-11-10
 |---|---|---|---|
 | `EditorContext.h` | `EngineServices` / `Selection` / `PlayState` —— 编辑器与引擎的唯一接缝 | [editor/architecture](../90-editor/architecture.md) | architecture |
 | `EditorState.h` | 选中、命令栈、日志、文档路径、播放快照 | [editor/architecture](../90-editor/architecture.md) | architecture |
-| `EditorLayer.h/.cpp` | 菜单栏、布局、快捷键、播放状态机、场景存读 | [editor/architecture](../90-editor/architecture.md)、[editor/panels](../90-editor/panels.md) | architecture、panels |
+| `EditorLayer.h/.cpp` | 菜单栏、DockSpace/DockBuilder 布局、快捷键、播放状态机、场景存读、启动恢复/退出自动保存/重命名 | [editor/architecture](../90-editor/architecture.md)、[editor/panels](../90-editor/panels.md)、[serialization](../90-editor/serialization.md) | architecture、panels、serialization |
 | `CommandStack.h/.cpp` | 撤销/重做栈、合并窗口、历史上限 | [editor/commands](../90-editor/commands.md) | commands |
-| `Commands.h/.cpp` | 变换 / 重命名 / 删除 / 创建网格 / 地形三命令 | [editor/commands](../90-editor/commands.md)、[terrain](../30-systems/terrain.md) | commands、terrain |
+| `Commands.h/.cpp` | 变换 / 重命名 / 删除 / 创建网格 / 创建带组件对象 / 地形三命令 | [editor/commands](../90-editor/commands.md)、[terrain](../30-systems/terrain.md) | commands、terrain |
 | `SceneSerializer.h/.cpp` | `SceneDescription` <-> JSON | [editor/serialization](../90-editor/serialization.md) | serialization |
 | `panels/HierarchyPanel.*` | 实体树、拖拽重挂、右键删除 | [editor/panels](../90-editor/panels.md) | panels |
-| `panels/InspectorPanel.*` | 组件编辑；变换/地形参数走命令栈，Generate 走 JobSystem，成功回调入重建命令 | [editor/panels](../90-editor/panels.md)、[editor/commands](../90-editor/commands.md)、[terrain](../30-systems/terrain.md) | panels、commands、terrain |
+| `panels/InspectorPanel.*` | 组件编辑；变换/地形参数走命令栈，Generate 走 JobSystem，成功回调入重建命令；属性控件复用 `ComponentWidgets.h` | [editor/panels](../90-editor/panels.md)、[editor/commands](../90-editor/commands.md)、[terrain](../30-systems/terrain.md) | panels、commands、terrain |
 | `panels/ConsolePanel.*` | 日志过滤 | [editor/panels](../90-editor/panels.md) | panels |
 | `panels/ViewportPanel.*` | 3D 视口：离屏纹理 + 射线拾取 | [editor/viewport](../90-editor/viewport.md)、[editor/gizmo](../90-editor/gizmo.md) | viewport、gizmo |
 | `Gizmo.h/.cpp` | 三轴手柄：投影、命中测试、拖拽换算 | [editor/gizmo](../90-editor/gizmo.md) | gizmo |
 | `src/Render/EditorOverlayPass.*` | 选中包围盒 OBB 的 3D 线框（复用 G-Buffer 深度做遮挡） | [editor/gizmo](../90-editor/gizmo.md) | gizmo |
 | `shaders/mrt.frag` 棋盘格 | 无 albedo 贴图时的占位着色（完整 UV 走 2D 棋盘，否则 3D 棋盘） | [editor/materials](../90-editor/materials.md) | materials |
 | `panels/AssetBrowserPanel.*` | 扫描 Models 目录，双击创建实体（走命令栈） | [editor/panels](../90-editor/panels.md) | panels |
+| `panels/RenderSettingsPanel.*` | 组件目录（12 单一性 / 15 对象 / 1 系统天空盒）、创建向导、engine.json 默认值 | [editor/panels](../90-editor/panels.md)、[scene-ecs](../30-systems/scene-ecs.md) | panels、scene-ecs |
+| `ComponentWidgets.h` | Inspector 与 Render 向导共用的属性控件（含 Int 枚举 Combo） | [scene-ecs](../30-systems/scene-ecs.md)、[editor/panels](../90-editor/panels.md) | scene-ecs、panels |
 
 配套的引擎侧改动（改这些要同时看编辑器文档）：
 
@@ -164,8 +168,8 @@ updated: 2026-11-10
 | `src/Core/ImGuiSystem.cpp` | 编辑器模式下跳过内置面板；`io.IniFilename` 指向 `config/imgui.ini` | [editor/panels](../90-editor/panels.md) |
 | `src/Scene/SceneDescription.h` | 纯数据场景描述（序列化边界） | [editor/serialization](../90-editor/serialization.md) |
 | `src/Scene/Scene.cpp` `captureDescription/buildFromDescription` | registry <-> 描述 | [editor/serialization](../90-editor/serialization.md) |
-| `src/Render/UiCompositePass.*` | 编辑器模式最后一步：只画 ImGui 到交换链 | [editor/viewport](../90-editor/viewport.md) |
-| `src/Render/PresentPass.*` | 输出目标二选一（视口纹理 / 交换链） | [editor/viewport](../90-editor/viewport.md) |
+| `src/Render/UiCompositePass.*` | 编辑器模式最后一步：只画 ImGui 到交换链；交换链重建后必须 `setImGuiSystem(new)` | [editor/viewport](../90-editor/viewport.md)、[imgui](../30-systems/imgui.md) |
+| `src/Render/PresentPass.*` | 输出目标二选一（视口纹理 / 交换链）；重建后同样更新 `ImGuiSystem*` | [editor/viewport](../90-editor/viewport.md)、[imgui](../30-systems/imgui.md) |
 | `src/Core/ImGuiSystem.cpp` 描述符池 | 容量 64，供 `AddTexture` 注册视口纹理 | [editor/viewport](../90-editor/viewport.md) |
 | `src/Scene/Components.h` `NameComponent` | 实体名（层级面板 + 序列化） | [scene-ecs](../30-systems/scene-ecs.md)、[editor/serialization](../90-editor/serialization.md) |
 

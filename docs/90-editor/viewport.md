@@ -4,8 +4,8 @@ title: 离屏视口
 type: system
 scope: 3D 画面如何从"铺满整窗"变成"ImGui 里的一张图"
 read-when: 改视口尺寸/格式、加多视口、或编辑器里画面拉伸/发暗
-size: ~140 行
-updated: 2026-10-30
+size: ~160 行
+updated: 2026-11-13
 ---
 
 # 离屏视口（TD-09）
@@ -74,6 +74,23 @@ ViewportPanel  ──requestViewportSize(w,h)──>  EngineServices 回调
 
 布局必须写死 `SHADER_READ_ONLY_OPTIMAL`：`UiCompositePass` 里声明了 `read`，
 渲染图会保证 ImGui 真正绘制时它确实处于这个布局。
+
+## 交换链重建
+
+交换链重建会销毁并新建 `ImGuiSystem`，而视口纹理句柄属于旧 `ImGuiSystem` 的 descriptor pool。
+顺序必须是：
+
+1. `vkDeviceWaitIdle()` 后、`imguiSystem.reset()` / 销毁旧 pool **之前**，调用
+   `removeEditorViewportImGuiTextures()`，让旧后端逐个 `ImGui_ImplVulkan_RemoveTexture()`；
+2. 用新尺寸重建 swapchain 与 render targets，再新建 `ImGuiSystem`；
+3. 同时更新 `presentPassPtr->setImGuiSystem()` 与 `uiCompositePassPtr->setImGuiSystem()`，
+   然后对新 pool 调用 `createEditorViewportTextures()`，按 frame slot 重新 `AddTexture`。
+
+若跳过第 1 步，`editorViewportImGuiSets` 里仍是旧 pool 的 `VkDescriptorSet`；下一次视口
+防抖重建时 `removeEditorViewportImGuiTextures()` 会把这些句柄交给新后端，最终对不属于新 pool
+的 set 调 `vkFreeDescriptorSets`，validation layer 直接以 `0xC0000005` 崩在
+`VkLayer_khronos_validation.dll`。若跳过第 3 步，`UiCompositePass` 还会持有已析构的
+`ImGuiSystem*`。
 
 ## 坑：ImGui 描述符池容量
 

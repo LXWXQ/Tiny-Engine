@@ -4,8 +4,8 @@ title: 撤销 / 重做
 type: architecture
 scope: CommandStack 的语义、合并窗口、以及"必须走命令"的硬规则
 read-when: 加任何会修改场景的交互；或撤销结果不对、撤销后数据损坏
-size: ~160 行
-updated: 2026-11-12
+size: ~210 行
+updated: 2026-11-13
 ---
 
 # 撤销 / 重做
@@ -154,6 +154,26 @@ if (const auto* mesh = registry->try_get<MeshComponent>(entity))
 ```
 
 `revert()` 只销毁实体（模型仍被快照持有），`apply()` 再走快照路径重建组件，跳过加载。
+
+## 创建带组件的实体：CreateComponentEntityCommand
+
+组件目录的对象组件向导不再「先建空实体、再单独挂组件」，而是走一条原子命令：
+
+```cpp
+CreateComponentEntityCommand(Scene& scene, std::string name,
+                             const glm::vec3& translation,
+                             const glm::vec3& eulerRadians,
+                             const glm::vec3& scale,
+                             std::vector<scene::ComponentRecord> components);
+```
+
+- `apply()`：`scene.createEntity()` 后先落 Transform 位姿（欧拉角是**弧度**），写/补
+  `NameComponent`，再逐条 `applyComponentRecord`，最后 `markTransformDirty` +
+  `markSpatialDirty`。先位姿后组件是必须的：体积雾/粒子的默认值按实体当前位置解释。
+- `revert()`：销毁实体并把句柄置 `entt::null`；redo 会重新创建实体并重放组件记录，
+  所以 EnTT id 会变，外部只能通过 `currentEntity()` 重新取句柄。
+- UI：Render 对象组件向导执行后立刻读 `currentEntity()` 选中新对象；命令名是
+  `Create Component Object`，History 面板显示为一步。
 
 ## 地形三命令
 

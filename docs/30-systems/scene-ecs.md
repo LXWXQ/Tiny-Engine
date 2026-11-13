@@ -4,8 +4,8 @@ title: 场景、ECS、Transform 层级与空间索引
 type: system
 scope: src/Scene/Scene.h, src/Scene/Scene.cpp, src/Scene/Components.h, src/Scene/ComponentTypes.h, src/Scene/ComponentRegistry.h, src/Scene/SystemScheduler.h, src/Scene/FeatureComponents.h, src/Scene/NativeComponents.h, src/Scene/SceneComponents.h, src/Scene/SceneComponents.cpp, src/Scene/SpatialIndex.h, src/Scene/GLTFLoader.cpp, src/Scene/Model.cpp
 read-when: 修改场景结构、增删组件、注册新组件/系统、改变换传播或剔除逻辑
-size: ~430 行
-updated: 2026-11-12
+size: ~390 行
+updated: 2026-11-13
 ---
 
 # 场景、ECS、Transform 层级与空间索引
@@ -45,7 +45,7 @@ EnTT 只提供存储。F5-01 在它上面加了两件事：**组件描述表**�
 `makeComponentDescriptor<T>()` 负责把具体类型包成 `addDefault` / `has` / `remove` /
 `read` / `write` / `defaults` 回调；`read`/`write` 只在注册属性上工作，不碰裸组件内存。
 
-属性类型目前是固定集合：`Bool`、`Int`、`Float`、`Vec3`、`Color`（vec4）、`String`。
+属性类型目前是固定集合：`Bool`、`Int`、`Float`、`Vec3`、`Color`（vec4）、`String`。`PropertyDescriptor` 另带 `std::vector<std::string> enumLabels`（纯 UI 元数据，不写入 JSON）；`withEnumOptions()` 附加后，`Int` 属性在 Inspector/Render 共用的 `ComponentWidgets.h` 里渲染为下拉框，下标就是序列化值。当前用于 `scene.shadows.filterMode`（0=PCF，1=PCSS）。
 `ComponentRecord` 是这些值的纯数据快照（`type` + `NamedProperty` 列表），
 不依赖 EnTT / Vulkan，供序列化、命令栈、复制/删除共用。
 
@@ -129,8 +129,8 @@ Add 弹窗对不可用项置灰并显示原因，而不是只给一个灰条。
 在“托管”分类以置灰项出现。弹窗不再隐藏已挂载项，而是打勾置灰并提示“参数在下方组件列表里编辑”，
 所以场景组件弹窗也不会是空列表。地形/流送地形/体素对象保留 Add 入口，但会先提示新建空实体；
 已挂载组件仍可移除。
-另有 12 个 `scene.*` 场景组件，只出现在无选中实体的 Scene Components 区，见 §1.2；Render 窗口提供
-同一批场景组件的启用/添加/移除快捷列表，详细参数仍在 Inspector 编辑。Character 面板的 8 个参数与 Render Tag 的移除按钮
+另有 12 个 `scene.*` 场景组件，只出现在无选中实体的 Scene Components 区，见 §1.2；Render 窗口是完整组件目录（12 个单一性 / 15 个对象 / 1 个系统天空盒），创建、编辑、移除与参数向导见 [panels](../90-editor/panels.md)。
+Character 面板的 8 个参数与 Render Tag 的移除按钮
 都走 `SetComponentRecordCommand`，可撤销。`DeleteEntityCommand` 为 Character 增加显式快照，
 因为 `native.*` 不会进入通用 `components` 数组；Render Tag 原本就有专用快照。
 
@@ -158,7 +158,7 @@ Add 弹窗对不可用项置灰并显示原因，而不是只给一个灰条。
   再显示已挂载且 `drawProperties` 的注册组件。组件区顶部是 `+ Add Component` 与剪贴板粘贴按钮；
   没有选中对象时，场景组件区还会显示「创建体积雾对象」，一键新建实体、挂 `effects.fogVolume` 并放到相机前方，避免用户把“对象组件不在场景组件列表里”误判成组件不存在。
   Add 弹窗支持按名称/分类/id 搜索，组件头默认展开。
-- 属性控件按注册表元数据设置范围、拖动速度和悬停提示；右键属性可单独“重置为默认值”。
+- 属性控件由 `src/Editor/ComponentWidgets.h` 的 `drawPropertyWidgets()` 统一绘制：按注册表元数据设置范围、拖动速度和悬停提示，`Int` 有 `enumLabels` 时用下拉框；右键属性可单独“重置为默认值”。
   组件头右键与原生面板底部提供复制 / 粘贴 / 重置 / 移除，全部走 `SetComponentRecordCommand`，可撤销。
   剪贴板是跨实体的纯数据快照，复制不置脏；粘贴要求同类型、目标可添加且值不同，
   重置使用 `defaultComponentRecord(type)`。
@@ -190,7 +190,7 @@ Add 弹窗对不可用项置灰并显示原因，而不是只给一个灰条。
 | 组件 id | 名称 | 分类 | 属性（均含 `enabled`） |
 |---|---|---|---|
 | `scene.environment` | 场景环境 | 场景环境 | `exposure` / `renderScale` / `lightDirection` / `lightColor` / `lightIntensity` |
-| `scene.shadows` | 阴影 | 光照 | `distance` / `strength` |
+| `scene.shadows` | 阴影 | 光照 | `distance` / `strength` / `filterMode`（0=PCF，1=PCSS） |
 | `scene.bloom` | Bloom 辉光 | 后处理 | `threshold` / `knee` / `intensity` |
 | `scene.ssao` | SSAO 环境遮蔽 | 后处理 | `radius` / `bias` / `kernelSize` |
 | `scene.ssr` | SSR 屏幕空间反射 | 后处理 | `maxDistance` |

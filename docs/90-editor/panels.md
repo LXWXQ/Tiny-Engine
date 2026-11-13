@@ -2,10 +2,10 @@
 id: editor/panels
 title: 面板与布局
 type: system
-scope: 现有面板、布局实现方式、以及没有 docking 时的注意事项
+scope: 现有面板、DockSpace 默认布局、面板职责与快捷键
 read-when: 写新面板、改布局、或面板位置错乱
-size: ~500 行
-updated: 2026-11-10
+size: ~490 行
+updated: 2026-11-13
 ---
 
 # 面板与布局
@@ -47,18 +47,19 @@ CPU 网格交给 JobSystem，旧网格继续渲染。生成期间再次点击 Ge
 ## Inspector 空选中：场景组件（F5-06）
 
 没有选中实体时，Inspector 不再只显示“没有选中对象”，而是显示 **Scene Components**：
-场景环境、阴影、Bloom、SSAO、SSR、运动模糊、TAA、水面、距离雾。这 9 个组件
+场景环境、阴影、Bloom、SSAO、SSR、运动模糊、TAA、水面、距离雾、体积云、太阳光晕、植被。这 12 个组件
 （`scene.*`，`scope=Scene`）挂在 `Scene` 的隐藏设置实体上，不出现在 Hierarchy 或实体列表里。
 
 - 顶部 `+ Add Scene Component` 只列 Scene scope 且未挂载的组件，支持按名称/分类/id 搜索；
   添加走 `SetComponentRecordCommand`，可撤销。
-- 每个组件有 `enabled` 与功能参数；控件与实体组件共用 `drawPropertyWidgets`，同样有范围、
-  拖动速度、悬停提示、右键重置、复制/粘贴/重置/移除。
+- 每个组件有 `enabled` 与功能参数；控件与实体组件共用
+  `src/Editor/ComponentWidgets.h` 的 `drawPropertyWidgets`，同样有范围、拖动速度、悬停提示、
+  右键重置、复制/粘贴/重置/移除。`Int` 属性带 `enumLabels` 时画下拉框（如 `阴影滤波` 的 `PCF` / `PCSS (软阴影)`）。
 - **移除组件 = 关闭该功能**；`enabled=false` 保留参数但同样关闭。组件值通过
   `Scene::syncSceneSettings()` 写回渲染器读取的 `EngineSettings` 缓存。
 - 场景组件属于场景文档：编辑进入撤销栈，保存时写到 `.scene.json` v4 顶层
   `sceneComponents`；预制体只存实体，不携带这些功能。
-- Render 面板里有“在 Inspector 中编辑场景组件”按钮：清空选中并把焦点带回这里。
+- Render 面板的「单一性组件」分区是同一批 `scene.*` 组件的目录：点击已挂载项直接在向导里编辑/应用/移除，未挂载项可创建；与 Inspector 的 Scene Components 区共享同一注册表和命令栈。
 
 ## 多选与搜索（E1）
 
