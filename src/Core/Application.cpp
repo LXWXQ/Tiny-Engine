@@ -812,6 +812,7 @@ streamingConfig.skirtsEnabled = false;
 	auto vegetationPass = std::make_unique<VegetationPass>(*vulkanDevice, *renderGraph,
 		*renderResources, descriptorManager->getGlobalSetLayout(),
 		gBuffers[0]->getDepth().format, scene.get());
+	shadowPass->setVegetationPass(vegetationPass.get());
 	auto ssaoPass = std::make_unique<SSAOPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
 	auto lightPass = std::make_unique<LightingPass>(*vulkanDevice, *gBuffers[0], *vulkanSwapchain,

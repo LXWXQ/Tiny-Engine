@@ -11,6 +11,7 @@
 class RenderGraph;
 class TerrainMeshArena;
 class Pipeline;
+class VegetationPass;
 
 // F6：方向光阴影（3 级联 CSM）。
 //
@@ -55,6 +56,10 @@ public:
     void setEnabled(bool value) { enabled = value; }
     bool isEnabled() const { return enabled; }
 
+    // Optional: the shadow pass calls back into the vegetation pass so tree
+    // instances land in the same cascades without a second render graph pass.
+    void setVegetationPass(VegetationPass* pass) { vegetationPass = pass; }
+
     struct Stats
     {
         uint32_t drewEntities = 0;
@@ -88,6 +93,7 @@ private:
     Device& vulkanDevice;
     RenderGraph& renderGraph;
     TerrainMeshArena* terrainMeshArena = nullptr;
+    VegetationPass* vegetationPass = nullptr;
 
     VkSampler shadowSampler = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;

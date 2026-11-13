@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Scene/Model.h"
 
@@ -15,7 +15,7 @@ namespace vegetation
 // 与 shaders/vegetation.vert 的实例布局一致：3 个 vec4。
 // positionScale.xyz = 世界基点；.w = 世界高度缩放
 // rotationTint.x = 绕 Y 的偏航；.y = 额外宽度缩放；.z = 风相位；.w = 颜色抖动
-// color = albedo 乘色
+// color.rgb = albedo 乘色；.a = 树类型（0 针叶 / 1 阔叶，草忽略）
 struct Instance
 {
     glm::vec4 positionScale{ 0.0f };
@@ -56,12 +56,13 @@ struct MeshData
     std::vector<uint32_t> indices;
 };
 
-// 程序化网格：草 = 3 张交叉 quad；树 = 6 棱树干 + 3 层锥形树冠。
-bool buildMeshes(MeshData& grass, MeshData& tree, std::string* errorMessage = nullptr);
+// 程序化网格：草 = 6 张交叉 quad；针叶树 = 树干 + 6 层锥形树冠；阔叶树 = 树干 + 7 团簇树冠。
+bool buildMeshes(MeshData& grass, MeshData& conifer, MeshData& broadleaf,
+                  std::string* errorMessage = nullptr);
 
 // 围绕相机放置草和树。ground(x,z,height) 应只返回地形（不返回体素/建筑），
-// 由调用方注入 Scene::sampleTerrainOnlyGroundHeightWorld。函数内部做水面、
-// 坡度、距离与确定性抖动筛选；同样的 seed + 相机位置结果一致。
+// 由调用方注入。函数内部做水面、树坡、距离与确定性抖动筛选；草不再逐株
+// 做四向坡度查询，而是统一下沉以免根部悬空。同样的 seed + 相机位置结果一致。
 Placement generate(const glm::vec3& camera, const Params& params,
                    const std::function<bool(float, float, float&)>& ground);
 

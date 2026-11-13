@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Core/DescriptorManager.h"
 #include "Core/FrameInFlight.h"
@@ -41,6 +41,13 @@ public:
     void addToGraph(RenderGraph& graph, FrameInfo& frameInfo) override;
     std::string getName() const override { return "Vegetation"; }
 
+    // ShadowPass calls these once per frame / once per cascade. Trees are the
+    // only vegetation that casts shadows: grass shadows are sub-pixel at the
+    // 2048 shadow-map resolution and would only add noise.
+    void prepareShadow(FrameInfo& frameInfo, uint32_t frame);
+    void recordShadow(VkCommandBuffer cmd, const glm::mat4& lightViewProjection,
+                      uint32_t frame, uint32_t& drawCalls, uint32_t& triangles);
+
 private:
     struct GpuBuffer
     {
@@ -51,11 +58,13 @@ private:
     };
 
     void createPipeline();
+    void createShadowPipeline();
     void createBuffers();
     void destroyBuffers();
     void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                           const char* name, GpuBuffer& out);
     void updatePlacement(FrameInfo& frameInfo, const glm::vec3& cameraPosition);
+    void uploadTreeInstances(uint32_t frame);
     void record(VkCommandBuffer cmd, FrameInfo& frameInfo, uint32_t frame);
 
     Device& device;
@@ -68,17 +77,28 @@ private:
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     std::unique_ptr<Pipeline> vegetationPipeline;
 
+    VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
+    std::unique_ptr<Pipeline> shadowPipeline;
+
     GpuBuffer grassVertexBuffer;
     GpuBuffer grassIndexBuffer;
     GpuBuffer treeVertexBuffer;
     GpuBuffer treeIndexBuffer;
+    GpuBuffer broadleafVertexBuffer;
+    GpuBuffer broadleafIndexBuffer;
     uint32_t grassIndexCount = 0;
     uint32_t treeIndexCount = 0;
+    uint32_t broadleafIndexCount = 0;
+    uint32_t shadowConiferCount = 0;
+    uint32_t shadowBroadleafCount = 0;
 
     std::array<GpuBuffer, kFramesInFlight> grassInstanceBuffers{};
     std::array<GpuBuffer, kFramesInFlight> treeInstanceBuffers{};
 
     vegetation::Placement placement;
+    // Trees are partitioned by type when uploaded so one instance buffer can
+    // feed two draw calls (conifer / broadleaf) without a second allocation.
+    std::vector<vegetation::Instance> sortedTrees;
     vegetation::Params lastParams{};
     bool placementValid = false;
     bool hasLastCamera = false;
@@ -87,6 +107,7 @@ private:
     uint64_t placedTerrainSignature = 0;
     bool hasTerrainSignature = false;
     float terrainStableSeconds = 0.0f;
+    float sinceLastPlacement = 0.0f;
 
     float elapsedTime = 0.0f;
     uint32_t lastLoggedGrass = 0xFFFFFFFFu;

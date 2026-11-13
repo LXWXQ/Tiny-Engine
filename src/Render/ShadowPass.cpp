@@ -1,5 +1,7 @@
 #include "Render/ShadowPass.h"
 
+#include "Render/VegetationPass.h"
+
 #include "AssetPaths.h"
 #include "Core/FrameInFlight.h"
 #include "Core/FrameInfo.h"
@@ -378,6 +380,9 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         if (!enabled || pipeline == nullptr)
             return;
 
+        if (vegetationPass != nullptr)
+            vegetationPass->prepareShadow(frameInfo, frameInfo.frameInFlightIndex);
+
         for (uint32_t cascade = 0; cascade < kCascadeCount; ++cascade)
             recordCascade(cmd, cascade, frameInfo.frameInFlightIndex, frameInfo);
 
@@ -534,6 +539,12 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
             stats.triangles += subMesh.indexCount / 3;
         }
         stats.drewEntities += 1;
+    }
+
+    if (vegetationPass != nullptr)
+    {
+        vegetationPass->recordShadow(cmd, cascade.viewProjection, frameIndex,
+                                     stats.drawCalls, stats.triangles);
     }
 
     vkCmdEndRendering(cmd);

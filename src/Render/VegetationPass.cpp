@@ -1,4 +1,4 @@
-#include "VegetationPass.h"
+﻿#include "VegetationPass.h"
 
 #include "AssetPaths.h"
 #include "RHI/GBuffer.h"
@@ -12,6 +12,7 @@
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace
 {
@@ -38,6 +39,123 @@ bool sameParams(const vegetation::Params& a, const vegetation::Params& b)
            a.waterEnabled == b.waterEnabled &&
            a.waterLevel == b.waterLevel;
 }
+
+struct VegetationShadowPushConstantData
+{
+    alignas(16) glm::mat4 lightViewProjection{ 1.0f };
+    alignas(16) glm::vec4 timeWind{ 0.0f }; // x=time, y=wind, z=mode
+};
+static_assert(sizeof(VegetationShadowPushConstantData) == 80,
+              "vegetation shadow push constants must stay tightly packed");
+
+struct TerrainHeightSampler
+{
+    struct Surface
+    {
+        glm::mat4 world{ 1.0f };
+        glm::mat4 inverse{ 1.0f };
+        float halfX = 0.0f;
+        float halfZ = 0.0f;
+        float boundRadius = 0.0f;
+        glm::vec3 center{ 0.0f };
+        const terrain::HeightField* field = nullptr;
+    };
+
+    static constexpr float kCellSize = 32.0f;
+    std::vector<Surface> surfaces;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
+
+    static uint64_t cellKey(int32_t x, int32_t z)
+    {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
+            static_cast<uint32_t>(z);
+    }
+
+    explicit TerrainHeightSampler(const entt::registry& registry)
+    {
+        auto view = registry.view<TerrainComponent, WorldTransformComponent>();
+        surfaces.reserve(view.size_hint());
+        for (const entt::entity entity : view)
+        {
+            const TerrainComponent& terrain = view.get<TerrainComponent>(entity);
+            const WorldTransformComponent& world = view.get<WorldTransformComponent>(entity);
+            if (!terrain.generated || terrain.generating || !terrain.cpuHeightField ||
+                !world.valid)
+                continue;
+            const terrain::HeightField& field = *terrain.cpuHeightField;
+            if (field.width < 2u || field.height < 2u ||
+                field.sizeX <= 0.0f || field.sizeZ <= 0.0f)
+                continue;
+
+            Surface surface;
+            surface.world = world.matrix;
+            surface.inverse = glm::inverse(world.matrix);
+            surface.halfX = field.sizeX * 0.5f;
+            surface.halfZ = field.sizeZ * 0.5f;
+            const float radiusX = surface.halfX * glm::length(glm::vec3(world.matrix[0]));
+            const float radiusZ = surface.halfZ * glm::length(glm::vec3(world.matrix[2]));
+            surface.boundRadius = std::sqrt(radiusX * radiusX + radiusZ * radiusZ) + 0.01f;
+            surface.center = glm::vec3(world.matrix[3]);
+            surface.field = &field;
+            surfaces.push_back(surface);
+        }
+
+        // 49 个流送 chunk 时逐点遍历所有 surface 仍然是主要开销；按 32m
+        // 世界网格建一份粗索引，查询时只检查覆盖该格的 1~4 个 chunk。
+        for (uint32_t i = 0; i < static_cast<uint32_t>(surfaces.size()); ++i)
+        {
+            const Surface& surface = surfaces[i];
+            const int32_t minX = static_cast<int32_t>(std::floor(
+                (surface.center.x - surface.boundRadius) / kCellSize));
+            const int32_t maxX = static_cast<int32_t>(std::floor(
+                (surface.center.x + surface.boundRadius) / kCellSize));
+            const int32_t minZ = static_cast<int32_t>(std::floor(
+                (surface.center.z - surface.boundRadius) / kCellSize));
+            const int32_t maxZ = static_cast<int32_t>(std::floor(
+                (surface.center.z + surface.boundRadius) / kCellSize));
+            for (int32_t z = minZ; z <= maxZ; ++z)
+                for (int32_t x = minX; x <= maxX; ++x)
+                    cells[cellKey(x, z)].push_back(i);
+        }
+    }
+
+    bool sample(float worldX, float worldZ, float& outHeight) const
+    {
+        const int32_t cellX = static_cast<int32_t>(std::floor(worldX / kCellSize));
+        const int32_t cellZ = static_cast<int32_t>(std::floor(worldZ / kCellSize));
+        const auto it = cells.find(cellKey(cellX, cellZ));
+        if (it == cells.end())
+            return false;
+
+        bool found = false;
+        for (const uint32_t index : it->second)
+        {
+            const Surface& surface = surfaces[index];
+            if (std::abs(worldX - surface.center.x) > surface.boundRadius ||
+                std::abs(worldZ - surface.center.z) > surface.boundRadius)
+                continue;
+
+            const glm::vec3 local = glm::vec3(surface.inverse *
+                glm::vec4(worldX, 0.0f, worldZ, 1.0f));
+            if (!std::isfinite(local.x) || !std::isfinite(local.z) ||
+                local.x < -surface.halfX || local.x > surface.halfX ||
+                local.z < -surface.halfZ || local.z > surface.halfZ)
+                continue;
+
+            const float localHeight = surface.field->worldHeightAt(local.x, local.z);
+            const glm::vec3 worldPoint = glm::vec3(surface.world *
+                glm::vec4(local.x, localHeight, local.z, 1.0f));
+            if (!std::isfinite(worldPoint.y))
+                continue;
+            if (!found || worldPoint.y > outHeight)
+            {
+                found = true;
+                outHeight = worldPoint.y;
+            }
+        }
+        return found;
+    }
+};
 
 uint64_t terrainSignature(const entt::registry& registry)
 {
@@ -67,7 +185,13 @@ VegetationPass::VegetationPass(Device& device, RenderGraph& graph,
 
 VegetationPass::~VegetationPass()
 {
+    shadowPipeline.reset();
     vegetationPipeline.reset();
+    if (shadowPipelineLayout != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineLayout(device.getDevice(), shadowPipelineLayout, nullptr);
+        shadowPipelineLayout = VK_NULL_HANDLE;
+    }
     if (pipelineLayout != VK_NULL_HANDLE)
     {
         vkDestroyPipelineLayout(device.getDevice(), pipelineLayout, nullptr);
@@ -80,6 +204,7 @@ void VegetationPass::init()
 {
     createBuffers();
     createPipeline();
+    createShadowPipeline();
 }
 
 void VegetationPass::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
@@ -113,9 +238,10 @@ void VegetationPass::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usag
 void VegetationPass::createBuffers()
 {
     vegetation::MeshData grassMesh;
-    vegetation::MeshData treeMesh;
+    vegetation::MeshData coniferMesh;
+    vegetation::MeshData broadleafMesh;
     std::string error;
-    if (!vegetation::buildMeshes(grassMesh, treeMesh, &error))
+    if (!vegetation::buildMeshes(grassMesh, coniferMesh, broadleafMesh, &error))
         throw std::runtime_error("VegetationPass: " + error);
 
     createHostBuffer(static_cast<VkDeviceSize>(grassMesh.vertices.size()) *
@@ -133,20 +259,35 @@ void VegetationPass::createBuffers()
                 grassMesh.indices.size() * sizeof(uint32_t));
     grassIndexCount = static_cast<uint32_t>(grassMesh.indices.size());
 
-    createHostBuffer(static_cast<VkDeviceSize>(treeMesh.vertices.size()) *
+    createHostBuffer(static_cast<VkDeviceSize>(coniferMesh.vertices.size()) *
                          sizeof(Vertex),
                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                     "Vegetation.TreeVertices", treeVertexBuffer);
-    std::memcpy(treeVertexBuffer.mapped, treeMesh.vertices.data(),
-                treeMesh.vertices.size() * sizeof(Vertex));
+                     "Vegetation.ConiferVertices", treeVertexBuffer);
+    std::memcpy(treeVertexBuffer.mapped, coniferMesh.vertices.data(),
+                coniferMesh.vertices.size() * sizeof(Vertex));
 
-    createHostBuffer(static_cast<VkDeviceSize>(treeMesh.indices.size()) *
+    createHostBuffer(static_cast<VkDeviceSize>(coniferMesh.indices.size()) *
                          sizeof(uint32_t),
                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                     "Vegetation.TreeIndices", treeIndexBuffer);
-    std::memcpy(treeIndexBuffer.mapped, treeMesh.indices.data(),
-                treeMesh.indices.size() * sizeof(uint32_t));
-    treeIndexCount = static_cast<uint32_t>(treeMesh.indices.size());
+                     "Vegetation.ConiferIndices", treeIndexBuffer);
+    std::memcpy(treeIndexBuffer.mapped, coniferMesh.indices.data(),
+                coniferMesh.indices.size() * sizeof(uint32_t));
+    treeIndexCount = static_cast<uint32_t>(coniferMesh.indices.size());
+
+    createHostBuffer(static_cast<VkDeviceSize>(broadleafMesh.vertices.size()) *
+                         sizeof(Vertex),
+                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                     "Vegetation.BroadleafVertices", broadleafVertexBuffer);
+    std::memcpy(broadleafVertexBuffer.mapped, broadleafMesh.vertices.data(),
+                broadleafMesh.vertices.size() * sizeof(Vertex));
+
+    createHostBuffer(static_cast<VkDeviceSize>(broadleafMesh.indices.size()) *
+                         sizeof(uint32_t),
+                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                     "Vegetation.BroadleafIndices", broadleafIndexBuffer);
+    std::memcpy(broadleafIndexBuffer.mapped, broadleafMesh.indices.data(),
+                broadleafMesh.indices.size() * sizeof(uint32_t));
+    broadleafIndexCount = static_cast<uint32_t>(broadleafMesh.indices.size());
 
     static const char* const grassNames[kFramesInFlight] = {
         "Vegetation.GrassInstances.Frame0", "Vegetation.GrassInstances.Frame1"
@@ -164,8 +305,10 @@ void VegetationPass::createBuffers()
 
     std::cout << "[Vegetation] meshes | grassVerts=" << grassMesh.vertices.size()
               << " grassIndices=" << grassMesh.indices.size()
-              << " treeVerts=" << treeMesh.vertices.size()
-              << " treeIndices=" << treeMesh.indices.size()
+              << " coniferVerts=" << coniferMesh.vertices.size()
+              << " coniferIndices=" << coniferMesh.indices.size()
+              << " broadleafVerts=" << broadleafMesh.vertices.size()
+              << " broadleafIndices=" << broadleafMesh.indices.size()
               << " maxGrass=" << vegetation::kMaxGrassInstances
               << " maxTrees=" << vegetation::kMaxTreeInstances << "\n";
 }
@@ -182,6 +325,8 @@ void VegetationPass::destroyBuffers()
     destroy(grassIndexBuffer);
     destroy(treeVertexBuffer);
     destroy(treeIndexBuffer);
+    destroy(broadleafVertexBuffer);
+    destroy(broadleafIndexBuffer);
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
         destroy(grassInstanceBuffers[frame]);
@@ -261,6 +406,64 @@ void VegetationPass::createPipeline()
         TINY_SHADER_DIR "vegetation.frag.spv", config);
 }
 
+void VegetationPass::createShadowPipeline()
+{
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(VegetationShadowPushConstantData);
+
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 0;
+    layoutInfo.pSetLayouts = nullptr;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    if (vkCreatePipelineLayout(device.getDevice(), &layoutInfo, nullptr,
+                               &shadowPipelineLayout) != VK_SUCCESS)
+        throw std::runtime_error("VegetationPass: shadow pipeline layout creation failed");
+
+    VkVertexInputBindingDescription bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].stride = sizeof(Vertex);
+    bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    bindings[1].binding = 1;
+    bindings[1].stride = sizeof(vegetation::Instance);
+    bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+
+    // The shadow shader only consumes position plus the instance transform;
+    // color.r is still needed there as the trunk/canopy wind mask.
+    VkVertexInputAttributeDescription attributes[4]{};
+    attributes[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT,
+                      static_cast<uint32_t>(offsetof(Vertex, position)) };
+    attributes[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT,
+                      static_cast<uint32_t>(offsetof(Vertex, color)) };
+    attributes[2] = { 4, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                      static_cast<uint32_t>(offsetof(vegetation::Instance, positionScale)) };
+    attributes[3] = { 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                      static_cast<uint32_t>(offsetof(vegetation::Instance, rotationTint)) };
+
+    PipelineConfigInfo config{};
+    Pipeline::defaultPipelineConfigInfo(config, 2048, 2048);
+    config.pipelineLayout = shadowPipelineLayout;
+    config.colorAttachmentFormats.clear();
+    config.colorBlendAttachments.clear();
+    config.colorBlendInfo.attachmentCount = 0;
+    config.colorBlendInfo.pAttachments = nullptr;
+    config.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+    config.depthStencilInfo.depthTestEnable = VK_TRUE;
+    config.depthStencilInfo.depthWriteEnable = VK_TRUE;
+    config.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    config.rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
+    config.rasterizationInfo.depthBiasEnable = VK_FALSE;
+    config.bindingDescriptions.assign(std::begin(bindings), std::end(bindings));
+    config.attributeDescriptions.assign(std::begin(attributes), std::end(attributes));
+
+    shadowPipeline = std::make_unique<Pipeline>(
+        device, TINY_SHADER_DIR "vegetation_shadow.vert.spv",
+        TINY_SHADER_DIR "shadow.frag.spv", config);
+}
+
 void VegetationPass::updatePlacement(FrameInfo& frameInfo,
                                      const glm::vec3& cameraPosition)
 {
@@ -283,10 +486,11 @@ void VegetationPass::updatePlacement(FrameInfo& frameInfo,
     params.waterLevel = frameInfo.settings.waterLevel;
 
     const uint64_t signature = terrainSignature(frameInfo.registry);
+    sinceLastPlacement += frameInfo.frameTime;
     if (!hasTerrainSignature || signature != lastTerrainSignature)
     {
-        // 流送期间 chunk 一直在增删：等签名稳定半秒再重排，避免每来一个
-        // chunk 就把上万株草重新采样一遍（会把加载期帧率拖到个位数）。
+        // 流送期间 chunk 一直在增删：短暂等签名稳定再重排。连续编辑/流送时
+        // 不能无限等待，下面的 forceRefresh 会保证最迟 0.5 秒刷新一次。
         lastTerrainSignature = signature;
         hasTerrainSignature = true;
         terrainStableSeconds = 0.0f;
@@ -301,16 +505,25 @@ void VegetationPass::updatePlacement(FrameInfo& frameInfo,
     const bool paramsChanged = !sameParams(params, lastParams);
     const bool placementStale = !placementValid || moved || paramsChanged ||
         signature != placedTerrainSignature;
-    if (!placementStale || terrainStableSeconds < 0.5f)
+    const bool settled = terrainStableSeconds >= 0.15f;
+    const bool forceRefresh = signature != placedTerrainSignature &&
+        sinceLastPlacement >= 0.5f;
+    if (!placementStale || (!settled && !forceRefresh))
         return;
 
+    const TerrainHeightSampler sampler(frameInfo.registry);
     placement = vegetation::generate(
         cameraPosition, params,
-        [this](float x, float z, float& height)
+        [&sampler](float x, float z, float& height)
         {
-            return scene->sampleTerrainOnlyGroundHeightWorld(x, z, height);
+            return sampler.sample(x, z, height);
         });
 
+    std::cout << "[Vegetation] regenerated | grass=" << placement.grass.size()
+              << " trees=" << placement.trees.size()
+              << " surfaces=" << sampler.surfaces.size() << "\n";
+
+    sinceLastPlacement = 0.0f;
     lastParams = params;
     lastCameraPosition = cameraPosition;
     hasLastCamera = true;
@@ -337,6 +550,93 @@ void VegetationPass::updatePlacement(FrameInfo& frameInfo,
                   << vegetation::kMaxTreeInstances << ")\n";
 }
 
+void VegetationPass::uploadTreeInstances(uint32_t frame)
+{
+    if (frame >= kFramesInFlight)
+        return;
+
+    sortedTrees.clear();
+    sortedTrees.reserve(placement.trees.size());
+    for (const vegetation::Instance& instance : placement.trees)
+    {
+        if (instance.color.a < 0.5f)
+            sortedTrees.push_back(instance);
+    }
+    shadowConiferCount = static_cast<uint32_t>(sortedTrees.size());
+    for (const vegetation::Instance& instance : placement.trees)
+    {
+        if (instance.color.a >= 0.5f)
+            sortedTrees.push_back(instance);
+    }
+    shadowBroadleafCount = static_cast<uint32_t>(sortedTrees.size()) - shadowConiferCount;
+
+    if (!sortedTrees.empty())
+    {
+        std::memcpy(treeInstanceBuffers[frame].mapped, sortedTrees.data(),
+                    sortedTrees.size() * sizeof(vegetation::Instance));
+        vmaFlushAllocation(device.getVmaAllocator(),
+                           treeInstanceBuffers[frame].allocation, 0,
+                           static_cast<VkDeviceSize>(sortedTrees.size()) *
+                               sizeof(vegetation::Instance));
+    }
+}
+
+void VegetationPass::prepareShadow(FrameInfo& frameInfo, uint32_t frame)
+{
+    shadowConiferCount = 0;
+    shadowBroadleafCount = 0;
+    if (!frameInfo.settings.vegetationEnabled || frame >= kFramesInFlight)
+        return;
+
+    const glm::vec3 cameraPosition = frameInfo.cameraTransform != nullptr
+        ? frameInfo.cameraTransform->getTranslation()
+        : glm::vec3(glm::inverse(frameInfo.viewMatrix)[3]);
+    updatePlacement(frameInfo, cameraPosition);
+    uploadTreeInstances(frame);
+}
+
+void VegetationPass::recordShadow(VkCommandBuffer cmd, const glm::mat4& lightViewProjection,
+                                  uint32_t frame, uint32_t& drawCalls, uint32_t& triangles)
+{
+    if (shadowPipeline == nullptr || frame >= kFramesInFlight)
+        return;
+    const uint32_t coniferCount = shadowConiferCount;
+    const uint32_t broadleafCount = shadowBroadleafCount;
+    if (coniferCount == 0 && broadleafCount == 0)
+        return;
+
+
+    shadowPipeline->bind(cmd);
+    VegetationShadowPushConstantData push{};
+    push.lightViewProjection = lightViewProjection;
+    push.timeWind = glm::vec4(elapsedTime, 1.0f, 1.0f, 0.0f);
+    vkCmdPushConstants(cmd, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                       sizeof(push), &push);
+
+    if (coniferCount > 0)
+    {
+        VkBuffer vertexBuffers[] = { treeVertexBuffer.buffer,
+                                     treeInstanceBuffers[frame].buffer };
+        VkDeviceSize offsets[] = { 0, 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 2, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(cmd, treeIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, treeIndexCount, coniferCount, 0, 0, 0);
+        drawCalls += 1;
+        triangles += coniferCount * (treeIndexCount / 3u);
+    }
+    if (broadleafCount > 0)
+    {
+        VkBuffer vertexBuffers[] = { broadleafVertexBuffer.buffer,
+                                     treeInstanceBuffers[frame].buffer };
+        VkDeviceSize offsets[] = { 0, 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 2, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(cmd, broadleafIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, broadleafIndexCount, broadleafCount, 0, 0, coniferCount);
+        drawCalls += 1;
+        triangles += broadleafCount * (broadleafIndexCount / 3u);
+    }
+}
+
 void VegetationPass::record(VkCommandBuffer cmd, FrameInfo& frameInfo, uint32_t frame)
 {
     if (vegetationPipeline == nullptr || frame >= kFramesInFlight)
@@ -350,8 +650,10 @@ void VegetationPass::record(VkCommandBuffer cmd, FrameInfo& frameInfo, uint32_t 
 
     const uint32_t grassCount = static_cast<uint32_t>(std::min<size_t>(
         placement.grass.size(), vegetation::kMaxGrassInstances));
-    const uint32_t treeCount = static_cast<uint32_t>(std::min<size_t>(
-        placement.trees.size(), vegetation::kMaxTreeInstances));
+    uploadTreeInstances(frame);
+    const uint32_t coniferCount = shadowConiferCount;
+    const uint32_t broadleafCount = shadowBroadleafCount;
+    const uint32_t treeCount = coniferCount + broadleafCount;
     if (grassCount == 0 && treeCount == 0)
         return;
 
@@ -364,16 +666,6 @@ void VegetationPass::record(VkCommandBuffer cmd, FrameInfo& frameInfo, uint32_t 
                            static_cast<VkDeviceSize>(grassCount) *
                                sizeof(vegetation::Instance));
     }
-    if (treeCount > 0)
-    {
-        std::memcpy(treeInstanceBuffers[frame].mapped, placement.trees.data(),
-                    static_cast<size_t>(treeCount) * sizeof(vegetation::Instance));
-        vmaFlushAllocation(device.getVmaAllocator(),
-                           treeInstanceBuffers[frame].allocation, 0,
-                           static_cast<VkDeviceSize>(treeCount) *
-                               sizeof(vegetation::Instance));
-    }
-
     vegetationPipeline->bind(cmd);
 
     const VkDescriptorSet globalSet =
@@ -402,34 +694,53 @@ void VegetationPass::record(VkCommandBuffer cmd, FrameInfo& frameInfo, uint32_t 
         vkCmdDrawIndexed(cmd, grassIndexCount, grassCount, 0, 0, 0);
     }
 
-    if (treeCount > 0)
+    if (coniferCount > 0 || broadleafCount > 0)
     {
         push.timeWind.z = 1.0f;
         vkCmdPushConstants(cmd, pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(push), &push);
+    }
+    if (coniferCount > 0)
+    {
         VkBuffer vertexBuffers[] = { treeVertexBuffer.buffer,
                                      treeInstanceBuffers[frame].buffer };
         VkDeviceSize offsets[] = { 0, 0 };
         vkCmdBindVertexBuffers(cmd, 0, 2, vertexBuffers, offsets);
         vkCmdBindIndexBuffer(cmd, treeIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, treeIndexCount, treeCount, 0, 0, 0);
+        vkCmdDrawIndexed(cmd, treeIndexCount, coniferCount, 0, 0, 0);
+    }
+    if (broadleafCount > 0)
+    {
+        VkBuffer vertexBuffers[] = { broadleafVertexBuffer.buffer,
+                                     treeInstanceBuffers[frame].buffer };
+        VkDeviceSize offsets[] = { 0, 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 2, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(cmd, broadleafIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, broadleafIndexCount, broadleafCount, 0, 0,
+                         coniferCount);
     }
 
     frameInfo.telemetry.drawCalls += (grassCount > 0 ? 1u : 0u) +
-                                     (treeCount > 0 ? 1u : 0u);
+                                     (coniferCount > 0 ? 1u : 0u) +
+                                     (broadleafCount > 0 ? 1u : 0u);
     frameInfo.telemetry.triangles +=
-        grassCount * (grassIndexCount / 3u) + treeCount * (treeIndexCount / 3u);
+        grassCount * (grassIndexCount / 3u) +
+        coniferCount * (treeIndexCount / 3u) +
+        broadleafCount * (broadleafIndexCount / 3u);
     frameInfo.telemetry.vertices +=
         grassCount * (grassVertexBuffer.size / sizeof(Vertex)) +
-        treeCount * (treeVertexBuffer.size / sizeof(Vertex));
+        coniferCount * (treeVertexBuffer.size / sizeof(Vertex)) +
+        broadleafCount * (broadleafVertexBuffer.size / sizeof(Vertex));
     frameInfo.telemetry.descriptorBinds += 1;
 
     if (!loggedFirstDraw)
     {
         std::cout << "[Vegetation] first draw | grass=" << grassCount
-                  << " trees=" << treeCount << " draws="
-                  << ((grassCount > 0 ? 1 : 0) + (treeCount > 0 ? 1 : 0))
+                  << " conifers=" << coniferCount
+                  << " broadleaf=" << broadleafCount << " draws="
+                  << ((grassCount > 0 ? 1 : 0) + (coniferCount > 0 ? 1 : 0) +
+                      (broadleafCount > 0 ? 1 : 0))
                   << "\n";
         loggedFirstDraw = true;
     }
