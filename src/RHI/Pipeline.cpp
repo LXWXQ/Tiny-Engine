@@ -1,5 +1,6 @@
 #include "Pipeline.h"
 #include "Scene/Model.h"
+#include "Core/AssetPack.h"
 #include <fstream>
 #include <stdexcept>
 #include <iostream>
@@ -19,6 +20,11 @@ Pipeline::~Pipeline()
 
 std::vector<char> Pipeline::readFile(const std::string& filepath)
 {
+    // 资产包优先：SPIR-V 直接从包内读，未命中再走文件系统。
+    std::vector<uint8_t> packed;
+    if (assets::mounts().readFile(filepath, packed))
+        return std::vector<char>(packed.begin(), packed.end());
+
     std::ifstream file(filepath, std::ios::ate | std::ios::binary);
     if (!file.is_open()) 
     {
@@ -226,6 +232,10 @@ void ComputePipeline::bind(VkCommandBuffer commandBuffer)
 
 std::vector<char> ComputePipeline::readFile(const std::string& filepath)
 {
+    std::vector<uint8_t> packed;
+    if (assets::mounts().readFile(filepath, packed))
+        return std::vector<char>(packed.begin(), packed.end());
+
     std::ifstream file(filepath, std::ios::ate | std::ios::binary);
     if (!file.is_open())
         throw std::runtime_error("failed to open file: " + filepath);

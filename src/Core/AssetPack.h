@@ -80,6 +80,9 @@ public:
     // 先查包，再退回文件系统。命中时把字节拷进 out。
     bool readFile(const std::string& path, std::vector<uint8_t>& out) const;
 
+    // 只查大小，不拷贝（给需要预分配大小的读取方用）。
+    bool stat(const std::string& path, size_t& size) const;
+
     size_t mountedCount() const { return packs.size(); }
 
 private:

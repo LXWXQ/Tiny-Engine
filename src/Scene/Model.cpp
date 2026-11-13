@@ -1,3 +1,5 @@
+#include "Core/AssetPack.h"
+#include <sstream>
 #include "Model.h"
 
 #include <glm/gtc/matrix_inverse.hpp>
@@ -875,7 +877,17 @@ void Model::Builder::loadModel(const std::string& filepath)
     std::vector<tinyobj::material_t> materials;
     std::string warn, err;
 
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filepath.c_str()))
+    // 资产包优先：OBJ 从包内读进内存流，未命中再按路径读盘。
+    std::vector<uint8_t> packedObj;
+    const bool objFromPack = assets::mounts().readFile(filepath, packedObj);
+    std::istringstream packedStream;
+    if (objFromPack)
+        packedStream.str(std::string(packedObj.begin(), packedObj.end()));
+
+    const bool objLoaded = objFromPack
+        ? tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, &packedStream)
+        : tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filepath.c_str());
+    if (!objLoaded)
     {
         throw std::runtime_error("模型加载失败: " + warn + err);
     }

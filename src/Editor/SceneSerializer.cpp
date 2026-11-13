@@ -1,3 +1,4 @@
+#include "Core/AssetPack.h"
 #include "Editor/SceneSerializer.h"
 #include "AssetPaths.h"
 
@@ -573,17 +574,28 @@ bool SceneSerializer::loadFromFile(const std::string& filepath,
                                    scene::SceneDescription& outDescription,
                                    std::string& errorMessage)
 {
-    std::ifstream in(filepath, std::ios::binary);
-    if (!in)
+    // 资产包优先：场景 JSON 从包内读进内存，未命中再按路径读盘。
+    std::vector<uint8_t> packedScene;
+    const bool sceneFromPack = assets::mounts().readFile(filepath, packedScene);
+
+    std::ifstream in;
+    if (!sceneFromPack)
     {
-        errorMessage = "cannot open: " + filepath;
-        return false;
+        in.open(filepath, std::ios::binary);
+        if (!in)
+        {
+            errorMessage = "cannot open: " + filepath;
+            return false;
+        }
     }
 
     try
     {
         json root;
-        in >> root;
+        if (sceneFromPack)
+            root = json::parse(packedScene.begin(), packedScene.end());
+        else
+            in >> root;
         if (!root.contains("entities"))
         {
             errorMessage = "scene file has no 'entities' array";

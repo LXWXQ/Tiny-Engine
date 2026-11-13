@@ -22,6 +22,9 @@
 #include <stb_image.h>
 #include <cstring>
 
+#include "Core/AssetPack.h"
+#include <filesystem>
+
 namespace tiny
 {
 
@@ -58,9 +61,71 @@ bool loadImageData(tinygltf::Image* image, int image_idx,
     return true;
 }
 
+namespace
+{
+// tinygltf 通过这组回调读外部 .bin 与贴图；先查资产包，未命中再退回文件系统。
+bool packFileExists(const std::string& path, void*)
+{
+    if (assets::mounts().exists(path))
+        return true;
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
+std::string packExpandFilePath(const std::string& path, void*)
+{
+    return path;
+}
+
+bool packReadWholeFile(std::vector<unsigned char>* out, std::string* err,
+    const std::string& path, void*)
+{
+    if (out == nullptr)
+    {
+        if (err) *err = "输出缓冲为空";
+        return false;
+    }
+    std::vector<uint8_t> bytes;
+    if (assets::mounts().readFile(path, bytes))
+    {
+        out->assign(bytes.begin(), bytes.end());
+        return true;
+    }
+    return tinygltf::ReadWholeFile(out, err, path, nullptr);
+}
+
+bool packGetFileSizeInBytes(size_t* out, std::string* err, const std::string& path, void*)
+{
+    if (out == nullptr)
+    {
+        if (err) *err = "输出参数为空";
+        return false;
+    }
+    if (assets::mounts().stat(path, *out))
+        return true;
+    return tinygltf::GetFileSizeInBytes(out, err, path, nullptr);
+}
+
+bool packWriteWholeFile(std::string* err, const std::string&, const std::vector<unsigned char>&, void*)
+{
+    if (err) *err = "资产包是只读的";
+    return false;
+}
+} // namespace
+
 void setupGLTFLoader(tinygltf::TinyGLTF& loader)
 {
     loader.SetImageLoader(&loadImageData, nullptr);
+
+    tinygltf::FsCallbacks callbacks{};
+    callbacks.FileExists = &packFileExists;
+    callbacks.ExpandFilePath = &packExpandFilePath;
+    callbacks.ReadWholeFile = &packReadWholeFile;
+    callbacks.WriteWholeFile = &packWriteWholeFile;
+    callbacks.GetFileSizeInBytes = &packGetFileSizeInBytes;
+    callbacks.user_data = nullptr;
+    std::string fsError;
+    loader.SetFsCallbacks(callbacks, &fsError);
 }
 
 } // namespace tiny
@@ -918,9 +983,34 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
     const bool isBinary = filepath.size() >= 4 &&
         filepath.compare(filepath.size() - 4, 4, ".glb") == 0;
 
-    const bool ok = isBinary
-        ? loader.LoadBinaryFromFile(&gltf, &err, &warn, filepath)
-        : loader.LoadASCIIFromFile(&gltf, &err, &warn, filepath);
+    // 资产包优先：整份文件从包内读进内存再交给 tinygltf，外部 .bin/贴图由上面的 FsCallbacks 兜住。
+    std::vector<uint8_t> packedFile;
+    const bool fromPack = assets::mounts().readFile(filepath, packedFile);
+
+    std::string baseDir;
+    {
+        std::error_code ec;
+        const std::filesystem::path parent = std::filesystem::path(filepath).parent_path();
+        if (!parent.empty())
+            baseDir = parent.string();
+    }
+
+    bool ok = false;
+    if (fromPack)
+    {
+        ok = isBinary
+            ? loader.LoadBinaryFromMemory(&gltf, &err, &warn, packedFile.data(),
+                static_cast<unsigned int>(packedFile.size()), baseDir)
+            : loader.LoadASCIIFromString(&gltf, &err, &warn,
+                reinterpret_cast<const char*>(packedFile.data()),
+                static_cast<unsigned int>(packedFile.size()), baseDir);
+    }
+    else
+    {
+        ok = isBinary
+            ? loader.LoadBinaryFromFile(&gltf, &err, &warn, filepath)
+            : loader.LoadASCIIFromFile(&gltf, &err, &warn, filepath);
+    }
 
     if (!warn.empty())
         std::cout << "[GLTF] 警告: " << warn << "\n";

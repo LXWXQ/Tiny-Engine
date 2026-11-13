@@ -4,7 +4,7 @@ title: 资产包（.tpack）
 type: system
 scope: src/Core/AssetPack.h, src/Core/AssetPack.cpp, src/RHI/Texture.cpp
 read-when: 要打包/挂载资产、要给新的加载路径接上资产包、或排查"贴图读不到"
-size: ~90 行
+size: ~110 行
 updated: 2026-11-13
 ---
 
@@ -62,18 +62,22 @@ if (auto pack = assets::AssetPack::open("Resources/assets.tpack", packError))
 
 ## 已接入的读取点
 
-| 位置 | 状态 |
+| 位置 | 接入方式 |
 |---|---|
-| `src/RHI/Texture.cpp` `loadLDR`/`loadHDR` | 已接入：`stbi_load_from_memory` / `stbi_loadf_from_memory` |
-| `src/Scene/GLTFLoader.cpp`（`LoadBinaryFromFile`/`LoadASCIIFromFile`） | 未接入（下一步） |
-| `src/RHI/Pipeline.cpp`（SPIR-V） | 未接入 |
-| `src/Editor/SceneSerializer.cpp`（场景 JSON） | 未接入 |
+| `src/RHI/Texture.cpp` `loadLDR`/`loadHDR` | `mounts().readFile` + `stbi_load_from_memory` / `stbi_loadf_from_memory` |
+| `src/Scene/GLTFLoader.cpp` | 主文件走 `LoadBinaryFromMemory` / `LoadASCIIFromString`；外部 `.bin`/贴图走 `tinygltf::FsCallbacks`（`FileExists`/`ExpandFilePath`/`ReadWholeFile`/`GetFileSizeInBytes`） |
+| `src/Scene/Model.cpp` `Builder::loadModel`（OBJ） | `mounts().readFile` + `tinyobj::LoadObj(..., std::istream*)` |
+| `src/RHI/Pipeline.cpp`（SPIR-V，含 ComputePipeline） | `mounts().readFile` 命中则直接用包内字节 |
+| `src/Editor/SceneSerializer.cpp`（场景 JSON） | `mounts().readFile` + `json::parse(begin, end)` |
 
 ## 验证方式
 
 - `--pack-test`：契约自检，14 个断言，输出 `[AssetPack] selfTest PASS | cases=14 align=16 suffix-lookup=ok`。
-- 端到端：`--pack-build Resources\Texture Resources\assets.tpack` 后把 `Resources/Texture` 改名，
-  再跑 `--selftest 5`：贴图仍能加载、Sponza bounds 与基线一致，说明走的是包内数据。
+- 端到端（全资源）：`--pack-build Resources Resources\assets.tpack` 生成 129 条目的包后，把
+  `Resources/Models`、`Resources/Texture`、`Resources/Scenes` 三个目录**全部改名藏起来**，
+  再跑 `--selftest 5`：glTF（含 9.5MB `.bin` 与 69 张贴图）、OBJ、场景 JSON、SPIR-V 全部从包内读，
+  Sponza bounds 与基线逐字一致 `min(-15.3676, -1.01154, -9.46246) max(14.3993, 11.4355, 8.84341)`，
+  exit 0、stderr 0 字节。
 
 ## 坑
 

@@ -291,6 +291,28 @@ void Mounts::unmountAll()
     packs.clear();
 }
 
+bool Mounts::stat(const std::string& path, size_t& size) const
+{
+    for (auto it = packs.rbegin(); it != packs.rend(); ++it)
+    {
+        const uint8_t* data = nullptr;
+        size_t bytes = 0;
+        if ((*it)->read(path, data, bytes))
+        {
+            size = bytes;
+            return true;
+        }
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
+        return false;
+    const auto fileSize = std::filesystem::file_size(path, ec);
+    if (ec)
+        return false;
+    size = static_cast<size_t>(fileSize);
+    return true;
+}
+
 bool Mounts::exists(const std::string& path) const
 {
     for (auto it = packs.rbegin(); it != packs.rend(); ++it)
