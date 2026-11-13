@@ -5,14 +5,14 @@ type: system
 scope: src/Core/ImGuiSystem.h, src/Core/ImGuiSystem.cpp
 read-when: 修改调试面板、ImGui 初始化、或遇到 UI 文字/字体问题
 size: ~110 行
-updated: 2026-10-30
+updated: 2026-11-13
 ---
 
 # ImGui 面板与后端
 
-## 1. 后端初始化（1.92.6）
+## 1. 后端初始化（1.92.6-docking）
 
-动态渲染下字段位置与老教程不同：
+项目使用 `v1.92.6-docking`，在 `ImGuiSystem` 中启用 `ImGuiConfigFlags_DockingEnable`，但不启用 `ImGuiConfigFlags_ViewportsEnable`（避免多原生窗口与 Vulkan 交换链耦合）。动态渲染下字段位置与老教程不同：
 
 ```cpp
 init_info.UseDynamicRendering = true;

@@ -81,7 +81,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 
 | 约束 | 原因 |
 |---|---|
-| Vegetation 在 Geometry/HiZBuild **之后**、SSAO **之前** | 植被写 G-Buffer 的四张颜色 + 深度（`LOAD`、`LESS_OR_EQUAL`、depthWrite ON），必须排在 SSAO/Lighting 之前，草和树才能接收 SSAO、级联阴影与延迟光照。草叶在片元里 alpha-test `discard`，不按透明物体排序；不透明深度由植被自己写，后面的 SSAO/Lighting 只看到最近表面。植被不参与 `SceneGpuCull`/Hi-Z（实例由 CPU 按地形放置），也不进 ShadowPass 与 PlanarReflection，所以不投自身阴影、不进水倒影 |
+| Vegetation 在 Geometry/HiZBuild **之后**、SSAO **之前** | 植被写 G-Buffer 的四张颜色 + 深度（`LOAD`、`LESS_OR_EQUAL`、depthWrite ON），必须排在 SSAO/Lighting 之前，草和树才能接收 SSAO、级联阴影与延迟光照。草叶在片元里 alpha-test `discard`，不按透明物体排序；不透明深度由植被自己写，后面的 SSAO/Lighting 只看到最近表面。植被不参与 `SceneGpuCull`/Hi-Z（实例由 CPU 按地形放置）；树由 `VegetationPass::recordShadow()` 投入 CSM，草不投影，二者都不进 PlanarReflection，所以水倒影里没有植被 |
 | SSAO 在 Lighting **之前** | SSAO 调制环境光项（`ambient *= ssao`），是光照的输入 |
 | Cloud 在 Lighting **之后**、PlanarReflection/SSR/Glass/Water **之前** | 云是叠在已着色 HDR 上的大气层，必须读 Lighting 的输出；放在反射/透明之前，水面、玻璃和 SSR 读到的 HDR 才带云。读 G-Buffer.Position 把射线截到最近不透明表面（天空位置在 10000 处，自然不截断），用预乘 alpha（`src=ONE`、`dst=ONE_MINUS_SRC_ALPHA`）保留 HDR alpha；无深度附件、不写深度，只由 `scene.clouds` 组件启用。PlanarReflection 内部的第二套 Lighting 不跑云，因此倒影里没有云，作为已知边界 |
 | FogVolume 在 Cloud **之后**、PlanarReflection/SSR/Glass/Water **之前** | 局部雾盒是叠在已着色 HDR 上的近景大气层，必须读 Lighting（含云）的输出；放在反射/透明之前，水面、玻璃和 SSR 读到的 HDR 才带雾。每个 `effects.fogVolume` 的 `center`/`size`/`rotation` 先组成局部盒体，再乘实体 WorldTransform；逐盒做世界空间 slab 相交，读 G-Buffer.Position 把步进截到最近不透明表面，盒内按高度/边缘/32³ 噪声/HG 相函数累积散射；预乘 alpha（`src=ONE`、`dst=ONE_MINUS_SRC_ALPHA`）保留 HDR alpha，无深度附件、不写深度。没有可渲染的 `effects.fogVolume` 实体时整个 pass 不注册，只打印一次 `[FogVolume] idle`。PlanarReflection 内部的第二套 Lighting 不跑雾，倒影里没有雾，作为已知边界 |

@@ -120,54 +120,54 @@ ImGui 自带字体只有 ASCII，之前编辑器里的中文日志、模态框�
 加载成功打印 `[ImGui] font: <path>`；都找不到就保持内置字体（英文照常，中文仍为问号），
 **不随仓库分发字体**，避免授权问题。ImGui 1.92 起字形按需加载，不需要声明 GlyphRanges。
 
-## 布局：为什么是手写的
+## 布局：DockSpace + DockBuilder
 
-本项目的 ImGui 是 **1.92.6 非 docking 分支**（没有 `DockSpace`）。
-所以布局靠 `SetNextWindowPos` / `SetNextWindowSize` 手动排：
+项目使用 ImGui **1.92.6-docking**，`EditorLayer::drawPanels()` 不再给每个面板手算
+`SetNextWindowPos/Size`，而是建一个全屏 host window `##DockHost`，再把面板停靠进
+`TinyEditorDockSpace`：
 
 ```
-+-------------------------------+------------------+
-| Hierarchy (280px) |  3D 视口  | Inspector (340px)|
-|                   |           |                  |
-+-------------------------------+------------------+
-| Console (200px)                                  |
-+--------------------------------------------------+
++----------------------+-------------------------------+
+| Hierarchy            | Inspector / Render（同节点 tab）|
+|----------------------|-------------------------------|
+| Assets               | History                       |
++----------------------+-------------------------------+
+| Console                                              |
++------------------------------------------------------+
+|                    Viewport（中央，无标题栏）          |
++------------------------------------------------------+
 ```
 
-菜单栏用 `BeginMainMenuBar()` 固定在顶部。
+默认布局由 `DockBuilder` 首次生成：
 
-## 视口窗口必须 NoMove / NoResize
+- 左侧 21%，再上下 60/40：Hierarchy 上、Assets 下；
+- 中央 Viewport；右侧 25%，再上下 66/34：Inspector 与 Render 同节点 tab、History 下；
+- 底部 24%：Console；
+- host 窗口自身 `NoTitleBar | NoCollapse | NoResize | NoMove | NoBringToFrontOnFocus |
+  NoNavFocus | NoDocking | NoBackground`，零 padding/rounding/border。
 
-`Viewport` 是"计算出来的固定区域"，不是可拖动的浮动窗口。标志里少了这两个：
+`ImGui::DockSpace(..., ImGuiDockNodeFlags_PassthruCentralNode | ImGuiDockNodeFlags_AutoHideTabBar)`：
+中央视口不画 dock 背景，单面板节点自动隐藏 tab 条。菜单栏/工具栏/状态栏仍由
+`BeginMainMenuBar()` 与固定窗口负责，且带 `NoDocking`，不会被拖进 dock。
+
+Render 与 Inspector 共享右侧节点。首次建布局、工具栏「渲染」开关打开、或
+`View -> Render Settings` 打开时，`focusRenderPanel = true`，面板循环之后
+`ImGui::SetWindowFocus("Render")` 把 Render 页签切到前台；否则它会藏在 Inspector 后面。
+
+## 视口窗口的 flags
+
+`Viewport` 不再是手写固定矩形，但仍然禁止用户把它当浮动窗口拖走/缩放：
 
 ```cpp
-ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings
+ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoMove |
+ImGuiWindowFlags_NoResize
 ```
 
-后果是**在视口里按住左键拖拽会把整块视口拖走**（想转视角或拖手柄时最容易触发），
-而且位置会被 `imgui.ini` 记住，下次启动依然是错的。
-
-布局里视口用 `ImGuiCond_Always` 而不是 `FirstUseEver` —— 它是算出来的，
-不该被历史 ini 影响。其余面板（Hierarchy / Inspector / Assets / Console）
-仍然可自由拖动缩放。
-
-## 坑：SetNextWindowPos 是单槽位的
-
-```cpp
-// 错的：三次调用只有最后一次生效，Console 的矩形会套到 Hierarchy 上
-ImGui::SetNextWindowPos(hierarchyPos);
-ImGui::SetNextWindowPos(inspectorPos);
-ImGui::SetNextWindowPos(consolePos);
-for (panel : panels) panel->draw();
-
-// 对的：每个 Begin 之前紧邻设置它自己的矩形
-for (panel : panels) {
-    if (name == "Hierarchy") ImGui::SetNextWindowPos(...);
-    panel->draw();
-}
-```
-
-`SetNextWindowPos` 只影响**下一个 `Begin` 的窗口**。
+旧的 `NoSavedSettings` 已移除，否则 ImGui 不会把视口的 DockId 写进 `config/imgui.ini`，
+重启后视口会掉出 dock。位置和大小现在由 dock 节点决定，`NoMove/NoResize` 只限制
+浮动状态下的拖动。
 
 ## 窗口布局持久化
 
@@ -176,9 +176,11 @@ for (panel : panels) {
 为什么不放默认的 `imgui.ini`（工作目录）：仓库根目录只允许 `README.md`，
 而且工作目录随启动方式变化（双击 / IDE / 脚本），会到处生成 ini。
 
-首帧用 `ImGuiCond_Always` 强推默认布局，之后用 `FirstUseEver` 尊重用户拖动。
-`View -> Reset Layout` 可以强制重排。
-
+首帧 `dockLayoutChecked` 在 `DockSpace()` 之前检查一次
+`DockBuilderGetNode(dockspaceId) != nullptr`；没有保存布局才调 `DockBuilder` 拆分。
+`View -> Reset Layout` 同时置 `layoutNeedsReset = true` 与
+`forceDockLayoutReset = true`，下一帧强制重建默认 DockNode。删除
+`config/imgui.ini` 等价于恢复默认布局。
 ## 编辑 / 运行模式（E8）
 
 视口左上角只有一枚可点击的模式徽标（「编辑模式」/「运行模式」）。
@@ -236,57 +238,58 @@ public:
 
 然后在 `EditorLayer::createDefaultPanels()` 里 `registerPanel<MyPanel>()`。
 
-## 工具栏与状态栏（E5-a）
+## 工具栏、状态栏与 DockHost
 
 两者都不是 `EditorPanel`，而是 `EditorLayer` 直接画的**固定矩形**：位置和高度写死，
-不使用 `SetNextWindowPos(..., FirstUseEver)`，也不进 `panels` 列表。原因很简单 ——
-它们的矩形要参与面板布局计算，必须可预测；如果让 ImGui 记忆位置，用户拖一次工具栏，
-整块工作区就会错位。
+不使用 `SetNextWindowPos(..., FirstUseEver)`，也不进 `panels` 列表；同时带
+`ImGuiWindowFlags_NoDocking`，防止被拖进 DockSpace。
 
 | 区域 | 高度 | 内容 |
 |---|---|---|
 | 工具栏 | 34 px | Play/Stop、Move/Rotate/Scale、Snap、Focus、Undo/Redo；右侧 `saved \| Editing \| 245 FPS`；模式徽标在视口左上角 |
 | 状态栏 | 26 px | 选中数量、当前手柄、吸附开关、最近错误；右侧 FPS/帧耗时/draw calls/三角形/undo 深度 |
 
-布局公式（`src/Editor/EditorLayer.cpp` 的 `drawPanels()`）：
+`##DockHost` 的位置和高度扣掉这两条：
 
 ```cpp
 const float top = viewport->WorkPos.y + kToolbarHeight;
 const float availableHeight = viewport->WorkSize.y - kToolbarHeight - kStatusBarHeight;
 ```
 
-**两个坑**（都踩过，写在这里省下一次调试）：
+`BeginMainMenuBar()` 在第一帧还没有把主视口的 `WorkPos.y` 下推（那帧是 0），
+所以首帧 `WorkPos.y <= 0.5f` 时先不建 DockBuilder 布局，等下一帧再拆；这不是
+旧版的 `layoutNeedsReset` 防抖，DockNode 一旦建好就不再每帧重排。
 
-1. `ImGui::BeginMainMenuBar()` 在第一帧还没有把主视口的 `WorkPos.y` 下推（那帧是 0），
-   于是第一帧算出来的面板矩形会整体偏高一个菜单栏高度，而 `imgui.ini` 会把这个错位置记住。
-   所以 `layoutNeedsReset` 要多留一帧：`if (viewport->WorkPos.y > 0.5f) layoutNeedsReset = false;`。
-2. 菜单栏右侧原来也写了一遍「保存状态 / 播放状态 / undo 深度」，和工具栏、状态栏三处重复。
-   E5-a 起菜单栏只显示文档名（脏时加 `*` 和 `(unsaved)`），状态只在一处出现。
+## Render 组件目录（E5-b / F5-06 / F5-09）
 
-## 渲染设置面板（E5-b / F5-06 收敛）
+`RenderSettingsPanel`（窗口名 `Render`）现在是**组件目录**，与 Inspector 共享右侧
+DockNode 的 tab。首次建布局、工具栏「渲染」开关打开或 `View -> Render Settings`
+打开时，`focusRenderPanel` 会把 Render 页签切到前台。
 
-`RenderSettingsPanel`（窗口名 `Render`）是一个**浮动工具窗**：不在 `drawPanels()` 的固定矩形里，
-位置和大小只在自己 `draw()` 里用 `ImGuiCond_FirstUseEver` 给一次，之后由用户拖动、记在
-`imgui.ini`。入口有两个：工具栏的 `Render` 按钮、`View -> Render Settings`。
+目录顺序与分组：
 
-F5-06 起，曝光 / Bloom / SSAO / 运动模糊 / TAA / 水面 / SSR / 距离雾 / 阴影 / 方向光这些
-**画质控件已迁到 Inspector 的场景组件**（见上一节），Render 面板不再重复一套滑杆，只保留：
+| 分区 | 数量 | 行为 |
+|---|---|---|
+| 单一性组件 | 12 | `scope=Scene`，每场景一份、无 Transform；已挂载显示「已挂载 · 点击编辑」 |
+| 对象组件 | 15 | `scope=Entity`，创建带 Transform 的新实体并挂组件 |
+| 系统对象 | 1 | 天空盒（`RenderTag.isSkybox` 实体），只查看/选中，不伪造创建参数 |
 
-| 分组 | 内容 |
-|---|---|
-| 场景功能 | 已挂载的场景组件数量；`在 Inspector 中编辑场景组件` 按钮（清空选中并回到 Inspector） |
-| 引擎默认值 | `Save to engine.json`、`Reload engine.json`；重载会重建场景组件 |
-| 提交路径（调试） | `gpuSceneEnabled`、`gpuMergedBuffers`、`hizEnabled`、`terrainBatchEnabled`、`gpuSceneMinInstances`、`gpuSceneMinScreenPixels` |
+分区内按组件 `category` 首次出现顺序分组，两列表格；顶部搜索匹配 label/category/
+type/description。点击可添加项打开「创建组件」模态框：
 
-这些剩余项仍是**引擎/本机运行参数，不是场景内容**：不进撤销栈、不让文档变脏；要永久保留
-engine.json 默认值就按 `Save to engine.json`。画质功能现在属于场景文档，修改会进撤销栈，
-随 `.scene.json` v4 保存。渲染 pass 仍每帧读 `EngineSettings`，场景组件通过
-`Scene::syncSceneSettings()` 把值写进这份缓存。
+- 单一性组件：未挂载时显示默认参数 + 「创建并挂到场景」；已挂载时显示当前参数 +
+  「应用修改 / 移除组件 / 取消」，走 `SetComponentRecordCommand`；
+- 对象组件：名称/位置/旋转（度）/缩放 + 组件参数，走
+  `CreateComponentEntityCommand`，创建后选中并进入撤销栈；
+- 系统托管项（Camera/Terrain/Streamed Terrain/Voxel World）显示「系统托管，不能创建」；
+- 天空盒弹窗说明它是启动时创建的球体实体，可「在 Inspector 中编辑」。
 
-`ssaoKernelSize` 滑杆虽然迁走，`RenderSettingsPanel::clampKernelSize()` 仍保留为纯函数并参与自检：
-夹到 4..64 的偶数，采样循环拿 0 或奇数会出问题。自检：
-`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
+底部「引擎默认值」仍保留 `Save to engine.json` / `Reload engine.json` 与「提交路径
+（调试）」开关；这些是本机运行参数，不进撤销栈、不让文档变脏。画质参数本身属于
+场景组件，随 `.scene.json` v4 保存。
 
+`RenderSettingsPanel::clampKernelSize()` 仍保留为纯函数并参与自检：夹到 4..64 的
+偶数。自检：`[Editor] render settings selfTest PASS | kernel clamped to 4..64 even`。
 ## 语言分层（B5 / UX-07）
 
 界面用词按「读它做什么」分四层，规则写在 [ux-rules](ux-rules.md) 的 U7：
@@ -421,25 +424,19 @@ Console 可以被 View 菜单关掉，所以「错误只写进 Console」等于�
 每帧检查并弹「无法打开场景」模态框：重试 / 选择其它文件 / 关闭。
 不要在 `openScene()` 里直接 `ImGui::OpenPopup` —— 它可能由启动参数在 ImGui 帧之外调用。
 
-## 面板布局条件与拖动（B4 / UX-14）
+## 停靠后的布局调整（B4 / UX-14）
 
-`drawPanels()` 对所有内置面板用同一个条件：
+Dock 布局由 `DockBuilder` 生成一次，之后完全交给 ImGui 的 DockNode 持久化；
+`drawPanels()` 不再对所有面板套 `ImGuiCond_Always` / `FirstUseEver`。窗口缩放、
+最大化、拖拽分隔条时，DockNode 自己重算矩形，面板不会像旧的手写矩形那样错位。
 
-```cpp
-const ImGuiCond cond = layoutNeedsReset ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-```
+`View -> Reset Layout` 是唯一强制重建入口：置 `layoutNeedsReset` 与
+`forceDockLayoutReset`，下一帧重新拆分并 `DockBuilderFinish`。日常不要每帧重建，
+否则用户拖过的比例会被覆盖。
 
-首帧（以及点 `View -> Reset Layout` 后的那一帧）用 `Always` 把矩形铺到位，之后交给
-`config/imgui.ini` 记忆：用户可以拖动、缩放、折叠任何面板，包括视口。E5-a 之前视口用的是
-`Always`，理由是「视口是算出来的固定区域」—— 那个理由只在没有记忆时才成立，代价是用户
-永远挪不动它，面板一多就没法让出空间。
-
-`Reset Layout` 的实现没变：把 `layoutNeedsReset` 置真，下一帧所有面板重新落位，旧位置被覆盖。
-
-`config/imgui.ini` 是**本机缓存**（已在 `.gitignore` 里，不进版本库）：删掉它就等于恢复默认布局。
-典型事故：某次运行把 `[Window][Render]` 存成 `Collapsed=1`，之后每次启动渲染设置面板都是一条细线 ——
-当场删掉那一段或点 `View -> Reset Layout` 即可，不用改代码。
-
+`config/imgui.ini` 是**本机缓存**（已在 `.gitignore` 里，不进版本库）：删掉它就等于
+恢复默认布局；Render 面板的尺寸/位置也由 DockNode 记录，不再依赖
+`SetNextWindowSize(FirstUseEver)`。
 ## 贴图选择（E6）
 
 Inspector 的 `Material` 段默认展开（`ImGuiTreeNodeFlags_DefaultOpen`），下面是 `贴图` 分组：Albedo / Normal /

@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
 size: ~1300 行
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # 里程碑与实测基线
@@ -1298,3 +1298,21 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 - 2026-11-12（再次反馈“UI 上找不到体积雾”）：无选中对象时 Inspector 的 `Scene Components` 旁新增「创建体积雾对象」按钮，直接新建 `Fog Volume` 实体、挂上 `effects.fogVolume`、放到相机前方 18m 并选中；Scene scope 的 Add 弹窗同时提示“体积雾 / 粒子是对象组件，不在这个列表里”。编辑器自检截图 `build/editor_fog_entry.png` 可见入口。
 
 **边界**：雾盒只能是长方体，靠噪声和边缘淡出掩盖硬边；同时最多 8 个，单盒 steps 上限 32；噪声是静态 32³ 体素，没有时域重投影/降噪/体积阴影/二次散射；雾只影响主 HDR，不进平面反射、SSR 反射与 CSM 阴影；不写深度、不进 G-Buffer，因此不参与 SSAO 与延迟光照；默认不添加任何雾盒。
+
+## 植被优化与 PCF/PCSS 阴影（2026-11-13）
+
+**提交**：`cd98db6`（植被）与 `2cc6630`（阴影）；组件目录/docking/场景持久化已在 `f8354bf`。
+
+**植被优化**：
+- 草从 3 张 quad 改为 6 张 60° 交叉卡片，每张沿法线偏移 0.11，网格 24/36；片元每张切 4 叶、更宽、带 RGB 差异；针叶树改为 6 层 10 边不规则树冠，阔叶树改为 7 个 10 边 × 4 环椭球团簇，顶点法线平滑；树干风权重归零，树根取中心 + 4 邻点最低并下沉。
+- 树新增独立 CSM 深度管线（`VegetationPass::prepareShadow/recordShadow`，`shaders/vegetation_shadow.vert`），草不投影，树根加 12 边接触圆盘兜底；可见 pass 为草/针叶/阔叶 3 draw。
+- 地形高度查询改为 `TerrainHeightSampler`：缓存 surface 矩阵 + 32m 世界网格索引；去掉草的逐株四向坡度查询，统一根部下沉。连续地形变化时 0.15s 稳定或 0.5s 强制刷新；首次生成从 **1416.1ms** 降到约 **9ms**（主场景 7782 草约 5.5~6.7ms）。
+- 验证：植被 demo 约 128 FPS、239k triangles、10930 草 / 117 树（74 针叶 + 43 阔叶）；主场景斜率测试 19 树约 254 FPS；`f6-vegetation` 与编辑器 60/180 帧回归 validation 0/0。
+
+**PCF/PCSS**：
+- `scene.shadows.filterMode`（0=PCF，1=PCSS）贯穿 `EngineSettings`、`GlobalUbo.shadowFilterParams.x`、`engine.json`（`lighting.shadows.filterMode`）与 Inspector 枚举 Combo。
+- `shaders/lighting.frag`：PCF 为 5x5 双线性；PCSS 为 5x5 blocker search，按 `compare-averageBlocker` 估算 `penumbra=clamp(diff*300,1,12)`，再用可变半径 PCF；无 blocker 直接返回 1。旧配置缺省按 PCF。
+- 验证：`TinyEditor --selftest 60/180 --editor --resize-test` 与 `TinyEngine --config-test` 均 exit 0，validation 0/0；`config/editor.json` 的 filterMode 注水/写回测试通过。PCSS 与 PCF 的画面差异尚未在「有明显投影物」的场景做可靠截图对比；当前测试场景的 CSM 覆盖有限，树影仍以接触圆盘为主要视觉兜底。
+
+
+**边界**：植被仍是纯程序化低模，没有 LOD/外部资产/异步分帧，约 9ms 单帧峰值；草不投影、树影覆盖仍受 CSM 分辨率与场景投射物数量限制；PCSS 的软阴影观感需在有明确遮挡物时继续确认。

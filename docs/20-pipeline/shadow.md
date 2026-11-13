@@ -5,26 +5,45 @@ type: architecture
 scope: [render, shadow]
 size: ~110 行
 read-when: 调阴影质量、排查阴影不显示、或改光照/相机参数时
-updated: 2026-11-03
+updated: 2026-11-13
 ---
 
 # 级联阴影（F6-a）
 
 方向光阴影：三级联 CSM（Cascaded Shadow Maps），每级一张 2048x2048 深度图，
-3 层合成一个 `VK_IMAGE_VIEW_TYPE_2D_ARRAY`，光照 pass 用 3x3 PCF 采样。
+3 层合成一个 `VK_IMAGE_VIEW_TYPE_2D_ARRAY`；光照 pass 默认用 5x5 PCF 采样，可在 `scene.shadows.filterMode` 切换为 blocker-search PCSS。
 
 ## 1. 数据流
 
 1. `ShadowPass::updateCascades(cameraView, cameraProjection, lightDirection)` 每帧在主相机
    矩阵确定后调用，算出三级联的光空间矩阵（含纹素吸附，避免相机移动时阴影边缘抖动）；
-2. `FirstApp::render()` 把 `shadowMatrices[3]`、`shadowCascadeSplits`、`shadowParams`
+2. `FirstApp::render()` 把 `shadowMatrices[3]`、`shadowCascadeSplits`、`shadowParams`、`shadowFilterParams`
    写进 `GlobalUbo` 尾部；
 3. `ShadowPass` 在渲染图里注册成**零附件 pass**（没有颜色/深度附件时渲染图只发屏障，
    不 `vkCmdBeginRendering`），回调里自己开一个只有深度附件的渲染过程，逐级联画全部
    投射者；
-4. `shaders/lighting.frag` 的 `SampleShadow()` 按视深度选级、投影到光空间、3x3 PCF。
+4. `shaders/lighting.frag` 的 `SampleShadow()` 按视深度选级、投影到光空间，再按 `shadowFilterParams.x` 分派 PCF/PCSS。
+5. 树木投射者由 `VegetationPass::recordShadow()` 用独立深度管线追加；草不投影，用树根接触圆盘兜底。
 
-## 2. 手写正交投影（不要换回 glm::ortho）
+## 2. PCF / PCSS
+
+`scene.shadows.filterMode`（0 = PCF，1 = PCSS）由 `syncSceneSettings()` 写进
+`EngineSettings::shadowFilterMode`，再打包到 `GlobalUbo.shadowFilterParams.x`；
+`shaders/lighting.frag` 的 `SampleShadow()` 在选级/投影/bias 之后按 x 分派。
+
+- **PCF**：固定 5x5 双线性采样，`texel = (1/res) * max(shadowParams.z, 1) * 0.5`。
+- **PCSS**：先做 5x5 blocker search，`searchRadius = max(shadowParams.z, 1) * 2`；
+  `stored < compare` 的样本计入遮挡，平均 blocker 深度与接收面深度差决定
+  `penumbra = clamp((compare - averageBlocker) * 300.0, 1.0, 12.0)`，再用可变半径
+  PCF 采样；没有 blocker 时直接返回 1。
+- **交界处**：接触面 blocker 与接收面接近，penumbra 小，阴影硬；遮挡物离接收面远，
+  penumbra 变大，阴影变软。
+- **UI**：Inspector 的 `场景阴影` 组件 -> `阴影滤波` 下拉框；Render 面板的组件创建/
+  编辑向导复用同一个枚举属性控件。
+- **配置**：`engine.json` 的 `engineSettings.lighting.shadows.filterMode`；缺省 0，
+  旧场景/旧配置自动按 PCF。
+
+## 3. 手写正交投影（不要换回 glm::ortho）
 
 ```cpp
 glm::mat4 lightProjection(1.0f);
@@ -42,7 +61,7 @@ lightProjection[3][2] = -0.5f;
 （实测 `ndc.z ≈ -0.68`），阴影图永远是空的；换成 `(-4r, 0)` 又会推到 `> 1`
 （1.24~1.73）。两个参数约定都不能凭直觉写，所以这里直接手写矩阵。
 
-## 3. 剔除：AABB 8 角点
+## 4. 剔除：AABB 8 角点
 
 `cascadeVisible()` 把包围盒 8 个角点投影到光空间 NDC 取 min/max，再与
 `[-1,1]x[-1,1]x[0,1]` 求交；任一角的 `clip.w <= 1e-5`（角点落在地形相机后方）时
@@ -54,7 +73,7 @@ lightProjection[3][2] = -0.5f;
 `recordCascade()` 里**不做相机视锥剔除**：阴影投射者可以来自相机外（视野外的高处
 物体同样会把阴影投进画面），靠深度测试和 2048² 分辨率兜住开销。
 
-## 4. 深度偏移的两处
+## 5. 深度偏移的两处
 
 - 光栅化端：`depthBiasEnable = VK_FALSE`（常量/斜率都关）。掠射角下把深度往外推
   会连接触阴影一起抹掉。
@@ -64,7 +83,7 @@ lightProjection[3][2] = -0.5f;
 `cullMode` 用 `VK_CULL_MODE_BACK_BIT`（默认）。试过 `FRONT_BIT`（只画背面，几何上
 消自遮蔽）：地形是单面网格，FRONT 剔除会让整个地形不进阴影图，所以不能用于本工程。
 
-## 5. 已知限制
+## 6. 已知限制
 
 - **默认场景的阴影偏淡**：F6 的默认光照里 IBL 环境光占主导，方向光只占最终亮度的
   约 5%（实测把 `CalcDirectionalLight` 返回 0 只让画面均值掉 13/255）。阴影只能作用
@@ -73,7 +92,7 @@ lightProjection[3][2] = -0.5f;
 - 级联数固定 3、分辨率固定 2048；`kMaxShadowDistance = 90`、`kSplitLambda = 0.5`。
 - 只有一个方向光投射阴影；点光源阴影未做。
 
-## 6. 排查清单
+## 7. 排查清单
 
 阴影不显示时按这个顺序看：
 
@@ -85,7 +104,7 @@ lightProjection[3][2] = -0.5f;
 4. 采样端深度对比：`proj.z - stored` 的分布应跨零（接收面与自身背面的正常差值是
    负的，遮挡处为正）。
 
-## 7. 相关
+## 8. 相关
 
 - [pass-order](pass-order.md)：Shadow 在 Geometry 之前注册
 - [gbuffer](gbuffer.md)：法线附件被光照 pass 采样

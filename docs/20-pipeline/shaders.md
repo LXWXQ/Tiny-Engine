@@ -10,14 +10,15 @@ updated: 2026-11-11
 
 # Shader 清单与编译管线
 
-## 1. 清单（47 个文件）
+## 1. 清单（48 个文件）
 
 | 文件 | 阶段 | 用途 |
 |---|---|---|
 | `mrt.vert` / `mrt.frag` | vert/frag | 普通网格 / 地形写 G-Buffer；`terrainMode` 分支采样当前地形材质集 Set2（4 个描述符集，按 `materialSetIndex` 重绑）的四层 albedo/normal/packed heightRoughness，叠加坡度权重、Surface Style、宏观噪声、切线空间法线，并在 LOD 过渡帧用 IGN 抖动 mask 混合两级 |
 | `glass.vert` / `glass.frag` | vert/frag | 体素玻璃前向着色；采样图集、输出 `SRC_ALPHA/ONE_MINUS_SRC_ALPHA`，不写深度 |
 | `water.vert` / `water.frag` | vert/frag | 水面前向混合；相机中心径向网格、4 个大波位移、解析法线、环境反射、厚度吸收与泡沫 |
-| `vegetation.vert` / `vegetation.frag` | vert/frag | 植被实例变换 + 风摆；写 G-Buffer 四输出；草按 UV 程序化 5 叶并 alpha-test `discard`，树按顶点色 r 区分树冠/树干 |
+| `vegetation.vert` / `vegetation.frag` | vert/frag | 植被实例变换 + 风摆；写 G-Buffer 四输出；草按 UV 程序化 4 叶并 alpha-test `discard`，树按顶点色 r 区分树冠/树干/阴影圆盘 |
+| `vegetation_shadow.vert` | vert | 树实例的 CSM 深度 pass；只读 position、顶点色与实例 3 个 vec4，复用可见 pass 的实例变换/风摆逻辑 |
 | `particle.vert` / `particle.frag` | vert/frag | 粒子 billboard：6 顶点四边形按相机 right/up 展开；实例带 materialId，frag 从 set1 bindless 数组采 sprite，0xFFFFFFFF 时回退程序化圆形软遮罩；前向 alpha 混合 |
 | `ssr.frag` | frag | 半分辨率屏幕空间反射：读 HDR + G-Buffer 世界位置，48 步追踪后用命中置信度与平面反射/IBL 混合 |
 | `cloud.frag` | frag | 体积云：读 G-Buffer 世界位置与 64³ 3D 噪声，全屏 raymarch + 4 步太阳自阴影，预乘 alpha 写 HDR |

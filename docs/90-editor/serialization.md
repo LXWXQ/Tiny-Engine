@@ -5,7 +5,7 @@ type: system
 scope: 场景描述模型、文件格式、以及"什么该存什么不该存"
 read-when: 改 *.scene.json 格式、加组件要存盘、或加载后场景不对
 size: ~240 行
-updated: 2026-11-10
+updated: 2026-11-13
 ---
 
 # 场景序列化
@@ -49,7 +49,8 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
       "properties": [
         { "name": "enabled", "type": "bool", "value": true },
         { "name": "distance", "type": "float", "value": 90 },
-        { "name": "strength", "type": "float", "value": 0.65 }
+        { "name": "strength", "type": "float", "value": 0.65 },
+        { "name": "filterMode", "type": "int", "value": 0 }
       ]
     }
   ],
@@ -249,6 +250,39 @@ TerrainConfig 默认值补齐）。`sampleOriginX/Z` 是连续噪声域的中心
 - `scene.*` 只进顶层 `sceneComponents`，不会挂在实体上；原生组件的 `components` 去重规则
   与场景组件容器无关。
 
+## 场景路径与自动保存（编辑器）
+
+场景 JSON 本身**不保存文件路径**；路径属于编辑器本机偏好 `config/editor.json`
+（不进版本库），由 `EditorPreferences::lastScenePath` 记录：
+
+```json
+{
+  "version": 1,
+  "panels": { "Hierarchy": true, "Inspector": true },
+  "gizmoMode": 0,
+  "lastScenePath": "C:/Users/Admin/Desktop/Vs code Demo/Resources/Scenes/main.scene.json",
+  "recentScenes": [ "C:/Users/Admin/Desktop/Vs code Demo/Resources/Scenes/main.scene.json" ]
+}
+```
+
+- **启动恢复**：`EditorLayer::initialize()` 先读偏好；`lastScenePath` 存在且是普通文件时
+  走 `loadSceneFromPath(..., recordRecent=true)`，失败/缺失再回退到
+  `Resources/Scenes/main.scene.json`；都失败则新建空场景并清空 `documentPath`。
+- **计算保存路径**：`saveSceneAs()` 的初始路径是
+  `Resources/Scenes/<当前文件名或 untitled.scene.json>`；`openSceneDialog()` 的初始目录
+  是 `Resources/Scenes`。原生 Win32 对话框的 `initialPath` 同时支持目录和文件名。
+- **退出自动保存**：文件菜单退出 / 窗口关闭触发 `requestDocumentAction(Exit)`；若
+  `documentDirty && documentWritable()` 先 `saveScene()`，失败则不退出；成功后
+  `performDocumentAction(Exit)` 保存偏好并 `requestExit()`。
+- **重命名**：`F2` 或文件菜单「重命名场景...」打开模态框。名称不能为空、不能含
+  `\\/:*?"<>|`，自动补 `.scene.json`；目标固定 `Resources/Scenes/<name>.scene.json`，
+  重名/失败给错误；成功后 `std::filesystem::rename` 旧文件、更新 `documentPath`、
+  `lastScenePath`、`recentScenes` 与窗口标题。
+- **路径规范化**：`documentPath` / `lastScenePath` / recent 统一用
+  `std::filesystem::path(...).generic_string()`，避免配置里混入 `\`。
+
+这些字段都不在 `.scene.json` 里，换机器后偏好自然回到默认场景；场景文件本身仍
+只保存实体、组件与 `sceneComponents`。
 ## 路径处理
 
 存盘写**相对 `Resources/` 的路径**，读回时拼回绝对路径。

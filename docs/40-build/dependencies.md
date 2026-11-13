@@ -18,7 +18,7 @@ updated: 2026-10-30
 |---|---|---|---|
 | GLFW | 3.4 | `glfw/` | `CMakeLists.txt`, `include/GLFW/glfw3.h` |
 | GLM | 1.0.3 | `glm/` | `glm/glm.hpp` |
-| ImGui | 1.92.6 | `imgui/` | `imgui.cpp`, `backends/imgui_impl_vulkan.cpp` |
+| ImGui | 1.92.6-docking | `imgui/` | `imgui.cpp`, `imgui_internal.h`, `backends/imgui_impl_vulkan.cpp` |
 | stb | `f4a71b1` | `stb/` | `stb_image.h` |
 | tinyobjloader | v2.0.0 | `tinyobjloader/` | `tiny_obj_loader.h` |
 | VulkanMemoryAllocator | v3.4.0 | `VulkanMemoryAllocator/` | `vk_mem_alloc.h` |

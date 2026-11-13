@@ -5,7 +5,7 @@ type: system
 scope: src/Core/EngineConfig.h, src/Core/EngineConfig.cpp, config/engine.json
 read-when: 增删可调参数、改配置格式、处理配置迁移
 size: ~180 行
-updated: 2026-10-30
+updated: 2026-11-13
 ---
 
 # 运行时配置
@@ -25,7 +25,8 @@ updated: 2026-10-30
   "camera": { "position": [...], "rotation": [...] },
   "engineSettings": {
     "bloom":      { "enabled", "intensity", "knee", "threshold" },
-    "lighting":   { "color", "direction", "exposure" },
+    "lighting":   { "color", "direction", "exposure",
+                     "shadows": { "enabled", "distance", "strength", "filterMode" } },
     "ssao":       { "enabled", "bias", "kernelSize", "radius" },
     "motionBlur": { "enabled", "maxRadius", "strength" },
     "water":      { "enabled", "level", "waveStrength", "waveSpeed" },
@@ -37,6 +38,7 @@ updated: 2026-10-30
 ```
 
 > `motionBlur` 字段当前**没有渲染实现**（属规划位）；`planned` 里的开关同理。
+> `lighting.shadows.filterMode`：0 = 5x5 PCF，1 = blocker-search PCSS；缺省 0，旧配置自动按 PCF。
 
 ## 3. 版本迁移（TD-09）
 

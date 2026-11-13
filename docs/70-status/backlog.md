@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
 size: ~340 行
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # 后续任务台账
@@ -272,8 +272,10 @@ updated: 2026-11-12
 | F6-04 | 未开始 | 切线空间法线贴图（启用 `getNormalFromMap()`，先补切线或 TBN） | F4 | 法线贴图生效；`normalMaps` 不再白绑（tech-debt #3） |
 | F6-05 | 已完成 | 体积云（场景级 `scene.clouds` 组件 + 全屏 raymarch `CloudPass`） | F6 | coverage/密度/高度/厚度可调；透明表面读到带云 HDR；`f6-clouds` 通过；云不进平面反射/阴影作为边界 |
 | F6-06 | 已完成 | 太阳盘 + 镜头光晕（场景级 `scene.sun` 组件 + 全屏后效 `SunFlarePass`） | F6、F5-06 | 8 参数可调；方向/光色跟随 `scene.environment`；5 点深度判定日盘遮挡；圆形散景鬼影/色散/光条（太阳在背后/出画不产生）；TAA 后 Bloom 前纯加色；`f6-sun` 通过；默认关闭，云遮挡为边界 |
-| F6-07 | 已完成 | 地形植被（场景级 `scene.vegetation` 组件 + 程序化草/树 + `VegetationPass`） | F5-06、F3 | 12 参数可调；Geometry 后 SSAO 前写 G-Buffer；草/树各一次实例化 draw、验证层 0/0；不投自身阴影、不进平面反射为边界；`f6-vegetation` 通过；默认关闭 |
+| F6-07 | 已完成 | 地形植被（场景级 `scene.vegetation` 组件 + 程序化草/树 + `VegetationPass`） | F5-06、F3 | 12 参数可调；6 卡片/每张 4 叶草、针叶 6 层、阔叶 7 团簇；Geometry 后 SSAO 前写 G-Buffer；草/针叶/阔叶 3 draw；树 shadow pipeline 投 CSM、草不投并用接触圆盘兜底；地形采样缓存/32m 索引/0.15s 稳定 + 0.5s 强制刷新；`f6-vegetation` 通过；默认关闭 |
 | F6-08 | 已完成 | 局部体积雾（实体级 `effects.fogVolume` 组件 + 盒形 raymarch `FogVolumePass`） | F5-06、F6-05 | 14 参数可调；`+ Add Component` → “体积效果”可发现；组件 `center`/`size`/`rotation` 定义雾盒、最多 8 个；Lighting/Cloud 后、反射/透明前预乘 alpha 写 HDR；读 G-Buffer 位置截断、32³ 噪声、高度衰减/边缘淡出/HG 相函数；`f6-fog-volume` 通过；默认不添加 |
+| F6-09 | 已完成 | 植被视觉/性能优化（2026-11-13） | F6-07 | 草 6 卡片/4 叶，针叶 6 层、阔叶 7 团簇；树干风权重归零、树根 4 邻点取最低+下沉、接触圆盘；生成 1416ms→约 9ms；`f6-vegetation` 与 60/180 帧回归 0/0 |
+| F6-10 | 已完成 | 阴影 PCF/PCSS 可选（2026-11-13） | F6-a | `scene.shadows.filterMode` 0=5x5 PCF / 1=blocker-search PCSS；UI Combo、engine.json、GlobalUbo、GLSL 全链路；旧配置缺省 PCF；selftest 60/180 validation 0/0 |
 | F4-01 | 未开始 | glTF 保留 node 层级（决策 13 的翻转）、primitive 独立变换、异步加载 | — | 载入后可改任意 node 局部变换并实时可见 |
 | F4-02 | 未开始 | 模型 LOD 链（GPU 端 LOD 选级的前置，见 F1 剩余项） | F4-01 | 同一模型可切 2~3 级，切换无跳变 |
 | F1-R1 | 已取代 | 粒子不接入 `ExternalInstance`：改由 F5-07 的独立组件与 `ParticlePass` 落地 | F5-07 | 不再以复用 ExternalInstance 为目标；粒子独立缓冲、独立前向 Pass |
