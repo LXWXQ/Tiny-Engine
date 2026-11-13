@@ -199,6 +199,13 @@ struct WorldTransformComponent
     glm::vec3 worldPosition{ 0.0f };
     uint64_t sourceRevision = 0;
     bool valid = false;
+
+    // M1-C1c: the world matrix of the previous tick, rolled in
+    // updateNodeRecursive() right before matrix is overwritten. The renderer
+    // blends previousMatrix -> matrix by the simulation alpha, so a 60Hz
+    // simulation looks continuous on a 144Hz display. Physics, picking and
+    // culling keep reading matrix, i.e. the authoritative pose.
+    glm::mat4 previousMatrix{ 1.0f };
 };
 
 struct MeshComponent

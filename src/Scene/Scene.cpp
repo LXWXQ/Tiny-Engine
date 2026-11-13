@@ -288,6 +288,10 @@ namespace
         if (needsUpdate)
         {
             world = parentWorld * transform.localMatrix();
+            // C1c: remember the pose we are leaving so the renderer can blend
+            // it with the new one. Only dirty entities reach this branch; for
+            // a static entity previous == current and interpolation is a no-op.
+            worldTransform.previousMatrix = worldTransform.matrix;
             worldTransform.matrix = world;
             worldTransform.normalMatrix = glm::transpose(glm::inverse(glm::mat3(world)));
             worldTransform.worldPosition = glm::vec3(world * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));

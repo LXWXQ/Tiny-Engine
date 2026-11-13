@@ -429,6 +429,10 @@ VkCommandBuffer commandBuffer;
 	TransformComponent* cameraTransform = nullptr;
 	CameraController* cameraController = nullptr;
 
+	// M1-C1c：模拟插值权重，取值 [0, 1)。0 表示"按当前姿态原样绘制"，所有自检与
+	// 无头回归都走这一档；编辑器播放态由 EditorLayer 用 SimulationClock::alpha() 填。
+	float renderAlpha = 0.0f;
+
 	// W1：配置存取的入口。
 	// 用回调而不是让 ImGuiSystem 直接持有 FirstApp，是为了不让 UI 层依赖引擎总控 ——
 	// 数据总线（FrameInfo）本来就承担"每帧把东西递给 Pass/UI"的职责，这里沿用同一套。

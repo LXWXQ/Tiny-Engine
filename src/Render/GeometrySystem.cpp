@@ -5,6 +5,7 @@
 #include "AssetPaths.h"
 #include "Render/SubMeshCulling.h"
 #include "Render/SceneGpuBatch.h"
+#include "Scene/RenderInterpolation.h"
 #include <iostream>
 #include <algorithm>
 #include <array>
@@ -933,9 +934,18 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
             visibleChunkCount > 0u &&
             indirectCursor + visibleChunkCount <= indirectBuffer.capacity;
 
+        // C1c: blend the previous tick pose with the current one. Outside the
+        // editor play mode renderAlpha is 0 and this is the authoritative matrix.
+        const glm::mat4 entityMatrix = (frameInfo.renderAlpha > 0.0f)
+            ? scene::interpolateTransform(worldTransform->previousMatrix,
+                                          worldTransform->matrix, frameInfo.renderAlpha)
+            : worldTransform->matrix;
+
         SimplePushConstantData push{};
-        push.modelMatrix = worldTransform->matrix;
-        push.normalMatrix = worldTransform->normalMatrix;
+        push.modelMatrix = entityMatrix;
+        push.normalMatrix = (frameInfo.renderAlpha > 0.0f)
+            ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(entityMatrix))))
+            : worldTransform->normalMatrix;
         push.clipY = viewOverride != nullptr ? viewOverride->clipY : 0.0f;
         push.clipMode = viewOverride != nullptr ? viewOverride->clipMode : 0u;
 
@@ -1103,15 +1113,17 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
             if (subMesh.node != kNoModelNode)
             {
                 const glm::mat4 instanceMatrix =
-                    worldTransform->matrix * mesh->model->getNodeWorldMatrix(subMesh.node);
+                    entityMatrix * mesh->model->getNodeWorldMatrix(subMesh.node);
                 push.modelMatrix = instanceMatrix;
                 push.normalMatrix =
                     glm::mat4(glm::transpose(glm::inverse(glm::mat3(instanceMatrix))));
             }
             else
             {
-                push.modelMatrix = worldTransform->matrix;
-                push.normalMatrix = worldTransform->normalMatrix;
+                push.modelMatrix = entityMatrix;
+                push.normalMatrix = (frameInfo.renderAlpha > 0.0f)
+                    ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(entityMatrix))))
+                    : worldTransform->normalMatrix;
             }
 
             // 实体级材质槽位只认 MaterialComponent::materialSetIndex：

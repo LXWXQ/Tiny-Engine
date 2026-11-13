@@ -69,6 +69,11 @@ public:
     bool simulationDrivenExternally() const { return simulationDrivenExternally_; }
     // 只推进一次模拟：SystemScheduler 两相 + 世界矩阵刷新；不碰相机、流送、可见性。
     void stepSimulation(float dt);
+
+    // M1-C1c：渲染插值权重。编辑器播放态写入 SimulationClock::alpha()，
+    // Application 每帧把它搬进 FrameInfo::renderAlpha；默认 0 = 不插值。
+    void setRenderInterpolationAlpha(float alpha) { renderInterpolationAlpha_ = alpha; }
+    float renderInterpolationAlpha() const { return renderInterpolationAlpha_; }
     void cleanup();
 
     entt::entity createEntity();
@@ -510,6 +515,9 @@ private:
     int32_t lastStreamingRadius = -1;
 
     bool simulationDrivenExternally_ = false;
+
+    // M1-C1c：见 setRenderInterpolationAlpha()。非播放态保持 0。
+    float renderInterpolationAlpha_ = 0.0f;
 
     // --update-profile：只累加 double，不做字符串与分配。
     bool updateProfiling = false;

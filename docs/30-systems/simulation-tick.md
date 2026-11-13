@@ -2,9 +2,9 @@
 id: systems/simulation-tick
 title: 固定步长模拟时钟
 type: system
-scope: src/Scene/SimulationClock.h, src/Scene/SimulationClock.cpp, src/Editor/EditorLayer.cpp（接入中）, main.cpp（--tick-test）
+scope: src/Scene/SimulationClock.h, src/Scene/SimulationClock.cpp, src/Scene/RenderInterpolation.h, src/Scene/RenderInterpolation.cpp, src/Editor/EditorLayer.cpp, src/Render/SceneGpuBatch.cpp, src/Render/GeometrySystem.cpp, main.cpp（--tick-test / --render-interp-test）
 read-when: 改角色移动/跳跃、把模拟接到新的循环、排查"高刷屏跳得高/走得快"或重放不一致
-size: ~130 行
+size: ~190 行
 updated: 2026-11-13
 ---
 
@@ -118,10 +118,43 @@ class SimulationClock
     `Scene::update` 在"被外部驱动"时跳过这三行（相机、流送、可见性仍在
     帧上跑）；
   - `startPlay` / `pausePlay` / `resumePlay` / `stopPlay` 都 `reset()` 时钟。
-- **C1c（未开始）**：渲染插值用 `alpha()` 在上一 tick 与当前 tick 的
-  变换之间插值。
+- **C1c（已完成）**：渲染插值，见下一节。
 
-## 8. 限制
+## 8. 渲染插值（C1c）
+
+固定 60Hz 的模拟配上 144Hz 的显示器时，一帧往往只推进 0 或 1 个 tick，
+直接把"当前 tick 的姿态"交给渲染，同一姿态会连画两三帧 —— 看上去就是台阶感。
+C1c 用时钟的 `alpha()` 在**上一 tick** 与**当前 tick**的世界矩阵之间插值，
+渲染端因此画的是连续姿态，代价是最多晚一个 tick（16.7ms）看到最新状态。
+
+- **历史矩阵从哪来**：`WorldTransformComponent::previousMatrix`。
+  `updateNodeRecursive()` 在改写 `matrix` 之前先把它滚进 `previousMatrix`
+  —— 只有 dirty 实体走这条分支，静止实体的 `previous == current`，
+  插值是恒等变换，不产生额外开销。
+- **为什么是 TRS 分解 + slerp**：对两个旋转矩阵做逐元素 lerp，两个正交基的
+  线性组合长度小于 1，模型在转身时会肉眼可见地"瘪"一下。分解出
+  平移/缩放/旋转后，平移与缩放走 `mix`、旋转走 `slerp`，刚体才不缩水。
+  分解需要 `<glm/gtx/matrix_decompose.hpp>`，它是实验性扩展，**必须先
+  `#define GLM_ENABLE_EXPERIMENTAL`** 再包含，否则编译直接报 C1189。
+- **作用范围**：只替换渲染用的实例矩阵（`SceneGpuBatch::buildInstances`
+  的 `InstanceRecord::model/normal` 与 `GeometrySystem` CPU 路径的
+  `SimplePushConstantData::modelMatrix/normalMatrix`，节点矩阵照旧相乘）。
+  物理、拾取、包围盒与剔除仍然读 `matrix`，即权威姿态 —— 否则剔除会用
+  一个"还没到"的位置做判断，边缘模型会闪。
+- **怎么开**：`EditorLayer` 在 `updatePlayState` / `updateRuntimeMode` 推进
+  完时钟后调用 `Scene::setRenderInterpolationAlpha(simulationClock.tick() > 0
+  ? alpha() : 0.0f)`；`pausePlay` / `stopPlay` 归零。`Application` 每帧把
+  `Scene::renderInterpolationAlpha()` 搬进 `FrameInfo::renderAlpha`。
+  **默认 0 = 不插值**，所以 `--selftest`、编辑器自检与所有无头回归看到的
+  画面与加 C1c 之前逐字一致（Sponza bounds 与 434.7MB 纹理预算均未变）。
+- **契约自检**：`--render-interp-test` → `[Render] interpolationSelfTest
+  PASS | cases=6 endpoints=ok slerp=ok fallback=ok`。6 组用例覆盖
+  alpha=0/1 端点、平移中点、90° 旋转的 45° 中点且基向量长度为 1、
+  缩放中点、非有限矩阵回退、奇异（零缩放）矩阵回退。
+- **已知边界**：蒙皮骨骼矩阵仍按 tick 更新，快速动作时手脚可能比身体
+  晚一帧；地形/体素 chunk 的顶点本身不动，不受影响。
+
+## 9. 限制
 
 - 只做主线程推进，没有多线程确定性保证。
 - 重放一致性目前只覆盖"输入投递"这一层：角色位移/重力仍写在

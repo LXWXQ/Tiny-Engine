@@ -2793,7 +2793,10 @@ void FirstApp::render(float dt)
 			&scene->getCameraController()
 		};
 
-		// 编辑器选中项交给渲染侧（画包围盒用）
+		// C1c：模拟插值权重由编辑器按播放态写入 Scene，这里每帧搬进帧数据。
+frameInfo.renderAlpha = scene->renderInterpolationAlpha();
+
+// 编辑器选中项交给渲染侧（画包围盒用）
 if (editorLayer)
 frameInfo.editorSelection = editorLayer->getState().selection.primary();
 

@@ -7,6 +7,7 @@
 
 #include "Core/FrameInfo.h"
 #include "Scene/Components.h"
+#include "Scene/RenderInterpolation.h"
 
 #include <algorithm>
 #include <chrono>
@@ -928,7 +929,14 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
             const bool hasNode = (subMesh.node != kNoModelNode);
             const glm::mat4 nodeMatrix = hasNode ? model->getNodeWorldMatrix(subMesh.node)
                                                  : glm::mat4(1.0f);
-            const glm::mat4 instanceMatrix = worldTransform.matrix * nodeMatrix;
+            // C1c: blend the previous tick pose with the current one, then apply
+            // the node matrix. renderAlpha is 0 outside the editor play mode, in
+            // which case this is exactly worldTransform.matrix.
+            const glm::mat4 entityMatrix = (frameInfo.renderAlpha > 0.0f)
+                ? scene::interpolateTransform(worldTransform.previousMatrix,
+                                              worldTransform.matrix, frameInfo.renderAlpha)
+                : worldTransform.matrix;
+            const glm::mat4 instanceMatrix = entityMatrix * nodeMatrix;
 
             glm::vec3 localMin = model->getBoundsMin();
             glm::vec3 localMax = model->getBoundsMax();
@@ -950,7 +958,7 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
 
             InstanceRecord record{};
             record.model = instanceMatrix;
-            record.normal = hasNode
+            record.normal = (hasNode || frameInfo.renderAlpha > 0.0f)
                 ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(instanceMatrix))))
                 : worldTransform.normalMatrix;
             record.flags = glm::uvec4(slot, materialValid ? 1u : 0u,

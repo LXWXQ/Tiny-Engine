@@ -612,6 +612,10 @@ void EditorLayer::updatePlayState(float dt)
             }
             scene->stepSimulation(fixedDt);
         });
+
+    // C1c：把"距上一个 tick 过去了多少"交给渲染侧。tick 还没跑过时保持 0，
+    // 避免首帧把单位矩阵和当前姿态插出一次假动作。
+    scene->setRenderInterpolationAlpha(simulationClock.tick() > 0 ? simulationClock.alpha() : 0.0f);
 }
 
 void EditorLayer::drawUI()
@@ -2155,6 +2159,9 @@ void EditorLayer::updateRuntimeMode(float dt)
             scene->stepSimulation(fixedDt);
         });
 
+    // C1c：运行模式同样把插值权重交给渲染侧。
+    scene->setRenderInterpolationAlpha(simulationClock.tick() > 0 ? simulationClock.alpha() : 0.0f);
+
     applyRuntimeCameraPose();
 
     static std::string lastRuntimeClip;
@@ -2189,6 +2196,9 @@ void EditorLayer::pausePlay()
         return;
     state.playState = PlayState::Paused;
     simulationClock.reset();          // 决策 5：暂停清空 accumulator，恢复后不追帧
+    // C1c：暂停后姿态不再变化，插值权重必须归零，否则会停在两个 tick 中间。
+    if (state.services.scene != nullptr)
+        state.services.scene->setRenderInterpolationAlpha(0.0f);
     state.pushLog(LogEntry::Level::Info, "[Editor] paused");
 }
 
@@ -2217,6 +2227,9 @@ void EditorLayer::stopPlay()
     state.hasPlaySnapshot = false;
     state.playSnapshot = scene::SceneDescription{};
     state.playState = PlayState::Editing;
+    // C1c：回到编辑态后渲染必须用精确姿态（回归基线依赖这一点）。
+    if (state.services.scene != nullptr)
+        state.services.scene->setRenderInterpolationAlpha(0.0f);
     state.selection.clear();
     state.commands.clear();
     state.notifySuccess("已停止播放，场景已恢复");
