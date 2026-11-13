@@ -84,6 +84,10 @@ namespace std
 
 // 子网格：索引缓冲里一段连续的索引区间，以及这段区间使用的材质槽位。
 // OBJ 模型只有一个子网格；glTF 模型（Sponza 之类）会有几百个。
+// glTF 节点树（F4）：几何按「节点局部空间」存一份，节点自己的局部变换才是可改的那层。
+// kNoModelNode = 这段几何不挂节点（OBJ / 地形 / 体素 / 蒙皮模型），渲染侧按单位矩阵处理。
+inline constexpr uint32_t kNoModelNode = 0xFFFFFFFFu;
+
 struct SubMesh
 {
     uint32_t firstIndex = 0;      // 索引缓冲内的第一个索引（元素，不是字节）
@@ -114,6 +118,9 @@ struct SubMesh
     uint32_t terrainChunkZ = 0;
     uint32_t terrainLod = 0;
     uint32_t terrainSurfaceIndexCount = 0;
+
+    // F4：这段索引属于 glTF 的哪个节点。
+    uint32_t node = kNoModelNode;
 };
 
 // ---- 骨骼动画（CPU 蒙皮）----
@@ -156,11 +163,28 @@ struct SkeletonNode
 class Model
 {
 public:
+    // glTF 节点：只存 TRS 与父子关系，不存世界矩阵（父改动后子要跟着动）。
+    struct Node
+    {
+        std::string name;
+        int32_t parent = -1;
+        glm::vec3 translation{ 0.0f };
+        glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
+        glm::vec3 scale{ 1.0f };
+        int32_t mesh = -1;
+
+        glm::mat4 localMatrix() const;
+    };
     struct Builder
     {
         std::vector<Vertex>   vertices;
         std::vector<uint32_t> indices;
         std::vector<SubMesh>  subMeshes;
+
+        // F4：节点树 + 每个节点下的几何在「节点局部空间」的包围盒。
+        std::vector<Node> nodes;
+        std::vector<glm::vec3> nodeBoundsMin;
+        std::vector<glm::vec3> nodeBoundsMax;
         void loadModel(const std::string& filepath);
 
         // 蒙皮数据（与 vertices 一一对应）。没有蒙皮的模型留空。
@@ -235,6 +259,12 @@ public:
                       const glm::vec3& rayOrigin, const glm::vec3& rayDir,
                       float& outDistance) const;
 
+    // 单个子网格（有一段索引范围）的求交；node 树由 intersectRay 拆开调用。
+    bool intersectRayRange(const glm::mat4& worldMatrix,
+                           const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+                           size_t firstIndex, size_t indexCount,
+                           float& outDistance) const;
+
     // 场景序列化需要知道这个模型来自哪个文件（编辑器保存 / 重载场景时用）。
     // 存的是 Model::createModelFromFile 收到的原始字符串（绝对路径），
     // 因为引擎本来就靠 AssetPaths.h 固化了资源根目录。
@@ -249,6 +279,13 @@ public:
     uint32_t getIndexCount()  const { return indexCount; }
 
     const std::vector<SubMesh>& getSubMeshes() const { return subMeshes; }
+
+    const std::vector<Node>& getNodes() const { return nodes; }
+    bool hasNodes() const { return !nodes.empty(); }
+    // 节点世界矩阵 = 从根一路乘下来的局部矩阵（模型空间，不含实体变换）。
+    glm::mat4 getNodeWorldMatrix(uint32_t node) const;
+    // 节点局部包围盒；该节点没有几何时返回 false。
+    bool getNodeBounds(uint32_t node, glm::vec3& outMin, glm::vec3& outMax) const;
 
     // F1：GPU 驱动提交要用 CPU 侧顶点位置算每个子网格的局部 AABB，
     // 才能在 compute 里做子网格级剔除；这里只读，不做任何修改。
@@ -320,6 +357,9 @@ private:
     uint32_t indexCount = 0;
 
     std::vector<SubMesh> subMeshes;
+    std::vector<Node> nodes;
+    std::vector<glm::vec3> nodeBoundsMin;
+    std::vector<glm::vec3> nodeBoundsMax;
     std::string sourcePath;
 
     // F1-b：合并缓冲的源数据（地形模型留空）
@@ -358,3 +398,9 @@ private:
     std::array<DynamicVertexBuffer, 3> dynamicVertexBuffers{};
     uint32_t dynamicVertexBufferIndex = 0;
 };
+// 节点世界矩阵 = 沿 parent 链把 localMatrix() 累乘起来（模型空间，不含实体变换）。
+// 独立成自由函数是为了能脱离 Device 直接自检：构造几条 Node 就能验证父链与 TRS 合成。
+glm::mat4 modelNodeWorldMatrix(const std::vector<Model::Node>& nodes, uint32_t node);
+
+// glTF 节点树契约自检（不需要 Vulkan / 窗口）：父链合成、TRS 顺序、默认值。
+bool modelNodeSelfTest();

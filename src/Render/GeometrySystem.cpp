@@ -1098,6 +1098,22 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
                 continue;
             }
 
+            // F4：子网格几何存在它所属节点的局部空间，push 常量必须带上节点世界矩阵。
+            // 没有节点信息（OBJ / 地形 / 体素 / 蒙皮）时维持实体矩阵，行为与以前一致。
+            if (subMesh.node != kNoModelNode)
+            {
+                const glm::mat4 instanceMatrix =
+                    worldTransform->matrix * mesh->model->getNodeWorldMatrix(subMesh.node);
+                push.modelMatrix = instanceMatrix;
+                push.normalMatrix =
+                    glm::mat4(glm::transpose(glm::inverse(glm::mat3(instanceMatrix))));
+            }
+            else
+            {
+                push.modelMatrix = worldTransform->matrix;
+                push.normalMatrix = worldTransform->normalMatrix;
+            }
+
             // 实体级材质槽位只认 MaterialComponent::materialSetIndex：
             //   * 它跟着实体生命周期走，clearEntities() 释放槽位时会一起清掉；
             //   * Material::descriptorSetIndex 是"材质对象"的字段，材质可能被多个

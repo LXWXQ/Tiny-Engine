@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <cstring>
 #include <cctype>
@@ -23,6 +24,44 @@ namespace
 // 每个模型一个进程内唯一的几何 id：GPU 批的包围盒缓存用它做键。
 std::atomic<uint64_t> g_nextGeometryId{ 1 };
 } // namespace
+
+glm::mat4 Model::Node::localMatrix() const
+{
+    glm::mat4 matrix = glm::mat4_cast(rotation);
+    matrix[0] *= scale.x;
+    matrix[1] *= scale.y;
+    matrix[2] *= scale.z;
+    matrix[3] = glm::vec4(translation, 1.0f);
+    return matrix;
+}
+
+glm::mat4 modelNodeWorldMatrix(const std::vector<Model::Node>& nodes, uint32_t node)
+{
+    glm::mat4 world(1.0f);
+    int32_t index = static_cast<int32_t>(node);
+    int guard = 0;
+    while (index >= 0 && index < static_cast<int32_t>(nodes.size()) && guard++ < 256)
+    {
+        const Model::Node& current = nodes[static_cast<size_t>(index)];
+        world = current.localMatrix() * world;
+        index = current.parent;
+    }
+    return world;
+}
+
+glm::mat4 Model::getNodeWorldMatrix(uint32_t node) const
+{
+    return modelNodeWorldMatrix(nodes, node);
+}
+
+bool Model::getNodeBounds(uint32_t node, glm::vec3& outMin, glm::vec3& outMax) const
+{
+    if (node >= nodes.size() || node >= nodeBoundsMin.size() || node >= nodeBoundsMax.size())
+        return false;
+    outMin = nodeBoundsMin[node];
+    outMax = nodeBoundsMax[node];
+    return outMin.x <= outMax.x;
+}
 
 Model::Model(Device& device, VkCommandPool commandPool, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
     : device(device)
@@ -70,7 +109,46 @@ Model::Model(Device& device, VkCommandPool commandPool, const Model::Builder& bu
         return;
     }
 
-    computeBounds(builder.vertices);
+    nodes = builder.nodes;
+    nodeBoundsMin = builder.nodeBoundsMin;
+    nodeBoundsMax = builder.nodeBoundsMax;
+
+    // F4：几何现在存在「节点局部空间」，模型空间 AABB 必须逐节点变换后求并，
+    // 否则包围盒、相机自动取景、剔除半径全部会缩到一个节点的大小。
+    // 没有节点信息的模型（OBJ / 地形 / 体素）仍走原来的顶点直算。
+    bool boundsFromNodes = false;
+    if (!nodes.empty() && nodeBoundsMin.size() == nodes.size() &&
+        nodeBoundsMax.size() == nodes.size())
+    {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(nodes.size()); ++i)
+        {
+            glm::vec3 lo;
+            glm::vec3 hi;
+            if (!getNodeBounds(i, lo, hi))
+                continue;
+            const glm::mat4 world = getNodeWorldMatrix(i);
+            for (int corner = 0; corner < 8; ++corner)
+            {
+                const glm::vec3 point((corner & 1) ? hi.x : lo.x,
+                                      (corner & 2) ? hi.y : lo.y,
+                                      (corner & 4) ? hi.z : lo.z);
+                const glm::vec3 transformed = glm::vec3(world * glm::vec4(point, 1.0f));
+                if (!boundsFromNodes)
+                {
+                    boundsMin = transformed;
+                    boundsMax = transformed;
+                    boundsFromNodes = true;
+                }
+                else
+                {
+                    boundsMin = glm::min(boundsMin, transformed);
+                    boundsMax = glm::max(boundsMax, transformed);
+                }
+            }
+        }
+    }
+    if (!boundsFromNodes)
+        computeBounds(builder.vertices);
 
     // 保留一份 CPU 侧几何用于编辑器点选。
     // 只拷位置：法线/UV 对射线求交没有意义，Sponza 那种规模能省下 2/3 内存。
@@ -194,9 +272,40 @@ bool Model::intersectRay(const glm::mat4& worldMatrix,
                          const glm::vec3& rayOrigin, const glm::vec3& rayDir,
                          float& outDistance) const
 {
-    if (pickingPositions.empty() || pickingIndices.size() < 3)
-        return false;
+    // 没有节点树（OBJ / 地形 / 体素）时几何本身就存在模型空间，行为与以前完全一致。
+    if (!hasNodes())
+        return intersectRayRange(worldMatrix, rayOrigin, rayDir, 0, pickingIndices.size(), outDistance);
 
+    // 有节点树：每个子网格的几何存在各自的节点局部空间，先乘出该子网格的实例矩阵再求交。
+    bool hit = false;
+    float nearest = std::numeric_limits<float>::max();
+    for (const SubMesh& subMesh : subMeshes)
+    {
+        const glm::mat4 instanceWorld = (subMesh.node == kNoModelNode)
+            ? worldMatrix
+            : worldMatrix * getNodeWorldMatrix(subMesh.node);
+        float distance = 0.0f;
+        if (!intersectRayRange(instanceWorld, rayOrigin, rayDir,
+                               subMesh.firstIndex, subMesh.indexCount, distance))
+            continue;
+        if (distance < nearest)
+        {
+            nearest = distance;
+            hit = true;
+        }
+    }
+    if (hit)
+        outDistance = nearest;
+    return hit;
+}
+
+bool Model::intersectRayRange(const glm::mat4& worldMatrix,
+                              const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+                              size_t firstIndex, size_t indexCount,
+                              float& outDistance) const
+{
+    if (pickingPositions.empty() || indexCount < 3)
+        return false;
     const glm::mat4 inverseWorld = glm::inverse(worldMatrix);
     const glm::vec3 localOrigin = glm::vec3(inverseWorld * glm::vec4(rayOrigin, 1.0f));
     const glm::vec3 localDir = glm::vec3(inverseWorld * glm::vec4(rayDir, 0.0f));
@@ -207,8 +316,10 @@ bool Model::intersectRay(const glm::mat4& worldMatrix,
 
     float nearest = std::numeric_limits<float>::max();
 
-    const size_t triangleCount = pickingIndices.size() / 3;
-    for (size_t tri = 0; tri < triangleCount; ++tri)
+    const size_t triBegin = firstIndex / 3;
+    const size_t triEnd = std::min<size_t>(triBegin + indexCount / 3,
+                                           pickingIndices.size() / 3);
+    for (size_t tri = triBegin; tri < triEnd; ++tri)
     {
         const uint32_t i0 = pickingIndices[tri * 3 + 0];
         const uint32_t i1 = pickingIndices[tri * 3 + 1];
@@ -852,4 +963,97 @@ void Model::Builder::loadModel(const std::string& filepath)
         if (subMesh.indexCount > 0)
             subMeshes.push_back(subMesh);
     }
+}
+
+// ---------------------------------------------------------------------------
+// glTF 节点树契约自检（--gltf-node-test）：不需要 Vulkan，只验数学与默认值。
+// 几何改成「节点局部空间」之后，世界矩阵全靠这里合成，错了就是整个场景塌到原点。
+// ---------------------------------------------------------------------------
+namespace
+{
+    bool nearValue(float a, float b, float eps = 1.0e-5f)
+    {
+        return std::fabs(a - b) <= eps;
+    }
+
+    bool nearVec3(const glm::vec3& a, const glm::vec3& b, float eps = 1.0e-5f)
+    {
+        return nearValue(a.x, b.x, eps) && nearValue(a.y, b.y, eps) && nearValue(a.z, b.z, eps);
+    }
+}
+
+bool modelNodeSelfTest()
+{
+    int cases = 0;
+    bool ok = true;
+    auto expect = [&ok, &cases](bool condition, const char* what)
+    {
+        ++cases;
+        if (!condition)
+        {
+            ok = false;
+            std::cerr << "[Model] nodeSelfTest FAIL: " << what << '\n';
+        }
+    };
+
+    // 1) 默认节点：TRS 为单位，局部矩阵是单位矩阵。
+    {
+        Model::Node node;
+        const glm::mat4 local = node.localMatrix();
+        bool identity = true;
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                identity = identity && nearValue(local[c][r], (c == r) ? 1.0f : 0.0f);
+        expect(identity, "default node localMatrix is identity");
+    }
+
+    // 2) 空树 / 越界下标：世界矩阵退回单位矩阵，不能崩。
+    {
+        const std::vector<Model::Node> empty;
+        expect(nearVec3(glm::vec3(modelNodeWorldMatrix(empty, 0)[3]), glm::vec3(0.0f)),
+               "empty tree world matrix is identity");
+    }
+
+    // 3) 父链平移累加：root(1,0,0) -> child(0,2,0)，child 世界位置 = (1,2,0)。
+    {
+        std::vector<Model::Node> nodes(2);
+        nodes[0].translation = glm::vec3(1.0f, 0.0f, 0.0f);
+        nodes[1].translation = glm::vec3(0.0f, 2.0f, 0.0f);
+        nodes[1].parent = 0;
+        expect(nearVec3(glm::vec3(modelNodeWorldMatrix(nodes, 1)[3]), glm::vec3(1.0f, 2.0f, 0.0f)),
+               "child world translation accumulates parent translation");
+    }
+
+    // 4) 父节点缩放会缩放子节点位移：root scale 2 -> child(1,0,0) 世界位置 = (2,0,0)。
+    {
+        std::vector<Model::Node> nodes(2);
+        nodes[0].scale = glm::vec3(2.0f);
+        nodes[1].translation = glm::vec3(1.0f, 0.0f, 0.0f);
+        nodes[1].parent = 0;
+        expect(nearVec3(glm::vec3(modelNodeWorldMatrix(nodes, 1)[3]), glm::vec3(2.0f, 0.0f, 0.0f)),
+               "parent scale scales child translation");
+    }
+
+    // 5) 旋转 + 缩放顺序：绕 Y 轴 90°、缩放 2 的节点把 (1,0,0) 送到 (0,0,-2)。
+    {
+        std::vector<Model::Node> nodes(1);
+        nodes[0].rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        nodes[0].scale = glm::vec3(2.0f);
+        const glm::mat4 world = modelNodeWorldMatrix(nodes, 0);
+        const glm::vec3 mapped = glm::vec3(world * glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+        expect(nearVec3(mapped, glm::vec3(0.0f, 0.0f, -2.0f)),
+               "rotation then scale maps +X to -Z with length 2");
+    }
+
+    // 6) 越界下标不能读到别的节点：树里只有一个节点时下标 7 必须是单位矩阵。
+    {
+        std::vector<Model::Node> nodes(1);
+        nodes[0].translation = glm::vec3(5.0f, 5.0f, 5.0f);
+        const glm::mat4 world = modelNodeWorldMatrix(nodes, 7);
+        expect(nearVec3(glm::vec3(world[3]), glm::vec3(0.0f)), "out-of-range node is identity");
+    }
+
+    if (ok)
+        std::cout << "[Model] nodeSelfTest PASS | cases=" << cases << " parent-chain=ok trs-order=ok\n";
+    return ok;
 }

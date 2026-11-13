@@ -923,6 +923,13 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
                 groupIndexValue = groupIt->second;
             }
 
+            // F4：glTF 几何存在它所属节点的局部空间，实例矩阵 = 实体世界矩阵 * 节点世界矩阵。
+            // 没有节点信息的模型（OBJ / 地形 / 体素 / 蒙皮）nodeMatrix 保持单位矩阵。
+            const bool hasNode = (subMesh.node != kNoModelNode);
+            const glm::mat4 nodeMatrix = hasNode ? model->getNodeWorldMatrix(subMesh.node)
+                                                 : glm::mat4(1.0f);
+            const glm::mat4 instanceMatrix = worldTransform.matrix * nodeMatrix;
+
             glm::vec3 localMin = model->getBoundsMin();
             glm::vec3 localMax = model->getBoundsMax();
             if (i < boundsList.size() && boundsList[i].valid)
@@ -930,10 +937,22 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
                 localMin = boundsList[i].min;
                 localMax = boundsList[i].max;
             }
+            else if (hasNode)
+            {
+                glm::vec3 nodeMin(0.0f);
+                glm::vec3 nodeMax(0.0f);
+                if (model->getNodeBounds(subMesh.node, nodeMin, nodeMax))
+                {
+                    localMin = nodeMin;
+                    localMax = nodeMax;
+                }
+            }
 
             InstanceRecord record{};
-            record.model = worldTransform.matrix;
-            record.normal = worldTransform.normalMatrix;
+            record.model = instanceMatrix;
+            record.normal = hasNode
+                ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(instanceMatrix))))
+                : worldTransform.normalMatrix;
             record.flags = glm::uvec4(slot, materialValid ? 1u : 0u,
                                       subMesh.alphaMasked ? 1u : 0u,
                                       (subMesh.albedoFallback || entityAlbedoFallback) ? 1u : 0u);
@@ -951,7 +970,7 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
                 const glm::vec3 localPoint((corner & 1) ? localMax.x : localMin.x,
                                            (corner & 2) ? localMax.y : localMin.y,
                                            (corner & 4) ? localMax.z : localMin.z);
-                const glm::vec3 worldPoint = glm::vec3(worldTransform.matrix * glm::vec4(localPoint, 1.0f));
+                const glm::vec3 worldPoint = glm::vec3(instanceMatrix * glm::vec4(localPoint, 1.0f));
                 if (!group.hasBounds)
                 {
                     group.boundsMin = worldPoint;

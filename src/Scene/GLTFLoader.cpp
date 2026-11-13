@@ -68,8 +68,8 @@ void setupGLTFLoader(tinygltf::TinyGLTF& loader)
 // glTF 2.0 加载实现
 //
 // 设计要点：
-//   * 遍历节点时累积变换，几何直接烘焙到世界空间
-//     （当前渲染路径没有逐物体变换的需求，SubMesh 也不携带节点信息）
+//   * 节点树原样保留在 Model::Node 里，几何只存「节点局部空间」，
+//     节点矩阵在渲染 / 拾取 / 包围盒处现乘（F4：改 node 变换不必重导资产）
 //   * 材质解析成 DescriptorManager 的槽位，逐个子网格写进 SubMesh::materialSlot，
 //     于是 GeometrySystem 无需区分 OBJ / glTF
 //   * 贴图严格按「语义」选色彩空间：颜色贴图 sRGB，数据贴图 UNORM
@@ -86,6 +86,7 @@ void setupGLTFLoader(tinygltf::TinyGLTF& loader)
 
 #include <functional>
 #include <iostream>
+#include <limits>
 
 namespace tiny
 {
@@ -431,6 +432,29 @@ namespace
         }
     }
 
+    // F4：把 glTF 节点树原样搬进 Model。几何之后只存节点局部空间，
+    // 所以节点自身的 TRS 必须完整保留，不能再像以前那样只用来烘焙顶点。
+    void buildModelNodes(const tinygltf::Model& gltf,
+                         const std::vector<int32_t>& nodeParents,
+                         Model::Builder& builder)
+    {
+        const float big = std::numeric_limits<float>::max();
+        builder.nodes.resize(gltf.nodes.size());
+        builder.nodeBoundsMin.assign(gltf.nodes.size(), glm::vec3(big));
+        builder.nodeBoundsMax.assign(gltf.nodes.size(), glm::vec3(-big));
+
+        for (size_t i = 0; i < gltf.nodes.size(); ++i)
+        {
+            const tinygltf::Node& node = gltf.nodes[i];
+            Model::Node& modelNode = builder.nodes[i];
+            modelNode.name = node.name;
+            modelNode.parent = nodeParents[i];
+            modelNode.mesh = node.mesh;
+            decomposeTRS(nodeLocalMatrix(node), modelNode.translation,
+                         modelNode.rotation, modelNode.scale);
+        }
+    }
+
     void buildJointSlots(const tinygltf::Model& gltf, Model::Builder& builder,
                          GLTFSkeletonData& out)
     {
@@ -524,23 +548,19 @@ namespace
         return result;
     }
 
+    // F4：顶点直接存节点局部空间的坐标。节点矩阵由 Model::Node 承担，
+    // 渲染 / 拾取 / 包围盒在消费端相乘，改 node 变换不需要重新导资产。
     Vertex makeVertex(const AccessorView& positions, const AccessorView& normals,
-                      const AccessorView& uvs, size_t vertexIndex, bool skinned,
-                      const glm::mat4& world, const glm::mat3& normalMatrix,
+                      const AccessorView& uvs, size_t vertexIndex,
                       size_t& missingNormals)
     {
         Vertex vertex{};
 
-        const glm::vec3 localPos = readVec3(positions, vertexIndex);
-        vertex.position = skinned
-            ? localPos
-            : glm::vec3(world * glm::vec4(localPos, 1.0f));
+        vertex.position = readVec3(positions, vertexIndex);
 
         if (normals.base != nullptr)
         {
-            vertex.normal = skinned
-                ? readVec3(normals, vertexIndex)
-                : glm::normalize(normalMatrix * readVec3(normals, vertexIndex));
+            vertex.normal = readVec3(normals, vertexIndex);
         }
         else
         {
@@ -583,8 +603,7 @@ namespace
     }
 
     uint32_t appendPrimitiveVertices(GLTFGeometryState& state, const tinygltf::Primitive& prim,
-                                     const GLTFPrimitiveViews& views,
-                                     const glm::mat4& world, const glm::mat3& normalMatrix)
+                                     const GLTFPrimitiveViews& views)
     {
         const uint32_t firstVertex = static_cast<uint32_t>(state.builder.vertices.size());
         const bool skinned = views.skin.index >= 0;
@@ -592,8 +611,7 @@ namespace
         for (size_t v = 0; v < views.positions.count; ++v)
         {
             state.builder.vertices.push_back(makeVertex(
-                views.positions, views.normals, views.uvs, v, skinned,
-                world, normalMatrix, state.missingNormals));
+                views.positions, views.normals, views.uvs, v, state.missingNormals));
 
             if (state.skeleton.hasSkinData)
             {
@@ -624,11 +642,13 @@ namespace
     void appendPrimitiveSubMesh(const GLTFMaterialTable& materials,
                                 const tinygltf::Primitive& prim,
                                 uint32_t firstIndex, uint32_t indexCount,
+                                uint32_t nodeIndex,
                                 Model::Builder& builder)
     {
         SubMesh sub{};
         sub.firstIndex = firstIndex;
         sub.indexCount = indexCount;
+        sub.node = nodeIndex;
 
         const bool hasMaterial = prim.material >= 0 &&
             prim.material < static_cast<int>(materials.slots.size());
@@ -647,8 +667,7 @@ namespace
     }
 
     void appendPrimitive(GLTFGeometryState& state, const tinygltf::Node& node,
-                         const tinygltf::Primitive& prim, const glm::mat4& world,
-                         const glm::mat3& normalMatrix)
+                         int nodeIndex, const tinygltf::Primitive& prim)
     {
         if (prim.mode != TINYGLTF_MODE_TRIANGLES)
         {
@@ -682,36 +701,54 @@ namespace
         views.skin = resolvePrimitiveSkin(state, node, prim);
 
         const uint32_t firstIndex = static_cast<uint32_t>(state.builder.indices.size());
-        const uint32_t firstVertex = appendPrimitiveVertices(state, prim, views, world, normalMatrix);
+        const uint32_t firstVertex = appendPrimitiveVertices(state, prim, views);
         appendPrimitiveIndices(state.gltf, prim, firstVertex, views.positions.count, state.builder);
 
         const uint32_t indexCount =
             static_cast<uint32_t>(state.builder.indices.size()) - firstIndex;
-        appendPrimitiveSubMesh(state.materials, prim, firstIndex, indexCount, state.builder);
+
+        // 蒙皮顶点本来就在绑定姿态的局部空间，再乘一次节点矩阵就是双重变换。
+        const bool skinned = views.skin.index >= 0;
+        const uint32_t subMeshNode = skinned ? kNoModelNode : static_cast<uint32_t>(nodeIndex);
+        appendPrimitiveSubMesh(state.materials, prim, firstIndex, indexCount, subMeshNode, state.builder);
+
+        if (!skinned && nodeIndex >= 0 &&
+            static_cast<size_t>(nodeIndex) < state.builder.nodeBoundsMin.size())
+        {
+            glm::vec3& lo = state.builder.nodeBoundsMin[static_cast<size_t>(nodeIndex)];
+            glm::vec3& hi = state.builder.nodeBoundsMax[static_cast<size_t>(nodeIndex)];
+            for (size_t v = firstVertex; v < state.builder.vertices.size(); ++v)
+            {
+                const glm::vec3& position = state.builder.vertices[v].position;
+                lo = glm::min(lo, position);
+                hi = glm::max(hi, position);
+            }
+        }
     }
 
-    void processSceneNode(GLTFGeometryState& state, int nodeIndex, const glm::mat4& parentMatrix)
+    // F4：这里只负责遍历拓扑，不再累积世界矩阵——节点变换已经存进 builder.nodes。
+    void processSceneNode(GLTFGeometryState& state, int nodeIndex)
     {
         if (nodeIndex < 0 || nodeIndex >= static_cast<int>(state.gltf.nodes.size()))
             return;
 
         const tinygltf::Node& node = state.gltf.nodes[nodeIndex];
-        const glm::mat4 world = parentMatrix * nodeLocalMatrix(node);
 
         if (node.mesh >= 0 && node.mesh < static_cast<int>(state.gltf.meshes.size()))
         {
             const tinygltf::Mesh& mesh = state.gltf.meshes[node.mesh];
-            const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(world)));
             for (const tinygltf::Primitive& prim : mesh.primitives)
-                appendPrimitive(state, node, prim, world, normalMatrix);
+                appendPrimitive(state, node, nodeIndex, prim);
         }
 
         for (int child : node.children)
-            processSceneNode(state, child, world);
+            processSceneNode(state, child);
     }
 
     void processSceneGeometry(GLTFGeometryState& state)
     {
+        buildModelNodes(state.gltf, buildNodeParents(state.gltf), state.builder);
+
         if (!state.gltf.scenes.empty())
         {
             int sceneIndex = state.gltf.defaultScene;
@@ -719,12 +756,12 @@ namespace
                 sceneIndex = 0;
 
             for (int rootNode : state.gltf.scenes[sceneIndex].nodes)
-                processSceneNode(state, rootNode, glm::mat4(1.0f));
+                processSceneNode(state, rootNode);
             return;
         }
 
         for (size_t i = 0; i < state.gltf.nodes.size(); ++i)
-            processSceneNode(state, static_cast<int>(i), glm::mat4(1.0f));
+            processSceneNode(state, static_cast<int>(i));
     }
 
     // ---------------- 动画 ----------------
