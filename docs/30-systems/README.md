@@ -24,3 +24,4 @@ updated: 2026-11-13
 | [water](water.md) | 水面在哪一步画、径向网格怎么跟随相机、波浪/反射/泡沫怎么算、为什么某些场景没有水？ |
 | [terrain-materials](terrain-materials.md) | Set2 的 12 个 sampler 怎么排？四套材质集怎么加载/回退？四层 PBR 在 shader 里怎么混？ |
 | [asset-pack](asset-pack.md) | 资产怎么打包/挂载、包格式长什么样、哪些加载点已接入？ |
+| [simulation-tick](simulation-tick.md) | 模拟为什么按固定步长跑？卡顿时怎么处理？跳跃为什么会被吞？ |

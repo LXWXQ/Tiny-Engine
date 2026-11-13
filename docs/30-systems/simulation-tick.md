@@ -1,0 +1,117 @@
+---
+id: systems/simulation-tick
+title: 固定步长模拟时钟
+type: system
+scope: src/Scene/SimulationClock.h, src/Scene/SimulationClock.cpp, src/Editor/EditorLayer.cpp（接入中）, main.cpp（--tick-test）
+read-when: 改角色移动/跳跃、把模拟接到新的循环、排查"高刷屏跳得高/走得快"或重放不一致
+size: ~130 行
+updated: 2026-11-13
+---
+
+# 固定步长模拟时钟
+
+## 1. 它解决什么问题
+
+主循环过去把 `glfwGetTime` 的帧间隔直接喂给模拟：`Scene::update(dt)` 里的
+角色控制器、`SystemScheduler` 的 Simulation / PostTransform 两相都拿同一个
+`dt`。于是"一秒走多远、跳多高"取决于这台机器跑多少帧 —— 同样的按键在
+60fps 与 144fps 下走出不同轨迹，也没法重放（D2 的预测/重放要求同一串输入
+产生逐位相同的结果）。
+
+`SimulationClock` 把"模拟"和"渲染"拆开：
+
+| 层 | 用什么时间 | 理由 |
+|---|---|---|
+| 渲染 / UI / 相机 | 可变帧间隔 `frameTime` | 鼠标视角如果量化到 60Hz 会有台阶感 |
+| 模拟（角色、系统相） | 固定 `1/60` 秒 | 轨迹只由输入决定，与帧率无关 |
+| 异步流送（地形/体素） | 留在帧轮询 | 它们本来就是后台线程 + 主线程轮询，不属于模拟步 |
+
+## 2. API
+
+```cpp
+struct InputCmd
+{
+    glm::vec3 moveWorld{ 0.0f, 0.0f, 0.0f };  // 采样时已按 yaw 转成世界方向
+    bool jump = false;                          // 边沿：本帧刚按下
+    bool sprint = false;                        // 电平：按住期间每 tick 都为 true
+    uint32_t tick = 0;                          // 由时钟填写
+};
+
+class SimulationClock
+{
+    void setFixedStep(float seconds);           // 非法值忽略，保持上一次的合法步长
+    void reset();                               // 进/出播放时清空 accumulator 与 tick
+    uint32_t advance(float frameDelta, const InputCmd& cmd,
+                     const std::function<void(const InputCmd&, float)>& step);
+    float alpha() const;                        // accumulator / fixedStep，留给渲染插值
+    uint32_t tick() const;
+    uint32_t droppedTicks() const;
+};
+```
+
+`advance` 返回本帧实际执行的 tick 数；回调收到的第二个参数恒等于
+`fixedStep()`，`InputCmd::tick` 是递增的 tick 号。
+
+## 3. 三条护栏
+
+| 护栏 | 值 | 不这么做会怎样 |
+|---|---|---|
+| 单帧帧间隔上限 | `kMaxFrameDelta = 0.25s` | 断点/加载卡 2 秒后一次补 120 个 tick，角色瞬移穿墙 |
+| 单帧最多 tick 数 | `kMaxStepsPerFrame = 8` | 追帧比卡顿更糟：越追越卡，形成死亡螺旋 |
+| 跳跃锁存 | `jumpLatched_` | 144fps 下有些帧一个 tick 都不跑，`IsKeyPressed` 的边沿会被直接吞掉 |
+
+超出上限的累积量会计入 `droppedTicks()`，不会悄悄丢掉。
+
+## 4. 三个已知风险（C1 方案评审时列出）
+
+1. **输入边沿**：`ImGui::IsKeyPressed(Space)` 是"每帧一次"的状态。如果在
+   tick 循环里直接读，一帧跑 2 个 tick 就会触发两次跳。必须先采样成
+   `InputCmd::jump`，由时钟锁存后交给第一个 tick。
+2. **回归隔离**：`--selftest` 与全部编辑器用例依赖 `Scene::update` 自己跑
+   模拟。接入时必须让"外部驱动模拟"默认关闭（`simulationDrivenExternally`
+   默认 false），否则一开就全红。
+3. **异步地面**：地形/体素流送在 tick 之间改变地面高度，"同一串输入逐位
+   相等"只在"地面不变"的前提下成立。跨 chunk 的确定性留到 D2（预测/重放）
+   再处理，`--tick-test` 的重放用例只用固定地面。
+
+## 5. 已拍板的决定
+
+1. 固定步长 60Hz（`1/60`）。
+2. 单帧上限 `0.25s`、最多 8 tick，多余丢弃并计数。
+3. 相机 / UI 不进 tick。
+4. Editing 态不进 tick，只有 Playing 与 Runtime 进。
+5. Paused 清空 accumulator（恢复时不追帧）。
+6. `--tick-test` 的重放一致性用纯函数验证，不建窗口。
+7. 渲染插值（`alpha`）单独一批（C1c），本批只提供 `alpha()`。
+
+## 6. 自检
+
+```powershell
+.\build\Debug\TinyEngine.exe --tick-test
+```
+
+成功输出（稳定标记，Validate 用例 `m1-c1-tick-clock` 依赖它）：
+
+```
+[Sim] clockSelfTest PASS | cases=8 fixed=1/60 max-steps=8 jump-latch=ok
+```
+
+8 组用例覆盖：默认 1/60、一秒 60 tick、抖动帧只由总时间决定、不足一 tick
+的帧不推进且 `alpha ∈ (0,1)`、跳跃锁存恰好消费一次、卡顿帧被 8 tick 截断
+并记 dropped、步长可配 + reset 语义、回调 tick 号与时钟一致。
+
+## 7. 接入现状
+
+- **C1a（已完成）**：`SimulationClock` + `--tick-test` + Validate 用例。
+- **C1b（进行中）**：`EditorLayer::beginFrame` 推进时钟，`updatePlayState`
+  与 `updateRuntimeMode` 的输入采样抽成 `sampleInputCmd`，模拟放进 tick
+  回调；`Scene` 增加 `stepSimulation(fixedDt)`，把 `Scene.cpp:1062-1064`
+  的三行包进"未被外部驱动"的条件。
+- **C1c（未开始）**：渲染插值用 `alpha()` 在上一 tick 与当前 tick 的
+  变换之间插值。
+
+## 8. 限制
+
+- 只做主线程推进，没有多线程确定性保证。
+- 时钟本身不记录输入，录制/回放是 D2 的事。
+- 流送中的地面变化不参与 tick 内确定性（见风险 3）。

@@ -9,6 +9,7 @@
 #include "src/RHI/TextureBudget.h"
 #include "src/Editor/SceneSerializer.h"
 #include "src/Terrain/TerrainSculptDelta.h"
+#include "src/Scene/SimulationClock.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
@@ -133,6 +134,7 @@ const UsageLine kUsageLines[] = {
         { "地形", "--terrain-sculpt-test", "地形雕刻差分与 JSON 往返的自检（不需要 Vulkan / 窗口）" },
         { "渲染", "--texture-budget <MB>", "纹理显存预算（MB；0 = 不限制，超限时降 mip / 减半分辨率）" },
         { "自检", "--texture-budget-test", "纹理预算降级策略自检（不需要 Vulkan / 窗口）" },
+        { "自检", "--tick-test", "固定步长模拟时钟契约自检（不需要 Vulkan / 窗口）" },
     { "剖析", "--build-info", "打印本二进制的调试能力后退出" },
     { "剖析", "--gpu-timing", "每 pass GPU 计时，退出时写 gpu_timing.csv" },
     { "剖析", "--gpu-timing-csv <path>", "指定计时 CSV 路径（隐含 --gpu-timing）" },
@@ -203,6 +205,7 @@ int main(int argc, char** argv)
     bool materialJsonTest = false;
     bool terrainSculptTest = false;
     bool textureBudgetTest = false;
+    bool tickTest = false;
     int textureBudgetMB = -1;   // < 0 表示命令行没给，保持不限制
     std::string packBuildDir;
     std::string packBuildOut;
@@ -380,6 +383,7 @@ int main(int argc, char** argv)
         else if (arg == "--material-json-test") materialJsonTest = true;
         else if (arg == "--terrain-sculpt-test") terrainSculptTest = true;
         else if (arg == "--texture-budget-test") textureBudgetTest = true;
+        else if (arg == "--tick-test") tickTest = true;
         else if (arg == "--texture-budget")
         {
             if (i + 1 < argc && argv[i + 1][0] != '-')
@@ -543,6 +547,9 @@ int main(int argc, char** argv)
 
         if (textureBudgetTest)
             return rhi::textureBudgetSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (tickTest)
+            return scene::simulationClockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 
         if (terrainSculptTest)
         {
