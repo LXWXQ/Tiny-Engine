@@ -33,6 +33,9 @@ public:
     static bool roundTrip(const scene::SceneDescription& input,
                           scene::SceneDescription& output,
                           std::string& errorMessage);
+
+    // B3：材质只存非默认字段的契约自检（不需要 Vulkan / 文件系统）。
+    static bool materialJsonSelfTest();
 };
 
 } // namespace editor

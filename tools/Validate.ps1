@@ -197,6 +197,8 @@ $tests = @(
        MustContain = @("[Model] nodeSelfTest PASS") },
     @{ Name = "m1-b2-tpack"; Args = @("--pack-test");
        MustContain = @("[AssetPack] selfTest PASS") },
+    @{ Name = "m1-b3-material-json"; Args = @("--material-json-test");
+       MustContain = @("[Material] jsonSelfTest PASS") },
     @{ Name = "selftest-default"; Args = @("--selftest", "$Frames");
        MustContain = @("[Scene] ECS/spatial selfTest PASS", "[Scene] ECS component selfTest PASS", "[TD07] ComputeProbe disabled: no probe dispatches or CPU readback", "[SelfTest]") },
     @{ Name = "selftest-no-bloom"; Args = @("--selftest", "$Frames", "--no-bloom");
@@ -438,7 +440,7 @@ foreach ($test in $tests) {
     # P0: every test that creates a Vulkan device must report zero validation messages.
     # (jobtest / config-test / --build-info / --diagnostics-test return before the Vulkan device exists.)
     $needsValidationMarker = -not $test.SkipValidationMarker -and
-        $test.Name -notin @('jobtest', 'td09-config-migration', 'p0-build-info', 'p0-diagnostics-selftest', 'f2e-terrain-picking', 'm1-handle-contract', 'm1-trace-contract', 'm1-b1-gltf-nodes', 'm1-b2-tpack')
+        $test.Name -notin @('jobtest', 'td09-config-migration', 'p0-build-info', 'p0-diagnostics-selftest', 'f2e-terrain-picking', 'm1-handle-contract', 'm1-trace-contract', 'm1-b1-gltf-nodes', 'm1-b2-tpack', 'm1-b3-material-json')
     if ($needsValidationMarker) {
         if ($stdout.IndexOf("[Validation] errors=0 warnings=0", [StringComparison]::OrdinalIgnoreCase) -lt 0) {
             $reasons += "missing zero-validation marker '[Validation] errors=0 warnings=0'"

@@ -67,11 +67,6 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
       "camera": false,
       "material": {
         "name": "glTF/Default",
-        "baseColorFactor": [1, 1, 1, 1],
-        "metallicFactor": 1.0,
-        "roughnessFactor": 1.0,
-        "alphaCutoff": 0.5,
-        "alphaMode": 0,
         "albedoMap": "Textures/xxx.png"
       },
       "components": [
@@ -101,6 +96,12 @@ scene::SceneDescription  <-- SceneSerializer -->  JSON 文本
 `terrain` / `terrainWorld` / `character` / `components` / `sceneComponents` 都是**可选字段**，所以旧场景
 不需要迁移；读取端不按版本号拒绝，只有写入端跟 `kCurrentVersion`（当前 4）升版本。
 `sceneComponents` 与实体 `components` 分开：前者只接受 `scope=Scene` 的组件，且只存在一份。
+
+材质块**只写与默认值不同的字段**（默认值来自 `src/Core/Material.h`：`baseColorFactor` 全 1、
+`metallicFactor`/`roughnessFactor` 为 1、`alphaCutoff` 0.5、`alphaMode` 0 = OPAQUE），
+所以默认材质只剩 `"name"`。读取端一律用 `m.value(key, 默认值)` 补齐，旧文件（全字段写法）照样能读。
+25 个默认材质的材质段从 4390B 降到 540B（-88%）；`main.scene.json` 里的 `__EngineDefault` 从 151B 降到 27B。
+契约由 `--material-json-test` 守住（`[Material] jsonSelfTest PASS`，Validate 用例 `m1-b3-material-json`）。
 
 ## 预制体文件（`.prefab.json`）
 

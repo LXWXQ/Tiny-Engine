@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <iostream>
 
 using json = nlohmann::json;
 
@@ -461,13 +462,24 @@ json toJson(const scene::SceneDescription& description)
 
         if (e.material.present)
         {
+            // B3：只写与默认值不同的字段。默认材质（1/1/1/1、metal 1、rough 1、
+            // cutoff 0.5、OPAQUE）只留 name，读侧 m.value(key, 默认值) 自动补回，
+            // 因此往返结果不变，而磁盘上的材质块大幅变小。
             json m;
             m["name"] = e.material.name;
-            m["baseColorFactor"] = toJson(e.material.baseColorFactor);
-            m["metallicFactor"] = e.material.metallicFactor;
-            m["roughnessFactor"] = e.material.roughnessFactor;
-            m["alphaCutoff"] = e.material.alphaCutoff;
-            m["alphaMode"] = e.material.alphaMode;
+            const glm::vec4 baseColor = e.material.baseColorFactor;
+            const bool baseColorIsDefault = baseColor.x == 1.0f && baseColor.y == 1.0f &&
+                                            baseColor.z == 1.0f && baseColor.w == 1.0f;
+            if (!baseColorIsDefault)
+                m["baseColorFactor"] = toJson(e.material.baseColorFactor);
+            if (e.material.metallicFactor != 1.0f)
+                m["metallicFactor"] = e.material.metallicFactor;
+            if (e.material.roughnessFactor != 1.0f)
+                m["roughnessFactor"] = e.material.roughnessFactor;
+            if (e.material.alphaCutoff != 0.5f)
+                m["alphaCutoff"] = e.material.alphaCutoff;
+            if (e.material.alphaMode != 0)
+                m["alphaMode"] = e.material.alphaMode;
             if (!e.material.albedoMap.empty())
                 m["albedoMap"] = toRelative(e.material.albedoMap);
             if (!e.material.normalMap.empty())
@@ -671,6 +683,160 @@ bool SceneSerializer::roundTrip(const scene::SceneDescription& input,
         }
     }
     return true;
+}
+
+bool SceneSerializer::materialJsonSelfTest()
+{
+    auto expect = [](bool condition, const char* what)
+    {
+        if (!condition)
+            std::cerr << "[Material] jsonSelfTest FAIL: " << what << "\n";
+        return condition;
+    };
+    auto sameVec4 = [](const glm::vec4& a, const glm::vec4& b)
+    {
+        return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
+    };
+
+    bool ok = true;
+
+    // 用例 1：全默认材质只写 name，其余参数键一个都不出现。
+    {
+        scene::SceneDescription desc;
+        scene::EntityDescription entity;
+        entity.name = "default-material";
+        entity.material.present = true;
+        entity.material.name = "mat_default";
+        desc.entities.push_back(entity);
+
+        const json block = toJson(desc)["entities"][0]["material"];
+        ok &= expect(block.size() == 1 && block.contains("name"),
+                     "default material must serialize only name");
+    }
+
+    // 用例 2：非默认材质五个参数键全部出现，且值正确。
+    {
+        scene::SceneDescription desc;
+        scene::EntityDescription entity;
+        entity.name = "non-default-material";
+        entity.material.present = true;
+        entity.material.name = "mat_non_default";
+        entity.material.baseColorFactor = glm::vec4(0.5f, 0.25f, 0.125f, 1.0f);
+        entity.material.metallicFactor = 0.2f;
+        entity.material.roughnessFactor = 0.8f;
+        entity.material.alphaCutoff = 0.3f;
+        entity.material.alphaMode = 1;
+        desc.entities.push_back(entity);
+
+        const json block = toJson(desc)["entities"][0]["material"];
+        ok &= expect(block.size() == 6, "non-default material must serialize all parameter keys");
+        ok &= expect(block.value("metallicFactor", 0.0f) == 0.2f, "metallicFactor value");
+        ok &= expect(block.value("roughnessFactor", 0.0f) == 0.8f, "roughnessFactor value");
+        ok &= expect(block.value("alphaCutoff", 0.0f) == 0.3f, "alphaCutoff value");
+        ok &= expect(block.value("alphaMode", -1) == 1, "alphaMode value");
+        const json& base = block["baseColorFactor"];
+        ok &= expect(base.is_array() && base.size() == 4 && base[0].get<float>() == 0.5f &&
+                         base[2].get<float>() == 0.125f,
+                     "baseColorFactor value");
+    }
+
+    // 用例 3：往返一致 —— 默认 / 非默认 / 带贴图三种材质经 JSON 一轮后逐字段相等。
+    {
+        scene::SceneDescription input;
+        for (int i = 0; i < 3; ++i)
+        {
+            scene::EntityDescription entity;
+            entity.name = "entity-" + std::to_string(i);
+            entity.material.present = true;
+            entity.material.name = "mat-" + std::to_string(i);
+            input.entities.push_back(entity);
+        }
+        input.entities[1].material.baseColorFactor = glm::vec4(0.1f, 0.2f, 0.3f, 0.4f);
+        input.entities[1].material.metallicFactor = 0.05f;
+        input.entities[1].material.roughnessFactor = 0.95f;
+        input.entities[1].material.alphaCutoff = 0.25f;
+        input.entities[1].material.alphaMode = 1;
+        input.entities[2].material.albedoMap = std::string(TINY_RESOURCE_DIR) + "Texture/a.png";
+        input.entities[2].material.normalMap = std::string(TINY_RESOURCE_DIR) + "Texture/n.png";
+
+        scene::SceneDescription output;
+        std::string error;
+        const bool roundTripped = roundTrip(input, output, error);
+        ok &= expect(roundTripped, error.c_str());
+        if (roundTripped)
+        {
+            bool same = true;
+            for (std::size_t i = 0; i < input.entities.size(); ++i)
+            {
+                const auto& a = input.entities[i].material;
+                const auto& b = output.entities[i].material;
+                same = same && a.present == b.present && a.name == b.name;
+                same = same && sameVec4(a.baseColorFactor, b.baseColorFactor);
+                same = same && a.metallicFactor == b.metallicFactor;
+                same = same && a.roughnessFactor == b.roughnessFactor;
+                same = same && a.alphaCutoff == b.alphaCutoff;
+                same = same && a.alphaMode == b.alphaMode;
+                same = same && a.albedoMap == b.albedoMap && a.normalMap == b.normalMap &&
+                       a.metallicRoughnessMap == b.metallicRoughnessMap;
+            }
+            ok &= expect(same, "material round trip mismatch");
+        }
+    }
+
+    // 用例 4：alphaCutoff 与默认值不同就必须写盘（即使当前是 OPAQUE，也不能丢信息）。
+    {
+        scene::SceneDescription desc;
+        scene::EntityDescription entity;
+        entity.material.present = true;
+        entity.material.name = "cutoff-only";
+        entity.material.alphaCutoff = 0.75f;
+        desc.entities.push_back(entity);
+
+        const json block = toJson(desc)["entities"][0]["material"];
+        ok &= expect(block.size() == 2 && block.value("alphaCutoff", 0.0f) == 0.75f,
+                     "non-default alphaCutoff must be written");
+    }
+
+    // 用例 5：25 个默认材质的材质段体积，相对"全字段"写法必须降 60% 以上。
+    {
+        scene::SceneDescription desc;
+        for (int i = 0; i < 25; ++i)
+        {
+            scene::EntityDescription entity;
+            entity.material.present = true;
+            entity.material.name = "mat-" + std::to_string(i);
+            desc.entities.push_back(entity);
+        }
+
+        const json document = toJson(desc);
+        std::size_t compactBytes = 0;
+        std::size_t fullBytes = 0;
+        for (const json& entity : document["entities"])
+        {
+            const json& block = entity["material"];
+            compactBytes += block.dump(2).size();
+
+            json full;
+            full["name"] = block["name"];
+            full["baseColorFactor"] = json::array({ 1.0f, 1.0f, 1.0f, 1.0f });
+            full["metallicFactor"] = 1.0f;
+            full["roughnessFactor"] = 1.0f;
+            full["alphaCutoff"] = 0.5f;
+            full["alphaMode"] = 0;
+            fullBytes += full.dump(2).size();
+        }
+
+        const double dropPercent =
+            100.0 * (1.0 - static_cast<double>(compactBytes) / static_cast<double>(fullBytes));
+        ok &= expect(dropPercent >= 60.0, "default material bytes must drop at least 60%");
+
+        std::cout << "[Material] 25 个默认材质: compact=" << compactBytes << "B full=" << fullBytes
+                  << "B drop=" << static_cast<int>(dropPercent + 0.5) << "%\n";
+    }
+
+    if (ok)
+        std::cout << "[Material] jsonSelfTest PASS | cases=5 non-default-only=ok round-trip=ok\n";
+    return ok;
 }
 
 } // namespace editor
