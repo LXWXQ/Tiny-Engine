@@ -5,6 +5,7 @@
 #include "src/Scene/EntityHandle.h"
 #include "src/Scene/Trace.h"
 #include "src/Scene/Model.h"
+#include "src/Core/AssetPack.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
@@ -123,6 +124,8 @@ const UsageLine kUsageLines[] = {
     { "自检", "--handle-test", "实体句柄契约自检（不需要 Vulkan / 窗口）" },
     { "自检", "--trace-test", "射线契约自检（不需要 Vulkan / 窗口）" },
     { "自检", "--gltf-node-test", "glTF 节点树契约自检（不需要 Vulkan / 窗口）" },
+    { "资产", "--pack-test", "资产包契约自检（不需要 Vulkan / 窗口）" },
+    { "资产", "--pack-build <dir> <out>", "把目录递归打成 .tpack 资产包" },
     { "剖析", "--build-info", "打印本二进制的调试能力后退出" },
     { "剖析", "--gpu-timing", "每 pass GPU 计时，退出时写 gpu_timing.csv" },
     { "剖析", "--gpu-timing-csv <path>", "指定计时 CSV 路径（隐含 --gpu-timing）" },
@@ -189,6 +192,9 @@ int main(int argc, char** argv)
     bool handleTest = false;
     bool traceTest = false;
     bool gltfNodeTest = false;
+    bool packTest = false;
+    std::string packBuildDir;
+    std::string packBuildOut;
     bool crossQueueTest = false;
     bool resizeTest = false;
     bool materialStress = false;
@@ -359,6 +365,16 @@ int main(int argc, char** argv)
         else if (arg == "--handle-test") handleTest = true;
         else if (arg == "--trace-test") traceTest = true;
     else if (arg == "--gltf-node-test") gltfNodeTest = true;
+        else if (arg == "--pack-test") packTest = true;
+        else if (arg == "--pack-build")
+        {
+            if (i + 2 < argc)
+            {
+                packBuildDir = argv[i + 1];
+                packBuildOut = argv[i + 2];
+                i += 2;
+            }
+        }
         else if (arg == "--cross-queue-test") crossQueueTest = true;
         else if (arg == "--resize-test") resizeTest = true;
         else if (arg == "--material-stress") materialStress = true;
@@ -495,6 +511,31 @@ int main(int argc, char** argv)
 
         if (gltfNodeTest)
             return modelNodeSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (packTest)
+            return assets::assetPackSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (!packBuildDir.empty())
+        {
+            std::string packError;
+            if (!assets::packDirectory(packBuildDir, packBuildOut, packError))
+            {
+                std::cerr << "[AssetPack] 打包失败: " << packError << '\n';
+                return EXIT_FAILURE;
+            }
+            std::cout << "[AssetPack] 已写出 " << packBuildOut << '\n';
+            return EXIT_SUCCESS;
+        }
+
+        // M1-B2：存在资产包就先挂上，之后所有贴图/模型加载都会优先从包内读。
+        {
+            std::string packError;
+            if (auto pack = assets::AssetPack::open("Resources/assets.tpack", packError))
+            {
+                assets::mounts().mount(pack);
+                std::cout << "[AssetPack] 已挂载 Resources/assets.tpack | 条目 " << pack->entries().size() << '\n';
+            }
+        }
 
         diag::configureValidationLog(diagOptions.validationJsonlPath);
 

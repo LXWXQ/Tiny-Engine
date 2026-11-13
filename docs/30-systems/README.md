@@ -5,7 +5,7 @@ type: system
 scope: src/Scene, src/Core, src/Terrain, src/Vegetation, src/Render
 read-when: 修改 ECS/场景、JobSystem、配置、ImGui 面板、程序化地形或局部雾
 size: ~60 行
-updated: 2026-11-11
+updated: 2026-11-13
 ---
 
 # 30-systems 运行时系统
@@ -23,3 +23,4 @@ updated: 2026-11-11
 | [character](character.md) | 运行模式角色怎么加载、怎么动、骨骼动画怎么切、为什么全黑/悬空？ |
 | [water](water.md) | 水面在哪一步画、径向网格怎么跟随相机、波浪/反射/泡沫怎么算、为什么某些场景没有水？ |
 | [terrain-materials](terrain-materials.md) | Set2 的 12 个 sampler 怎么排？四套材质集怎么加载/回退？四层 PBR 在 shader 里怎么混？ |
+| [asset-pack](asset-pack.md) | 资产怎么打包/挂载、包格式长什么样、哪些加载点已接入？ |

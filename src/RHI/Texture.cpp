@@ -1,4 +1,5 @@
 #include "Texture.h"
+#include "Core/AssetPack.h"
 #include <stdexcept>
 #include <iostream>
 #include <cstring>
@@ -126,7 +127,18 @@ Texture& Texture::operator=(Texture&& other) noexcept
 void Texture::loadLDR(const std::string& filepath, VkFormat format, VkCommandPool commandPool, bool tileableMips)
 {
 	int texWidth, texHeight, texChannels;
-	stbi_uc* pixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+	// M1-B2: asset pack first, file system as fallback; both decode from memory.
+	std::vector<uint8_t> packed;
+	stbi_uc* pixels = nullptr;
+	if (assets::mounts().readFile(filepath, packed))
+	{
+		pixels = stbi_load_from_memory(packed.data(), static_cast<int>(packed.size()),
+			&texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+	}
+	else
+	{
+		pixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+	}
 
 	if (!pixels)
 		throw std::runtime_error("Texture: failed to load " + filepath);
@@ -142,7 +154,18 @@ void Texture::loadLDR(const std::string& filepath, VkFormat format, VkCommandPoo
 void Texture::loadHDR(const std::string& filepath, VkCommandPool commandPool)
 {
 	int texWidth, texHeight, texChannels;
-	float* pixels = stbi_loadf(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+	// M1-B2: asset pack first, file system as fallback; both decode from memory.
+	std::vector<uint8_t> packed;
+	float* pixels = nullptr;
+	if (assets::mounts().readFile(filepath, packed))
+	{
+		pixels = stbi_loadf_from_memory(packed.data(), static_cast<int>(packed.size()),
+			&texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+	}
+	else
+	{
+		pixels = stbi_loadf(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+	}
 
 	if (!pixels)
 		throw std::runtime_error("Texture: failed to load HDR " + filepath);
