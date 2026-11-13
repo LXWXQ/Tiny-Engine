@@ -331,6 +331,23 @@ scene::SceneDescription fromJson(const json& root)
             entity.characterGroundSnapDistance = c.value("groundSnapDistance", entity.characterGroundSnapDistance);
         }
 
+        if (e.contains("terrainSculpt") && e["terrainSculpt"].is_object())
+        {
+            const json& sculpt = e["terrainSculpt"];
+            const auto indices = sculpt.value("indices", json::array());
+            const auto heights = sculpt.value("heights", json::array());
+            if (indices.is_array() && heights.is_array() && indices.size() == heights.size())
+            {
+                entity.terrainSculpt.indices.reserve(indices.size());
+                entity.terrainSculpt.heights.reserve(heights.size());
+                for (std::size_t i = 0; i < indices.size(); ++i)
+                {
+                    entity.terrainSculpt.indices.push_back(indices[i].get<uint32_t>());
+                    entity.terrainSculpt.heights.push_back(heights[i].get<float>());
+                }
+            }
+        }
+
         if (e.contains("material") && e["material"].is_object())
         {
             const json& m = e["material"];
@@ -435,6 +452,15 @@ json toJson(const scene::SceneDescription& description)
         if (e.isTerrain)
         {
             j["terrain"] = writeTerrainConfig(e.terrainConfig);
+
+            // B4：只写被笔刷改过的格子，整块高度场（257² float = 264KB）不写盘。
+            if (!e.terrainSculpt.empty())
+            {
+                json sculpt;
+                sculpt["indices"] = e.terrainSculpt.indices;
+                sculpt["heights"] = e.terrainSculpt.heights;
+                j["terrainSculpt"] = std::move(sculpt);
+            }
         }
         if (e.isTerrainWorld)
         {
@@ -836,6 +862,62 @@ bool SceneSerializer::materialJsonSelfTest()
 
     if (ok)
         std::cout << "[Material] jsonSelfTest PASS | cases=5 non-default-only=ok round-trip=ok\n";
+    return ok;
+}
+
+bool SceneSerializer::terrainSculptJsonSelfTest()
+{
+    auto expect = [](bool condition, const char* what)
+    {
+        if (!condition)
+            std::cerr << "[Terrain] sculptJsonSelfTest FAIL: " << what << "\n";
+        return condition;
+    };
+
+    bool ok = true;
+
+    scene::SceneDescription input;
+    {
+        scene::EntityDescription terrainEntity;
+        terrainEntity.name = "sculpted-terrain";
+        terrainEntity.isTerrain = true;
+        terrainEntity.terrainSculpt.indices = { 3u, 17u, 400u };
+        terrainEntity.terrainSculpt.heights = { 0.125f, 0.75f, 0.5f };
+        input.entities.push_back(terrainEntity);
+        input.entities.push_back(scene::EntityDescription{});   // 没有雕刻的普通实体
+    }
+
+    scene::SceneDescription output;
+    std::string error;
+    const bool roundTripped = roundTrip(input, output, error);
+    ok &= expect(roundTripped, error.c_str());
+    if (roundTripped && output.entities.size() == input.entities.size())
+    {
+        const auto& in = input.entities[0].terrainSculpt;
+        const auto& out = output.entities[0].terrainSculpt;
+        ok &= expect(out.indices == in.indices, "sculpt indices must survive round trip");
+        ok &= expect(out.heights.size() == in.heights.size(), "sculpt height count");
+        bool sameHeights = out.heights.size() == in.heights.size();
+        for (std::size_t i = 0; sameHeights && i < in.heights.size(); ++i)
+            sameHeights = out.heights[i] == in.heights[i];
+        ok &= expect(sameHeights, "sculpt heights must survive round trip");
+        ok &= expect(output.entities[1].terrainSculpt.empty(),
+                     "entity without sculpt must stay empty");
+    }
+
+    // 空差分不写盘：文档里不应该出现 terrainSculpt 键。
+    {
+        scene::SceneDescription plain;
+        scene::EntityDescription entity;
+        entity.isTerrain = true;
+        plain.entities.push_back(entity);
+        const json document = toJson(plain);
+        ok &= expect(!document["entities"][0].contains("terrainSculpt"),
+                     "empty sculpt delta must not be serialized");
+    }
+
+    if (ok)
+        std::cout << "[Terrain] sculptJsonSelfTest PASS | cases=2 round-trip=ok empty-omitted=ok\n";
     return ok;
 }
 

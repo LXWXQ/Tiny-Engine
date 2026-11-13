@@ -2329,6 +2329,17 @@ scene::SceneDescription Scene::captureDescription(entt::entity root) const
         {
             e.isTerrain = true;
             e.terrainConfig = terrainComp->config;
+            // B4：std::map 本身有序，直接展开成升序的 indices/heights。
+            if (!terrainComp->sculptEdits.empty())
+            {
+                e.terrainSculpt.indices.reserve(terrainComp->sculptEdits.size());
+                e.terrainSculpt.heights.reserve(terrainComp->sculptEdits.size());
+                for (const auto& [index, height] : terrainComp->sculptEdits)
+                {
+                    e.terrainSculpt.indices.push_back(index);
+                    e.terrainSculpt.heights.push_back(height);
+                }
+            }
         }
         if (const auto* character = registry.try_get<CharacterControllerComponent>(entity))
         {
@@ -2869,6 +2880,36 @@ bool Scene::buildFromDescription(const scene::SceneDescription& description, std
                 (terrainComponent.cpuHeightField->generatedOnGpu
                     ? (meshGeneratedOnGpu ? "GPU height + GPU mesh" : "GPU height")
                     : (meshGeneratedOnGpu ? "GPU mesh" : "CPU fallback"));
+            if (!e.terrainSculpt.empty())
+            {
+                // B4：高度场先盖差分，再按盖完的高度场重建网格，否则网格和碰撞对不上。
+                std::string deltaError;
+                if (!terrain::applySculptDelta(*terrainComponent.cpuHeightField, e.terrainSculpt,
+                                               deltaError) ||
+                    !buildTerrainModelFromHeightField(e.terrainConfig, terrainComponent.cpuHeightField,
+                                                      terrainModel, vertexCount, indexCount,
+                                                      generationMs, errorMessage,
+                                                      &meshGeneratedOnGpu) ||
+                    !terrainModel)
+                {
+                    clearEntities();
+                    return false;
+                }
+                registry.emplace_or_replace<MeshComponent>(target, MeshComponent{ terrainModel });
+                terrainComponent.vertexCount = vertexCount;
+                terrainComponent.indexCount = indexCount;
+                terrainComponent.lastGenerationMs = generationMs;
+                terrainComponent.meshGeneratedOnGpu = meshGeneratedOnGpu;
+                terrainComponent.generationBackend =
+                    (terrainComponent.cpuHeightField->generatedOnGpu
+                        ? (meshGeneratedOnGpu ? "GPU height + GPU mesh (sculpted)"
+                                              : "GPU height (sculpted)")
+                        : (meshGeneratedOnGpu ? "GPU mesh (sculpted)" : "CPU fallback (sculpted)"));
+                for (std::size_t edit = 0; edit < e.terrainSculpt.indices.size(); ++edit)
+                    terrainComponent.sculptEdits[e.terrainSculpt.indices[edit]] =
+                        e.terrainSculpt.heights[edit];
+            }
+
             registry.emplace<TerrainComponent>(target, std::move(terrainComponent));
             setModelBounds(registry, target, terrainModel, &dirtySpatialEntities);
         }
@@ -5539,6 +5580,18 @@ bool Scene::sculptTerrain(const terrain::TerrainBrushSettings& brush,
         terrain->lastError.clear();
         terrain->generated = true;
         terrain->meshGeneratedOnGpu = commit.meshGeneratedOnGpu;
+        // B4：记录本次笔刷相对「笔刷前高度场」的差分，并进已有雕刻表，供存档写盘。
+        {
+            terrain::TerrainSculptDelta brushDelta;
+            std::string deltaError;
+            if (terrain->cpuHeightField &&
+                terrain::collectSculptDelta(*terrain->cpuHeightField, *commit.heightField,
+                                            brushDelta, deltaError))
+            {
+                for (std::size_t edit = 0; edit < brushDelta.indices.size(); ++edit)
+                    terrain->sculptEdits[brushDelta.indices[edit]] = brushDelta.heights[edit];
+            }
+        }
         terrain->cpuHeightField = commit.heightField;
         terrain->generationBackend = commit.meshGeneratedOnGpu
             ? "GPU mesh (sculpted)" : "CPU fallback (sculpted)";

@@ -4,8 +4,8 @@ title: 程序化地形
 type: system
 scope: src/Terrain/, src/Render/TerrainGpuMeshBuilder.*, Scene 地形生成接口, shaders/terrain_mesh.comp（材质与 Set2 见 terrain-materials）
 read-when: 改地形生成算法、网格规则、顶点色、创建/重建流程、地形存读或地形自检
-size: ~560 行
-updated: 2026-11-05
+size: ~590 行
+updated: 2026-11-13
 ---
 
 # 程序化地形
@@ -526,6 +526,29 @@ Surface Style）单独写在 [terrain-materials](terrain-materials.md)，这里�
 `Scene::buildFromDescription()` 重建 manager，再由流送逻辑围绕相机加载 chunk。
 `terrain.version` 当前为 5；旧 v1~v4 地形缺少的新字段由 `TerrainConfig`
 默认值补齐，旧场景没有 `terrain`/`terrainWorld` 字段时按普通实体加载。
+
+被笔刷改过的地形还会写一个可选对象，只存改过的格子，不写整块高度场：
+
+```json
+"terrainSculpt": {
+  "indices": [ 1234, 1235, 2001 ],
+  "heights": [ 0.512, 0.498, 0.63 ]
+}
+```
+
+`indices` 是高度场的行优先下标（升序），`heights` 是归一化高度
+（世界高度 = `baseHeight + heightScale * h`）。运行时形态是
+`TerrainComponent::sculptEdits`（`std::map<uint32_t, float>`）：每次笔刷只把
+"笔刷前 → 笔刷后"变化的格子并进去，保存时展开成这两个数组。加载时先
+`applySculptDelta()` 盖到重建出的高度场上，再
+`buildTerrainModelFromHeightField()` 重建网格，所以网格与碰撞对得上。
+257² 的整块高度场是 264KB，一次半径 4m 的笔刷通常只动几百格，
+因此存档里只出现差分；没有雕刻的地形不写这个键。
+
+当前限制：只有手动地形（`terrain`）的雕刻会落盘。流送 chunk
+（`terrainWorld`）由 manager 按 `chunkConfig` 重新生成，chunk 上的雕刻
+仍不保存，属于 tech-debt #10 的后续项。
+
 ## 10. 验证
 
 ```powershell
@@ -535,10 +558,17 @@ Surface Style）单独写在 [terrain-materials](terrain-materials.md)，这里�
 # 只看地形截图
 .\\build\\Debug\\TinyEngine.exe --selftest 30 --empty-scene --terrain-test `
   --screenshot terrain.png --screenshot-frame 20
+
+# 雕刻差分与存档往返（不需要 Vulkan / 窗口）
+.\\build\\Debug\\TinyEngine.exe --terrain-sculpt-test
 ```
 
 稳定标记：
 
+- `[Terrain] sculptDeltaSelfTest PASS | cases=5 ascending=ok apply=ok guards=ok`：
+  差分只收改动格且升序，尺寸不一致、越界、长度不等、非递增、NaN 全部拒绝；
+- `[Terrain] sculptJsonSelfTest PASS | cases=2 round-trip=ok empty-omitted=ok`：
+  `terrainSculpt` 往返逐格相等，没有雕刻时不写这个键；
 - `[Terrain] LOD stitching PASS | lodPairs=9 edges=18 skirts=off boundary=full-res`：
   LOD0/1/2 的 3×3 邻接组合全部通过边界顶点位置、法线、UV、色断言；
 - `[Terrain] selfTest PASS`：同/不同 seed、非法参数、顶点/索引与法线、+Y 绕序、

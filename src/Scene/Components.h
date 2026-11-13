@@ -13,6 +13,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/glm.hpp>
 #include <cmath>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -237,6 +238,10 @@ struct TerrainComponent
     // CPU-side collision source. Built alongside the mesh and replaced only
     // after a successful generation/upload; not serialized.
     std::shared_ptr<terrain::HeightField> cpuHeightField;
+
+    // B4：手动地形被笔刷改过的格子（下标 -> 归一化高度），保存时写进
+    // terrainSculpt。流送 chunk 不走这里（它们的存档见 tech-debt #10）。
+    std::map<uint32_t, float> sculptEdits;
 };
 
 struct RenderTagComponent

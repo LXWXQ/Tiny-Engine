@@ -16,6 +16,7 @@
 
 #include "Scene/ComponentTypes.h"
 #include "Terrain/TerrainConfig.h"
+#include "Terrain/TerrainSculptDelta.h"
 
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -68,6 +69,9 @@ struct EntityDescription
 
     // Runtime streamed terrain manager. Chunk entities are derived from this
     // template and are intentionally not serialized as individual entities.
+    // B4：手动地形（isTerrain）的雕刻差分；按生成态为基准，只存改过的格子。
+    terrain::TerrainSculptDelta terrainSculpt;
+
     bool isTerrainWorld = false;
     terrain::TerrainConfig terrainWorldConfig;
     int32_t terrainLoadRadius = 1;
