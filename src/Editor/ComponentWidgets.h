@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <initializer_list>
 #include <string>
+#include <vector>
 
 namespace editor
 {
@@ -59,11 +60,27 @@ inline bool drawPropertyWidgets(scene::ComponentRecord& record,
         case scene::PropertyType::Int:
         {
             int v = value->value.asInt();
-            const bool edited = hasRange
-                ? ImGui::DragInt(property.label.c_str(), &v, dragSpeed,
-                                 static_cast<int>(property.minimum),
-                                 static_cast<int>(property.maximum), "%d")
-                : ImGui::DragInt(property.label.c_str(), &v, dragSpeed);
+            bool edited = false;
+            if (!property.enumLabels.empty())
+            {
+                const int count = static_cast<int>(property.enumLabels.size());
+                if (v < 0 || v >= count)
+                    v = 0;
+                std::vector<const char*> items;
+                items.reserve(property.enumLabels.size());
+                for (const std::string& enumLabel : property.enumLabels)
+                    items.push_back(enumLabel.c_str());
+                edited = ImGui::Combo(property.label.c_str(), &v,
+                                      items.data(), count);
+            }
+            else
+            {
+                edited = hasRange
+                    ? ImGui::DragInt(property.label.c_str(), &v, dragSpeed,
+                                     static_cast<int>(property.minimum),
+                                     static_cast<int>(property.maximum), "%d")
+                    : ImGui::DragInt(property.label.c_str(), &v, dragSpeed);
+            }
             if (edited)
             {
                 value->value = scene::PropertyValue::fromInt(v);
@@ -142,7 +159,9 @@ inline bool drawPropertyWidgets(scene::ComponentRecord& record,
                 tip += "\n";
             tip += property.type == scene::PropertyType::Bool
                 ? "点击切换，右键重置"
-                : "拖动修改，Ctrl+点击输入数值，右键重置";
+                : (!property.enumLabels.empty()
+                    ? "点击选择，右键重置"
+                    : "拖动修改，Ctrl+点击输入数值，右键重置");
             ImGui::SetTooltip("%s", tip.c_str());
         }
 

@@ -146,6 +146,11 @@ void registerSceneComponents(ComponentRegistry& registry)
             floatProperty<SceneShadowsComponent>("strength", "阴影强度", &SceneShadowsComponent::strength,
                                                  0.0f, 1.0f, 0.01f,
                                                  "0 = 无阴影，1 = 全黑；默认留一点环境光避免贴纸感"),
+            withEnumOptions(
+                intProperty<SceneShadowsComponent>("filterMode", "阴影滤波",
+                    &SceneShadowsComponent::filterMode, 0, 1,
+                    "PCF：固定 5x5 核，开销低、边缘较硬\nPCSS：先找遮挡物再按距离扩大核，接触处硬、远处软"),
+                {"PCF", "PCSS (软阴影)"}),
         },
         sceneOptions));
 
@@ -377,6 +382,7 @@ void resetSceneComponentsFromSettings(entt::registry& registry, entt::entity set
     shadows.enabled = settings.shadowEnabled;
     shadows.distance = settings.shadowDistance;
     shadows.strength = settings.shadowStrength;
+    shadows.filterMode = std::clamp(settings.shadowFilterMode, 0, 1);
     registry.emplace<SceneShadowsComponent>(settingsEntity, shadows);
 
     SceneBloomComponent bloom;
@@ -482,6 +488,7 @@ void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
     settings.shadowEnabled = false;
     settings.shadowDistance = defaults.shadowDistance;
     settings.shadowStrength = defaults.shadowStrength;
+    settings.shadowFilterMode = defaults.shadowFilterMode;
 
     settings.bloomEnabled = false;
     settings.bloomThreshold = defaults.bloomThreshold;
@@ -570,6 +577,7 @@ void syncSceneSettings(entt::registry& registry, entt::entity settingsEntity,
         settings.shadowEnabled = true;
         settings.shadowDistance = shadows->distance;
         settings.shadowStrength = shadows->strength;
+        settings.shadowFilterMode = std::clamp(shadows->filterMode, 0, 1);
     }
 
     if (const auto* bloom = registry.try_get<SceneBloomComponent>(settingsEntity);

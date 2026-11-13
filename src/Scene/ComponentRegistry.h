@@ -43,6 +43,9 @@ struct PropertyDescriptor
     // true 时通用控件跳过该属性，由组件自己的专用控件绘制。
     // 用于贴图这类需要资源选择器、不能手输路径的字段。
     bool hidden = false;
+    // Int 属性的可选枚举标签。非空时通用控件画 Combo，而不是 DragInt。
+    // 数组下标就是序列化值（0 / 1 / ...），不参与本地化存盘。
+    std::vector<std::string> enumLabels;
 
     // void* 指向组件实例；由 makeProperty<T>() 做类型擦除。
     std::function<PropertyValue(const void*)> get;
@@ -175,6 +178,13 @@ inline PropertyDescriptor withRange(PropertyDescriptor property, float minimum, 
 inline PropertyDescriptor withTooltip(PropertyDescriptor property, std::string tooltip)
 {
     property.tooltip = std::move(tooltip);
+    return property;
+}
+
+inline PropertyDescriptor withEnumOptions(PropertyDescriptor property,
+                                          std::vector<std::string> labels)
+{
+    property.enumLabels = std::move(labels);
     return property;
 }
 

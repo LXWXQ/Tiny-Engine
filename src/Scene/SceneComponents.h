@@ -43,6 +43,8 @@ struct SceneShadowsComponent
     bool enabled = true;
     float distance = 90.0f;
     float strength = 0.65f;
+    // 0 = PCF，1 = PCSS。属性注册时用 Combo 暴露。
+    int filterMode = 0;
 };
 
 struct SceneBloomComponent

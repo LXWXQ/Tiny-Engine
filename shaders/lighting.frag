@@ -24,6 +24,7 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     vec4 shadowCascadeSplits;   // xyz = 每级最远视深度，w = 级联数
     vec4 shadowParams;          // x = 1/分辨率, y = 强度, z = PCF 半径, w = 启用
     vec4 fogParams;             // x = 起始距离, y = 密度, z = 保留, w = 启用
+    vec4 shadowFilterParams;    // x = 0 PCF / 1 PCSS, yzw 保留
 } ubo;
 
 layout(set = 0, binding = 1) uniform sampler2D environmentMap;
@@ -110,7 +111,54 @@ vec3 CalcLightBRDF(vec3 L, vec3 V, vec3 N, vec3 albedo, float roughness, float m
     return (kD * albedo / PI + specular) * radiance * NdotL;
 }
 
-// 选级 + 3x3 PCF。自己比较深度而不是用比较采样器：比较采样器会让 PCF 的
+// 深度比较：返回 1 表示受光，0 表示被遮挡。
+float ShadowCompare(vec2 uv, uint cascade, float compare) {
+    float stored = texture(shadowMaps, vec3(uv, cascade)).r;
+    return compare <= stored ? 1.0 : 0.0;
+}
+
+// 固定核 PCF：5x5 双线性采样。radiusTexels 控制核半径，
+// 1.5 对应约 3 个纹素的覆盖范围。
+float SampleShadowPCF(vec2 uv, uint cascade, float compare, float radiusTexels) {
+    float radius = max(radiusTexels, 1.0);
+    vec2 texel = vec2(ubo.shadowParams.x) * radius * 0.5;
+    float lit = 0.0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            lit += ShadowCompare(uv + vec2(x, y) * texel, cascade, compare);
+        }
+    }
+    return lit / 25.0;
+}
+
+// PCSS：先在较大范围内找平均遮挡深度，再按「接收者深度 - 遮挡者深度」
+// 估计半影宽度，最后用可变半径 PCF 采样。接触点附近 penumbra 很小，
+// 阴影边缘硬；离遮挡物越远，核越大、边缘越软。
+float SampleShadowPCSS(vec2 uv, uint cascade, float compare, float radiusTexels) {
+    const float searchRadius = max(radiusTexels, 1.0) * 2.0;
+    const vec2 searchStep = vec2(ubo.shadowParams.x) * searchRadius * 0.5;
+    float blockerDepth = 0.0;
+    int blockerCount = 0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            float stored = texture(shadowMaps,
+                vec3(uv + vec2(x, y) * searchStep, cascade)).r;
+            if (stored < compare) {
+                blockerDepth += stored;
+                ++blockerCount;
+            }
+        }
+    }
+    if (blockerCount == 0)
+        return 1.0;
+
+    const float averageBlocker = blockerDepth / float(blockerCount);
+    // 正交阴影图的深度是 0..1；300 把常见的地形/树木深度差映射到 1..12 纹素。
+    const float penumbra = clamp((compare - averageBlocker) * 300.0, 1.0, 12.0);
+    return SampleShadowPCF(uv, cascade, compare, penumbra);
+}
+
+// 选级 + 阴影滤波。自己比较深度而不是用比较采样器：比较采样器会让 PCF 的
 // 软化程度无法和强度参数解耦，而且还要多一套 sampler 状态。
 float SampleShadow(vec3 fragPosWorld, float viewDepth, vec3 N, float NdotL) {
     if (ubo.shadowParams.w < 0.5)
@@ -135,19 +183,14 @@ float SampleShadow(vec3 fragPosWorld, float viewDepth, vec3 N, float NdotL) {
         return 1.0;
 
     // 斜射面需要更大的偏移：N·L 越小，同一深度差对应的世界距离越长。
-    // 斜率放大 + 常量兜底：正交阴影图覆盖 2r 的深度范围，1024 纹素下
+    // 斜率放大 + 常量兜底：正交阴影图覆盖 2r 的深度范围，2048 纹素下
     // 1 纹素≈0.015 世界单位，bias 太小会让大面积平面自己遮自己。
     float bias = max(0.0008, 0.0030 * (1.0 - NdotL));
     float compare = proj.z - bias;
-    vec2 texel = vec2(ubo.shadowParams.x * max(ubo.shadowParams.z, 1.0));
-    float lit = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float stored = texture(shadowMaps, vec3(proj.xy + vec2(x, y) * texel, cascade)).r;
-            lit += compare <= stored ? 1.0 : 0.0;
-        }
-    }
-    return lit / 9.0;
+
+    if (ubo.shadowFilterParams.x > 0.5)
+        return SampleShadowPCSS(proj.xy, cascade, compare, ubo.shadowParams.z);
+    return SampleShadowPCF(proj.xy, cascade, compare, ubo.shadowParams.z);
 }
 
 vec3 CalcDirectionalLight(vec3 N, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0,

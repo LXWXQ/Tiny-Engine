@@ -186,6 +186,7 @@ namespace
 		shadows["enabled"] = s.shadowEnabled;
 		shadows["distance"] = s.shadowDistance;
 		shadows["strength"] = s.shadowStrength;
+		shadows["filterMode"] = s.shadowFilterMode;
 		light["shadows"] = std::move(shadows);
 		j["lighting"] = std::move(light);
 
@@ -341,6 +342,7 @@ namespace
 				out.shadowEnabled = read(n, "enabled", out.shadowEnabled, warnings);
 				out.shadowDistance = read(n, "distance", out.shadowDistance, warnings);
 				out.shadowStrength = read(n, "strength", out.shadowStrength, warnings);
+				out.shadowFilterMode = std::clamp(read(n, "filterMode", out.shadowFilterMode, warnings), 0, 1);
 			}
 		}
 	}
@@ -865,6 +867,15 @@ bool EngineConfig::selfTest()
 		check(load(camera), "legacy camera did not load");
 		check(camera.position.x == 1.0f && camera.position.y == 2.0f && camera.position.z == 3.0f,
 			"legacy camera pose mismatch");
+
+		const fs::path roundtripPath = tempRoot / "roundtrip.json";
+		g_configPath = roundtripPath.string();
+		EngineSettings roundtripSettings;
+		roundtripSettings.shadowFilterMode = 1;
+		check(save(roundtripSettings), "shadow filter config save failed");
+		EngineSettings roundtripLoaded;
+		check(load(roundtripLoaded), "shadow filter config load failed");
+		check(roundtripLoaded.shadowFilterMode == 1, "shadow filter mode did not round-trip");
 
 		const fs::path corruptPath = tempRoot / "corrupt.json";
 		const std::string corruptText = "{ this is not json";

@@ -50,6 +50,10 @@ struct GlobalUbo
 	// B：全场景距离雾。x = 起始距离(m), y = 密度(1/m), z = 保留,
 	// w = 是否启用。放在 UBO 尾部而不是新开 uniform，避免多一次绑定。
 	alignas(16) glm::vec4 fogParams{ 80.f, 0.00045f, 0.f, 1.f };
+
+	// x = 阴影滤波模式：0 = PCF，1 = PCSS。其它分量保留。
+	// 单独开一个 vec4 而不是复用 fogParams.z，避免雾/阴影参数互相污染。
+	alignas(16) glm::vec4 shadowFilterParams{ 0.f, 0.f, 0.f, 0.f };
 };
 
 // ---------------------------------------------------------------------------
@@ -80,8 +84,12 @@ static_assert(offsetof(GlobalUbo, shadowParams) ==
 static_assert(offsetof(GlobalUbo, fogParams) ==
 		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) + 2 * sizeof(glm::vec4),
 	"GlobalUbo.fogParams offset mismatch");
-static_assert(sizeof(GlobalUbo) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) +
+static_assert(offsetof(GlobalUbo, shadowFilterParams) ==
+		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) +
 		3 * sizeof(glm::vec4),
+	"GlobalUbo.shadowFilterParams offset mismatch");
+static_assert(sizeof(GlobalUbo) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) +
+		4 * sizeof(glm::vec4),
 	"GlobalUbo size mismatch");
 
 struct SimplePushConstantData
@@ -237,6 +245,8 @@ struct EngineSettings
 	float shadowDistance = 90.0f;
 	// 阴影强度：0 = 完全不加暗，1 = 全黑遮挡。0.65 是不把暗部压死的经验值。
 	float shadowStrength = 0.65f;
+	// 阴影滤波：0 = PCF（固定核，开销低），1 = PCSS（接触硬化软阴影）。
+	int shadowFilterMode = 0;
 	// B-03: compare GPU-selected LOD/visibility against a CPU mirror. Enabled
 	// only by --terrain-test; production frames skip the mirror entirely.
 	bool terrainGpuSelectionSelfTest = false;
