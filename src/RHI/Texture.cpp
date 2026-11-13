@@ -1,10 +1,12 @@
 #include "Texture.h"
+#include "TextureBudget.h"
 #include "Core/AssetPack.h"
 #include <stdexcept>
 #include <iostream>
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <type_traits>
 #include <vector>
 #include <stb_image.h>
 
@@ -14,6 +16,39 @@ namespace
 // clamps at the image edge, so every texture repeat keeps a darker/lighter
 // 1px seam that turns into a visible square quilt at distance. This CPU box
 // filter wraps the 2x2 taps, which keeps the mip chain periodic.
+// M1-B5：预算不够时按 2x2 盒式滤波减半。只处理 RGBA（stb 已统一成 rgb_alpha），
+// 8 位与 32 位浮点各一份；边界处少取一个采样（奇数尺寸的最后一行/列）。
+template <typename T>
+void downsampleHalfRGBA(const T* source, uint32_t width, uint32_t height,
+                        std::vector<T>& out, uint32_t& outWidth, uint32_t& outHeight)
+{
+    outWidth = std::max(1u, width / 2);
+    outHeight = std::max(1u, height / 2);
+    out.assign(static_cast<size_t>(outWidth) * outHeight * 4u, T(0));
+    for (uint32_t y = 0; y < outHeight; ++y)
+    {
+        const uint32_t y0 = std::min(height - 1, y * 2);
+        const uint32_t y1 = std::min(height - 1, y * 2 + 1);
+        for (uint32_t x = 0; x < outWidth; ++x)
+        {
+            const uint32_t x0 = std::min(width - 1, x * 2);
+            const uint32_t x1 = std::min(width - 1, x * 2 + 1);
+            for (uint32_t channel = 0; channel < 4; ++channel)
+            {
+                const size_t i00 = (static_cast<size_t>(y0) * width + x0) * 4 + channel;
+                const size_t i01 = (static_cast<size_t>(y0) * width + x1) * 4 + channel;
+                const size_t i10 = (static_cast<size_t>(y1) * width + x0) * 4 + channel;
+                const size_t i11 = (static_cast<size_t>(y1) * width + x1) * 4 + channel;
+                const size_t target = (static_cast<size_t>(y) * outWidth + x) * 4 + channel;
+                if constexpr (std::is_floating_point<T>::value)
+                    out[target] = (source[i00] + source[i01] + source[i10] + source[i11]) * T(0.25);
+                else
+                    out[target] = static_cast<T>((source[i00] + source[i01] + source[i10] + source[i11] + 2) / 4);
+            }
+        }
+    }
+}
+
 std::vector<unsigned char> buildWrappedMipChain(const unsigned char* base,
                                                 uint32_t width, uint32_t height,
                                                 uint32_t levels)
@@ -89,14 +124,20 @@ Texture::Texture(Device& device, const void* pixelData, uint32_t width, uint32_t
 
 Texture::~Texture()
 {
+	if (residentBytes != 0)
+	{
+		rhi::TextureBudget::instance().unregisterTexture(static_cast<uint64_t>(residentBytes));
+		residentBytes = 0;
+	}
 	if (sampler != VK_NULL_HANDLE) vkDestroySampler(vulkanDevice.getDevice(), sampler, nullptr);
 	if (view != VK_NULL_HANDLE) vkDestroyImageView(vulkanDevice.getDevice(), view, nullptr);
 	if (image != VK_NULL_HANDLE) vmaDestroyImage(vulkanDevice.getVmaAllocator(), image, allocation);
 }
 
 Texture::Texture(Texture&& other) noexcept
-	: vulkanDevice(other.vulkanDevice), image(other.image), allocation(other.allocation), view(other.view), sampler(other.sampler)
+	: residentBytes(other.residentBytes), vulkanDevice(other.vulkanDevice), image(other.image), allocation(other.allocation), view(other.view), sampler(other.sampler)
 {
+	other.residentBytes = 0;
 	other.image = VK_NULL_HANDLE;
 	other.allocation = VK_NULL_HANDLE;
 	other.view = VK_NULL_HANDLE;
@@ -107,6 +148,11 @@ Texture& Texture::operator=(Texture&& other) noexcept
 {
 	if (this != &other)
 	{
+		if (residentBytes != 0)
+		{
+			rhi::TextureBudget::instance().unregisterTexture(static_cast<uint64_t>(residentBytes));
+			residentBytes = 0;
+		}
 		if (sampler) vkDestroySampler(vulkanDevice.getDevice(), sampler, nullptr);
 		if (view) vkDestroyImageView(vulkanDevice.getDevice(), view, nullptr);
 		if (image) vmaDestroyImage(vulkanDevice.getVmaAllocator(), image, allocation);
@@ -115,6 +161,8 @@ Texture& Texture::operator=(Texture&& other) noexcept
 		allocation = other.allocation;
 		view = other.view;
 		sampler = other.sampler;
+		residentBytes = other.residentBytes;
+		other.residentBytes = 0;
 
 		other.image = VK_NULL_HANDLE;
 		other.allocation = VK_NULL_HANDLE;
@@ -198,6 +246,56 @@ if (canBlit || wrappedMipRequested)
 mipLevels = static_cast<uint32_t>(
 std::floor(std::log2(static_cast<float>(std::max(width, height))))) + 1;
 }
+// M1-B5：先让预算决定这张纹理怎么放（原尺寸全链 → 只留 mip0 → 逐级减半），
+// 再据此决定上传尺寸与 mip 级数。预算不超限时 plan 与请求完全一致。
+const uint32_t bytesPerPixel = 4u * static_cast<uint32_t>(pixelSize);
+const rhi::TextureBudget::MipPlan budgetPlan =
+rhi::TextureBudget::instance().planTexture(width, height, bytesPerPixel, mipLevels);
+
+const void* uploadPixels = pixels;
+std::vector<unsigned char> downsampledLdr;
+std::vector<float> downsampledHdr;
+if (budgetPlan.width != width || budgetPlan.height != height)
+{
+uint32_t currentWidth = width;
+uint32_t currentHeight = height;
+if (pixelSize == sizeof(float))
+{
+const float* source = static_cast<const float*>(pixels);
+while (currentWidth > budgetPlan.width || currentHeight > budgetPlan.height)
+{
+downsampleHalfRGBA(source, currentWidth, currentHeight, downsampledHdr, currentWidth, currentHeight);
+source = downsampledHdr.data();
+}
+}
+else
+{
+const unsigned char* source = static_cast<const unsigned char*>(pixels);
+while (currentWidth > budgetPlan.width || currentHeight > budgetPlan.height)
+{
+downsampleHalfRGBA(source, currentWidth, currentHeight, downsampledLdr, currentWidth, currentHeight);
+source = downsampledLdr.data();
+}
+}
+uploadPixels = (pixelSize == sizeof(float))
+? static_cast<const void*>(downsampledHdr.data())
+: static_cast<const void*>(downsampledLdr.data());
+}
+
+if (budgetPlan.width != width || budgetPlan.height != height || budgetPlan.mipLevels != mipLevels)
+{
+std::cout << "[Texture] 预算降级 " << width << "x" << height << " -> "
+<< budgetPlan.width << "x" << budgetPlan.height
+<< " mips " << mipLevels << " -> " << budgetPlan.mipLevels
+<< " (" << (budgetPlan.bytes / 1024) << " KB)\n";
+}
+
+pixels = uploadPixels;
+width = budgetPlan.width;
+height = budgetPlan.height;
+mipLevels = budgetPlan.mipLevels;
+imageSize = static_cast<VkDeviceSize>(width) * height * 4 * pixelSize;
+
 const bool useWrappedMips = wrappedMipRequested && mipLevels > 1;
 
 std::vector<unsigned char> wrappedChain;
@@ -439,4 +537,8 @@ samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 samplerInfo.minLod = 0.0f;
 samplerInfo.maxLod = static_cast<float>(mipLevels - 1);
 vkCreateSampler(vulkanDevice.getDevice(), &samplerInfo, nullptr, &this->sampler);
+
+// M1-B5：记账放在最后，保证"创建成功的纹理才计入驻留"。
+residentBytes = static_cast<VkDeviceSize>(budgetPlan.bytes);
+rhi::TextureBudget::instance().registerTexture(static_cast<uint64_t>(residentBytes));
 }

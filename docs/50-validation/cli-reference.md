@@ -4,8 +4,8 @@ title: 命令行参数全表
 type: validation
 scope: main.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~180 行
-updated: 2026-11-11
+size: ~200 行
+updated: 2026-11-13
 ---
 
 # 命令行参数全表
@@ -22,6 +22,14 @@ updated: 2026-11-11
 | `--diagnostics-test [path]` | 诊断管线自检（合成消息 -> 计数 + JSONL），不建窗口 |
 | `--subresource-error-test` | 期望 RenderGraph **拒绝**写 mip0 后读 mip1 |
 | `--device-fault-test` | `VK_EXT_device_fault` 能力自检 |
+| `--handle-test` | 实体句柄契约自检（失效、索引复用升版本），不建窗口 |
+| `--trace-test` | 射线契约（TraceRay/TraceResult/TraceFilter）自检，不建窗口 |
+| `--gltf-node-test` | glTF 节点树（父子链合成、TRS 顺序）自检，不建窗口 |
+| `--pack-test` | `.tpack` 资产包契约自检（格式、16B 对齐、后缀查找、挂载），不建窗口 |
+| `--pack-build <dir> <out>` | 把目录递归打成 `.tpack` 资产包后退出 |
+| `--material-json-test` | 材质 JSON 只存非默认字段的契约自检，不建窗口 |
+| `--terrain-sculpt-test` | 地形雕刻差分与存档往返自检，不建窗口 |
+| `--texture-budget-test` | 纹理预算降级策略自检，不建窗口 |
 | `--hidden` | 不创建可见窗口；自检/截图/回归这类无人值守运行**默认开启**。窗口仍有真实客户区尺寸，交换链、渲染与截图不受影响 |
 | `--minimized` | 启动后最小化窗口（先隐藏创建，渲染器就绪后再 `glfwShowWindow` + `glfwIconifyWindow`，避免启动瞬间抢焦点）；最小化会命中 `handleWindowMaintenance()` 的跳过分支、不出帧，只适合看日志。与自检/截图等无人值守运行组合时自动退化为 `--hidden` |
 | `--visible` | 强制显示窗口，覆盖 `--hidden` 的默认行为（交互调试 / RenderDoc 抓帧时用） |
@@ -56,6 +64,7 @@ updated: 2026-11-11
 | `--no-origin-rebase` | 关闭浮动原点；相机走远后局部坐标会一直变大（用来做对照） |
 | `--streaming-budget <ms>` | 每帧流送生成预算（默认 2 ms）；超预算时本帧不再发起新 chunk，避免慢帧雪崩 |
 | `--update-profile` | 让 `Scene::update()` 分段计时，每 60 帧打印 `[Update] avg us | genPoll= streaming= world= spatial= visibility= | maxTotal=`；关闭时零开销（只在自检/调优时开） |
+| `--texture-budget <MB>` | 纹理显存预算（0 = 不限制，默认不限制）。超限时该张纹理先丢 mip 链（-25%），仍放不下就逐级减半分辨率（每级 -75%，最小 64×64），日志 `[Texture] 预算降级 A -> B`；`--selftest` 结束会打印 `[Texture] budget used=... peak=... limit=... textures=N` |
 | `--render-scale F` | 动态分辨率倍率 0.25~1.0 |
 | `--resize-test` | 自检中连续缩放、切动态分辨率、最小化/恢复 |
 | `--material-stress` | 反复分配/延迟归还材质槽位 |

@@ -4,7 +4,7 @@ title: 构建与运行故障排查
 type: build
 scope: 空（症状 -> 原因 -> 修法）
 read-when: 构建失败、启动失败、或回归莫名失败时
-size: ~190 行
+size: ~200 行
 updated: 2026-11-13
 ---
 
@@ -120,6 +120,28 @@ updated: 2026-11-13
   `[Window] sizing | workarea=... scale=... -> WxH (fits|clamped)`。
 - **1366x768 笔记本** → 窗口收敛到 1177x662；**150% 缩放**时工作区只有 1280x720，同样收敛。
 - **仍 open**：字体固定 16px，不随 DPI 缩放（界面字偏小）。
+
+### 4.5 手动跑过 --selftest 后编辑器用例集体 FAIL
+
+症状：手动执行 `TinyEngine.exe --selftest 5`（或 `--selftest 5 --texture-budget 64`）之后，
+`tools\Validate.ps1` 里所有 `TinyEditor.exe` 用例一起失败，stderr 都是同一行：
+
+```
+[Editor] selfTestWithScene FAIL: streaming serialization |  | sceneComponents=12
+```
+
+原因：`--selftest` 会按运行期状态改写 `Resources/Scenes/main.scene.json`（多出
+`Runtime Player` 实体、相机位姿变化）和 `config/engine.json`。编辑器自检虽然带
+`--empty-scene`，启动时仍会读这两个文件，"存档往返后角色数 = 1 / 流送 chunk = 0"
+这类断言就会被多出来的实体打破。
+
+修法：把这两个文件恢复后再跑回归。
+
+```
+git checkout -- Resources/Scenes/main.scene.json config/engine.json
+```
+
+`Validate.ps1` 自己也会改写它们，所以提交前务必确认这两个文件不在 `git status` 里。
 
 ## 5. 排查顺序（推荐）
 

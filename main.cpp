@@ -6,6 +6,7 @@
 #include "src/Scene/Trace.h"
 #include "src/Scene/Model.h"
 #include "src/Core/AssetPack.h"
+#include "src/RHI/TextureBudget.h"
 #include "src/Editor/SceneSerializer.h"
 #include "src/Terrain/TerrainSculptDelta.h"
 #include <iostream>
@@ -130,6 +131,8 @@ const UsageLine kUsageLines[] = {
     { "资产", "--pack-build <dir> <out>", "把目录递归打成 .tpack 资产包" },
         { "序列化", "--material-json-test", "材质 JSON 只存非默认字段的自检（不需要 Vulkan / 窗口）" },
         { "地形", "--terrain-sculpt-test", "地形雕刻差分与 JSON 往返的自检（不需要 Vulkan / 窗口）" },
+        { "渲染", "--texture-budget <MB>", "纹理显存预算（MB；0 = 不限制，超限时降 mip / 减半分辨率）" },
+        { "自检", "--texture-budget-test", "纹理预算降级策略自检（不需要 Vulkan / 窗口）" },
     { "剖析", "--build-info", "打印本二进制的调试能力后退出" },
     { "剖析", "--gpu-timing", "每 pass GPU 计时，退出时写 gpu_timing.csv" },
     { "剖析", "--gpu-timing-csv <path>", "指定计时 CSV 路径（隐含 --gpu-timing）" },
@@ -199,6 +202,8 @@ int main(int argc, char** argv)
     bool packTest = false;
     bool materialJsonTest = false;
     bool terrainSculptTest = false;
+    bool textureBudgetTest = false;
+    int textureBudgetMB = -1;   // < 0 表示命令行没给，保持不限制
     std::string packBuildDir;
     std::string packBuildOut;
     bool crossQueueTest = false;
@@ -374,6 +379,16 @@ int main(int argc, char** argv)
         else if (arg == "--pack-test") packTest = true;
         else if (arg == "--material-json-test") materialJsonTest = true;
         else if (arg == "--terrain-sculpt-test") terrainSculptTest = true;
+        else if (arg == "--texture-budget-test") textureBudgetTest = true;
+        else if (arg == "--texture-budget")
+        {
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                try { textureBudgetMB = std::stoi(argv[i + 1]); }
+                catch (...) { }
+                ++i;
+            }
+        }
         else if (arg == "--pack-build")
         {
             if (i + 2 < argc)
@@ -526,6 +541,9 @@ int main(int argc, char** argv)
         if (materialJsonTest)
             return editor::SceneSerializer::materialJsonSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 
+        if (textureBudgetTest)
+            return rhi::textureBudgetSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
         if (terrainSculptTest)
         {
             const bool deltaOk = terrain::terrainSculptDeltaSelfTest();
@@ -553,6 +571,14 @@ int main(int argc, char** argv)
                 assets::mounts().mount(pack);
                 std::cout << "[AssetPack] 已挂载 Resources/assets.tpack | 条目 " << pack->entries().size() << '\n';
             }
+        }
+
+        // M1-B5：命令行给了预算就先设上，再开始创建任何纹理。
+        if (textureBudgetMB >= 0)
+        {
+            rhi::TextureBudget::instance().setLimitBytes(
+                static_cast<uint64_t>(textureBudgetMB) * 1024ull * 1024ull);
+            std::cout << rhi::TextureBudget::instance().report() << '\n';
         }
 
         diag::configureValidationLog(diagOptions.validationJsonlPath);
@@ -600,7 +626,11 @@ int main(int argc, char** argv)
             return app.runSubresourceErrorSelfTest();
 
         if (selfTest)
-            return app.runHeadlessSelfTest(selfTestFrames);
+        {
+            const int selfTestResult = app.runHeadlessSelfTest(selfTestFrames);
+            std::cout << rhi::TextureBudget::instance().report() << '\n';
+            return selfTestResult;
+        }
 
         app.run();
     }

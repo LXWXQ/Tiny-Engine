@@ -4,8 +4,8 @@ title: 回归测试矩阵
 type: validation
 scope: tools/Validate.ps1
 read-when: 加/改回归项，或某项失败需要知道它在测什么
-size: ~200 行
-updated: 2026-11-11
+size: ~220 行
+updated: 2026-11-13
 ---
 
 # 回归测试矩阵
@@ -107,6 +107,18 @@ updated: 2026-11-11
 | 76 | `f6-sun` | 太阳盘 + 镜头光晕：空场景创建 `scene.sun` 与 `scene.environment`，`SunFlarePass` 在 TAA 后、Bloom 前读深度、纯加色写 `taaOutput`；日盘按世界空间射线夹角绘制，鬼影沿太阳-屏幕中心镜像 | `TinyEngine.exe --selftest 30 --empty-scene --sun-demo` | `[Sun] initialized \|`、`[Sun] demo scene ready \|`、`[Sun] first draw \|`、`[Validation] errors=0 warnings=0` | 太阳默认关闭（`sunEnabled=false`），只有 `scene.sun` 存在且启用时才注册；方向/光色跟随 `scene.environment`，不单独存太阳方向；5 点深度只决定日盘可见度，鬼影不逐像素遮挡；放在 TAA 后避免拖影、Bloom 前让日盘参与辉光；云不写深度所以日盘会叠在云上；太阳不进平面反射/SSR |
 | 77 | `f6-vegetation` | 地形植被：空场景 + 流送地形生成程序化草/树，`VegetationPass` 在 Geometry 后、SSAO 前写 G-Buffer；草/树各一次实例化 draw | `TinyEngine.exe --selftest 90 --empty-scene --streaming-world 3 --vegetation-demo` | `[Vegetation] meshes \|`、`[Vegetation] demo scene ready \|`、`[Vegetation] placed \| grass=`、`[Vegetation] first draw \|`、`[Validation] errors=0 warnings=0` | 默认关闭（`vegetationEnabled=false`），只有 `scene.vegetation` 存在且启用时才放置/绘制；只采样地形、跳过水面与陡坡；放置去抖：相机>6m、参数变化或地形签名稳定 0.5s；不投自身阴影、不进平面反射；无 LOD/外部资产，实例上限草 49152 / 树 4096 |
 | 78 | `f6-fog-volume` | 局部体积雾：空场景 + 流送地形创建一个 `effects.fogVolume` 雾盒，组件的 center/size/rotation 定义局部盒体再乘实体 WorldTransform；`FogVolumePass` 在 Cloud 后、反射/透明前逐盒 raymarch，读 G-Buffer 世界位置截断，预乘混合进 HDR | `TinyEngine.exe --selftest 70 --empty-scene --streaming-world 3 --fog-demo` | `[FogVolume] initialized \| noise=32^3`、`[FogVolume] demo volume created \| density=0.045 center=-6,10,-10 size=30x10x36 steps=24`、`[FogVolume] first draw \|`、`[Validation] errors=0 warnings=0` | 默认不添加，只有存在且启用的 `effects.fogVolume` 实体才注册 Pass；size 为全尺寸、最多 8 个；32³ 静态噪声、单盒 steps 1..32；无深度附件、不写 G-Buffer，雾不进平面反射/CSM 阴影；地形/体素对象禁止挂通用组件；`--fog-demo` 用固定 `groundY=10`，流送 chunk 创建时尚未落地 |
+
+### 迁移改造自检（M1 系列，均不创建 Vulkan 设备）
+
+| 名称 | 参数 | 断言标记 | 覆盖内容 |
+|---|---|---|---|
+| `m1-handle-contract` | `--handle-test` | `[Handle] selfTest PASS` | 句柄失效、索引复用升版本、拷贝与往返 |
+| `m1-trace-contract` | `--trace-test` | `[Trace] selfTest PASS` | 命中 epsilon、request 语义、surface 位运算、hitPoint |
+| `m1-b1-gltf-nodes` | `--gltf-node-test` | `[Model] nodeSelfTest PASS` | 父子链合成、TRS 顺序、越界返回单位矩阵 |
+| `m1-b2-tpack` | `--pack-test` | `[AssetPack] selfTest PASS` | 包格式、16B 对齐、后缀查找、挂载后回读 |
+| `m1-b3-material-json` | `--material-json-test` | `[Material] jsonSelfTest PASS` | 只写非默认字段、往返、25 材质 -88% |
+| `m1-b4-terrain-sculpt` | `--terrain-sculpt-test` | `[Terrain] sculptDeltaSelfTest PASS`、`[Terrain] sculptJsonSelfTest PASS` | 差分只收改动格、存档往返、空差分不写盘 |
+| `m1-b5-texture-budget` | `--texture-budget-test` | `[Texture] budgetSelfTest PASS` | mip 链字节、25% / 75% 两档降级、记账与峰值 |
 
 ## 3. 工具自测
 

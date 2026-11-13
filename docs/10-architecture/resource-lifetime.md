@@ -4,8 +4,8 @@ title: 资源生命周期
 type: architecture
 scope: src/RHI/RenderGraph.cpp, src/Core/Application.cpp, src/Core/DescriptorManager.cpp, src/RHI/CommandUtils.h
 read-when: 新增任何 GPU 资源、修改销毁逻辑、处理延迟释放或 resize
-size: ~230 行
-updated: 2026-10-30
+size: ~270 行
+updated: 2026-11-13
 ---
 
 # 资源生命周期
@@ -127,3 +127,30 @@ cmake -S . -B build -DTINY_VMA_LEAK_CHECK=ON
 - [ ] 若延迟释放，用的是 timeline 还是 `vkQueueWaitIdle`？为什么？
 - [ ] resize 时会被重建吗？依赖它 view 的描述符会重写吗？
 - [ ] 跑 `--selftest 60 --resize-test` 与 `--selftest 150 --material-stress`
+
+## 6. 纹理显存预算（M1-B5）
+
+外部常驻纹理以前没有任何上限：Sponza 一套 101 张纹理带完整 mip 链常驻 434.7MB，
+显存吃紧只能整体换低分辨率资源，引擎里也没有地方能回答"贴图一共吃了多少显存"。
+
+`rhi::TextureBudget`（`src/RHI/TextureBudget.h`）做两件事：
+
+1. **记账**：每张纹理按 `mip 链总和 = Σ max(1, w>>l) * max(1, h>>l) * bpp` 注册驻留字节，
+   析构与移动时成对注销；`report()` 输出
+   `[Texture] budget used=... peak=... limit=... textures=N`。
+2. **降级**：`planTexture()` 只在"注册这张会超限"时按固定顺序退让 ——
+   整链 → 只留 mip0（省 25%）→ 逐级减半分辨率（每级省 75%，下限 64×64）。
+   降级只作用在超限的那张纹理上，其它纹理不受影响。
+
+命令行 `--texture-budget <MB>`（0 = 不限制，默认不限制）在创建任何纹理之前设上限。实测（`--selftest 5`）：
+
+| 预算 | 驻留 | 降级张数 | 说明 |
+|---|---|---|---|
+| 不限制 | 434.7MB | 0 | 101 张纹理的基线 |
+| 64MB | 65.3MB（-85%） | 74 | 后段纹理被压到 64²~256²，画面明显变糊 |
+
+降级只改尺寸与 mip 级数，不动几何：两种预算下 Sponza bounds 逐字一致
+（`min(-15.3676, -1.01154, -9.46246) max(14.3993, 11.4355, 8.84341)`）。
+`fits=false` 表示已降到 64×64 仍超预算——照常创建并记账，报告里能看到超额（64MB 档的 65.3MB 就是这一笔）。
+
+只做主线程记账：纹理都在主线程创建/销毁，加锁会把一次上传变成锁竞争。

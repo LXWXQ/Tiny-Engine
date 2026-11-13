@@ -38,10 +38,14 @@ private:
 		VkDeviceSize pixelSize, VkFormat format, VkCommandPool commandPool,
 		bool isFloat, bool tileableMips);
 
+	// M1-B5：这张纹理实际驻留的字节数（mip 链总和）。0 表示没有记账
+	// （例如构造失败）。析构/移动时必须成对注销，否则预算会越跑越高。
+	VkDeviceSize residentBytes = 0;
+
 	Device& vulkanDevice;
 	VkImage image = VK_NULL_HANDLE;
 	VmaAllocation allocation = VK_NULL_HANDLE;
 	VkImageView view = VK_NULL_HANDLE;
 	VkSampler sampler = VK_NULL_HANDLE;
-std::string sourcePath;
+	std::string sourcePath;
 };
