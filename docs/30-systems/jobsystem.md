@@ -4,8 +4,8 @@ title: CPU 作业系统
 type: system
 scope: src/Core/JobSystem.h, src/Core/JobSystem.cpp
 read-when: 需要并行 CPU 任务，或要改线程池调度 / 依赖 / 取消
-size: ~120 行
-updated: 2026-11-13
+size: ~140 行
+updated: 2026-11-16
 ---
 
 # CPU 作业系统
@@ -116,3 +116,20 @@ JobSystem::Stats s = jobs.stats();               // submitted/executed/skippedCa
 8. 吞吐对比（同样的 CPU 工作量串行 vs 并行，`workerCount >= 2` 时要求 ≥1.5×）。
 
 验收基线（本机 16 线程 / Debug）：串行 9–12ms、并行 1.5ms，加速 6–8×。
+
+### 5.1 依赖计数必须在注册之前写好（踩过的坑）
+
+`submitAfter` 的 `pendingDependencies` **必须先 `store(dependencies.size())`，再去挂 `dependents`**。
+反过来的话存在这个窗口：挂上去 → 依赖正好完成 → `fetch_sub` 把计数从 0 减到 0xFFFFFFFF →
+之后才 `store(1)` → 计数永远停在 1，汇合任务再也不会被 `pushReady`。
+
+现象很隐蔽：进程不崩、日志不缺，只是**偶发挂死**（约 1/6 概率），stdout 停在
+`[Editor] example presets selfTest PASS | voxel-world meshes=9 ...` 的下一行之前，
+Windows 事件日志是 `Application Hang`（Id 1002）、退出码 `0xCFFFFFFF`，因为是被系统关掉的挂起进程而不是崩溃。
+定位手段是给 `JobHandle::wait()` / `waitIdle()` 加 5 秒看门狗，超时把
+`ready/active/submitted/executed/injection` 与等待中任务的 `pendingDeps` 打到 stderr 再 `abort()`：
+当时读到 `submitted=548 executed=547 pendingDeps=1`，一眼就能定位到"少唤醒一次"。
+
+同批还修了两处相邻隐患：`pushReady` 改成**先加 `readyCount` 再入队**（否则 worker 抢先取走会让
+`uint32` 计数下溢，`waitIdle` 一直转）；`waitIdle` 改用 `outstandingCount`（已提交未完成的总数）判定，
+因为"取任务"到"开跑"之间 `readyCount` 与 `activeCount` 会同时为 0，早返回。

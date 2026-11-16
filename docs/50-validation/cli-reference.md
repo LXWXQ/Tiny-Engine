@@ -30,6 +30,9 @@ updated: 2026-11-13
 | `--material-json-test` | 材质 JSON 只存非默认字段的契约自检，不建窗口 |
 | `--terrain-sculpt-test` | 地形雕刻差分与存档往返自检，不建窗口 |
 | `--texture-budget-test` | 纹理预算降级策略自检，不建窗口 |
+| `--tick-test` | 固定步长模拟时钟契约（60Hz、护栏、跳跃锁存、重放一致性）自检，不建窗口 |
+| `--render-interp-test` | 渲染插值（TRS 分解 + slerp + 退化回退）契约自检，不建窗口 |
+| `--particle-bench` | 粒子上限（16384）下的模拟耗时测量，打印 `[Particle] bench PASS`，不建窗口 |
 | `--hidden` | 不创建可见窗口；自检/截图/回归这类无人值守运行**默认开启**。窗口仍有真实客户区尺寸，交换链、渲染与截图不受影响 |
 | `--minimized` | 启动后最小化窗口（先隐藏创建，渲染器就绪后再 `glfwShowWindow` + `glfwIconifyWindow`，避免启动瞬间抢焦点）；最小化会命中 `handleWindowMaintenance()` 的跳过分支、不出帧，只适合看日志。与自检/截图等无人值守运行组合时自动退化为 `--hidden` |
 | `--visible` | 强制显示窗口，覆盖 `--hidden` 的默认行为（交互调试 / RenderDoc 抓帧时用） |

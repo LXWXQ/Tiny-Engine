@@ -194,6 +194,11 @@ struct FogVolumeComponent
     glm::mat4 localMatrix() const;
 };
 
+// 粒子上限压力测试（M1-C3 前置测量）：在真实的 particleSystem 代码路径上
+// 填满 kMaxParticlesTotal 个粒子，测量每帧积分成本，并单独测量发射成本。
+// 只做测量不做断言（耗时随机器变化），返回 false 表示连基本不变量都不成立。
+bool particleSystemBenchmark();
+
 // 注册全部效果组件的元数据。重复调用是安全的：ComponentRegistry::add
 // 会拒绝同 id 的第二个描述。
 void registerFeatureComponents(ComponentRegistry& registry);

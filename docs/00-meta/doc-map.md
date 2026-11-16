@@ -45,7 +45,7 @@ updated: 2026-11-13
 | `LightingPass.*` / `LightingSystem.*` | HDR 光照输出、导入交换链 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `WaterPass.*` / `water.vert` / `water.frag` | 相机中心径向网格、波浪位移、Fresnel/环境反射/厚度吸收/泡沫，HDR 前向混合 | [water](../30-systems/water.md)、[pass-order](../20-pipeline/pass-order.md) | water、pass-order |
 | `VegetationPass.*` / `vegetation.vert` / `vegetation.frag` | 实例化草/树写 G-Buffer（Geometry 后、SSAO 前），地形高度/坡度放置、风摆、草片元 alpha-test discard | [vegetation](../30-systems/vegetation.md)、[pass-order](../20-pipeline/pass-order.md) | vegetation、pass-order |
-| `ParticlePass.*` / `particle.vert` / `particle.frag` | 每帧 host-visible 粒子实例、billboard、圆形软遮罩，Water 后/TAA 前前向混合 HDR，按相机距离排序 | [scene-ecs](../30-systems/scene-ecs.md)、[pass-order](../20-pipeline/pass-order.md) | scene-ecs、pass-order |
+| `ParticlePass.*` / `particle.vert` / `particle.frag` | 每帧 host-visible 粒子实例、billboard、圆形软遮罩，Water 后/TAA 前前向混合 HDR，按相机距离排序 | [particles](../30-systems/particles.md)、[scene-ecs](../30-systems/scene-ecs.md)、[pass-order](../20-pipeline/pass-order.md) | particles、scene-ecs、pass-order |
 | `CloudPass.*` / `cloud.frag` | 全屏体积云：读 G-Buffer 世界位置截断 + 64³ 3D 噪声，4 步太阳自阴影，预乘 alpha 写 HDR；Lighting 后/反射前 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `FogVolumePass.*` / `fog_volume.frag` | 可摆放局部体积雾：逐实体雾盒（最多 8 个）slab 相交 + 盒内步进，32³ 3D 噪声/高度衰减/边缘淡出/HG 相函数，预乘 alpha 写 HDR；Cloud 后/反射前 | [fog-volume](../30-systems/fog-volume.md)、[pass-order](../20-pipeline/pass-order.md) | fog-volume、pass-order |
 | `SunFlarePass.*` / `sunflare.frag` | 太阳盘 + 镜头光晕：方向跟随场景方向光，世界空间射线夹角画日盘，5 点深度可见度，圆形散景鬼影/色散/光条（太阳在背后/出画不产生）；TAA 后/Bloom 前纯加色写 HDR | [pass-order](../20-pipeline/pass-order.md) | pass-order |

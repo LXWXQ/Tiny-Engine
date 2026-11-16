@@ -130,25 +130,33 @@ JobSystem::JobHandle JobSystem::submitAfter(std::vector<JobHandle> dependencies,
     task->token = std::move(token);
     submittedCount.fetch_add(1, std::memory_order_relaxed);
 
-    uint32_t pending = 0;
+    // 计数必须在注册之前就写好总数：依赖可能在 push_back 之后、store 之前
+    // 完成并 fetch_sub，那时计数还是 0，减一次就下溢，任务永远等不到唤醒。
+    task->pendingDependencies.store(static_cast<uint32_t>(dependencies.size()),
+                                    std::memory_order_relaxed);
+
+    uint32_t alreadyComplete = 0;
     for (const JobHandle& dependency : dependencies)
     {
         if (!dependency.task)
+        {
+            ++alreadyComplete;
             continue;
-        if (dependency.task->completedFlag.load(std::memory_order_acquire))
-            continue;
+        }
 
         std::lock_guard<std::mutex> lock(dependency.task->dependentsMutex);
         // 拿到 dependentsMutex 之后再判一次：依赖可能刚好在这两条语句之间
         // 完成，那时它的 dependents 已经交换走了，我们挂上去就永远等不到。
         if (dependency.task->completedFlag.load(std::memory_order_acquire))
+        {
+            ++alreadyComplete;
             continue;
-        ++pending;
+        }
         dependency.task->dependents.push_back(task);
     }
 
-    task->pendingDependencies.store(pending, std::memory_order_relaxed);
-    if (pending == 0)
+    if (alreadyComplete > 0 &&
+        task->pendingDependencies.fetch_sub(alreadyComplete, std::memory_order_acq_rel) == alreadyComplete)
         pushReady(task);
 
     // pushReady 按值接收 shared_ptr，里面的 std::move 只移动形参，
@@ -217,8 +225,9 @@ void JobSystem::waitIdle()
 {
     for (;;)
     {
-        if (readyCount.load(std::memory_order_acquire) == 0 &&
-            activeCount.load(std::memory_order_acquire) == 0)
+        // 用"已提交未完成"的总数判定：readyCount 与 activeCount 分开看时，
+        // 取任务到开跑之间会有一个两者同时为 0 的窗口，waitIdle 会提前返回。
+        if (outstandingCount.load(std::memory_order_acquire) == 0)
             return;
 
         if (tryExecuteOne(t_workerIndex))
@@ -246,6 +255,11 @@ void JobSystem::pushReady(std::shared_ptr<JobTask> task)
     if (stopping.load(std::memory_order_relaxed))
         throw std::runtime_error("JobSystem: 已 shutdown，不能继续提交任务");
 
+    // 先加计数再入队：反过来的话 worker 可能立刻取走并 fetch_sub，
+    // uint32 计数会下溢成 0xFFFFFFFF，waitIdle 就会一直转。
+    const uint32_t depth = readyCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+    outstandingCount.fetch_add(1, std::memory_order_acq_rel);
+
     const uint32_t index = t_workerIndex;
     if (index < queues.size())
     {
@@ -261,7 +275,6 @@ void JobSystem::pushReady(std::shared_ptr<JobTask> task)
         injection.push_back(std::move(task));
     }
 
-    const uint32_t depth = readyCount.fetch_add(1, std::memory_order_acq_rel) + 1;
     uint64_t previousDepth = maxQueueDepth.load(std::memory_order_relaxed);
     while (depth > previousDepth &&
            !maxQueueDepth.compare_exchange_weak(previousDepth, depth, std::memory_order_relaxed))
@@ -365,6 +378,7 @@ void JobSystem::runTask(std::shared_ptr<JobTask> task)
     completeTask(task);
 
     activeCount.fetch_sub(1, std::memory_order_acq_rel);
+    outstandingCount.fetch_sub(1, std::memory_order_acq_rel);
     idleCv.notify_all();
 }
 

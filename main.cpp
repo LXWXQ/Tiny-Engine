@@ -11,6 +11,7 @@
 #include "src/Terrain/TerrainSculptDelta.h"
 #include "src/Scene/SimulationClock.h"
 #include "src/Scene/RenderInterpolation.h"
+#include "src/Scene/FeatureComponents.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
@@ -137,6 +138,7 @@ const UsageLine kUsageLines[] = {
         { "自检", "--texture-budget-test", "纹理预算降级策略自检（不需要 Vulkan / 窗口）" },
         { "自检", "--tick-test", "固定步长模拟时钟契约自检（不需要 Vulkan / 窗口）" },
 	{ "自检", "--render-interp-test", "渲染插值（TRS 分解 + slerp）契约自检（不需要 Vulkan / 窗口）" },
+{ "自检", "--particle-bench", "粒子上限下的模拟耗时测量（不需要 Vulkan / 窗口）" },
     { "剖析", "--build-info", "打印本二进制的调试能力后退出" },
     { "剖析", "--gpu-timing", "每 pass GPU 计时，退出时写 gpu_timing.csv" },
     { "剖析", "--gpu-timing-csv <path>", "指定计时 CSV 路径（隐含 --gpu-timing）" },
@@ -209,6 +211,7 @@ int main(int argc, char** argv)
     bool textureBudgetTest = false;
     bool tickTest = false;
 bool renderInterpTest = false;
+bool particleBench = false;
     int textureBudgetMB = -1;   // < 0 表示命令行没给，保持不限制
     std::string packBuildDir;
     std::string packBuildOut;
@@ -388,6 +391,7 @@ bool renderInterpTest = false;
         else if (arg == "--texture-budget-test") textureBudgetTest = true;
         else if (arg == "--tick-test") tickTest = true;
 		else if (arg == "--render-interp-test") renderInterpTest = true;
+		else if (arg == "--particle-bench") particleBench = true;
         else if (arg == "--texture-budget")
         {
             if (i + 1 < argc && argv[i + 1][0] != '-')
@@ -557,6 +561,9 @@ bool renderInterpTest = false;
 
         if (renderInterpTest)
             return scene::renderInterpolationSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (particleBench)
+            return scene::particleSystemBenchmark() ? EXIT_SUCCESS : EXIT_FAILURE;
 
         if (terrainSculptTest)
         {

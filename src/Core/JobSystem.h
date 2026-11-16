@@ -130,6 +130,7 @@ private:
 
     std::atomic<uint32_t> readyCount{ 0 };
     std::atomic<uint32_t> activeCount{ 0 };
+    std::atomic<int64_t> outstandingCount{ 0 };
     std::atomic<bool> stopping{ false };
 
     std::atomic<uint64_t> submittedCount{ 0 };

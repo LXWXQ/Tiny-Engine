@@ -8,8 +8,10 @@
 #include <glm/trigonometric.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <iostream>
 
 namespace scene
 {
@@ -592,6 +594,89 @@ void particleSystem(entt::registry& registry, float deltaSeconds)
 }
 
 } // namespace
+
+bool particleSystemBenchmark()
+{
+    constexpr float kDeltaSeconds = 1.0f / 60.0f;
+    constexpr uint32_t kIntegrationFrames = 600;
+    constexpr uint32_t kSpawnFrames = 300;
+
+    entt::registry registry;
+    const entt::entity entity = registry.create();
+    registry.emplace<TransformComponent>(entity);
+    WorldTransformComponent& worldTransform = registry.emplace<WorldTransformComponent>(entity);
+    worldTransform.matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    worldTransform.valid = true;
+
+    ParticleEmitterComponent& emitter = registry.emplace<ParticleEmitterComponent>(entity);
+    emitter.enabled = false;   // 只推进不发射，单独量积分成本
+    emitter.maxParticles = static_cast<int>(kMaxParticlesTotal);
+    emitter.lifetime = 1000.0f;
+    emitter.lifetimeVariation = 0.0f;
+    emitter.gravity = glm::vec3(0.0f, -1.5f, 0.0f);
+
+    emitter.particles.resize(kMaxParticlesTotal);
+    for (std::size_t i = 0; i < emitter.particles.size(); ++i)
+    {
+        Particle& particle = emitter.particles[i];
+        particle.position = glm::vec3(static_cast<float>(i % 64) * 0.1f,
+                                      static_cast<float>(i / 64) * 0.05f,
+                                      static_cast<float>(i % 7) * 0.02f);
+        particle.velocity = glm::vec3(0.5f, 1.0f, -0.25f);
+        particle.age = 0.0f;
+        particle.lifetime = 1000.0f;
+        particle.sizeScale = 1.0f;
+    }
+
+    // 预热一帧：把分支预测与缓存拉到稳定态，否则第一帧会被算进均值。
+    particleSystem(registry, kDeltaSeconds);
+
+    const auto integrationBegin = std::chrono::steady_clock::now();
+    for (uint32_t frame = 0; frame < kIntegrationFrames; ++frame)
+        particleSystem(registry, kDeltaSeconds);
+    const double integrationMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - integrationBegin).count();
+
+    const std::size_t alive = emitter.particles.size();
+    const double perFrameMs = integrationMs / static_cast<double>(kIntegrationFrames);
+    const double perParticleNs =
+        alive > 0 ? perFrameMs * 1.0e6 / static_cast<double>(alive) : 0.0;
+
+    // 发射成本：每帧清空后重新发射，spawnAccumulator 上限 256，所以每帧恰好发 256 个。
+    emitter.enabled = true;
+    emitter.emissionRate = 1.0e6f;
+    emitter.maxParticles = 256;
+    emitter.spawnAccumulator = 0.0f;
+
+    std::size_t spawned = 0;
+    const auto spawnBegin = std::chrono::steady_clock::now();
+    for (uint32_t frame = 0; frame < kSpawnFrames; ++frame)
+    {
+        emitter.particles.clear();
+        emitter.spawnAccumulator = 0.0f;
+        particleSystem(registry, kDeltaSeconds);
+        spawned += emitter.particles.size();
+    }
+    const double spawnMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - spawnBegin).count();
+    const double perSpawnUs =
+        spawned > 0 ? spawnMs * 1.0e3 / static_cast<double>(spawned) : 0.0;
+
+    std::cout << "[Particle] bench 积分: particles=" << alive << " frames=" << kIntegrationFrames
+              << " per-frame=" << perFrameMs << "ms (" << perParticleNs << "ns/particle)"
+              << " 1ms 预算可容纳 " << (perFrameMs > 0.0 ? static_cast<int>(1.0 / perFrameMs * alive) : 0)
+              << " 个\n";
+    std::cout << "[Particle] bench 发射: spawned=" << spawned << " frames=" << kSpawnFrames
+              << " per-frame=" << (spawnMs / static_cast<double>(kSpawnFrames)) << "ms ("
+              << perSpawnUs << "us/particle)\n";
+
+    // ASCII 标记行：Validate.ps1 只允许 ASCII，用它做稳定断言点。
+    std::cout << "[Particle] bench PASS | particles=" << alive
+              << " integration-ms=" << perFrameMs
+              << " spawn-us=" << perSpawnUs << "\n";
+
+    return alive == kMaxParticlesTotal && spawned > 0;
+}
 
 glm::mat4 FogVolumeComponent::localMatrix() const
 {
