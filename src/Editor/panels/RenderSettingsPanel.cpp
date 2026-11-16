@@ -461,31 +461,32 @@ void RenderSettingsPanel::drawWizard(EditorState& state, Scene& scene)
             ImGui::TextDisabled("移除后可以从目录重新创建。");
             ImGui::Spacing();
             ImGui::SeparatorText("当前参数");
-            drawPropertyWidgets(draft_, *descriptor, &defaults_);
+            // 参数即时生效：控件一变就把草稿写回场景，拖拽期间的连续修改由
+            // CommandStack 的合并窗口收成一条撤销记录（与 Inspector 一致）。
+            // 没有控件处于激活状态时，把草稿同步成场景里的当前值，
+            // 这样 Ctrl+Z、别的面板改动都不会被下一次编辑覆盖掉。
+            if (!ImGui::IsAnyItemActive())
+            {
+                if (const std::optional<scene::ComponentRecord> live =
+                        scene.readComponent(settingsEntity, descriptor->type))
+                    draft_ = *live;
+            }
+            const std::optional<scene::ComponentRecord> before =
+                scene.readComponent(settingsEntity, descriptor->type);
+            const bool changed = drawPropertyWidgets(draft_, *descriptor, &defaults_);
+            if (changed && before && !before->equivalentTo(draft_))
+            {
+                state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                    scene, settingsEntity, descriptor->type, before, draft_,
+                    "Modify Scene Component"));
+                state.markDirty();
+            }
+            ImGui::TextDisabled("参数即时生效；一次拖拽合并为一条撤销记录（Ctrl+Z 可撤销）。");
 
             ImGui::Spacing();
             ImGui::Separator();
-            if (ImGui::Button("应用修改", ImVec2(140.0f, 0.0f)))
-            {
-                const std::optional<scene::ComponentRecord> before =
-                    scene.readComponent(settingsEntity, descriptor->type);
-                if (before)
-                {
-                    if (!before->equivalentTo(draft_))
-                    {
-                        state.commands.execute(std::make_unique<SetComponentRecordCommand>(
-                            scene, settingsEntity, descriptor->type, before, draft_,
-                            "Modify Scene Component"));
-                        state.markDirty();
-                        state.notifySuccess("已更新场景组件：" + descriptor->label);
-                    }
-                    else
-                    {
-                        state.notifySuccess("场景组件参数没有变化");
-                    }
-                }
+            if (ImGui::Button("完成", ImVec2(140.0f, 0.0f)))
                 ImGui::CloseCurrentPopup();
-            }
             ImGui::SameLine();
             if (ImGui::Button("移除组件", ImVec2(120.0f, 0.0f)))
             {
@@ -501,9 +502,6 @@ void RenderSettingsPanel::drawWizard(EditorState& state, Scene& scene)
                 }
                 ImGui::CloseCurrentPopup();
             }
-            ImGui::SameLine();
-            if (ImGui::Button("取消", ImVec2(100.0f, 0.0f)))
-                ImGui::CloseCurrentPopup();
         }
         else
         {

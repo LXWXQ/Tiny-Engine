@@ -5,7 +5,7 @@ type: system
 scope: 现有面板、DockSpace 默认布局、面板职责与快捷键
 read-when: 写新面板、改布局、或面板位置错乱
 size: ~490 行
-updated: 2026-11-13
+updated: 2026-11-16
 ---
 
 # 面板与布局
@@ -59,7 +59,7 @@ CPU 网格交给 JobSystem，旧网格继续渲染。生成期间再次点击 Ge
   `Scene::syncSceneSettings()` 写回渲染器读取的 `EngineSettings` 缓存。
 - 场景组件属于场景文档：编辑进入撤销栈，保存时写到 `.scene.json` v4 顶层
   `sceneComponents`；预制体只存实体，不携带这些功能。
-- Render 面板的「单一性组件」分区是同一批 `scene.*` 组件的目录：点击已挂载项直接在向导里编辑/应用/移除，未挂载项可创建；与 Inspector 的 Scene Components 区共享同一注册表和命令栈。
+- Render 面板的「单一性组件」分区是同一批 `scene.*` 组件的目录：点击已挂载项直接在向导里**即时编辑**（控件一变就写回场景，拖拽期间的连续修改由命令栈的 0.35s 合并窗口收成一条撤销记录，不需要再点「应用修改」）/移除，未挂载项可创建；与 Inspector 的 Scene Components 区共享同一注册表和命令栈。
 
 ## 多选与搜索（E1）
 

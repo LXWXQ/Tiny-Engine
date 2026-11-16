@@ -4499,6 +4499,38 @@ bool EditorLayer::selfTestWithScene()
         }
         state.commands.undo();
         state.commands.clear();
+
+        // Render 面板的组件现在是即时编辑：控件一变就 apply。这条用例钉住它依赖的
+        // 语义 —— 同一实体、同一组件的连续修改落在命令栈的合并窗口内，只留一条
+        // 撤销记录（一次拖拽 = 一条 Ctrl+Z）。
+        std::optional<scene::ComponentRecord> spinMerge =
+            scene.readComponent(restoredCharacter, "effects.spin");
+        if (!spinMerge)
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: live edit source record missing\n";
+            return false;
+        }
+        for (const float value : { 120.0f, 150.0f })
+        {
+            std::optional<scene::ComponentRecord> next = spinMerge;
+            next->find("degreesPerSecond")->value = scene::PropertyValue::fromFloat(value);
+            state.commands.execute(std::make_unique<SetComponentRecordCommand>(
+                scene, restoredCharacter, "effects.spin", spinMerge, next, "Modify Component"));
+            spinMerge = next;
+        }
+        if (!spinEquals(150.0f))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: live edit did not apply\n";
+            return false;
+        }
+        state.commands.undo();
+        if (!spinEquals(90.0f))
+        {
+            std::cerr << "[Editor] selfTestWithScene FAIL: live edit merged into one undo step\n";
+            return false;
+        }
+        state.commands.clear();
+
         scene.destroyEntity(restoredCharacter);
         for (uint32_t frame = 0; frame < 20 && countLoadedChunks() < expectedChunks; ++frame)
         {
