@@ -11,6 +11,7 @@
 #include "src/Terrain/TerrainSculptDelta.h"
 #include "src/Scene/SimulationClock.h"
 #include "src/Scene/RenderInterpolation.h"
+#include "src/Scene/CharacterCollision.h"
 #include "src/Scene/FeatureComponents.h"
 #include "src/Audio/AudioMixer.h"
 #include "src/Audio/AudioDevice.h"
@@ -145,6 +146,7 @@ const UsageLine kUsageLines[] = {
         { "自检", "--texture-budget-test", "纹理预算降级策略自检（不需要 Vulkan / 窗口）" },
         { "自检", "--tick-test", "固定步长模拟时钟契约自检（不需要 Vulkan / 窗口）" },
 	{ "自检", "--render-interp-test", "渲染插值（TRS 分解 + slerp）契约自检（不需要 Vulkan / 窗口）" },
+{ "自检", "--character-collision-test", "角色扫掠盒/滑动/上台阶契约自检（不需要 Vulkan / 窗口）" },
 { "自检", "--particle-bench", "粒子上限下的模拟耗时测量（不需要 Vulkan / 窗口）" },
     { "音频", "--audio-test", "音频混音器契约自检（不需要声卡 / 窗口）" },
     { "音频", "--audio-play", "打开声卡播一段 440Hz 测试音（需要音频设备）" },
@@ -221,6 +223,7 @@ int main(int argc, char** argv)
     bool textureBudgetTest = false;
     bool tickTest = false;
 bool renderInterpTest = false;
+bool characterCollisionTest = false;
 bool particleBench = false;
 bool audioTest = false;
 bool audioPlay = false;
@@ -404,6 +407,7 @@ bool audioSpatialTest = false;
         else if (arg == "--texture-budget-test") textureBudgetTest = true;
         else if (arg == "--tick-test") tickTest = true;
 		else if (arg == "--render-interp-test") renderInterpTest = true;
+else if (arg == "--character-collision-test") characterCollisionTest = true;
 		else if (arg == "--particle-bench") particleBench = true;
     else if (arg == "--audio-test") audioTest = true;
     else if (arg == "--audio-play") audioPlay = true;
@@ -577,6 +581,9 @@ bool audioSpatialTest = false;
 
         if (renderInterpTest)
             return scene::renderInterpolationSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (characterCollisionTest)
+            return scene::characterCollisionSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 
 
         if (audioTest)

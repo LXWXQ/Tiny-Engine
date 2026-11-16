@@ -4,8 +4,8 @@ title: 运行时角色与骨骼动画
 type: system
 scope: src/Scene/Model.*, src/Scene/GLTFLoader.cpp, src/Scene/Scene.cpp, src/Editor/EditorLayer.cpp, Resources/Models/Character
 read-when: 改角色移动/出生点/动画状态机/蒙皮，或排查角色全黑、不动、悬空、动画不切换
-size: ~150 行
-updated: 2026-11-05
+size: ~200 行
+updated: 2026-11-16
 ---
 
 # 运行时角色与骨骼动画
@@ -82,6 +82,38 @@ updated: 2026-11-05
 
 控制器参数默认值在 `CharacterControllerComponent`：半径 0.35、身高 1.8、移速 6、跳跃初速 6、重力 18、最大坡度 50°、step 0.5、snap 0.4。运行模式把 `speedMultiplier` 在 0.55（走）和 1.35（Shift 跑）之间切。
 
+### 4.1 扫掠盒求解器（D1a，已落地但尚未接管 Scene）
+
+`src/Scene/CharacterCollision.h/.cpp` 是一个不依赖 Vulkan、不依赖 Scene 的纯几何求解器，
+把"不穿墙、能上台阶、坡上不抖"这三件事从 `updateCharacterController` 里抽出来单独测。
+
+它只问外部两个问题（`CollisionWorld` 接口）：
+
+| 查询 | 用途 | Scene 侧将来的实现 |
+|---|---|---|
+| `collectBoxes(center, halfExtents, out, capacity)` | 取与包围盒相交的 AABB | 体素 chunk 的实心块 + 模型包围盒 + 地形 chunk 的 AABB |
+| `sampleGround(x, z, height, normal)` | 取该 XZ 的地面高度与法线 | 地形高度场 + 体素表面（即现在 `sampleTerrainGroundHeightWorld` 的产物） |
+
+`moveCharacter(world, shape, settings, start, delta, wasGrounded)` 的流程：
+
+1. 若当前站在可行走坡面上，先把 `delta` 投影到坡面（`remaining -= n * dot(remaining, n)`）。
+   少了这一步，上坡时水平走 1m 会让地面抬升 1m，超过 `stepHeight` 就被判成悬空。
+2. 迭代最多 `maxIterations` 次：先对所有候选盒做 Minkowski 展开的 slab 扫掠取最早命中；
+   地面平面只在下落**且终点脚底真的会陷进地面**时才算命中（否则站在坡上每轮都在 `t=0`
+   命中同一平面，永远走不动）。
+3. 撞到竖直面且有水平剩余时尝试上台阶：抬到 `stepHeight`，若无重叠就沿水平剩余再扫一次。
+4. 命中后沿法线滑动：`remaining = left - n * dot(left, n)`。
+5. 收尾用 `findSupport` 找支撑面（地面与脚下盒子顶面里最高的那个），
+   `gap` 在 `[-groundSnapDistance, stepHeight]` 内且支撑面可行走才贴地，否则置为离地。
+
+8 组自检覆盖：平地直走、45° 坡连续上坡（`y == x`）、60° 坡只给重力时下滑、
+0.4m 台阶能上、0.8m 台阶被挡、撞墙停在 `1.0 - radius`、天花板挡住上升、斜撞墙不耗尽迭代。
+PASS 行：`[Collision] characterSelfTest PASS | cases=8 slide=ok step=ok slope=ok`。
+
+**当前状态**：求解器与自检已提交，但 `Scene::updateCharacterController` 仍在用旧的
+"采样地面高度 + 台阶/坡度检查 + 贴地吸附"路径（见本节开头）。接入（写 `SceneCollisionWorld`
+适配器并替换控制器内部）是 D1b。
+
 ## 5. 动画状态机
 
 `updateCharacterAnimation()` 的优先级（从高到低）：
@@ -144,6 +176,8 @@ updated: 2026-11-05
   - 初始 `currentClipName == "Idle"`；
   - PASS 行：`[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose | skinned=1 animations=18 clips=Idle/Walk/Run/Jump/Jump_Idle/Jump_Land active=Idle`。
 - `tools/Validate.ps1` 的 `e9-runtime-character` 断言上述 PASS 行与 clips 字段。
+- `TinyEngine.exe --character-collision-test` 跑扫掠盒求解器的 8 组几何用例（不建窗口、不需要 Vulkan），
+  `tools/Validate.ps1` 的 `m1-d1-character-collision` 断言 `[Collision] characterSelfTest PASS`。
 - 手工回归：进入运行模式后按 `W`/`Shift+W`/`Space`，日志应依次出现 `clip=Walk`/`clip=Run`/`clip=Jump` → `clip=Jump_Land` → `clip=Idle`。
 
 ## 8. 已知边界
