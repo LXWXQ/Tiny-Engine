@@ -5,7 +5,7 @@ type: system
 scope: src/Scene/SimulationClock.h, src/Scene/SimulationClock.cpp, src/Scene/RenderInterpolation.h, src/Scene/RenderInterpolation.cpp, src/Editor/EditorLayer.cpp, src/Render/SceneGpuBatch.cpp, src/Render/GeometrySystem.cpp, main.cpp（--tick-test / --render-interp-test）
 read-when: 改角色移动/跳跃、把模拟接到新的循环、排查"高刷屏跳得高/走得快"或重放不一致
 size: ~190 行
-updated: 2026-11-13
+updated: 2026-11-16
 ---
 
 # 固定步长模拟时钟
@@ -128,9 +128,20 @@ C1c 用时钟的 `alpha()` 在**上一 tick** 与**当前 tick**的世界矩阵�
 渲染端因此画的是连续姿态，代价是最多晚一个 tick（16.7ms）看到最新状态。
 
 - **历史矩阵从哪来**：`WorldTransformComponent::previousMatrix`。
-  `updateNodeRecursive()` 在改写 `matrix` 之前先把它滚进 `previousMatrix`
-  —— 只有 dirty 实体走这条分支，静止实体的 `previous == current`，
-  插值是恒等变换，不产生额外开销。
+  `updateNodeRecursive()` 在改写 `matrix` 之前先把它滚进 `previousMatrix`，
+  同时写下 `changedTick`（这次改写发生在哪个 tick）。**首次生效**（`valid`
+  还是 false）时 `previousMatrix` 直接等于新矩阵，否则新实体第一帧会从原点飞过来。
+- **只对"这一 tick 动过"的实体插值**：判据是
+  `changedTick == FrameInfo::renderTick`，封装在
+  `scene::shouldInterpolateTransform()` 里。这一条是补 bug 补出来的：
+  最初只看 `renderAlpha > 0`，而 `previousMatrix` 只在 dirty 分支里滚动、
+  `updateAllWorldTransforms` 又只访问脏实体及其子树，于是**静态实体的
+  previousMatrix 永远停在"上一次变化之前"**。地形 chunk 生成时
+  `setTranslation(chunkCenter)` 之后就再也不脏，渲染时被放到
+  `alpha * chunkCenter` 上，每个 chunk 比例还不同 —— 运行模式下整片地形
+  朝原点收缩又弹回，表现就是"地形闪烁"。现在 `--render-interp-test`
+  有 3 组 tick-gate 用例，`Scene::selfTest` 也断言静态实体的
+  `changedTick` 不会跟着 tick 前进、`previousMatrix == matrix`。
 - **为什么是 TRS 分解 + slerp**：对两个旋转矩阵做逐元素 lerp，两个正交基的
   线性组合长度小于 1，模型在转身时会肉眼可见地"瘪"一下。分解出
   平移/缩放/旋转后，平移与缩放走 `mix`、旋转走 `slerp`，刚体才不缩水。
@@ -148,11 +159,13 @@ C1c 用时钟的 `alpha()` 在**上一 tick** 与**当前 tick**的世界矩阵�
   **默认 0 = 不插值**，所以 `--selftest`、编辑器自检与所有无头回归看到的
   画面与加 C1c 之前逐字一致（Sponza bounds 与 434.7MB 纹理预算均未变）。
 - **契约自检**：`--render-interp-test` → `[Render] interpolationSelfTest
-  PASS | cases=6 endpoints=ok slerp=ok fallback=ok`。6 组用例覆盖
-  alpha=0/1 端点、平移中点、90° 旋转的 45° 中点且基向量长度为 1、
-  缩放中点、非有限矩阵回退、奇异（零缩放）矩阵回退。
+  PASS | cases=9 endpoints=ok slerp=ok fallback=ok tick-gate=ok`。9 组用例
+  覆盖 alpha=0/1 端点、平移中点、90° 旋转的 45° 中点且基向量长度为 1、
+  缩放中点、非有限矩阵回退、奇异（零缩放）矩阵回退，以及 tick-gate 三组
+  （静态实体不插值 / 本 tick 动过的插值 / alpha=0 不插值）。
 - **已知边界**：蒙皮骨骼矩阵仍按 tick 更新，快速动作时手脚可能比身体
-  晚一帧；地形/体素 chunk 的顶点本身不动，不受影响。
+  晚一帧；地形/体素 chunk 的顶点本身不动，不受影响（但它们的**实体变换**
+  必须过 tick-gate，见上）。
 
 ## 9. 限制
 

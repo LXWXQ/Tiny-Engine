@@ -932,7 +932,9 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
             // C1c: blend the previous tick pose with the current one, then apply
             // the node matrix. renderAlpha is 0 outside the editor play mode, in
             // which case this is exactly worldTransform.matrix.
-            const glm::mat4 entityMatrix = (frameInfo.renderAlpha > 0.0f)
+            const bool interpolateEntity = scene::shouldInterpolateTransform(
+                worldTransform, frameInfo.renderAlpha, frameInfo.renderTick);
+            const glm::mat4 entityMatrix = interpolateEntity
                 ? scene::interpolateTransform(worldTransform.previousMatrix,
                                               worldTransform.matrix, frameInfo.renderAlpha)
                 : worldTransform.matrix;
@@ -958,7 +960,7 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
 
             InstanceRecord record{};
             record.model = instanceMatrix;
-            record.normal = (hasNode || frameInfo.renderAlpha > 0.0f)
+            record.normal = (hasNode || interpolateEntity)
                 ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(instanceMatrix))))
                 : worldTransform.normalMatrix;
             record.flags = glm::uvec4(slot, materialValid ? 1u : 0u,

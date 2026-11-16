@@ -88,7 +88,17 @@ namespace scene
         return result;
     }
 
-    bool renderInterpolationSelfTest()
+    bool shouldInterpolateTransform(const WorldTransformComponent& transform,
+                                float alpha, uint64_t renderTick)
+{
+    if (alpha <= 0.0f || alpha >= 1.0f)
+        return false;
+    if (!transform.valid)
+        return false;
+    return transform.changedTick == renderTick;
+}
+
+bool renderInterpolationSelfTest()
     {
         bool ok = true;
 
@@ -154,7 +164,24 @@ namespace scene
         }
 
         if (ok)
-            std::cout << "[Render] interpolationSelfTest PASS | cases=6 endpoints=ok slerp=ok fallback=ok\n";
+            // 7-9：只有"这一 tick 动过"的实体才允许插值（地形闪烁的回归用例）。
+    {
+        WorldTransformComponent staticTransform{};
+        staticTransform.matrix = glm::translate(glm::mat4(1.0f), glm::vec3(40.0f, 0.0f, -40.0f));
+        staticTransform.valid = true;
+        staticTransform.changedTick = 3;
+        expect(!shouldInterpolateTransform(staticTransform, 0.5f, 7),
+               "static entity must not interpolate");
+
+        WorldTransformComponent movingTransform = staticTransform;
+        movingTransform.changedTick = 7;
+        expect(shouldInterpolateTransform(movingTransform, 0.5f, 7),
+               "entity changed this tick must interpolate");
+        expect(!shouldInterpolateTransform(movingTransform, 0.0f, 7),
+               "alpha 0 must not interpolate");
+    }
+
+    std::cout << "[Render] interpolationSelfTest PASS | cases=9 endpoints=ok slerp=ok fallback=ok tick-gate=ok\n";
         return ok;
     }
 }

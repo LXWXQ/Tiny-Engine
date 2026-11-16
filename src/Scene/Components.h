@@ -198,6 +198,10 @@ struct WorldTransformComponent
     glm::mat4 normalMatrix{ 1.0f };
     glm::vec3 worldPosition{ 0.0f };
     uint64_t sourceRevision = 0;
+    // M1-C1c: 这个矩阵是在哪个模拟 tick 里被改写的。渲染插值只对
+    // changedTick == 当前 tick 的实体生效；否则静态实体会永远拿一个
+    // 陈旧的 previousMatrix 去插值（地形 chunk 会朝原点收缩）。
+    uint64_t changedTick = 0;
     bool valid = false;
 
     // M1-C1c: the world matrix of the previous tick, rolled in

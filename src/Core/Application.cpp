@@ -2795,6 +2795,7 @@ void FirstApp::render(float dt)
 
 		// C1c：模拟插值权重由编辑器按播放态写入 Scene，这里每帧搬进帧数据。
 frameInfo.renderAlpha = scene->renderInterpolationAlpha();
+    frameInfo.renderTick = scene->simulationTick();
 
 // 编辑器选中项交给渲染侧（画包围盒用）
 if (editorLayer)

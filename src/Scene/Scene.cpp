@@ -274,7 +274,8 @@ namespace
                              const glm::mat4& parentWorld, bool parentChanged,
                              uint32_t& updatedCount,
                              std::unordered_set<entt::entity>* dirtyTransforms,
-                             std::unordered_set<entt::entity>* dirtySpatial)
+                             std::unordered_set<entt::entity>* dirtySpatial,
+                             uint64_t tick)
     {
         TransformComponent& transform = registry.get<TransformComponent>(entity);
         WorldTransformComponent& worldTransform =
@@ -289,9 +290,11 @@ namespace
         {
             world = parentWorld * transform.localMatrix();
             // C1c: remember the pose we are leaving so the renderer can blend
-            // it with the new one. Only dirty entities reach this branch; for
-            // a static entity previous == current and interpolation is a no-op.
-            worldTransform.previousMatrix = worldTransform.matrix;
+            // it with the new one. 首次生效时没有"上一帧"可插值（否则新实体
+            // 会从原点飞过来），直接把 previous 设成新矩阵。
+            const bool hadPose = worldTransform.valid;
+            worldTransform.previousMatrix = hadPose ? worldTransform.matrix : world;
+            worldTransform.changedTick = tick;
             worldTransform.matrix = world;
             worldTransform.normalMatrix = glm::transpose(glm::inverse(glm::mat3(world)));
             worldTransform.worldPosition = glm::vec3(world * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
@@ -317,7 +320,8 @@ namespace
                 if (registry.valid(child))
                 {
                     updateNodeRecursive(registry, child, world, needsUpdate,
-                                        updatedCount, dirtyTransforms, dirtySpatial);
+                                        updatedCount, dirtyTransforms, dirtySpatial,
+                                        tick);
                 }
             }
         }
@@ -326,7 +330,8 @@ namespace
     uint32_t updateAllWorldTransforms(
         entt::registry& registry,
         std::unordered_set<entt::entity>* dirtyTransforms = nullptr,
-        std::unordered_set<entt::entity>* dirtySpatial = nullptr)
+        std::unordered_set<entt::entity>* dirtySpatial = nullptr,
+        uint64_t tick = 0)
     {
         uint32_t updatedCount = 0;
 
@@ -375,7 +380,8 @@ namespace
                         parentWorld = parentWorldComp->matrix;
                 }
                 updateNodeRecursive(registry, root, parentWorld, false,
-                                    updatedCount, dirtyTransforms, dirtySpatial);
+                                    updatedCount, dirtyTransforms, dirtySpatial,
+                                    tick);
             }
 
             for (auto it = dirtyTransforms->begin(); it != dirtyTransforms->end();)
@@ -397,7 +403,7 @@ namespace
             if (isRoot)
             {
                 updateNodeRecursive(registry, entity, glm::mat4{ 1.0f }, false,
-                                    updatedCount, nullptr, nullptr);
+                                    updatedCount, nullptr, nullptr, tick);
             }
         }
         return updatedCount;
@@ -1070,6 +1076,7 @@ void Scene::stepSimulation(float dt)
 {
     // 效果系统（Spin / Orbit…）先改局部 Transform，再统一刷新世界矩阵。
     // PostTransform 预留给依赖世界坐标的系统（当前无内置系统）。
+    ++simulationTick_;
     systemScheduler.run(registry, scene::SystemPhase::Simulation, dt);
     updateWorldTransforms();
     systemScheduler.run(registry, scene::SystemPhase::PostTransform, dt);
@@ -1137,7 +1144,8 @@ void Scene::collectRetiredModels()
 void Scene::updateWorldTransforms()
 {
     lastWorldTransformUpdates = updateAllWorldTransforms(
-        registry, &dirtyTransformEntities, &dirtySpatialEntities);
+        registry, &dirtyTransformEntities, &dirtySpatialEntities,
+        simulationTick_);
 }
 
 void Scene::refreshSpatialIndex()
@@ -1552,6 +1560,40 @@ bool Scene::selfTest()
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;
+        }
+
+        // M1-C1c：静态实体的 changedTick 不能跟着 tick 前进。否则渲染端会拿一个
+        // 陈旧的 previousMatrix 一直插值 —— 地形 chunk 就是这么朝原点收缩、
+        // 在运行模式里闪烁的。
+        {
+            const entt::entity staticEntity = scene.getRegistry().create();
+            scene.getRegistry().emplace<TransformComponent>(staticEntity);
+            scene.getRegistry().get<TransformComponent>(staticEntity)
+                .setTranslation(glm::vec3(30.0f, 0.0f, -20.0f));
+            scene.markTransformDirty(staticEntity);
+
+            scene.stepSimulation(1.0f / 60.0f);
+            const uint64_t firstTick = scene.simulationTick();
+            scene.stepSimulation(1.0f / 60.0f);
+
+            const auto& world =
+                scene.getRegistry().get<WorldTransformComponent>(staticEntity);
+            if (scene.simulationTick() != firstTick + 1u)
+            {
+                std::cerr << "[Scene] selfTest FAIL: simulation tick did not advance\n";
+                ok = false;
+            }
+            if (world.changedTick == scene.simulationTick())
+            {
+                std::cerr << "[Scene] selfTest FAIL: static entity kept a fresh changedTick\n";
+                ok = false;
+            }
+            if (world.previousMatrix != world.matrix)
+            {
+                std::cerr << "[Scene] selfTest FAIL: static entity previous pose drifted\n";
+                ok = false;
+            }
+            scene.getRegistry().destroy(staticEntity);
         }
 
         const auto defaultSpin = scene.defaultComponentRecord("effects.spin");

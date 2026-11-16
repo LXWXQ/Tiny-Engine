@@ -936,14 +936,16 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
 
         // C1c: blend the previous tick pose with the current one. Outside the
         // editor play mode renderAlpha is 0 and this is the authoritative matrix.
-        const glm::mat4 entityMatrix = (frameInfo.renderAlpha > 0.0f)
+        const bool interpolateEntity = scene::shouldInterpolateTransform(
+            *worldTransform, frameInfo.renderAlpha, frameInfo.renderTick);
+        const glm::mat4 entityMatrix = interpolateEntity
             ? scene::interpolateTransform(worldTransform->previousMatrix,
                                           worldTransform->matrix, frameInfo.renderAlpha)
             : worldTransform->matrix;
 
         SimplePushConstantData push{};
         push.modelMatrix = entityMatrix;
-        push.normalMatrix = (frameInfo.renderAlpha > 0.0f)
+        push.normalMatrix = interpolateEntity
             ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(entityMatrix))))
             : worldTransform->normalMatrix;
         push.clipY = viewOverride != nullptr ? viewOverride->clipY : 0.0f;
@@ -1121,7 +1123,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
             else
             {
                 push.modelMatrix = entityMatrix;
-                push.normalMatrix = (frameInfo.renderAlpha > 0.0f)
+                push.normalMatrix = interpolateEntity
                     ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(entityMatrix))))
                     : worldTransform->normalMatrix;
             }

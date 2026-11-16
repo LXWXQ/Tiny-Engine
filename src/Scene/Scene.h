@@ -74,6 +74,9 @@ public:
     // Application 每帧把它搬进 FrameInfo::renderAlpha；默认 0 = 不插值。
     void setRenderInterpolationAlpha(float alpha) { renderInterpolationAlpha_ = alpha; }
     float renderInterpolationAlpha() const { return renderInterpolationAlpha_; }
+    // M1-C1c：已完成多少个模拟 tick。渲染端拿它和 WorldTransformComponent::
+    // changedTick 比对，只有"这一 tick 真的动过"的实体才做插值。
+    uint64_t simulationTick() const { return simulationTick_; }
     void cleanup();
 
     entt::entity createEntity();
@@ -518,6 +521,7 @@ private:
 
     // M1-C1c：见 setRenderInterpolationAlpha()。非播放态保持 0。
     float renderInterpolationAlpha_ = 0.0f;
+    uint64_t simulationTick_ = 0;
 
     // --update-profile：只累加 double，不做字符串与分配。
     bool updateProfiling = false;
