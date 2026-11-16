@@ -2,6 +2,7 @@
 
 #include "Audio/AudioClip.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -69,9 +70,14 @@ public:
     AudioMixer();
 
     ClipId addClip(std::shared_ptr<const AudioClip> clip);
+    // 把片段写进固定槽位：音频线程可以在运行期注册片段（设备用 AddClip 命令走这条路），
+    // 固定数组保证不会在渲染时触发 vector 重新分配。
+    void setClip(ClipId slot, std::shared_ptr<const AudioClip> clip);
     const AudioClip* clip(ClipId id) const;
 
     VoiceId play(ClipId clip, const VoiceParams& params);
+    // 改运行期参数（音量/声像/低通/音高）。loop/priority/淡入淡出是起播参数，不在这里改。
+    bool updateVoice(VoiceId voice, const VoiceParams& params);
     void stop(VoiceId voice);
     void stopAll();
     void setMasterVolume(float volume);
@@ -111,7 +117,7 @@ private:
     void captureTail(const Voice& voice, uint32_t sampleRate);
     void freeVoice(Voice& voice);
 
-    std::vector<std::shared_ptr<const AudioClip>> clips_;
+    std::array<std::shared_ptr<const AudioClip>, kMaxClips> clips_{};
     Voice voices_[kMaxVoices];
     Tail tails_[4];
 

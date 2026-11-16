@@ -1,6 +1,7 @@
 #include "Editor/EditorLayer.h"
 #include "Editor/SceneSerializer.h"
 #include "Editor/Commands.h"
+#include "Audio/AudioService.h"
 #include "Editor/Prefab.h"
 
 #include "Editor/panels/HierarchyPanel.h"
@@ -2224,6 +2225,8 @@ void EditorLayer::stopPlay()
     }
 
     simulationClock.reset();
+    // 回到编辑态：把播放期间起的声音停掉，避免循环音在编辑态继续响。
+    audio::AudioService::instance().stopAll();
     state.hasPlaySnapshot = false;
     state.playSnapshot = scene::SceneDescription{};
     state.playState = PlayState::Editing;

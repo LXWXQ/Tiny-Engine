@@ -1,6 +1,8 @@
 #include "Scene/FeatureComponents.h"
 
 #include "Scene/Components.h"
+#include "Audio/AudioService.h"
+#include "Audio/AudioSpatial.h"
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -482,6 +484,133 @@ glm::vec3 sampleConeDirection(const glm::vec3& axis, float cosMaxAngle,
 // 粒子模拟：推进、淘汰、发射。挂在 PostTransform，保证世界位置/旋转
 // 已经由 Scene::updateWorldTransforms 更新；enabled=false 时只推进不发射，
 // 移除组件时运行期粒子随组件一起销毁。
+// 3D 音源：听者取 AudioListenerComponent（没有就用相机），音源取实体世界位置。
+// 只在 PostTransform 跑，所以世界矩阵已经是本帧的最终值。
+void audioSystem(entt::registry& registry, float deltaSeconds)
+{
+    (void)deltaSeconds;
+
+    audio::AudioService& service = audio::AudioService::instance();
+
+    audio::AudioListener listener;
+    bool haveListener = false;
+
+    {
+        auto view = registry.view<AudioListenerComponent, WorldTransformComponent>();
+        for (const entt::entity entity : view)
+        {
+            const WorldTransformComponent& world = view.get<WorldTransformComponent>(entity);
+            const AudioListenerComponent& component = view.get<AudioListenerComponent>(entity);
+
+            listener.position = glm::vec3(world.matrix[3]);
+            listener.forward = -glm::vec3(world.matrix[2]);
+            listener.up = glm::vec3(world.matrix[1]);
+            listener.gain = component.gain;
+            haveListener = true;
+            break;
+        }
+    }
+
+    if (!haveListener)
+    {
+        auto view = registry.view<CameraComponent, WorldTransformComponent>();
+        for (const entt::entity entity : view)
+        {
+            const WorldTransformComponent& world = view.get<WorldTransformComponent>(entity);
+            listener.position = glm::vec3(world.matrix[3]);
+            listener.forward = -glm::vec3(world.matrix[2]);
+            listener.up = glm::vec3(world.matrix[1]);
+            haveListener = true;
+            break;
+        }
+    }
+
+    auto view = registry.view<AudioSourceComponent>();
+    for (const entt::entity entity : view)
+    {
+        AudioSourceComponent& source = view.get<AudioSourceComponent>(entity);
+
+        if (!source.playOnStart)
+        {
+            if (source.playing)
+            {
+                service.stop(source.playRequest);
+                source.playing = false;
+                source.playRequest = 0;
+            }
+            continue;
+        }
+
+        const WorldTransformComponent* world = registry.try_get<WorldTransformComponent>(entity);
+        if (world == nullptr)
+            continue;
+
+        const glm::vec3 sourcePosition = glm::vec3(world->matrix[3]);
+
+        if (!source.playing)
+        {
+            const audio::ClipId clip = service.loadClip(source.clipPath);
+            if (clip == audio::kInvalidClip)
+                continue;
+
+            audio::VoiceParams params;
+            params.volume = source.volume;
+            params.pitch = source.pitch;
+            params.loop = source.loop;
+            params.priority = source.priority;
+
+            if (source.spatialized && haveListener)
+            {
+                audio::AudioSpatialSettings settings;
+                settings.minDistance = source.minDistance;
+                settings.maxDistance = source.maxDistance;
+
+                const audio::AudioSpatialParams spatial =
+                    audio::computeSpatialParams(listener, sourcePosition, source.volume, settings);
+                if (!spatial.audible)
+                    continue;
+
+                params.volume = spatial.volume;
+                params.pan = spatial.pan;
+                params.lowpassHz = spatial.lowpassHz;
+            }
+
+            const audio::PlayRequest request = service.play(clip, params);
+            if (request == audio::kInvalidPlayRequest)
+                continue;
+
+            source.playRequest = request;
+            source.playing = true;
+            continue;
+        }
+
+        if (!source.spatialized || !haveListener)
+            continue;
+
+        audio::AudioSpatialSettings settings;
+        settings.minDistance = source.minDistance;
+        settings.maxDistance = source.maxDistance;
+
+        const audio::AudioSpatialParams spatial =
+            audio::computeSpatialParams(listener, sourcePosition, source.volume, settings);
+
+        audio::VoiceParams params;
+        params.volume = spatial.audible ? spatial.volume : 0.0f;
+        params.pitch = source.pitch;
+        params.pan = spatial.pan;
+        params.lowpassHz = spatial.lowpassHz;
+        params.loop = source.loop;
+        params.priority = source.priority;
+
+        // 声部已经播完/被抢时 updateVoice 返回 false，这里顺手把状态复位。
+        if (!service.updateVoice(source.playRequest, params))
+        {
+            source.playing = false;
+            source.playRequest = 0;
+        }
+    }
+}
+
 void particleSystem(entt::registry& registry, float deltaSeconds)
 {
     // 卡顿或断点恢复时不要让粒子一步飞出画面；0.1s 也足够覆盖 10 FPS。
@@ -781,6 +910,37 @@ void registerFeatureComponents(ComponentRegistry& registry)
 
     // F5：粒子发射器。属性只暴露可序列化的发射/外观参数；particles 数组
     // 是运行期状态，复制组件或撤销时由默认构造重置，不会把旧粒子带过去。
+    registry.add(makeComponentDescriptor<AudioSourceComponent>(
+        "audio.source", "Audio Source", "音频",
+        { makeStringProperty<AudioSourceComponent>("clipPath", "Clip", &AudioSourceComponent::clipPath,
+                                                   "相对 Resources 的 WAV 路径，如 Audio/step.wav"),
+          makeFloatProperty<AudioSourceComponent>("volume", "Volume", &AudioSourceComponent::volume,
+                                                  0.0f, 4.0f, "线性音量；0 = 静音", 0.01f),
+          makeFloatProperty<AudioSourceComponent>("pitch", "Pitch", &AudioSourceComponent::pitch,
+                                                  0.25f, 4.0f, "1 = 原速；2 = 高八度且时长减半", 0.01f),
+          makeBoolProperty<AudioSourceComponent>("loop", "Loop", &AudioSourceComponent::loop,
+                                                 "循环播放"),
+          makeIntProperty<AudioSourceComponent>("priority", "Priority", &AudioSourceComponent::priority,
+                                                0, 100, "越大越不容易被抢占", 1.0f),
+          makeFloatProperty<AudioSourceComponent>("minDistance", "Min Distance",
+                                                  &AudioSourceComponent::minDistance, 0.0f, 100.0f,
+                                                  "这个距离内不衰减（米）", 0.1f),
+          makeFloatProperty<AudioSourceComponent>("maxDistance", "Max Distance",
+                                                  &AudioSourceComponent::maxDistance, 0.1f, 500.0f,
+                                                  "超过这个距离听不见（米）", 0.5f),
+          makeBoolProperty<AudioSourceComponent>("spatialized", "Spatialized",
+                                                 &AudioSourceComponent::spatialized,
+                                                 "关掉就当作 2D 音，只受 volume 控制"),
+          makeBoolProperty<AudioSourceComponent>("playOnStart", "Play On Start",
+                                                 &AudioSourceComponent::playOnStart,
+                                                 "实体存在时自动播放；关掉即停") }));
+
+    registry.add(makeComponentDescriptor<AudioListenerComponent>(
+        "audio.listener", "Audio Listener", "音频",
+        { makeFloatProperty<AudioListenerComponent>("gain", "Gain", &AudioListenerComponent::gain,
+                                                    0.0f, 4.0f,
+                                                    "听者整体增益；场景里没有听者时用相机实体", 0.01f) }));
+
     registry.add(makeComponentDescriptor<ParticleEmitterComponent>(
         "effects.particles", "Particle Emitter", "效果",
         { makeBoolProperty<ParticleEmitterComponent>(
@@ -906,6 +1066,8 @@ void registerFeatureSystems(SystemScheduler& scheduler)
     scheduler.add("effects.lookAt", SystemPhase::Simulation, 160, &lookAtSystem);
     // PostTransform：世界变换已经算完，粒子位置才能跟随父节点/旋转。
     scheduler.add("effects.particles", SystemPhase::PostTransform, 200, &particleSystem);
+    // 音频也要在 PostTransform：音源位置用的是本帧最终世界矩阵。
+    scheduler.add("audio.sources", SystemPhase::PostTransform, 210, &audioSystem);
 }
 
 } // namespace scene

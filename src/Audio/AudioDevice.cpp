@@ -54,7 +54,10 @@ private:
 
 enum class CommandKind : uint32_t
 {
+    AddClip,
     Play,
+    UpdateVoice,
+    StopVoice,
     StopAll,
     MasterVolume,
 };
@@ -62,9 +65,12 @@ enum class CommandKind : uint32_t
 struct Command
 {
     CommandKind kind = CommandKind::Play;
-    ClipId clip = kInvalidClip;
-    VoiceParams params;
-    float volume = 1.0f;
+    ClipId clip = kInvalidClip;          // Play
+    ClipId slot = kInvalidClip;          // AddClip
+    PlayRequest request = kInvalidPlayRequest;  // Play / UpdateVoice / StopVoice
+    VoiceParams params;                  // Play / UpdateVoice
+    float volume = 1.0f;                 // MasterVolume
+    std::shared_ptr<const AudioClip> data;  // AddClip
 };
 } // namespace
 
@@ -80,6 +86,16 @@ struct AudioDevice::Impl
     std::atomic<bool> running{ false };
     bool comInitialized = false;
     std::string error;
+
+    // 播放令牌 -> 声部号。只有音频线程读写，所以不需要锁。
+    struct VoiceSlot
+    {
+        PlayRequest request = kInvalidPlayRequest;
+        VoiceId voice = kInvalidVoice;
+    };
+    VoiceSlot voiceSlots[kCommandCapacity]{};
+    std::atomic<uint64_t> nextPlayRequest{ 1 };
+    std::atomic<uint32_t> nextClipSlot{ 0 };
 
     Command commands[kCommandCapacity]{};
     std::atomic<uint32_t> writeIndex{ 0 };
@@ -101,12 +117,35 @@ struct AudioDevice::Impl
         const uint32_t write = writeIndex.load(std::memory_order_acquire);
         while (read != write)
         {
-            const Command& command = commands[read];
+            Command& command = commands[read];
             switch (command.kind)
             {
-            case CommandKind::Play:
-                mixer.play(command.clip, command.params);
+            case CommandKind::AddClip:
+                mixer.setClip(command.slot, std::move(command.data));
+                command.data.reset();
                 break;
+            case CommandKind::Play:
+            {
+                const VoiceId voice = mixer.play(command.clip, command.params);
+                VoiceSlot& slot = voiceSlots[command.request % kCommandCapacity];
+                slot.request = command.request;
+                slot.voice = voice;
+                break;
+            }
+            case CommandKind::UpdateVoice:
+            {
+                const VoiceSlot& slot = voiceSlots[command.request % kCommandCapacity];
+                if (slot.request == command.request)
+                    mixer.updateVoice(slot.voice, command.params);
+                break;
+            }
+            case CommandKind::StopVoice:
+            {
+                const VoiceSlot& slot = voiceSlots[command.request % kCommandCapacity];
+                if (slot.request == command.request)
+                    mixer.stop(slot.voice);
+                break;
+            }
             case CommandKind::StopAll:
                 mixer.stopAll();
                 break;
@@ -277,29 +316,63 @@ uint32_t AudioDevice::bufferFrames() const
 
 ClipId AudioDevice::addClip(std::shared_ptr<const AudioClip> clip)
 {
-    if (impl_ == nullptr)
+    if (impl_ == nullptr || !clip || !clip->valid())
         return kInvalidClip;
-    if (impl_->running.load())
+
+    const ClipId slot = impl_->nextClipSlot.fetch_add(1, std::memory_order_relaxed) % kMaxClips;
+
+    if (!impl_->running.load(std::memory_order_acquire))
     {
-        std::cerr << "[Audio] addClip must be called before start(), ignored\n";
-        return kInvalidClip;
+        impl_->mixer.setClip(slot, std::move(clip));
+        return slot;
     }
-    return impl_->mixer.addClip(std::move(clip));
+
+    Command command;
+    command.kind = CommandKind::AddClip;
+    command.slot = slot;
+    command.data = std::move(clip);
+    return impl_->submit(command) ? slot : kInvalidClip;
 }
 
-VoiceId AudioDevice::play(ClipId clip, const VoiceParams& params)
+PlayRequest AudioDevice::play(ClipId clip, const VoiceParams& params)
 {
     if (impl_ == nullptr || !impl_->running.load())
-        return kInvalidVoice;
+        return kInvalidPlayRequest;
+
+    const PlayRequest request = impl_->nextPlayRequest.fetch_add(1, std::memory_order_relaxed);
 
     Command command;
     command.kind = CommandKind::Play;
     command.clip = clip;
+    command.request = request;
     command.params = params;
     if (!impl_->submit(command))
-        return kInvalidVoice;
+        return kInvalidPlayRequest;
 
-    return static_cast<VoiceId>(impl_->writeIndex.load(std::memory_order_relaxed) + 1u);
+    return request;
+}
+
+bool AudioDevice::updateVoice(PlayRequest request, const VoiceParams& params)
+{
+    if (impl_ == nullptr || !impl_->running.load() || request == kInvalidPlayRequest)
+        return false;
+
+    Command command;
+    command.kind = CommandKind::UpdateVoice;
+    command.request = request;
+    command.params = params;
+    return impl_->submit(command);
+}
+
+void AudioDevice::stop(PlayRequest request)
+{
+    if (impl_ == nullptr || !impl_->running.load() || request == kInvalidPlayRequest)
+        return;
+
+    Command command;
+    command.kind = CommandKind::StopVoice;
+    command.request = request;
+    impl_->submit(command);
 }
 
 void AudioDevice::stopAll()

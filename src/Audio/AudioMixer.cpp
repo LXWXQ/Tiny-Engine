@@ -63,17 +63,46 @@ ClipId AudioMixer::addClip(std::shared_ptr<const AudioClip> clip)
 {
     if (!clip || !clip->valid())
         return kInvalidClip;
-    if (clips_.size() >= kMaxClips)
-        return kInvalidClip;
-    clips_.push_back(std::move(clip));
-    return static_cast<ClipId>(clips_.size() - 1);
+    for (uint32_t slot = 0; slot < kMaxClips; ++slot)
+    {
+        if (!clips_[slot])
+        {
+            clips_[slot] = std::move(clip);
+            return slot;
+        }
+    }
+    return kInvalidClip;
+}
+
+void AudioMixer::setClip(ClipId slot, std::shared_ptr<const AudioClip> clip)
+{
+    if (slot >= kMaxClips)
+        return;
+    clips_[slot] = std::move(clip);
 }
 
 const AudioClip* AudioMixer::clip(ClipId id) const
 {
-    if (id >= clips_.size())
+    if (id >= kMaxClips)
         return nullptr;
     return clips_[id].get();
+}
+
+bool AudioMixer::updateVoice(VoiceId id, const VoiceParams& params)
+{
+    if (id == kInvalidVoice)
+        return false;
+    for (Voice& voice : voices_)
+    {
+        if (!voice.active || voice.id != id)
+            continue;
+        voice.params.volume = params.volume;
+        voice.params.pitch = params.pitch;
+        voice.params.pan = params.pan;
+        voice.params.lowpassHz = params.lowpassHz;
+        return true;
+    }
+    return false;
 }
 
 void AudioMixer::setMasterVolume(float volume)

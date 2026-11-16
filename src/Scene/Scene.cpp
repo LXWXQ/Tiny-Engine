@@ -1547,7 +1547,8 @@ bool Scene::selfTest()
         scene.getRegistry();
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
-        if (componentCount != 30 || systemCount != 8)
+        // C4b 之后是 32 个组件（新增 audio.source / audio.listener）与 9 个系统（新增 audio.sources）。
+        if (componentCount != 32 || systemCount != 9)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;

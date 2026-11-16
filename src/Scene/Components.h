@@ -431,6 +431,30 @@ struct CameraComponent
 {
 };
 
+// 3D 音源：由 audioSystem 在 PostTransform 阶段驱动（世界变换算完之后）。
+struct AudioSourceComponent
+{
+    std::string clipPath;            // 相对 Resources 的路径，如 "Audio/step.wav"
+    float volume = 1.0f;
+    float pitch = 1.0f;
+    bool loop = false;
+    int priority = 0;
+    float minDistance = 1.0f;        // 这个距离内不衰减
+    float maxDistance = 30.0f;       // 超过就听不见
+    bool spatialized = true;         // 关掉就当作 2D 音（只受 volume 控制）
+    bool playOnStart = false;
+
+    // 运行期状态，不进存档。
+    bool playing = false;
+    uint64_t playRequest = 0;
+};
+
+// 听者标记：场景里没有它时，audioSystem 退回用相机实体当听者。
+struct AudioListenerComponent
+{
+    float gain = 1.0f;
+};
+
 inline AABB transformAABB(const AABB& local, const glm::mat4& transform)
 {
     if (!local.valid)

@@ -14,6 +14,7 @@
 #include "src/Scene/FeatureComponents.h"
 #include "src/Audio/AudioMixer.h"
 #include "src/Audio/AudioDevice.h"
+#include "src/Audio/AudioSpatial.h"
 #include "src/Audio/AudioClip.h"
 #include <iostream>
 #include <stdexcept>
@@ -147,6 +148,7 @@ const UsageLine kUsageLines[] = {
 { "自检", "--particle-bench", "粒子上限下的模拟耗时测量（不需要 Vulkan / 窗口）" },
     { "音频", "--audio-test", "音频混音器契约自检（不需要声卡 / 窗口）" },
     { "音频", "--audio-play", "打开声卡播一段 440Hz 测试音（需要音频设备）" },
+    { "音频", "--audio-spatial-test", "3D 音源空间参数（衰减/声像/低通）契约自检（不需要声卡）" },
     { "剖析", "--build-info", "打印本二进制的调试能力后退出" },
     { "剖析", "--gpu-timing", "每 pass GPU 计时，退出时写 gpu_timing.csv" },
     { "剖析", "--gpu-timing-csv <path>", "指定计时 CSV 路径（隐含 --gpu-timing）" },
@@ -222,6 +224,7 @@ bool renderInterpTest = false;
 bool particleBench = false;
 bool audioTest = false;
 bool audioPlay = false;
+bool audioSpatialTest = false;
     int textureBudgetMB = -1;   // < 0 表示命令行没给，保持不限制
     std::string packBuildDir;
     std::string packBuildOut;
@@ -404,6 +407,7 @@ bool audioPlay = false;
 		else if (arg == "--particle-bench") particleBench = true;
     else if (arg == "--audio-test") audioTest = true;
     else if (arg == "--audio-play") audioPlay = true;
+    else if (arg == "--audio-spatial-test") audioSpatialTest = true;
         else if (arg == "--texture-budget")
         {
             if (i + 1 < argc && argv[i + 1][0] != '-')
@@ -577,6 +581,9 @@ bool audioPlay = false;
 
         if (audioTest)
             return audio::mixerSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (audioSpatialTest)
+            return audio::audioSpatialSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 
         if (audioPlay)
         {

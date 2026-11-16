@@ -4,7 +4,7 @@ title: 音频：混音器与设备后端
 type: system
 scope: src/Audio/AudioClip.*, src/Audio/AudioMixer.*, src/Audio/AudioDevice.*
 read-when: 要播放声音、调音量/声部数，或排查"没声音 / 有爆音 / 声部被抢"
-size: ~140 行
+size: ~190 行
 updated: 2026-11-16
 ---
 
@@ -83,10 +83,9 @@ WAV 解析器放在这里而不是设备里，是因为下一步要让它从 `.t
 | 主线程 | `addClip`（**必须在 `start()` 之前**）、`play` / `stopAll` / `setMasterVolume`（进命令环） |
 | 音频线程 | `drainCommands`、`mixer.render`、`SubmitSourceBuffer` |
 
-`addClip` 必须在 `start()` 之前，是因为音频线程直接读片段表，运行期 `push_back` 会让
-`std::vector` 重新分配。运行期再注册会打印
-`[Audio] addClip must be called before start(), ignored` 并返回 `kInvalidClip`。
-（要做运行期加载，得把片段表换成"命令环 + 固定槽位"或加锁，留给 C4b。）
+片段表是**固定槽位数组**（`kMaxClips = 32`），运行期注册走 `AddClip` 命令，写进预先分配的槽位，
+不会在渲染过程中触发容器重新分配 —— 所以 `addClip` 在 `start()` 前后都可以调用。
+槽位用完时返回 `kInvalidClip` 并打印 `[Audio] 片段槽位已满：<path>`。
 
 ## 4. 命令行
 
@@ -123,20 +122,90 @@ WAV 解析器放在这里而不是设备里，是因为下一步要让它从 `.t
 9. `encodeWav16` → `loadWavFromMemory` 往返一致（16 位误差 ≤ 1/32000）；
 10. 同一串事件两次渲染逐位相同（FNV 哈希）。
 
-## 6. 已知限制
+## 6. 已知限制（混音器与设备）
 
 - **没有 3D 定位**：只有 `pan` 与 `lowpassHz` 两个手工参数，没有听者/衰减/多普勒；
 - **没有总线**：只有 `masterVolume`，没有分组（音乐/音效/UI）与 ducking；
-- **片段必须在 `start()` 之前注册**（见 3.1）；
+- **片段槽位固定 32 个**，超出后新片段加载失败（见 3.1）；
 - **没有流式解码**：整段 PCM 常驻内存（一个 3 分钟立体声 48kHz 片段约 69MB），
   长音乐要等 Ogg/MP3 解码与分块流送；
 - **重采样是线性插值**：`pitch != 1` 或片段采样率与输出不一致时会有混叠，够用但不发烧；
 - **编辑器还没接**：目前只有命令行入口，`Scene` / `EditorLayer` 里还没有"播放某个事件"的组件。
 
-## 7. 下一步（C4b）
+## 7. 3D 音源（C4b）
 
-1. `AudioSourceComponent` + `AudioListenerComponent`，在 `SystemPhase` 里按世界坐标算距离衰减与声像；
-2. 总线与音量分组（Master / Music / SFX / UI）；
-3. 从 `.tpack` 里 `loadWavFromMemory`（`asset-pack` 已经就绪）；
-4. 片段表运行期注册（命令环 + 固定槽位）；
-5. 长音频流式播放。
+### 7.1 两个组件
+
+| 组件 | 类型字符串 | 作用 |
+| --- | --- | --- |
+| `AudioSourceComponent` | `audio.source` | 挂在音源实体上：片段路径、音量、音高、循环、优先级、衰减距离 |
+| `AudioListenerComponent` | `audio.listener` | 挂在听者实体上（通常就是相机）；**没挂时自动退回相机实体** |
+
+`AudioSourceComponent` 的字段：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `clipPath` | 空 | 相对 `Resources` 的 WAV 路径，如 `Audio/step.wav`（走资产包） |
+| `volume` | 1.0 | 线性音量 |
+| `pitch` | 1.0 | 1 = 原速，2 = 高八度且时长减半 |
+| `loop` | false | 循环播放 |
+| `priority` | 0 | 越大越不容易被抢占 |
+| `minDistance` | 1.0 | 这个距离内不衰减（米） |
+| `maxDistance` | 30.0 | 超过就听不见（米） |
+| `spatialized` | true | 关掉就是 2D 音，只受 `volume` 控制 |
+| `playOnStart` | false | 实体存在时自动播放；改成 false 立即淡出停止 |
+
+`playing` / `playRequest` 是运行期状态，不进存档。
+
+### 7.2 系统
+
+`audioSystem` 注册在 `SystemPhase::PostTransform`、order 210（在 `effects.particles` 之后），
+因为音源位置要用**本帧最终的世界矩阵**。每帧做三件事：
+
+1. 找听者：`AudioListenerComponent` → 没有就退回 `CameraComponent`；位置取矩阵第 4 列，
+   前方向取 `-第 3 列`（相机朝 -Z），上方向取第 2 列；
+2. `playOnStart && !playing` → 载入片段（按路径缓存）并按当前空间参数起播；
+3. 正在响的音源每帧重算空间参数并 `updateVoice()`；`updateVoice` 返回 false
+   （声部已播完或被抢占）就把 `playing` 复位。
+
+`stopPlay()` 会调 `AudioService::stopAll()`，避免循环音在编辑态继续响。
+
+### 7.3 空间参数怎么算
+
+`audio::computeSpatialParams()` 是纯函数（所以能无设备自检）：
+
+- **距离衰减**：`minDistance` 内为 1，之后 `pow(min/distance, rolloff)`；
+- **边界淡出**：接近 `maxDistance` 的最后 10% 线性淡到 0，避免"走到边界突然静音"；
+- **声像**：`dot(normalize(source - listener), right)`，`right = normalize(cross(forward, up))`；
+- **远处闷声**：衰减到 1 以下才开始低通，截止频率 `20000 * attenuation`，下限 600Hz。
+
+### 7.4 怎么用
+
+在场景 JSON 里给实体加组件（也可以从 Inspector 的"音频"分类里加）：
+
+```json
+{
+  "type": "audio.source",
+  "properties": {
+    "clipPath": "Audio/step.wav",
+    "volume": 0.8,
+    "maxDistance": 20,
+    "playOnStart": true
+  }
+}
+```
+
+自检：
+
+```powershell
+.\build\Debug\TinyEngine.exe --audio-spatial-test
+# [Audio] spatialSelfTest PASS | cases=8 pan=ok rolloff=ok cutoff=ok
+```
+
+## 8. 已知限制（3D 音源）与后续
+
+- 没有遮挡/混响/多普勒：只有距离衰减、声像、低通；
+- 参数是"每帧覆盖式更新"，没有曲线与自动化；
+- 音源实体被销毁时声部不会立刻停（循环音要等 `stopAll()`），后续在 `Scene::destroyEntity` 里补钩子；
+- 总线与音量分组（Master / Music / SFX / UI）还没做；
+- 长音频仍是整段 PCM 常驻，流式播放要等解码器。
