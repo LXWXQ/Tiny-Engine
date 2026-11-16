@@ -5345,6 +5345,169 @@ void updateCharacterAnimation(entt::registry& registry, entt::entity entity,
 }
 } // namespace
 
+namespace
+{
+// D1b：把 Scene 的两个查询接到 scene::CollisionWorld 上。
+class SceneCollisionWorldAdapter final : public scene::CollisionWorld
+{
+public:
+    explicit SceneCollisionWorldAdapter(const Scene& scene) : scene_(scene) {}
+
+    std::size_t collectBoxes(const glm::vec3& center, const glm::vec3& halfExtents,
+                             scene::CollisionBox* out, std::size_t capacity) const override
+    {
+        return scene_.collectCollisionBoxes(center, halfExtents, out, capacity);
+    }
+
+    bool sampleGround(float x, float z, float& outHeight, glm::vec3& outNormal) const override
+    {
+        return scene_.sampleGroundForCharacter(x, z, outHeight, outNormal);
+    }
+
+private:
+    const Scene& scene_;
+};
+} // namespace
+
+std::size_t Scene::collectCollisionBoxes(const glm::vec3& center, const glm::vec3& halfExtents,
+                                        scene::CollisionBox* out, std::size_t capacity) const
+{
+    if (out == nullptr || capacity == 0)
+        return 0;
+
+    std::size_t count = 0;
+    const glm::vec3 lo = center - halfExtents;
+    const glm::vec3 hi = center + halfExtents;
+
+    // 体素：逐列找连续实心段，一段一个 AABB。
+    // 关键：一列只认**第一个**匹配的 chunk（和 sampleVoxelGroundHeight 的
+    // "first chunk wins" 语义一致）。否则场景里同时存在两个体素世界时，
+    // 角色会落在另一个世界的方块顶面上，与地面查询给出的高度对不上。
+    const int32_t columnX0 = static_cast<int32_t>(std::floor(lo.x));
+    const int32_t columnX1 = static_cast<int32_t>(std::floor(hi.x));
+    const int32_t columnZ0 = static_cast<int32_t>(std::floor(lo.z));
+    const int32_t columnZ1 = static_cast<int32_t>(std::floor(hi.z));
+    const int32_t columnY0 = static_cast<int32_t>(std::floor(lo.y));
+    const int32_t columnY1 = static_cast<int32_t>(std::floor(hi.y));
+
+    for (int32_t worldX = columnX0; worldX <= columnX1; ++worldX)
+    {
+        for (int32_t worldZ = columnZ0; worldZ <= columnZ1; ++worldZ)
+        {
+            const VoxelChunkComponent* column = nullptr;
+            entt::entity columnEntity = entt::null;
+            for (auto [chunkEntity, chunk] : registry.view<VoxelChunkComponent>().each())
+            {
+                if (!chunk.chunk)
+                    continue;
+                if (voxel::Chunk::toChunkCoord(worldX) != chunk.chunkX ||
+                    voxel::Chunk::toChunkCoord(worldZ) != chunk.chunkZ)
+                    continue;
+                column = &chunk;
+                columnEntity = chunkEntity;
+                break;
+            }
+            if (column == nullptr || columnEntity == entt::null)
+                continue;
+
+            const int32_t localX = voxel::Chunk::toLocal(worldX);
+            const int32_t localZ = voxel::Chunk::toLocal(worldZ);
+            const int32_t localY0 = std::max(0, columnY0 - column->baseY);
+            const int32_t localY1 = std::min(voxel::Chunk::kSize - 1, columnY1 - column->baseY);
+
+            int32_t y = localY0;
+            while (y <= localY1)
+            {
+                if (!voxel::isSolid(column->chunk->get(localX, y, localZ)))
+                {
+                    ++y;
+                    continue;
+                }
+                const int32_t first = y;
+                while (y <= localY1 && voxel::isSolid(column->chunk->get(localX, y, localZ)))
+                    ++y;
+                const float bottom = static_cast<float>(column->baseY + first);
+                const float top = static_cast<float>(column->baseY + y);
+                scene::CollisionBox box;
+                box.center = glm::vec3(static_cast<float>(worldX) + 0.5f,
+                                       (bottom + top) * 0.5f,
+                                       static_cast<float>(worldZ) + 0.5f);
+                box.halfExtents = glm::vec3(0.5f, (top - bottom) * 0.5f, 0.5f);
+                out[count++] = box;
+                if (count >= capacity)
+                    return count;
+            }
+        }
+    }
+
+    // 模型：用世界 AABB 近似。旋转过的模型会偏保守（挡得比看起来早一点），
+    // 这是 D1b 明说的粗粒度取舍；要精确得等每个子网格的 OBB。
+    for (auto [entity, mesh, world] : registry.view<MeshComponent, WorldTransformComponent>().each())
+    {
+        if (!mesh.model || !world.valid || mesh.model->isSkinned())
+            continue;
+        // 体素/地形 chunk 自己的网格是"渲染用的合并几何"，它的 AABB 会把整块
+        // 地形包成一个看不见的盒子（角色会停在半空）。这两类几何已经由
+        // 体素实心段与 sampleGround 覆盖，这里跳过。
+        if (registry.any_of<VoxelChunkComponent, TerrainChunkComponent, TerrainComponent,
+                            VoxelWorldComponent, TerrainStreamingComponent>(entity))
+            continue;
+
+        const glm::vec3 localMin = mesh.model->getBoundsMin();
+        const glm::vec3 localMax = mesh.model->getBoundsMax();
+        glm::vec3 worldMin(std::numeric_limits<float>::max());
+        glm::vec3 worldMax(-std::numeric_limits<float>::max());
+        for (int corner = 0; corner < 8; ++corner)
+        {
+            const glm::vec3 local((corner & 1) ? localMax.x : localMin.x,
+                                  (corner & 2) ? localMax.y : localMin.y,
+                                  (corner & 4) ? localMax.z : localMin.z);
+            const glm::vec3 point = glm::vec3(world.matrix * glm::vec4(local, 1.0f));
+            worldMin = glm::min(worldMin, point);
+            worldMax = glm::max(worldMax, point);
+        }
+        if (worldMax.x <= lo.x || worldMin.x >= hi.x || worldMax.y <= lo.y ||
+            worldMin.y >= hi.y || worldMax.z <= lo.z || worldMin.z >= hi.z)
+            continue;
+
+        scene::CollisionBox box;
+        box.center = (worldMin + worldMax) * 0.5f;
+        box.halfExtents = glm::max((worldMax - worldMin) * 0.5f, glm::vec3(0.01f));
+        out[count++] = box;
+        if (count >= capacity)
+            return count;
+    }
+
+    return count;
+}
+
+bool Scene::sampleGroundForCharacter(float worldX, float worldZ, float& outHeight,
+                                    glm::vec3& outNormal) const
+{
+    outNormal = glm::vec3(0.0f, 1.0f, 0.0f);
+    entt::entity entity = entt::null;
+    if (!queryGroundAtWorld(worldX, worldZ, outHeight, entity, nullptr))
+        return false;
+
+    // 法线用中心差分：地形与体素都是"高度场 + 台阶"，坡度就够用了。
+    const float epsilon = 0.25f;
+    float left = 0.0f, right = 0.0f, back = 0.0f, front = 0.0f;
+    entt::entity ignored = entt::null;
+    if (queryGroundAtWorld(worldX - epsilon, worldZ, left, ignored, nullptr) &&
+        queryGroundAtWorld(worldX + epsilon, worldZ, right, ignored, nullptr) &&
+        queryGroundAtWorld(worldX, worldZ - epsilon, back, ignored, nullptr) &&
+        queryGroundAtWorld(worldX, worldZ + epsilon, front, ignored, nullptr))
+    {
+        const float slopeX = (right - left) / (2.0f * epsilon);
+        const float slopeZ = (front - back) / (2.0f * epsilon);
+        const glm::vec3 normal(-slopeX, 1.0f, -slopeZ);
+        const float length = glm::length(normal);
+        if (std::isfinite(length) && length > 1.0e-4f)
+            outNormal = normal / length;
+    }
+    return true;
+}
+
 bool Scene::updateCharacterController(entt::entity entity,
                                       const glm::vec3& worldMoveDirection,
                                       bool jump,
@@ -5368,11 +5531,6 @@ bool Scene::updateCharacterController(entt::entity entity,
     const float previousVerticalVelocity = controller->verticalVelocity;
     speedMultiplier = std::max(speedMultiplier, 0.0f);
 
-    float groundHeight = 0.0f;
-    entt::entity groundEntity = entt::null;
-    const bool hasGround = queryGroundAtWorld(position.x, position.z,
-                                              groundHeight, groundEntity, nullptr);
-
     glm::vec3 move = glm::vec3(worldMoveDirection.x, 0.0f, worldMoveDirection.z);
     if (glm::dot(move, move) > 1.0e-8f)
         move = glm::normalize(move);
@@ -5385,94 +5543,40 @@ bool Scene::updateCharacterController(entt::entity entity,
         controller->verticalVelocity = std::max(0.0f, controller->jumpSpeed);
         controller->grounded = false;
     }
-
-    const float targetX = position.x + move.x * controller->moveSpeed * speedMultiplier * dt;
-    const float targetZ = position.z + move.z * controller->moveSpeed * speedMultiplier * dt;
-
-    float targetGroundHeight = 0.0f;
-    entt::entity targetGroundEntity = entt::null;
-    const bool hasTargetGround = queryGroundAtWorld(targetX, targetZ,
-                                                    targetGroundHeight,
-                                                    targetGroundEntity, nullptr);
-
-    bool blocked = false;
-    if (controller->grounded && hasGround && hasTargetGround &&
-        glm::dot(move, move) > 1.0e-8f)
-    {
-        const float stepUp = targetGroundHeight - groundHeight;
-        if (stepUp > controller->stepHeight)
-        {
-            blocked = true;
-        }
-        else if (stepUp > 1.0e-4f)
-        {
-            float slopeDegrees = 0.0f;
-            entt::entity ignored = entt::null;
-            queryGroundAtWorld(targetX, targetZ, targetGroundHeight,
-                               ignored, &slopeDegrees);
-            if (slopeDegrees > controller->maxSlopeAngle)
-                blocked = true;
-        }
-    }
-
-    if (!blocked && glm::dot(move, move) > 1.0e-8f)
-    {
-        position.x = targetX;
-        position.z = targetZ;
-    }
-
-    // Re-sample after horizontal movement. Ground snapping keeps the feet on
-    // the surface for small downhill steps, while larger drops become airborne.
-    float currentGround = groundHeight;
-    entt::entity currentGroundEntity = groundEntity;
-    const bool hasCurrentGround = queryGroundAtWorld(position.x, position.z,
-                                                     currentGround,
-                                                     currentGroundEntity, nullptr);
-
-    if (!jumped && controller->grounded)
-    {
-        if (hasCurrentGround)
-        {
-            const float groundDelta = currentGround - position.y;
-            if (groundDelta >= -controller->groundSnapDistance &&
-                groundDelta <= controller->stepHeight)
-            {
-                position.y = currentGround;
-                controller->verticalVelocity = 0.0f;
-            }
-            else if (groundDelta < -controller->groundSnapDistance)
-            {
-                controller->grounded = false;
-            }
-        }
-        else
-        {
-            controller->grounded = false;
-        }
-    }
-
     if (controller->grounded)
-    {
         controller->verticalVelocity = 0.0f;
-        if (hasCurrentGround)
-            position.y = currentGround;
-    }
     else
-    {
         controller->verticalVelocity -= controller->gravity * dt;
-        position.y += controller->verticalVelocity * dt;
-        if (hasCurrentGround && position.y <= currentGround)
-        {
-            position.y = currentGround;
-            controller->verticalVelocity = 0.0f;
-            controller->grounded = true;
-        }
-    }
 
-    if (hasCurrentGround)
-    {
+    // D1b：水平移动、上台阶、坡度限制、贴地都交给扫掠盒求解器。
+    // 重力与跳跃仍在这里算，合成一个总位移交给它。
+    scene::CharacterShape shape;
+    shape.radius = controller->radius;
+    shape.height = controller->height;
+
+    scene::CharacterMoveSettings settings;
+    settings.maxSlopeAngle = controller->maxSlopeAngle;
+    settings.stepHeight = controller->stepHeight;
+    settings.groundSnapDistance = controller->groundSnapDistance;
+
+    const glm::vec3 delta(move.x * controller->moveSpeed * speedMultiplier * dt,
+                          controller->verticalVelocity * dt,
+                          move.z * controller->moveSpeed * speedMultiplier * dt);
+
+    SceneCollisionWorldAdapter collisionWorld(*this);
+    const scene::CharacterMoveOutput solved =
+        scene::moveCharacter(collisionWorld, shape, settings, position, delta,
+                             wasGrounded && !jumped);
+    position = solved.position;
+    const bool blocked = solved.blocked;
+    controller->grounded = solved.grounded;
+    if (controller->grounded)
+        controller->verticalVelocity = 0.0f;
+
+    float currentGround = solved.groundHeight;
+    entt::entity currentGroundEntity = entt::null;
+    if (queryGroundAtWorld(position.x, position.z, currentGround, currentGroundEntity, nullptr))
         controller->groundEntity = currentGroundEntity;
-    }
 
     transform->setTranslation(position);
 

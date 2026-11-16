@@ -5,6 +5,7 @@
 #include "Scene/SceneDescription.h"
 #include "Scene/SystemScheduler.h"
 #include "Scene/Camera.h"
+#include "Scene/CharacterCollision.h"
 #include "Scene/CameraController.h"
 #include "Scene/SpatialIndex.h"
 #include "Core/MaterialSystem.h"
@@ -266,6 +267,13 @@ public:
                                    float dt,
                                    CharacterMoveResult& outResult,
                                    float speedMultiplier = 1.0f);
+
+    // D1b：给 scene::CollisionWorld 用的两个查询。地形只出现在 sampleGround 里
+    // （高度场没有体积），体素方块与模型包围盒走 collectCollisionBoxes。
+    std::size_t collectCollisionBoxes(const glm::vec3& center, const glm::vec3& halfExtents,
+                                      scene::CollisionBox* out, std::size_t capacity) const;
+    bool sampleGroundForCharacter(float worldX, float worldZ, float& outHeight,
+                                  glm::vec3& outNormal) const;
 
     // 运行时角色：把带蒙皮/动画的 glTF 挂到已有角色实体上。模型绑定姿势的
     // 脚底在原点，uniformScale 用来把 3.55m 的 Quaternius 绑定高度压到约 1.78m。

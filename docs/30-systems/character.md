@@ -4,7 +4,7 @@ title: 运行时角色与骨骼动画
 type: system
 scope: src/Scene/Model.*, src/Scene/GLTFLoader.cpp, src/Scene/Scene.cpp, src/Editor/EditorLayer.cpp, Resources/Models/Character
 read-when: 改角色移动/出生点/动画状态机/蒙皮，或排查角色全黑、不动、悬空、动画不切换
-size: ~200 行
+size: ~215 行
 updated: 2026-11-16
 ---
 
@@ -75,8 +75,9 @@ updated: 2026-11-16
 
 `Scene::updateCharacterController(entity, worldMoveDirection, jump, dt, out, speedMultiplier)` 每帧：
 
-- 用 `sampleTerrainGroundHeightWorld`（地形 + 体素都走这条查询）找脚下地面；
-- 处理水平移动、重力、跳跃、step up、坡度限制和 ground snap；
+- 重力与跳跃在本函数里算（`verticalVelocity -= gravity * dt`），水平移动与竖直位移合成一个总位移；
+- 交给 `scene::moveCharacter()`（见 4.1）做扫掠、滑动、上台阶与贴地 —— D1b 起不再自己写台阶/坡度判断；
+- 落地后再查一次地面，只为了记录 `groundEntity`（地形 chunk 或体素 chunk）；
 - 角色只绕 Y 轴转向：`setEuler(0, atan2(move.x, move.z), 0)`，前向为 +Z，与 glTF 模型默认朝向一致；
 - 把水平速度与 `justLanded` 交给 `updateCharacterAnimation()`。
 
@@ -110,9 +111,21 @@ updated: 2026-11-16
 0.4m 台阶能上、0.8m 台阶被挡、撞墙停在 `1.0 - radius`、天花板挡住上升、斜撞墙不耗尽迭代。
 PASS 行：`[Collision] characterSelfTest PASS | cases=8 slide=ok step=ok slope=ok`。
 
-**当前状态**：求解器与自检已提交，但 `Scene::updateCharacterController` 仍在用旧的
-"采样地面高度 + 台阶/坡度检查 + 贴地吸附"路径（见本节开头）。接入（写 `SceneCollisionWorld`
-适配器并替换控制器内部）是 D1b。
+**接入方式（D1b）**：`Scene` 实现这两个查询，`SceneCollisionWorldAdapter` 把它们转成
+`CollisionWorld` 传给 `moveCharacter()`：
+
+| 查询 | Scene 侧实现 | 取舍 |
+|---|---|---|
+| `collectCollisionBoxes` | 体素按列合并"连续实心段"成一个 AABB；普通模型的**世界 AABB** | 体素逐方块会让候选盒爆掉，整 chunk 一个盒又会造出看不见的墙，所以按列合并；模型用世界 AABB 近似，旋转模型会挡得比看起来早一点 |
+| `sampleGroundForCharacter` | `queryGroundAtWorld` + 中心差分求法线（±0.25m） | 地形是高度场、没有体积，所以只出现在地面查询里 |
+
+**踩过的坑（已修）**：模型循环一开始把体素/地形 chunk 自己的合并网格也算成了碰撞盒，
+它的 AABB 把整块地形包成一个看不见的大盒子 —— 体素自检里角色停在 `y=13` 而不是方块顶面
+`y=11`。现在显式跳过带 `VoxelChunkComponent / TerrainChunkComponent / TerrainComponent /
+VoxelWorldComponent / TerrainStreamingComponent` 的实体。
+
+**已知取舍**：模型碰撞只有世界 AABB，没有逐子网格 OBB；体素只有实心方块，玻璃不算障碍；
+没有斜坡碰撞体（坡靠 `sampleGround` 的法线）；角色与角色之间不互相阻挡。
 
 ## 5. 动画状态机
 
