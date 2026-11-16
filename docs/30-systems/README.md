@@ -4,8 +4,8 @@ title: 运行时系统索引
 type: system
 scope: src/Scene, src/Core, src/Terrain, src/Vegetation, src/Render
 read-when: 修改 ECS/场景、JobSystem、配置、ImGui 面板、程序化地形或局部雾
-size: ~60 行
-updated: 2026-11-13
+size: ~70 行
+updated: 2026-11-16
 ---
 
 # 30-systems 运行时系统
@@ -26,3 +26,4 @@ updated: 2026-11-13
 | [asset-pack](asset-pack.md) | 资产怎么打包/挂载、包格式长什么样、哪些加载点已接入？ |
 | [particles](particles.md) | 粒子怎么模拟、上限是多少、为什么还没改成 SoA？ |
 | [simulation-tick](simulation-tick.md) | 模拟为什么按固定步长跑？卡顿时怎么处理？跳跃为什么会被吞？ |
+| [audio](audio.md) | 声音怎么播？声部不够时谁被抢？为什么 addClip 必须在 start 之前？ |

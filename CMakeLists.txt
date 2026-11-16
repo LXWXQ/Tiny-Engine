@@ -161,6 +161,11 @@ target_link_libraries(tiny_core PUBLIC
     Threads::Threads
 )
 
+# 音频后端：Windows 自带的 XAudio2（不引入第三方依赖）。
+if(WIN32)
+    target_link_libraries(tiny_core PUBLIC xaudio2)
+endif()
+
 # ---------------------------------------------------------------------------
 # 调试 / 剖析能力开关（P0）。
 #

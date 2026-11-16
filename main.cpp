@@ -12,11 +12,17 @@
 #include "src/Scene/SimulationClock.h"
 #include "src/Scene/RenderInterpolation.h"
 #include "src/Scene/FeatureComponents.h"
+#include "src/Audio/AudioMixer.h"
+#include "src/Audio/AudioDevice.h"
+#include "src/Audio/AudioClip.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
 #include <string>
 #include <sstream>
+#include <chrono>
+#include <memory>
+#include <thread>
 #include <cstdio>
 #include <cstring>
 #include <cctype>
@@ -139,6 +145,8 @@ const UsageLine kUsageLines[] = {
         { "自检", "--tick-test", "固定步长模拟时钟契约自检（不需要 Vulkan / 窗口）" },
 	{ "自检", "--render-interp-test", "渲染插值（TRS 分解 + slerp）契约自检（不需要 Vulkan / 窗口）" },
 { "自检", "--particle-bench", "粒子上限下的模拟耗时测量（不需要 Vulkan / 窗口）" },
+    { "音频", "--audio-test", "音频混音器契约自检（不需要声卡 / 窗口）" },
+    { "音频", "--audio-play", "打开声卡播一段 440Hz 测试音（需要音频设备）" },
     { "剖析", "--build-info", "打印本二进制的调试能力后退出" },
     { "剖析", "--gpu-timing", "每 pass GPU 计时，退出时写 gpu_timing.csv" },
     { "剖析", "--gpu-timing-csv <path>", "指定计时 CSV 路径（隐含 --gpu-timing）" },
@@ -212,6 +220,8 @@ int main(int argc, char** argv)
     bool tickTest = false;
 bool renderInterpTest = false;
 bool particleBench = false;
+bool audioTest = false;
+bool audioPlay = false;
     int textureBudgetMB = -1;   // < 0 表示命令行没给，保持不限制
     std::string packBuildDir;
     std::string packBuildOut;
@@ -392,6 +402,8 @@ bool particleBench = false;
         else if (arg == "--tick-test") tickTest = true;
 		else if (arg == "--render-interp-test") renderInterpTest = true;
 		else if (arg == "--particle-bench") particleBench = true;
+    else if (arg == "--audio-test") audioTest = true;
+    else if (arg == "--audio-play") audioPlay = true;
         else if (arg == "--texture-budget")
         {
             if (i + 1 < argc && argv[i + 1][0] != '-')
@@ -562,6 +574,37 @@ bool particleBench = false;
         if (renderInterpTest)
             return scene::renderInterpolationSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 
+
+        if (audioTest)
+            return audio::mixerSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (audioPlay)
+        {
+            audio::AudioDevice device;
+            // 片段必须在 start() 之前注册：音频线程会直接读片段表。
+            auto clip = std::make_shared<audio::AudioClip>(
+                audio::makeSineClip(440.0f, 2.0f, 48000, 0.3f));
+            const audio::ClipId clipId = device.addClip(clip);
+            if (!device.start())
+            {
+                std::cerr << "[Audio] device start failed: " << device.lastError()
+                          << " (engine keeps running silently)\n";
+                return EXIT_FAILURE;
+            }
+
+            audio::VoiceParams params;
+            params.volume = 0.8f;
+            device.play(clipId, params);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            const audio::MixStats stats = device.stats();
+            std::cout << "[Audio] play test | sampleRate=" << device.sampleRate()
+                      << " played=" << stats.playedEvents
+                      << " peak=" << stats.peak
+                      << " active=" << stats.activeVoices << "\n";
+            device.shutdown();
+            return (stats.playedEvents > 0 && stats.activeVoices > 0 && stats.peak > 0.0f) ? EXIT_SUCCESS : EXIT_FAILURE;
+        }
         if (particleBench)
             return scene::particleSystemBenchmark() ? EXIT_SUCCESS : EXIT_FAILURE;
 
