@@ -37,6 +37,7 @@ updated: 2026-11-13
 | `--audio-play` | 打开声卡播 2s/440Hz 测试音并校验 `played/active/peak`；**需要音频设备**，不放进 Validate |
 | `--audio-spatial-test` | 3D 音源空间参数（距离衰减、边界淡出、声像、远处低通）契约自检，不建窗口、不需要声卡 |
 | `--replay-test` | 角色步进纯函数（60/144Hz 逐 tick 哈希一致）与输入录制/回放一致性自检，不建窗口 |
+| `--viewmodel-test` | 手持物投影/偏移矩阵契约自检（6 组，含 +z 朝前约定与 TRS 顺序），不建窗口 |
 | `--hidden` | 不创建可见窗口；自检/截图/回归这类无人值守运行**默认开启**。窗口仍有真实客户区尺寸，交换链、渲染与截图不受影响 |
 | `--minimized` | 启动后最小化窗口（先隐藏创建，渲染器就绪后再 `glfwShowWindow` + `glfwIconifyWindow`，避免启动瞬间抢焦点）；最小化会命中 `handleWindowMaintenance()` 的跳过分支、不出帧，只适合看日志。与自检/截图等无人值守运行组合时自动退化为 `--hidden` |
 | `--visible` | 强制显示窗口，覆盖 `--hidden` 的默认行为（交互调试 / RenderDoc 抓帧时用） |

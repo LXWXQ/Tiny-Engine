@@ -31,15 +31,16 @@
 #include "Render/GlassPass.h"
 #include "Render/WaterPass.h"
 #include "Render/ParticlePass.h"
+#include "Render/ViewModelPass.h"
 #include "Render/VegetationPass.h"
 #include "Render/ReflectionPass.h"
 #include "Render/SSRPass.h"
 #include "Core/Material.h"
+#include "Scene/SceneComponents.h"
 #include "Render/TAAPass.h"
 #include "Render/SunFlarePass.h"
 #include "Render/ShadowPass.h"
 #include "Scene/FeatureComponents.h"
-#include "Scene/SceneComponents.h"
 #include "Voxel/VoxelChunk.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
@@ -812,6 +813,10 @@ streamingConfig.skirtsEnabled = false;
 	auto vegetationPass = std::make_unique<VegetationPass>(*vulkanDevice, *renderGraph,
 		*renderResources, descriptorManager->getGlobalSetLayout(),
 		gBuffers[0]->getDepth().format, scene.get());
+	// D3：第一人称手持物。独立投影 + 独立近远平面，画在粒子之后、TAA 之前，
+	// 永远压在场景内容之上（贴墙不裁切）。
+	auto viewModelPass = std::make_unique<ViewModelPass>(*vulkanDevice, *renderGraph,
+		*renderResources);
 	shadowPass->setVegetationPass(vegetationPass.get());
 	auto ssaoPass = std::make_unique<SSAOPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
@@ -907,6 +912,7 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(glassPass));
 	renderPipeline.addPass(std::move(waterPass));
 	renderPipeline.addPass(std::move(particlePass));
+renderPipeline.addPass(std::move(viewModelPass));
 	renderPipeline.addPass(std::move(taaPass));
 	renderPipeline.addPass(std::move(sunFlarePass));
 	renderPipeline.addPass(std::move(bloomPass));

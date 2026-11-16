@@ -941,6 +941,23 @@ void registerFeatureComponents(ComponentRegistry& registry)
                                                     0.0f, 4.0f,
                                                     "听者整体增益；场景里没有听者时用相机实体", 0.01f) }));
 
+    // D3：第一人称手持物。属性都是相机空间的相对量，改完立刻在视口里生效。
+    registry.add(makeComponentDescriptor<ViewModelComponent>(
+        "viewmodel.camera", "Viewmodel", "渲染",
+        { makeBoolProperty<ViewModelComponent>("visible", "Visible", &ViewModelComponent::visible,
+                                              "关掉后不再绘制手持物"),
+          makeFloatProperty<ViewModelComponent>("fovDegrees", "FOV (deg)", &ViewModelComponent::fovDegrees,
+                                                10.0f, 120.0f,
+                                                "手持物自己的视场角；比场景更窄会显得更近", 0.5f),
+          makeVec3Property<ViewModelComponent>("offset", "Offset", &ViewModelComponent::offset, 0.01f,
+                                               "相机空间位置（米）：x 右、y 上、z 朝前"),
+          makeVec3Property<ViewModelComponent>("rotation", "Rotation (deg)", &ViewModelComponent::rotation, 0.5f,
+                                               "欧拉角（度，Y→X→Z）"),
+          makeVec3Property<ViewModelComponent>("scale", "Scale", &ViewModelComponent::scale, 0.005f,
+                                               "手持物缩放；0 会被忽略"),
+          makeVec3Property<ViewModelComponent>("color", "Color", &ViewModelComponent::color, 0.01f,
+                                               "手持物基色（与光照相乘）") }));
+
     registry.add(makeComponentDescriptor<ParticleEmitterComponent>(
         "effects.particles", "Particle Emitter", "效果",
         { makeBoolProperty<ParticleEmitterComponent>(

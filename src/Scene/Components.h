@@ -459,6 +459,18 @@ struct AudioListenerComponent
     float gain = 1.0f;
 };
 
+// D3：第一人称手持物。渲染走独立的 ViewModelPass（自己的近远平面与深度缓冲），
+// 位置是相机空间的偏移，与实体自身的世界变换无关——贴墙时不会被墙裁掉。
+struct ViewModelComponent
+{
+    bool visible = true;
+    float fovDegrees = 54.0f;
+    glm::vec3 offset{ 0.28f, -0.24f, 0.55f };    // 相机空间位置（米，+z 朝前）
+    glm::vec3 rotation{ 0.0f, -14.0f, 0.0f };    // 欧拉角（度，Y→X→Z）
+    glm::vec3 scale{ 0.055f };
+    glm::vec3 color{ 0.42f, 0.44f, 0.48f };
+};
+
 inline AABB transformAABB(const AABB& local, const glm::mat4& transform)
 {
     if (!local.valid)

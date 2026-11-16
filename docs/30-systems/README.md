@@ -4,7 +4,7 @@ title: 运行时系统索引
 type: system
 scope: src/Scene, src/Core, src/Terrain, src/Vegetation, src/Render
 read-when: 修改 ECS/场景、JobSystem、配置、ImGui 面板、程序化地形或局部雾
-size: ~75 行
+size: ~80 行
 updated: 2026-11-16
 ---
 
@@ -28,3 +28,4 @@ updated: 2026-11-16
 | [simulation-tick](simulation-tick.md) | 模拟为什么按固定步长跑？卡顿时怎么处理？跳跃为什么会被吞？ |
 | [audio](audio.md) | 声音怎么播？声部不够时谁被抢？为什么 addClip 必须在 start 之前？ |
 | [replay](replay.md) | 同一串操作跑两遍结果一样吗？怎么录制与回放？为什么只有角色是纯函数？ |
+| [viewmodel](viewmodel.md) | 手持物为什么要单独的投影和深度？贴墙为什么不被裁？偏移矩阵乘错了会怎样？ |
