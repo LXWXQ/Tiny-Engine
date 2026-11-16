@@ -22,6 +22,7 @@
 #include "Editor/EditorPanel.h"
 #include "Editor/EditorPreferences.h"
 #include "Scene/SimulationClock.h"
+#include "Scene/SimulationReplay.h"
 
 #include <memory>
 #include <string>
@@ -187,6 +188,7 @@ private:
     float lastFrameDelta = 0.0f;
     // M1-C1b：播放/运行模式的模拟时钟（固定 1/60 tick）。
     scene::SimulationClock simulationClock;
+    scene::ReplayRecorder replayRecorder;
 
     template <typename T>
     T* registerPanel()

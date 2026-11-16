@@ -611,6 +611,7 @@ void EditorLayer::updatePlayState(float dt)
             {
                 state.transformRefreshPending = true;
             }
+            replayRecorder.record(current);
             scene->stepSimulation(fixedDt);
         });
 
@@ -2157,6 +2158,7 @@ void EditorLayer::updateRuntimeMode(float dt)
             if (scene->updateCharacterController(state.runtimeCharacter, current.moveWorld,
                                                  current.jump, fixedDt, result, speedMultiplier))
                 state.transformRefreshPending = true;
+            replayRecorder.record(current);
             scene->stepSimulation(fixedDt);
         });
 
@@ -2183,6 +2185,7 @@ void EditorLayer::enterPlay()
         return;
 
     // 播放前必须先把"未保存的修改"落进快照，否则 Stop 会丢改动
+    replayRecorder.clear();
     state.playSnapshot = state.services.scene->captureDescription();
     state.hasPlaySnapshot = true;
     state.playState = PlayState::Playing;
@@ -2227,6 +2230,10 @@ void EditorLayer::stopPlay()
     simulationClock.reset();
     // 回到编辑态：把播放期间起的声音停掉，避免循环音在编辑态继续响。
     audio::AudioService::instance().stopAll();
+
+    // D2：这一局吃了哪些输入、最终状态哈希是什么 —— 同样的操作跑两遍，哈希应当相同。
+    std::cout << "[Sim] replay | ticks=" << replayRecorder.size() << " hash=0x" << std::hex
+              << replayRecorder.hash() << std::dec << '\n';
     state.hasPlaySnapshot = false;
     state.playSnapshot = scene::SceneDescription{};
     state.playState = PlayState::Editing;

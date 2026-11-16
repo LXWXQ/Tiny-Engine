@@ -12,6 +12,8 @@
 #include "src/Scene/SimulationClock.h"
 #include "src/Scene/RenderInterpolation.h"
 #include "src/Scene/CharacterCollision.h"
+#include "src/Scene/CharacterSimulation.h"
+#include "src/Scene/SimulationReplay.h"
 #include "src/Scene/FeatureComponents.h"
 #include "src/Audio/AudioMixer.h"
 #include "src/Audio/AudioDevice.h"
@@ -145,9 +147,10 @@ const UsageLine kUsageLines[] = {
         { "渲染", "--texture-budget <MB>", "纹理显存预算（MB；0 = 不限制，超限时降 mip / 减半分辨率）" },
         { "自检", "--texture-budget-test", "纹理预算降级策略自检（不需要 Vulkan / 窗口）" },
         { "自检", "--tick-test", "固定步长模拟时钟契约自检（不需要 Vulkan / 窗口）" },
-	{ "自检", "--render-interp-test", "渲染插值（TRS 分解 + slerp）契约自检（不需要 Vulkan / 窗口）" },
-{ "自检", "--character-collision-test", "角色扫掠盒/滑动/上台阶契约自检（不需要 Vulkan / 窗口）" },
-{ "自检", "--particle-bench", "粒子上限下的模拟耗时测量（不需要 Vulkan / 窗口）" },
+        { "自检", "--render-interp-test", "渲染插值（TRS 分解 + slerp）契约自检（不需要 Vulkan / 窗口）" },
+        { "自检", "--character-collision-test", "角色扫掠盒/滑动/上台阶契约自检（不需要 Vulkan / 窗口）" },
+        { "自检", "--replay-test", "角色步进纯函数与输入录制/回放一致性自检（不需要 Vulkan / 窗口）" },
+        { "自检", "--particle-bench", "粒子上限下的模拟耗时测量（不需要 Vulkan / 窗口）" },
     { "音频", "--audio-test", "音频混音器契约自检（不需要声卡 / 窗口）" },
     { "音频", "--audio-play", "打开声卡播一段 440Hz 测试音（需要音频设备）" },
     { "音频", "--audio-spatial-test", "3D 音源空间参数（衰减/声像/低通）契约自检（不需要声卡）" },
@@ -222,9 +225,10 @@ int main(int argc, char** argv)
     bool terrainSculptTest = false;
     bool textureBudgetTest = false;
     bool tickTest = false;
-bool renderInterpTest = false;
-bool characterCollisionTest = false;
-bool particleBench = false;
+    bool renderInterpTest = false;
+    bool characterCollisionTest = false;
+    bool replayTest = false;
+    bool particleBench = false;
 bool audioTest = false;
 bool audioPlay = false;
 bool audioSpatialTest = false;
@@ -406,9 +410,10 @@ bool audioSpatialTest = false;
         else if (arg == "--terrain-sculpt-test") terrainSculptTest = true;
         else if (arg == "--texture-budget-test") textureBudgetTest = true;
         else if (arg == "--tick-test") tickTest = true;
-		else if (arg == "--render-interp-test") renderInterpTest = true;
-else if (arg == "--character-collision-test") characterCollisionTest = true;
-		else if (arg == "--particle-bench") particleBench = true;
+        else if (arg == "--render-interp-test") renderInterpTest = true;
+        else if (arg == "--character-collision-test") characterCollisionTest = true;
+        else if (arg == "--replay-test") replayTest = true;
+        else if (arg == "--particle-bench") particleBench = true;
     else if (arg == "--audio-test") audioTest = true;
     else if (arg == "--audio-play") audioPlay = true;
     else if (arg == "--audio-spatial-test") audioSpatialTest = true;
@@ -584,6 +589,13 @@ else if (arg == "--character-collision-test") characterCollisionTest = true;
 
         if (characterCollisionTest)
             return scene::characterCollisionSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (replayTest)
+        {
+            const bool simOk = scene::characterSimulationSelfTest();
+            const bool replayOk = scene::simulationReplaySelfTest();
+            return (simOk && replayOk) ? EXIT_SUCCESS : EXIT_FAILURE;
+        }
 
 
         if (audioTest)

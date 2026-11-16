@@ -6,6 +6,8 @@
 #include "Scene/FeatureComponents.h"
 #include "Scene/NativeComponents.h"
 #include "Scene/SceneComponents.h"
+#include "Scene/CharacterCollision.h"
+#include "Scene/CharacterSimulation.h"
 #include "Render/TerrainMaterial.h"
 #include "Render/TerrainComputeGenerator.h"
 #include "Render/SubMeshCulling.h"
@@ -5526,73 +5528,53 @@ bool Scene::updateCharacterController(entt::entity entity,
 
     dt = std::min(dt, 0.1f);
     glm::vec3 position = transform->getTranslation();
-    const glm::vec3 startPosition = position;
-    const bool wasGrounded = controller->grounded;
-    const float previousVerticalVelocity = controller->verticalVelocity;
     speedMultiplier = std::max(speedMultiplier, 0.0f);
 
-    glm::vec3 move = glm::vec3(worldMoveDirection.x, 0.0f, worldMoveDirection.z);
-    if (glm::dot(move, move) > 1.0e-8f)
-        move = glm::normalize(move);
-    else
-        move = glm::vec3(0.0f);
+    // D2：一 tick 的角色步进是纯函数（不读 ImGui、不读时间、不碰 registry），
+    // 这样同一串输入才能逐 tick 重放对比。这里只负责把结果写回组件。
+    scene::CharacterSimSettings settings;
+    settings.shape.radius = controller->radius;
+    settings.shape.height = controller->height;
+    settings.move.maxSlopeAngle = controller->maxSlopeAngle;
+    settings.move.stepHeight = controller->stepHeight;
+    settings.move.groundSnapDistance = controller->groundSnapDistance;
+    settings.moveSpeed = controller->moveSpeed;
+    settings.jumpSpeed = controller->jumpSpeed;
+    settings.gravity = controller->gravity;
 
-    const bool jumped = jump && controller->grounded;
-    if (jumped)
-    {
-        controller->verticalVelocity = std::max(0.0f, controller->jumpSpeed);
-        controller->grounded = false;
-    }
-    if (controller->grounded)
-        controller->verticalVelocity = 0.0f;
-    else
-        controller->verticalVelocity -= controller->gravity * dt;
-
-    // D1b：水平移动、上台阶、坡度限制、贴地都交给扫掠盒求解器。
-    // 重力与跳跃仍在这里算，合成一个总位移交给它。
-    scene::CharacterShape shape;
-    shape.radius = controller->radius;
-    shape.height = controller->height;
-
-    scene::CharacterMoveSettings settings;
-    settings.maxSlopeAngle = controller->maxSlopeAngle;
-    settings.stepHeight = controller->stepHeight;
-    settings.groundSnapDistance = controller->groundSnapDistance;
-
-    const glm::vec3 delta(move.x * controller->moveSpeed * speedMultiplier * dt,
-                          controller->verticalVelocity * dt,
-                          move.z * controller->moveSpeed * speedMultiplier * dt);
+    scene::CharacterSimState simState;
+    simState.position = position;
+    simState.verticalVelocity = controller->verticalVelocity;
+    simState.grounded = controller->grounded;
 
     SceneCollisionWorldAdapter collisionWorld(*this);
-    const scene::CharacterMoveOutput solved =
-        scene::moveCharacter(collisionWorld, shape, settings, position, delta,
-                             wasGrounded && !jumped);
-    position = solved.position;
-    const bool blocked = solved.blocked;
-    controller->grounded = solved.grounded;
-    if (controller->grounded)
-        controller->verticalVelocity = 0.0f;
+    const scene::CharacterSimStep stepped =
+        scene::stepCharacter(collisionWorld, settings, simState, worldMoveDirection, jump, dt,
+                             speedMultiplier);
 
-    float currentGround = solved.groundHeight;
+    position = stepped.state.position;
+    controller->verticalVelocity = stepped.state.verticalVelocity;
+    controller->grounded = stepped.state.grounded;
+    const bool blocked = stepped.blocked;
+
+    float currentGround = stepped.solved.groundHeight;
     entt::entity currentGroundEntity = entt::null;
     if (queryGroundAtWorld(position.x, position.z, currentGround, currentGroundEntity, nullptr))
         controller->groundEntity = currentGroundEntity;
 
     transform->setTranslation(position);
 
-    const float horizontalSpeed =
-        glm::length(glm::vec2(position.x - startPosition.x,
-                              position.z - startPosition.z)) / dt;
-    if (glm::dot(move, move) > 1.0e-8f && horizontalSpeed > 0.05f)
+    const float horizontalSpeed = stepped.horizontalSpeed;
+    if (glm::dot(stepped.moveDirection, stepped.moveDirection) > 1.0e-8f &&
+        horizontalSpeed > 0.05f)
     {
         // 角色只绕 Y 轴转向；前向为 +Z，和 glTF 角色默认朝向一致（截图会复核）。
-        transform->setEuler(glm::vec3(0.0f, std::atan2(move.x, move.z), 0.0f));
+        transform->setEuler(glm::vec3(0.0f, std::atan2(stepped.moveDirection.x,
+                                                      stepped.moveDirection.z), 0.0f));
     }
 
-    const bool justLanded = !wasGrounded && controller->grounded &&
-                            previousVerticalVelocity < -1.0f;
     updateCharacterAnimation(registry, entity, *controller, horizontalSpeed,
-                             justLanded, dt);
+                             stepped.justLanded, dt);
 
     outResult.grounded = controller->grounded;
     outResult.blocked = blocked;
