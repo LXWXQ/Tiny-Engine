@@ -2,6 +2,7 @@
 #include "Editor/SceneSerializer.h"
 #include "Editor/Commands.h"
 #include "Audio/AudioService.h"
+#include "Scene/RenderInterpolation.h"
 #include "Editor/Prefab.h"
 
 #include "Editor/panels/HierarchyPanel.h"
@@ -2092,7 +2093,22 @@ void EditorLayer::applyRuntimeCameraPose()
     // 第三人称：相机沿“视线反方向”退到角色身后，焦点在胸口高度。
     // 引擎相机的前方是 +w = (sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch))，
     // pitch 为正表示向下看。
-    const glm::vec3 feetPosition = feet->getTranslation();
+    // M1-D3c：相机必须跟"正在渲染的那一帧"的角色位置走。
+    // 角色网格是按 alpha 在上一 tick 与当前 tick 之间插值的，而这里原来直接读
+    // TransformComponent（当前 tick 的最终位置）—— 两者最多差一个 tick 的位移
+    // （6 m/s 时约 10cm）。每个 tick 相机会先跳到终点、再等网格追上来，画面上
+    // 就是角色在相机焦点前后高频抖动。改用同一套插值结果后角色相对相机恒定。
+    glm::vec3 feetPosition = feet->getTranslation();
+    if (const auto* feetWorld = registry->try_get<WorldTransformComponent>(state.runtimeCharacter);
+        feetWorld != nullptr)
+    {
+        const float alpha = scene->renderInterpolationAlpha();
+        if (scene::shouldInterpolateTransform(*feetWorld, alpha, scene->simulationTick()))
+        {
+            feetPosition = glm::vec3(scene::interpolateTransform(
+                feetWorld->previousMatrix, feetWorld->matrix, alpha)[3]);
+        }
+    }
     const glm::vec3 focus = feetPosition + glm::vec3(0.0f, 1.25f, 0.0f);
     const float cosPitch = std::cos(state.runtimePitch);
     const glm::vec3 viewForward{
@@ -4950,13 +4966,45 @@ bool EditorLayer::selfTestWithScene()
         const bool follows = cameraPosition.y > feet->getTranslation().y + 0.5f &&
             glm::dot(toCamera, flatForward) < -0.1f;
 
+        // M1-D3c：相机必须跟"渲染出来的"角色位置（插值后的），而不是当前 tick 的
+        // 终点。之前两者差最多一个 tick 的位移，运行模式下角色会在相机焦点前后
+        // 高频抖动。这里把 alpha 设成 0.5、给角色造一对跨 8m 的前后矩阵，断言相机
+        // 更靠近中点而不是终点。
+        bool interpolatedFollows = true;
+        if (auto* feetWorld = registry->try_get<WorldTransformComponent>(state.runtimeCharacter))
+        {
+            feetWorld->previousMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 3.0f, 0.0f));
+            feetWorld->matrix = glm::translate(glm::mat4(1.0f), glm::vec3(8.0f, 3.0f, 0.0f));
+            feetWorld->changedTick = scene->simulationTick();
+            feetWorld->valid = true;
+            scene->setRenderInterpolationAlpha(0.5f);
+            applyRuntimeCameraPose();
+            const glm::vec3 interpolatedCamera = scene->getCameraTransform().getTranslation();
+            // 用相机反推焦点：focus = camera + viewForward * 4（与 applyRuntimeCameraPose 同一公式）。
+            const float cosPitch = std::cos(state.runtimePitch);
+            const glm::vec3 viewForward{
+                std::sin(state.runtimeYaw) * cosPitch,
+                -std::sin(state.runtimePitch),
+                std::cos(state.runtimeYaw) * cosPitch
+            };
+            const glm::vec3 reconstructedFocus = interpolatedCamera + viewForward * 4.0f;
+            const glm::vec3 expectedFocus{ 4.0f, 3.0f + 1.25f, 0.0f };
+            const glm::vec3 currentFocus{ 8.0f, 3.0f + 1.25f, 0.0f };
+            const float focusError = glm::length(reconstructedFocus - expectedFocus);
+            const float currentError = glm::length(reconstructedFocus - currentFocus);
+            interpolatedFollows = focusError < 0.35f && focusError < currentError * 0.5f;
+            scene->setRenderInterpolationAlpha(0.0f);
+            applyRuntimeCameraPose();
+        }
+
         setEditorMode(EditorState::EditorMode::Edit);
         const bool restored = state.runtimeCharacter == entt::null &&
             glm::length(scene->getCameraTransform().getTranslation() - savedPosition) < 1e-4f;
-        if (!follows || !restored || !yawPreserved || !pitchPreserved || !skinned ||
-            animations != 18 || !clipsFound || !idleActive)
+        if (!follows || !interpolatedFollows || !restored || !yawPreserved || !pitchPreserved ||
+            !skinned || animations != 18 || !clipsFound || !idleActive)
         {
             std::cerr << "[Editor] runtime character selfTest FAIL: follows=" << follows
+                      << " interpolatedFollows=" << interpolatedFollows
                       << " restored=" << restored
                       << " yawPreserved=" << yawPreserved
                       << " pitchPreserved=" << pitchPreserved
@@ -4966,7 +5014,7 @@ bool EditorLayer::selfTestWithScene()
                       << " idleActive=" << idleActive << std::endl;
             return false;
         }
-        std::cout << "[Editor] runtime character selfTest PASS | camera follows feet, exit restores pose"
+        std::cout << "[Editor] runtime character selfTest PASS | camera follows interpolated feet, exit restores pose"
                   << " | skinned=" << (skinned ? 1 : 0) << " animations=" << animations
                   << " clips=Idle/Walk/Run/Jump/Jump_Idle/Jump_Land active=Idle"
                   << std::endl;

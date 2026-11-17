@@ -4,8 +4,8 @@ title: 固定步长模拟时钟
 type: system
 scope: src/Scene/SimulationClock.h, src/Scene/SimulationClock.cpp, src/Scene/RenderInterpolation.h, src/Scene/RenderInterpolation.cpp, src/Editor/EditorLayer.cpp, src/Render/SceneGpuBatch.cpp, src/Render/GeometrySystem.cpp, main.cpp（--tick-test / --render-interp-test）
 read-when: 改角色移动/跳跃、把模拟接到新的循环、排查"高刷屏跳得高/走得快"或重放不一致
-size: ~190 行
-updated: 2026-11-16
+size: ~210 行
+updated: 2026-11-17
 ---
 
 # 固定步长模拟时钟
@@ -166,6 +166,21 @@ C1c 用时钟的 `alpha()` 在**上一 tick** 与**当前 tick**的世界矩阵�
 - **已知边界**：蒙皮骨骼矩阵仍按 tick 更新，快速动作时手脚可能比身体
   晚一帧；地形/体素 chunk 的顶点本身不动，不受影响（但它们的**实体变换**
   必须过 tick-gate，见上）。
+
+## 9. 相机也要插值（运行模式角色抖动的根因）
+
+角色网格按 `alpha` 在上一 tick 与当前 tick 之间插值，而第三人称相机原先每帧直接读角色的
+`TransformComponent`（当前 tick 的最终位置）。两者相差最多一个 tick 的位移 —— 以 6 m/s 计约
+10cm：每个 tick 相机先跳到终点、随后网格才追上来，画面上就是角色在焦点前后 60Hz 高频抖动，
+跑动时最明显。
+
+修法：`EditorLayer::applyRuntimeCameraPose()` 改为用同一套插值结果取脚底位置
+（`shouldInterpolateTransform` + `interpolateTransform`，alpha 与渲染端同源），角色相对相机因此恒定。
+回归用例在 `[Editor] runtime character selfTest` 里：把 alpha 设成 0.5、给角色造一对跨 8m 的前后
+矩阵，反推相机焦点必须落在中点上（不允许贴着终点）。
+
+注意：蒙皮骨骼仍按 tick 更新，所以快速动作时手脚的姿态会比身体晚一 tick；这是已知限制，
+要彻底解决需要给骨骼矩阵也做插值。
 
 ## 9. 限制
 
