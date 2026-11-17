@@ -3435,6 +3435,9 @@ bool EditorLayer::selfTest()
         terrain.terrainConfig.surfaceStyle = terrain::TerrainSurfaceStyle::Alpine;
         input.entities.push_back(terrain);
 
+        // D3b 的 3D 天空标记必须跟着场景存读（否则重新打开后天空退化成普通网格）。
+        input.entities[0].isSkyGeometry = true;
+
         scene::SceneDescription output;
         std::string error;
         if (!SceneSerializer::roundTrip(input, output, error))
@@ -3446,6 +3449,12 @@ bool EditorLayer::selfTest()
         if (output.entities.size() != 3)
         {
             std::cerr << "[Editor] selfTest FAIL: entity count mismatch\n";
+            return false;
+        }
+        if (!output.entities[0].isSkyGeometry || output.entities[1].isSkyGeometry ||
+            output.entities[2].isSkyGeometry)
+        {
+            std::cerr << "[Editor] selfTest FAIL: skyGeometry flag lost in round trip\n";
             return false;
         }
         if (output.entities[1].parentIndex != 0)

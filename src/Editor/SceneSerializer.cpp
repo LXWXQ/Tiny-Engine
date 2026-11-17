@@ -291,6 +291,7 @@ scene::SceneDescription fromJson(const json& root)
         entity.parentIndex = e.value("parent", -1);
         entity.meshPath = toAbsolute(e.value("mesh", std::string()));
         entity.isSkybox = e.value("skybox", false);
+        entity.isSkyGeometry = e.value("skyGeometry", false);
 
         entity.isGrid = e.value("grid", false);
 
@@ -444,6 +445,7 @@ json toJson(const scene::SceneDescription& description)
         if (!e.isTerrain && !e.meshPath.empty())
             j["mesh"] = toRelative(e.meshPath);
         if (e.isSkybox) j["skybox"] = true;
+        if (e.isSkyGeometry) j["skyGeometry"] = true;
         if (e.isGrid)   j["grid"] = true;
         if (e.isCamera) j["camera"] = true;
 

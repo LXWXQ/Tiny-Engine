@@ -2368,6 +2368,7 @@ scene::SceneDescription Scene::captureDescription(entt::entity root) const
         {
             e.isSkybox = tag->isSkybox;
             e.isGrid = tag->isGrid;
+            e.isSkyGeometry = tag->isSkyGeometry;
             e.isTerrain = tag->isTerrain;
         }
 
@@ -2528,6 +2529,7 @@ bool Scene::applyMeshAndMaterialFromDescription(const scene::EntityDescription& 
         RenderTagComponent tag;
         tag.isSkybox = e.isSkybox;
         tag.isGrid = e.isGrid;
+        tag.isSkyGeometry = e.isSkyGeometry;
         registry.emplace_or_replace<RenderTagComponent>(entity, tag);
         setModelBounds(registry, entity, model, &dirtySpatialEntities);
     }
@@ -2537,6 +2539,7 @@ bool Scene::applyMeshAndMaterialFromDescription(const scene::EntityDescription& 
         RenderTagComponent tag;
         tag.isSkybox = e.isSkybox;
         tag.isGrid = e.isGrid;
+        tag.isSkyGeometry = e.isSkyGeometry;
         registry.emplace_or_replace<RenderTagComponent>(entity, tag);
     }
 

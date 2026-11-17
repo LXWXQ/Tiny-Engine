@@ -123,8 +123,9 @@ Amanatides-Woo DDA 拾取、挖/放 + 逐格撤销、`queryGroundAtWorld` 叠加
 - 资产引用计数 + 异步加载 + 材质流送
 - Prefab 资产格式（复用场景描述，单根子树；F5-02 已完成）
 
-**当前阻塞**：`GLTFLoader.cpp` 把 node 变换直接烘焙进顶点位置
-（[decisions](../10-architecture/decisions.md) 决策 13）。
+**当前状态**：`GLTFLoader.cpp` 不再把 node 变换烘焙进顶点（M1-B1），`.tpack` 资产包与
+全资源接入也已完成（M1-B2），所以「保留 glTF 内部 node 层级」这条不再是阻塞。剩下的是异步
+加载、引用计数与材质流送。逐项状态见 [source-migration-plan](source-migration-plan.md)。
 
 **验收**：载入 glTF 后可挑任意 node 改 local transform 并实时看到；
 同一 mesh 可被多个 entity 实例化而不重复占显存；反复加载/卸载不泄漏材质槽位与 GPU 资源。
@@ -133,13 +134,14 @@ Amanatides-Woo DDA 拾取、挖/放 + 逐格撤销、`queryGroundAtWorld` 叠加
 
 ## F5：运行时架构
 
-- JobSystem：work stealing、任务依赖图、取消、优先级
+- JobSystem：work stealing、任务依赖图、取消、优先级（已完成，M1-C2）
 - ECS systems：元数据组件注册表 + SystemScheduler（Simulation / updateWorldTransforms / PostTransform）已完成（F5-01）；预制体保存/实例化已完成（F5-02）；内置效果/运动组件第一批（Bob/Pulse/Sway/LookAt/Follow）已完成（F5-03）；原生组件接入统一 Add Component 已完成（F5-04）；剩余更细阶段划分与热重载
 - SpatialIndex：dirty flag / 增量更新 / 分块索引
 - 场景序列化与热重载
 
 **注意**：这些是 F2/F3 的规模化前置。当前版本能工作，但不要在地形 chunk 数量上来后
-Transform/Bounds 字段已私有并通过 setter 自动通知 Scene；streaming chunk 已有 XZ region 索引。剩余 `registry.destroy()` 约定、非 chunk 实体的统一网格与全局 JobSystem 单队列。
+Transform/Bounds 字段已私有并通过 setter 自动通知 Scene；streaming chunk 已有 XZ region 索引。剩余非 chunk 实体的统一网格与场景序列化热重载；`registry.destroy()` 已有静态门禁
+（M1-A2），JobSystem 已换 work stealing（M1-C2）。
 
 ---
 

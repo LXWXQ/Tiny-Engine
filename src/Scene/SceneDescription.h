@@ -60,6 +60,8 @@ struct EntityDescription
 
     bool isSkybox = false;
     bool isGrid = false;
+    // 3D 几何天空（D3b）：这些实体走 skyGeometryPipeline，不写深度、锁相机。
+    bool isSkyGeometry = false;
     bool isCamera = false;
 
     // Terrain is serialized as parameters only. Mesh vertices, indices and

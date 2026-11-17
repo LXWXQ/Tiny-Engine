@@ -4,8 +4,8 @@ title: 当前技术债
 type: status
 scope: 空
 read-when: 决定下一步做什么之前
-size: ~185 行
-updated: 2026-11-10
+size: ~125 行
+updated: 2026-11-17
 ---
 
 # 当前技术债
@@ -47,6 +47,27 @@ updated: 2026-11-10
 | TD-29 | 粒子没有生产方，只有 `ExternalInstance` 数据入口 | 实体级 `ParticleEmitterComponent`（16 属性，默认 512/属性上限 4096）+ CPU 发射/模拟系统（Particle 200）+ 独立 `ParticlePass`（Water 后、TAA 前，前向混合 HDR、`depthWrite = FALSE`、按相机距离排序）；不占用 `ExternalInstance` 与 merged buffer | `--particle-demo` 240 帧 `alive=376`、`drawcalls=1`、验证层 0/0；`f6-particles` 回归 |
 
 > TD-28 证据：`[Scene] ECS component selfTest PASS | components=27 | systems=8` 覆盖 scope 约束、settings 同步、capture/clear/reset；编辑器自检覆盖 v4 存读往返；全套 77 项 ALL PASS，日志 `build/validation/20261110-140504`；DocCheck PASS（documents=68 lines=12275）。
+## 1.1 M1 迁移改造（2026-11-13 ~ 11-17）
+
+不另开编号，集中记一笔改造期间**关掉**与**新开**的条目，避免和 TD-01~TD-29 混在一起。
+逐项状态见 [source-migration-plan](../80-roadmap/source-migration-plan.md)。
+
+已关闭：
+
+- tech-debt #2（glTF 层级被烘焙）：M1-B1，`4feb575`。
+- tech-debt #4（JobSystem 无 work stealing / 依赖图 / 取消）：M1-C2，`ab1cda3`；偶发挂死
+  由 `d0fa6c8` 修掉。
+- tech-debt #10（地形雕刻不写场景）：手动地形已解决，M1-B4，`9d2c46d`；流送 chunk 仍丢，
+  拆成下面的 B4b。
+
+仍然开放：
+
+- **A1 接线**：`EntityHandle` 只有契约与自检，生产代码 0 处使用（仍裸 `entt::entity`）。
+- **A3 接线**：`TraceRequest/TraceResult` 无消费方，`Scene::traceRay()` 未写。
+- **B4b 流送 chunk 雕刻落盘**：`sculptEdits` 只服务手动地形。
+- **C2 收尾**：`CancelToken` 在 JobSystem 之外未使用，地形/体素仍是自己的 `cancelRequested`。
+- **D4 / D5**：`Pipeline.cpp` 仍 `pSpecializationInfo = nullptr`；LOD 只有 CPU 选级。
+
 ## 2. 未关闭（按"何时必须处理"排序）
 
 | # | 内容 | 影响 | 触发条件 |
