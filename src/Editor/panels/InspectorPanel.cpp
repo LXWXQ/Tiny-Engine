@@ -31,7 +31,7 @@ void drawVoxelBrushControls(EditorState& state)
     // E8：体素操作不再是"笔刷开关"，而是运行模式的默认鼠标语义。
     ImGui::TextDisabled("运行模式：左键挖、右键放（F8 切换）");
 
-    if (state.voxelWorld == entt::null)
+    if (state.voxelWorld.isNull())
     {
         ImGui::TextDisabled("还没有体素世界 —— 用「创建 -> 体素世界」或 --voxel-world 启动。");
         return;
@@ -256,7 +256,7 @@ void InspectorPanel::draw(EditorState& state)
         {
             std::vector<std::unique_ptr<Command>> children;
             std::vector<DuplicateEntityCommand*> raw;
-            for (entt::entity selected : state.selection.entities)
+            for (entt::entity selected : state.selection.entityIds())
             {
                 if (!registry.valid(selected) ||
                     !DuplicateEntityCommand::canDuplicate(registry, selected))
@@ -283,7 +283,7 @@ void InspectorPanel::draw(EditorState& state)
         {
             std::vector<std::unique_ptr<Command>> children;
             const entt::entity cameraEntity = state.services.scene->getCameraEntity();
-            for (entt::entity selected : state.selection.entities)
+            for (entt::entity selected : state.selection.entityIds())
             {
                 if (!registry.valid(selected) || selected == cameraEntity)
                     continue;

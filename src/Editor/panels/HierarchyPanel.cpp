@@ -296,7 +296,7 @@ void HierarchyPanel::drawContextMenu(EditorState& state, entt::entity entity)
         {
             std::vector<std::unique_ptr<Command>> children;
             const entt::entity cameraEntity = state.services.scene->getCameraEntity();
-            for (entt::entity selected : state.selection.entities)
+            for (entt::entity selected : state.selection.entityIds())
             {
                 if (selected == cameraEntity || !state.services.registry->valid(selected))
                     continue;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Scene/EntityHandle.h"
+
 // ===========================================================================
 // 视口内的三轴操作手柄（Gizmo）
 //
@@ -126,7 +128,7 @@ private:
     // ---- 拖拽状态 ----
     bool dragging = false;
     Axis activeAxis = Axis::None;
-    entt::entity dragEntity = entt::null;
+    scene::EntityHandle dragEntity;
 
     // 拖拽开始时的完整变换（撤销时要回到这里）
     glm::vec3 startTranslation{ 0.0f };

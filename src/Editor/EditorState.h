@@ -107,7 +107,7 @@ struct EditorState
 
     // tech-debt #19：异步地形构建的跟踪目标。实体当帧出现，几何后台合成；
     // 每帧 poll 一次，完成时把结果播报出来（成功给顶点数/耗时，失败给原因）。
-    entt::entity pendingTerrainBuild = entt::null;
+    scene::EntityHandle pendingTerrainBuild;
     int terrainCreateWaitFrames = 0;
     // 本帧刚产生的错误不能算「已读」：Console 画出来不代表用户看到了新加的那一行。
     // 每帧开头 tickNotices() 清掉，notify(Error) 置位。
@@ -244,12 +244,12 @@ struct EditorState
     // voxelWorld 为 null 时这些操作无目标。
     bool voxelBrushEnabled = false;
     int voxelBrushBlock = 1;   // voxel::BlockId 的整数值
-    entt::entity voxelWorld = entt::null;
+    scene::EntityHandle voxelWorld;
 
     // ---- E9 运行模式接管角色（第一人称） ----
     // 进入运行模式时创建一个不可见的角色实体，相机跟着它的脚底 + 眼高走；
     // 退出时销毁角色并还原进入前的相机位姿。
-    entt::entity runtimeCharacter = entt::null;
+    scene::EntityHandle runtimeCharacter;
     glm::vec3 runtimeSavedCameraPosition{ 0.0f };
     glm::vec3 runtimeSavedCameraEuler{ 0.0f };
     float runtimeYaw = 0.0f;     // 弧度，与相机 euler 一致

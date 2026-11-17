@@ -22,44 +22,6 @@ namespace editor
 namespace
 {
 // 射线与 AABB 求交（slab 法）。返回 true 时 outT 是入射距离。
-bool rayAabb(const glm::vec3& origin, const glm::vec3& dir, const AABB& box, float& outT)
-{
-    if (!box.valid)
-        return false;
-
-    float tMin = 0.0f;
-    float tMax = std::numeric_limits<float>::max();
-
-    for (int axis = 0; axis < 3; ++axis)
-    {
-        const float d = dir[axis];
-        const float o = origin[axis];
-        const float lo = box.min[axis];
-        const float hi = box.max[axis];
-
-        if (std::abs(d) < 1e-8f)
-        {
-            // 射线与该轴平行：起点必须在 slab 内，否则永不相交
-            if (o < lo || o > hi)
-                return false;
-            continue;
-        }
-
-        const float inv = 1.0f / d;
-        float t1 = (lo - o) * inv;
-        float t2 = (hi - o) * inv;
-        if (t1 > t2) std::swap(t1, t2);
-
-        tMin = std::max(tMin, t1);
-        tMax = std::min(tMax, t2);
-        if (tMin > tMax)
-            return false;
-    }
-
-    outT = tMin;
-    return true;
-}
-
 // 屏幕像素 -> 世界射线
 void screenToRay(const ImVec2& screen, const ImVec2& rectMin, const ImVec2& rectMax,
                  const glm::mat4& view, const glm::mat4& projection,
@@ -99,48 +61,20 @@ void screenToRay(const ImVec2& screen, const ImVec2& rectMin, const ImVec2& rect
 //
 // 所以：先用 AABB 做快速剔除（绝大多数实体一次比较就排除），
 // 再用 Möller-Trumbore 做真正的三角形求交。
-entt::entity pickEntity(entt::registry& registry, const glm::vec3& origin, const glm::vec3& dir)
+entt::entity pickEntity(Scene& scene, const glm::vec3& origin, const glm::vec3& dir)
 {
-    entt::entity best = entt::null;
-    float bestDistance = std::numeric_limits<float>::max();
+    // M1-A3：拾取走 Scene::traceRay 的模型后端，不再自己遍历实体。
+    const float dirLength = glm::length(dir);
+    if (!(dirLength > 1.0e-8f))
+        return entt::null;
 
-    for (auto [entity, bounds, mesh] : registry.view<WorldBoundsComponent, MeshComponent>().each())
-    {
-        if (!mesh.model)
-            continue;
+    scene::TraceRequest request;
+    request.start = origin;
+    request.delta = dir * (1000.0f / dirLength);
+    request.surfaces = scene::TraceSurface::Model;
 
-        // 天空盒是相机跟随的巨球，永远包住射线，不能参与拾取
-        if (const auto* tag = registry.try_get<RenderTagComponent>(entity))
-        {
-            if (tag->isSkybox)
-                continue;
-        }
-
-        // AABB 粗筛：射线连包围盒都没碰到就不可能命中三角形
-        float aabbT = 0.0f;
-        if (!rayAabb(origin, dir, bounds.world, aabbT))
-            continue;
-
-        // 已经比当前最近命中更远的实体，不必再测三角形
-        if (aabbT > bestDistance)
-            continue;
-
-        const auto* worldTransform = registry.try_get<WorldTransformComponent>(entity);
-        if (!worldTransform)
-            continue;
-
-        float distance = 0.0f;
-        if (!mesh.model->intersectRay(worldTransform->matrix, origin, dir, distance))
-            continue;
-
-        if (distance < bestDistance)
-        {
-            bestDistance = distance;
-            best = entity;
-        }
-    }
-
-    return best;
+    const scene::TraceResult hit = scene.traceRay(request);
+    return hit.hit() ? hit.entity.entity() : entt::null;
 }
 } // namespace
 
@@ -415,7 +349,7 @@ void ViewportPanel::draw(EditorState& state)
     const bool voxelRightClick = runtime && viewportHovered &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Right);
     if (!gizmoConsumed && viewportHovered && runtime &&
-        state.voxelWorld != entt::null &&
+        !state.voxelWorld.isNull() &&
         (voxelLeftClick || voxelRightClick) &&
         state.services.scene != nullptr)
     {
@@ -428,7 +362,7 @@ void ViewportPanel::draw(EditorState& state)
         float hitDistance = 0.0f;
         if (state.services.scene->raycastVoxelWorld(
                 rayOrigin, rayDir, 160.0f, hitBlock, hitNormal, hitDistance,
-                nullptr, state.voxelWorld))
+                nullptr, state.voxelWorld.entity()))
         {
             const bool placing = voxelRightClick;
             glm::ivec3 target = hitBlock;
@@ -442,11 +376,11 @@ void ViewportPanel::draw(EditorState& state)
             }
 
             const uint8_t before = state.services.scene->getVoxelBlock(
-                state.voxelWorld, target.x, target.y, target.z);
+                state.voxelWorld.entity(), target.x, target.y, target.z);
             if (before != block)
             {
                 state.commands.execute(std::make_unique<VoxelEditCommand>(
-                    *state.services.scene, state.voxelWorld,
+                    *state.services.scene, state.voxelWorld.entity(),
                     target.x, target.y, target.z, before, block));
                 char buffer[192];
                 std::snprintf(buffer, sizeof(buffer),
@@ -474,7 +408,7 @@ void ViewportPanel::draw(EditorState& state)
         screenToRay(ImGui::GetIO().MousePos, rectMin, rectMax,
                     gizmoView.view, gizmoView.projection, rayOrigin, rayDir);
 
-        const entt::entity picked = pickEntity(*state.services.registry, rayOrigin, rayDir);
+        const entt::entity picked = pickEntity(*state.services.scene, rayOrigin, rayDir);
         // Streamed chunks are runtime-derived; select their manager so delete/
         // undo/transform semantics stay stable across unload/reload.
         const entt::entity hit = picked == entt::null

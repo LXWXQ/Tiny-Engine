@@ -37,6 +37,9 @@ public:
     // "was never set" - not "still alive". Two very different questions.
     [[nodiscard]] constexpr bool isNull() const noexcept { return id == entt::null; }
 
+    // A1: 把句柄复位成无效（等价于过去的 = entt::null）。
+    constexpr void clear() noexcept { id = entt::null; }
+
     // "still refers to the same living entity". A recycled index answers false
     // because EnTT bumps the version when the slot is reused.
     [[nodiscard]] bool alive(const entt::registry& registry) const noexcept

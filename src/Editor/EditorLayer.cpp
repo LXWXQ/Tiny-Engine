@@ -142,24 +142,28 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
     // 笔刷要认它 —— 首次见到就记住，之后由「创建 -> 体素世界」更新。
     // 体素世界会随「停止播放 / 打开场景」被重建，旧实体句柄随即失效，
     // 所以这里同时检查 null 与 valid，否则笔刷会一直指向一个已销毁的实体。
+    // A1: 选择跨帧持有句柄，实体被销毁/槽位复用后立刻剪掉，Inspector 不会改到别人身上。
+    if (state.services.registry != nullptr)
+        state.selection.pruneDestroyed(*state.services.registry);
+
     if (state.services.registry != nullptr &&
-        (state.voxelWorld == entt::null || !state.services.registry->valid(state.voxelWorld)))
+        (state.voxelWorld.isNull() || !state.services.registry->valid(state.voxelWorld.entity())))
     {
         auto view = state.services.registry->view<VoxelWorldComponent>();
-        state.voxelWorld = view.empty() ? entt::null : *view.begin();
+        state.voxelWorld = view.empty() ? scene::EntityHandle{} : scene::EntityHandle(*view.begin());
     }
 
     if (advanceTerrainCreateRequest(state.terrainCreatePending, state.terrainCreateWaitFrames))
         createTerrainFromUi();
 
     // tech-debt #19：异步地形构建的收尾播报（每帧最多看一次）。
-    if (state.pendingTerrainBuild != entt::null && state.services.registry != nullptr)
+    if (!state.pendingTerrainBuild.isNull() && state.services.registry != nullptr)
     {
-        const entt::entity building = state.pendingTerrainBuild;
+        const entt::entity building = state.pendingTerrainBuild.entity();
         const auto* terrain = state.services.registry->try_get<TerrainComponent>(building);
         if (terrain == nullptr)
         {
-            state.pendingTerrainBuild = entt::null;
+            state.pendingTerrainBuild.clear();
         }
         else if (!terrain->generating)
         {
@@ -180,7 +184,7 @@ void EditorLayer::beginFrame(float dt, bool viewportHovered)
                 state.notify(LogEntry::Level::Error,
                              "地形生成失败：" + (error.empty() ? std::string("未知原因") : error));
             }
-            state.pendingTerrainBuild = entt::null;
+            state.pendingTerrainBuild.clear();
         }
     }
 
@@ -204,7 +208,7 @@ bool isBatchExcluded(entt::registry& registry, entt::entity entity)
 std::vector<entt::entity> selectionRoots(EditorState& state)
 {
     entt::registry& registry = *state.services.registry;
-    const std::vector<entt::entity>& selected = state.selection.entities;
+    const std::vector<entt::entity> selected = state.selection.entityIds();
     std::vector<entt::entity> roots;
     for (entt::entity entity : selected)
     {
@@ -297,7 +301,7 @@ void duplicateSelection(EditorState& state)
 void focusSelection(EditorState& state)
 {
     entt::registry& registry = *state.services.registry;
-    const std::vector<entt::entity>& selected = state.selection.entities;
+    const std::vector<entt::entity> selected = state.selection.entityIds();
 
     bool hasBounds = false;
     glm::vec3 boundsMin{ 0.0f };
@@ -749,7 +753,7 @@ void EditorLayer::drawMenuBar()
             state.gizmo.mode = GizmoMode::Scale;
         ImGui::Separator();
         // UX-06：这四个以前只活在快捷键里，菜单里补上门面。
-        const bool hasSelection = !state.selection.entities.empty();
+        const bool hasSelection = !state.selection.empty();
         if (ImGui::MenuItem("复制选中", "Ctrl+D", false, hasSelection))
             duplicateSelection(state);
         if (ImGui::MenuItem("删除选中", "Del", false, hasSelection))
@@ -777,7 +781,7 @@ void EditorLayer::drawMenuBar()
             const entt::entity world = state.services.scene->createVoxelWorld(20251104ull, 1, 0);
             if (world != entt::null)
             {
-                state.voxelWorld = world;
+                state.voxelWorld = scene::EntityHandle(world);
                 state.notifySuccess("已创建体素世界（3x3 chunk）");
             }
             else
@@ -947,7 +951,7 @@ entt::entity EditorLayer::createTerrainFromUi()
         if (terrain->generating)
         {
             // 异步路径：几何还没好，先盯住它，完成后由 beginFrame 里的轮询播报。
-            state.pendingTerrainBuild = entity;
+            state.pendingTerrainBuild = scene::EntityHandle(entity);
             char buffer[256];
             std::snprintf(buffer, sizeof(buffer),
                           "地形已创建（后台生成 %ux%u）",
@@ -1152,7 +1156,7 @@ void EditorLayer::drawToolbar()
         // UX-08：同步生成会占满一帧，忙碌提示必须在此之前就画出来（两阶段请求）。
         // UX-08：同步生成会占满一帧，忙碌提示必须在此之前就画出来（两阶段请求）。
         // tech-debt #19：异步构建期间（pendingTerrainBuild）同样要显示。
-        if (state.terrainCreatePending || state.pendingTerrainBuild != entt::null)
+        if (state.terrainCreatePending || !state.pendingTerrainBuild.isNull())
         {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.35f, 1.0f), "地形生成中…");
@@ -1656,8 +1660,8 @@ bool EditorLayer::loadExample(const std::string& id)
     if (!newScene(false))
         return false;
 
-    state.voxelWorld = entt::null;
-    state.pendingTerrainBuild = entt::null;
+    state.voxelWorld.clear();
+    state.pendingTerrainBuild.clear();
     state.terrainCreatePending = false;
     state.terrainCreateWaitFrames = 0;
     state.selection.clear();
@@ -1681,7 +1685,7 @@ bool EditorLayer::loadExample(const std::string& id)
             state.notify(LogEntry::Level::Error, "示例加载失败：体素世界创建失败");
             return false;
         }
-        state.voxelWorld = world;
+        state.voxelWorld = scene::EntityHandle(world);
 
         // 首轮体素网格是异步生成的：先等全部落地再摆玻璃/相机，否则
         // placeVoxelGlassDemo() 写入的玻璃会被仍在跑的旧作业用旧网格覆盖。
@@ -1997,7 +2001,7 @@ void EditorLayer::enterRuntimeMode()
 {
     Scene* scene = state.services.scene;
     entt::registry* registry = state.services.registry;
-    if (scene == nullptr || registry == nullptr || state.runtimeCharacter != entt::null)
+    if (scene == nullptr || registry == nullptr || !state.runtimeCharacter.isNull())
         return;
 
     TransformComponent& camera = scene->getCameraTransform();
@@ -2045,14 +2049,14 @@ void EditorLayer::enterRuntimeMode()
         }
     }
 
-    state.runtimeCharacter = scene->createCharacterEntity("Runtime Player", spawn);
+    state.runtimeCharacter = scene::EntityHandle(scene->createCharacterEntity("Runtime Player", spawn));
     // 初始朝向与进入运行模式时的视线一致，避免角色先面向镜头再被第一步转过去。
-    registry->get<TransformComponent>(state.runtimeCharacter).setEuler(
+    registry->get<TransformComponent>(state.runtimeCharacter.entity()).setEuler(
         glm::vec3(0.0f, state.runtimeYaw, 0.0f));
     std::cout << "[Runtime] spawn=" << spawn.x << "," << spawn.y << "," << spawn.z
               << " onGround=" << (spawnOnGround ? 1 : 0) << std::endl;
     const bool modelAttached = scene->attachCharacterModel(
-        state.runtimeCharacter,
+        state.runtimeCharacter.entity(),
         std::string(TINY_RESOURCE_DIR) + "Models/Character/Character.glb",
         0.5f);
     state.notify(LogEntry::Level::Info,
@@ -2068,9 +2072,9 @@ void EditorLayer::exitRuntimeMode()
     if (scene == nullptr || registry == nullptr)
         return;
 
-    if (state.runtimeCharacter != entt::null && registry->valid(state.runtimeCharacter))
-        scene->destroyEntity(state.runtimeCharacter);
-    state.runtimeCharacter = entt::null;
+    if (!state.runtimeCharacter.isNull() && registry->valid(state.runtimeCharacter.entity()))
+        scene->destroyEntity(state.runtimeCharacter.entity());
+    state.runtimeCharacter.clear();
 
     TransformComponent& camera = scene->getCameraTransform();
     camera.setTranslation(state.runtimeSavedCameraPosition);
@@ -2082,11 +2086,11 @@ void EditorLayer::applyRuntimeCameraPose()
 {
     Scene* scene = state.services.scene;
     entt::registry* registry = state.services.registry;
-    if (scene == nullptr || registry == nullptr || state.runtimeCharacter == entt::null ||
-        !registry->valid(state.runtimeCharacter))
+    if (scene == nullptr || registry == nullptr || state.runtimeCharacter.isNull() ||
+        !registry->valid(state.runtimeCharacter.entity()))
         return;
 
-    const TransformComponent* feet = registry->try_get<TransformComponent>(state.runtimeCharacter);
+    const TransformComponent* feet = registry->try_get<TransformComponent>(state.runtimeCharacter.entity());
     if (feet == nullptr)
         return;
 
@@ -2099,7 +2103,7 @@ void EditorLayer::applyRuntimeCameraPose()
     // （6 m/s 时约 10cm）。每个 tick 相机会先跳到终点、再等网格追上来，画面上
     // 就是角色在相机焦点前后高频抖动。改用同一套插值结果后角色相对相机恒定。
     glm::vec3 feetPosition = feet->getTranslation();
-    if (const auto* feetWorld = registry->try_get<WorldTransformComponent>(state.runtimeCharacter);
+    if (const auto* feetWorld = registry->try_get<WorldTransformComponent>(state.runtimeCharacter.entity());
         feetWorld != nullptr)
     {
         const float alpha = scene->renderInterpolationAlpha();
@@ -2130,7 +2134,7 @@ void EditorLayer::updateRuntimeMode(float dt)
     Scene* scene = state.services.scene;
     entt::registry* registry = state.services.registry;
     if (!state.isRuntime() || scene == nullptr || registry == nullptr ||
-        state.runtimeCharacter == entt::null || !registry->valid(state.runtimeCharacter) ||
+        state.runtimeCharacter.isNull() || !registry->valid(state.runtimeCharacter.entity()) ||
         dt <= 0.0f)
         return;
 
@@ -2171,7 +2175,7 @@ void EditorLayer::updateRuntimeMode(float dt)
     simulationClock.advance(dt, cmd,
         [&](const scene::InputCmd& current, float fixedDt)
         {
-            if (scene->updateCharacterController(state.runtimeCharacter, current.moveWorld,
+            if (scene->updateCharacterController(state.runtimeCharacter.entity(), current.moveWorld,
                                                  current.jump, fixedDt, result, speedMultiplier))
                 state.transformRefreshPending = true;
             replayRecorder.record(current);
@@ -2184,11 +2188,11 @@ void EditorLayer::updateRuntimeMode(float dt)
     applyRuntimeCameraPose();
 
     static std::string lastRuntimeClip;
-    const auto* animation = registry->try_get<CharacterAnimationComponent>(state.runtimeCharacter);
+    const auto* animation = registry->try_get<CharacterAnimationComponent>(state.runtimeCharacter.entity());
     if (animation != nullptr && animation->currentClipName != lastRuntimeClip)
     {
         lastRuntimeClip = animation->currentClipName;
-        const glm::vec3 feet = registry->get<TransformComponent>(state.runtimeCharacter).getTranslation();
+        const glm::vec3 feet = registry->get<TransformComponent>(state.runtimeCharacter.entity()).getTranslation();
         std::cout << "[Runtime] clip=" << lastRuntimeClip
                   << " feet=" << feet.x << "," << feet.y << "," << feet.z
                   << " grounded=" << (result.grounded ? 1 : 0) << "\n";
@@ -4928,7 +4932,7 @@ bool EditorLayer::selfTestWithScene()
 
         const glm::vec3 savedPosition = scene->getCameraTransform().getTranslation();
         setEditorMode(EditorState::EditorMode::Runtime);
-        if (state.runtimeCharacter == entt::null || !registry->valid(state.runtimeCharacter))
+        if (state.runtimeCharacter.isNull() || !registry->valid(state.runtimeCharacter.entity()))
         {
             std::cerr << "[Editor] runtime character selfTest FAIL: character not spawned" << std::endl;
             return false;
@@ -4942,7 +4946,7 @@ bool EditorLayer::selfTestWithScene()
             std::abs(state.runtimePitch - glm::clamp(enteredEuler.x,
                 -glm::radians(85.0f), glm::radians(85.0f))) < 1e-5f;
 
-        auto* animation = registry->try_get<CharacterAnimationComponent>(state.runtimeCharacter);
+        auto* animation = registry->try_get<CharacterAnimationComponent>(state.runtimeCharacter.entity());
         const bool skinned = animation != nullptr && animation->model != nullptr &&
             animation->model->isSkinned();
         const size_t animations = (animation != nullptr && animation->model != nullptr)
@@ -4961,7 +4965,7 @@ bool EditorLayer::selfTestWithScene()
         const bool idleActive = animation && clipsFound &&
             animation->currentClip == idleClip && animation->currentClipName == "Idle";
 
-        TransformComponent* feet = registry->try_get<TransformComponent>(state.runtimeCharacter);
+        TransformComponent* feet = registry->try_get<TransformComponent>(state.runtimeCharacter.entity());
         if (feet == nullptr)
         {
             std::cerr << "[Editor] runtime character selfTest FAIL: character has no transform" << std::endl;
@@ -4980,7 +4984,7 @@ bool EditorLayer::selfTestWithScene()
         // 高频抖动。这里把 alpha 设成 0.5、给角色造一对跨 8m 的前后矩阵，断言相机
         // 更靠近中点而不是终点。
         bool interpolatedFollows = true;
-        if (auto* feetWorld = registry->try_get<WorldTransformComponent>(state.runtimeCharacter))
+        if (auto* feetWorld = registry->try_get<WorldTransformComponent>(state.runtimeCharacter.entity()))
         {
             feetWorld->previousMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 3.0f, 0.0f));
             feetWorld->matrix = glm::translate(glm::mat4(1.0f), glm::vec3(8.0f, 3.0f, 0.0f));
@@ -5007,7 +5011,7 @@ bool EditorLayer::selfTestWithScene()
         }
 
         setEditorMode(EditorState::EditorMode::Edit);
-        const bool restored = state.runtimeCharacter == entt::null &&
+        const bool restored = state.runtimeCharacter.isNull() &&
             glm::length(scene->getCameraTransform().getTranslation() - savedPosition) < 1e-4f;
         if (!follows || !interpolatedFollows || !restored || !yawPreserved || !pitchPreserved ||
             !skinned || animations != 18 || !clipsFound || !idleActive)
@@ -5190,6 +5194,81 @@ bool EditorLayer::selfTestWithScene()
         }
 
         std::cout << "[Editor] prefab selfTest PASS | save/load/instantiate/undo/redo" << std::endl;
+    }
+
+    // ---- 2g2) A1/A3：选择集合的句柄剪枝、统一射线入口 ----
+    {
+        Scene* scene = state.services.scene;
+        entt::registry* registry = state.services.registry;
+        if (scene && registry)
+        {
+            const std::string cubePath = std::string(TINY_RESOURCE_DIR) + "Models/debug_cube.obj";
+            const entt::entity probe = scene->createMeshEntity(cubePath, "SelectionPruneProbe");
+            if (probe == entt::null)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: selection probe is null\n";
+                return false;
+            }
+
+            // 放到相机正前方 6 个单位，供 A3 真实命中用
+            const TransformComponent& cameraTransform = scene->getCameraTransform();
+            const glm::vec3 forward = glm::vec3{
+                std::sin(cameraTransform.getEuler().y) * std::cos(cameraTransform.getEuler().x),
+                -std::sin(cameraTransform.getEuler().x),
+                std::cos(cameraTransform.getEuler().y) * std::cos(cameraTransform.getEuler().x)
+            };
+            const glm::vec3 probePos = cameraTransform.getTranslation() + forward * 6.0f;
+            registry->get<TransformComponent>(probe).setTranslation(probePos);
+            registry->get<TransformComponent>(probe).setScale(glm::vec3(1.0f));
+            scene->markTransformDirty(probe);
+            scene->refreshTransformsAndVisibility();
+
+            // A1：选中 → 销毁 → prune，选择必须为空
+            state.selection.clear();
+            state.selection.select(probe);
+            if (state.selection.size() != 1 || state.selection.primary() != probe)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: selection did not hold the probe\n";
+                return false;
+            }
+
+            // A3：统一射线入口必须命中该实体，且句柄能用
+            scene::TraceRequest request;
+            request.start = cameraTransform.getTranslation();
+            request.delta = forward * 12.0f;
+            request.surfaces = scene::TraceSurface::Model;
+            const scene::TraceResult hit = scene->traceRay(request);
+            if (!hit.hit() || hit.surface != scene::TraceSurface::Model ||
+                hit.entity.entity() != probe)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: traceRay did not return the probe entity\n";
+                return false;
+            }
+            if (!(hit.fraction > 0.0f) || !(hit.fraction < 1.0f))
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: traceRay fraction out of range | "
+                          << hit.fraction << "\n";
+                return false;
+            }
+
+            scene->destroyEntity(probe);
+            state.selection.pruneDestroyed(*registry);
+            if (!state.selection.empty() || state.selection.primary() != entt::null)
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: pruned selection still holds a dead handle\n";
+                return false;
+            }
+
+            // 退化输入：零位移不能命中，且 endPos 就是起点
+            scene::TraceRequest degenerate;
+            degenerate.start = glm::vec3(1.0f, 2.0f, 3.0f);
+            const scene::TraceResult degenerateHit = scene->traceRay(degenerate);
+            if (degenerateHit.hit() || !scene::sameVector(degenerateHit.endPos, degenerate.start))
+            {
+                std::cerr << "[Editor] selfTestWithScene FAIL: degenerate trace should not hit\n";
+                return false;
+            }
+        }
     }
 
     // ---- 2h) 帮助 → 示例：预设场景能替换世界并自动取景 ----

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Scene/EntityHandle.h"
+
 // ===========================================================================
 // 编辑器与引擎之间的唯一接缝（Editor <-> Engine 边界）
 //
@@ -67,38 +69,45 @@ struct LogEntry
 // 选中状态。当前是单选，但接口按"集合"设计 —— 将来加多选不用改调用方。
 struct Selection
 {
-    std::vector<entt::entity> entities;
+    // A1: 跨帧持有句柄而不是裸 id。实体被销毁、槽位被复用时，旧选择不会悄悄指向新实体。
+    std::vector<scene::EntityHandle> handles;
 
-    bool empty() const { return entities.empty(); }
-    entt::entity primary() const { return entities.empty() ? entt::null : entities.front(); }
+    bool empty() const { return handles.empty(); }
+    entt::entity primary() const { return handles.empty() ? entt::null : handles.front().entity(); }
 
-    void clear() { entities.clear(); }
+    void clear() { handles.clear(); }
 
     void select(entt::entity entity)
     {
-        entities.clear();
+        handles.clear();
         if (entity != entt::null)
-            entities.push_back(entity);
+            handles.emplace_back(entity);
     }
 
-    bool contains(entt::entity entity) const
+    bool contains(scene::EntityHandle handle) const
     {
-        for (entt::entity e : entities)
-            if (e == entity) return true;
+        for (const scene::EntityHandle& h : handles)
+            if (h == handle) return true;
         return false;
     }
 
-    // E1：多选。层级面板的 Ctrl 点击、视口 Ctrl 点击都走这里。
-    void add(entt::entity entity)
+    bool contains(entt::entity entity) const { return contains(scene::EntityHandle(entity)); }
+
+    // E1: 多选。层级面板的 Ctrl 点击、视口 Ctrl 点击都走这里。
+    void add(scene::EntityHandle handle)
     {
-        if (entity != entt::null && !contains(entity))
-            entities.push_back(entity);
+        if (!handle.isNull() && !contains(handle))
+            handles.push_back(handle);
     }
 
-    void remove(entt::entity entity)
+    void add(entt::entity entity) { add(scene::EntityHandle(entity)); }
+
+    void remove(scene::EntityHandle handle)
     {
-        entities.erase(std::remove(entities.begin(), entities.end(), entity), entities.end());
+        handles.erase(std::remove(handles.begin(), handles.end(), handle), handles.end());
     }
+
+    void remove(entt::entity entity) { remove(scene::EntityHandle(entity)); }
 
     void toggle(entt::entity entity)
     {
@@ -106,7 +115,25 @@ struct Selection
         else add(entity);
     }
 
-    size_t size() const { return entities.size(); }
+    size_t size() const { return handles.size(); }
+
+    // 老代码按 id 遍历的地方用它（一次转换，不保留第二份事实）。
+    std::vector<entt::entity> entityIds() const
+    {
+        std::vector<entt::entity> out;
+        out.reserve(handles.size());
+        for (const scene::EntityHandle& h : handles)
+            out.push_back(h.entity());
+        return out;
+    }
+
+    // A1: 每帧剪掉已销毁的选择，避免 Inspector 继续编辑复用了槽位的新实体。
+    void pruneDestroyed(const entt::registry& registry)
+    {
+        handles.erase(std::remove_if(handles.begin(), handles.end(),
+                         [&registry](const scene::EntityHandle& h) { return !h.alive(registry); }),
+            handles.end());
+    }
 };
 
 // 引擎侧能力的抽象。所有字段都在 Application 构造时填好，编辑器只管调用。

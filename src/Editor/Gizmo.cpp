@@ -524,7 +524,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
 
         dragging = true;
         activeAxis = hovered;
-        dragEntity = entity;
+        dragEntity = scene::EntityHandle(entity);
         startTranslation = transform->getTranslation();
         startRotation = transform->getEuler();
         startScale = transform->getScale();
@@ -572,7 +572,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         captureEntry(entity);
         if (state.selection.size() > 1)
         {
-            for (entt::entity selected : state.selection.entities)
+            for (entt::entity selected : state.selection.entityIds())
                 captureEntry(selected);
         }
         dragPrimaryParentWorld = glm::inverse(dragEntries.front().parentWorldInverse);
@@ -611,7 +611,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         consumed = true;
 
         // 实体可能在拖拽中被删除/撤销
-        if (dragEntity == entt::null || !registry.valid(dragEntity))
+        if (dragEntity.isNull() || !registry.valid(dragEntity.entity()))
         {
             dragging = false;
             activeAxis = Axis::None;
@@ -621,7 +621,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         glm::vec3 rayOrigin, rayDir;
         screenToRay(mouse, view, rayOrigin, rayDir);
 
-        auto* liveTransform = registry.try_get<TransformComponent>(dragEntity);
+        auto* liveTransform = registry.try_get<TransformComponent>(dragEntity.entity());
         if (!liveTransform)
         {
             dragging = false;
@@ -648,7 +648,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
             // 世界位移 → 父节点局部空间。
             // 不做这一步的话，父节点带旋转时"往世界 X 拖"会变成"往父节点的 X 拖"。
             glm::vec3 localDelta = worldDelta;
-            if (const auto* hierarchy = registry.try_get<HierarchyComponent>(dragEntity))
+            if (const auto* hierarchy = registry.try_get<HierarchyComponent>(dragEntity.entity()))
             {
                 if (hierarchy->parent != entt::null && registry.valid(hierarchy->parent))
                 {
@@ -707,7 +707,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         poses.reserve(dragEntries.size());
 
         TransformPose primaryPose;
-        primaryPose.entity = dragEntity;
+        primaryPose.entity = dragEntity.entity();
         primaryPose.oldTranslation = startTranslation;
         primaryPose.newTranslation = newTranslation;
         primaryPose.oldRotation = startRotation;
@@ -779,11 +779,11 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
         {
             state.services.scene->refreshTransformsAndVisibility();
 
-            if (const auto* refreshedWorld = registry.try_get<WorldTransformComponent>(dragEntity))
+            if (const auto* refreshedWorld = registry.try_get<WorldTransformComponent>(dragEntity.entity()))
             {
                 origin = glm::vec3(refreshedWorld->matrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
                 bool refreshedLocalCenter = false;
-                if (const auto* refreshedLocalBounds = registry.try_get<BoundsComponent>(dragEntity))
+                if (const auto* refreshedLocalBounds = registry.try_get<BoundsComponent>(dragEntity.entity()))
                 {
                     if (refreshedLocalBounds->getLocal().valid)
                     {
@@ -794,7 +794,7 @@ bool Gizmo::interact(EditorState& state, const GizmoView& view)
                 }
                 if (!refreshedLocalCenter)
                 {
-                    if (const auto* refreshedBounds = registry.try_get<WorldBoundsComponent>(dragEntity))
+                    if (const auto* refreshedBounds = registry.try_get<WorldBoundsComponent>(dragEntity.entity()))
                     {
                         if (refreshedBounds->world.valid)
                             origin = refreshedBounds->world.center();

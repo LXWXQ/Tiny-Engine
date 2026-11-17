@@ -5906,6 +5906,164 @@ static bool raycastHeightField(const terrain::HeightField& field,
     return true;
 }
 
+namespace
+{
+// 与编辑器拾取同一套 slab 测试：只用来把绝大多数实体一次比较就排除。
+bool rayHitsAabb(const glm::vec3& origin, const glm::vec3& dir, const AABB& box, float& outT)
+{
+    if (!box.valid)
+        return false;
+
+    float tMin = 0.0f;
+    float tMax = std::numeric_limits<float>::max();
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const float d = dir[axis];
+        const float o = origin[axis];
+        const float lo = box.min[axis];
+        const float hi = box.max[axis];
+        if (std::abs(d) < 1.0e-8f)
+        {
+            if (o < lo || o > hi)
+                return false;
+            continue;
+        }
+        const float inv = 1.0f / d;
+        float t1 = (lo - o) * inv;
+        float t2 = (hi - o) * inv;
+        if (t1 > t2)
+            std::swap(t1, t2);
+        tMin = std::max(tMin, t1);
+        tMax = std::min(tMax, t2);
+        if (tMin > tMax)
+            return false;
+    }
+    outT = tMin;
+    return true;
+}
+} // namespace
+
+scene::TraceResult Scene::traceRay(const scene::TraceRequest& request) const
+{
+    scene::TraceResult result;
+    const float length = request.length();
+    if (!std::isfinite(length) || length < 1.0e-8f)
+    {
+        result.endPos = request.start;
+        return result;
+    }
+
+    const glm::vec3 direction = request.delta / length;
+    float bestFraction = 1.0f;
+
+    // 地形：高度场步进 + 二分，返回最近命中点；法线来自地形斜度。
+    if (scene::hasSurface(request.surfaces, scene::TraceSurface::Terrain))
+    {
+        glm::vec3 hitPoint(0.0f);
+        entt::entity hitEntity = entt::null;
+        float distance = 0.0f;
+        if (raycastTerrainWorld(request.start, direction, hitPoint, hitEntity, distance) &&
+            distance >= 0.0f && distance <= length)
+        {
+            const float fraction = glm::clamp(distance / length, 0.0f, 1.0f);
+            if (fraction < bestFraction)
+            {
+                bestFraction = fraction;
+                result.fraction = fraction;
+                result.endPos = hitPoint;
+                result.surface = scene::TraceSurface::Terrain;
+                result.entity = scene::EntityHandle(hitEntity);
+
+                float groundHeight = 0.0f;
+                glm::vec3 groundNormal(0.0f, 1.0f, 0.0f);
+                if (sampleGroundForCharacter(hitPoint.x, hitPoint.z, groundHeight, groundNormal))
+                {
+                    result.normal = groundNormal;
+                    result.normalValid = true;
+                    result.planeDist = glm::dot(groundNormal, hitPoint);
+                }
+            }
+        }
+    }
+
+    // 体素：DDA，命中面法线是整数轴向量。
+    if (scene::hasSurface(request.surfaces, scene::TraceSurface::Voxel))
+    {
+        glm::ivec3 block(0);
+        glm::ivec3 faceNormal(0);
+        float distance = length;
+        if (raycastVoxelWorld(request.start, direction, length, block, faceNormal, distance) &&
+            distance >= 0.0f && distance <= length)
+        {
+            const float fraction = glm::clamp(distance / length, 0.0f, 1.0f);
+            if (fraction < bestFraction)
+            {
+                bestFraction = fraction;
+                result.fraction = fraction;
+                result.endPos = request.start + request.delta * fraction;
+                result.normal = glm::vec3(faceNormal);
+                result.normalValid = true;
+                result.planeDist = glm::dot(result.normal, result.endPos);
+                result.surface = scene::TraceSurface::Voxel;
+                result.entity = scene::EntityHandle{};
+            }
+        }
+    }
+
+    // 模型：与编辑器拾取同一条路径（包围盒粗筛 + 三角形求交）。
+    if (scene::hasSurface(request.surfaces, scene::TraceSurface::Model))
+    {
+        for (auto [entity, bounds, mesh] : registry.view<WorldBoundsComponent, MeshComponent>().each())
+        {
+            if (!mesh.model)
+                continue;
+            if (const auto* tag = registry.try_get<RenderTagComponent>(entity))
+            {
+                if (tag->isSkybox || tag->isSkyGeometry || tag->isGrid)
+                    continue;
+            }
+
+            float aabbT = 0.0f;
+            if (!rayHitsAabb(request.start, direction, bounds.world, aabbT))
+                continue;
+            if (aabbT > bestFraction * length)
+                continue;
+
+            const auto* worldTransform = registry.try_get<WorldTransformComponent>(entity);
+            if (!worldTransform)
+                continue;
+
+            float distance = 0.0f;
+            if (!mesh.model->intersectRay(worldTransform->matrix, request.start, direction, distance))
+                continue;
+            if (distance < 0.0f || distance > length)
+                continue;
+
+            const float fraction = glm::clamp(distance / length, 0.0f, 1.0f);
+            if (fraction >= bestFraction)
+                continue;
+
+            bestFraction = fraction;
+            result.fraction = fraction;
+            result.endPos = request.start + request.delta * fraction;
+            result.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+            result.normalValid = false; // 三角形法线还没接，不能编一个假的
+            result.planeDist = glm::dot(result.normal, result.endPos);
+            result.surface = scene::TraceSurface::Model;
+            result.entity = scene::EntityHandle(entity);
+        }
+    }
+
+    if (!result.hit())
+    {
+        result.fraction = 1.0f;
+        result.endPos = request.start + request.delta;
+        result.surface = scene::TraceSurface::None;
+        result.entity = scene::EntityHandle{};
+    }
+    return result;
+}
+
 bool Scene::raycastTerrain(entt::entity entity, const glm::vec3& rayOrigin,
                            const glm::vec3& rayDirection, glm::vec3& outHitPoint,
                            float& outDistance) const

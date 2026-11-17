@@ -20,9 +20,9 @@ updated: 2026-11-17
 
 | 项 | 内容 | 状态 | 提交 |
 |---|---|---|---|
-| A1 | 实体句柄契约 `EntityHandle` | 契约落地，**未接线**（生产代码仍用 `entt::entity`） | `3810761` |
+| A1 | 实体句柄契约 `EntityHandle` | 契约 + **接线完成**（`Selection`/`EditorState` 三个字段/`Gizmo::dragEntity` 改句柄，`pruneDestroyed` 每帧剪掉已销毁选择；命令栈仍存快照式 `entt::entity`） | `3810761` |
 | A2 | 实体销毁唯一出口（静态门禁） | 完成（`Validate.ps1` 的 M1-A2 门禁） | `f2c0df4` |
-| A3 | 射线契约 `TraceRequest/TraceResult` | 值类型落地，**无消费方**（`Scene::traceRay()` 未写） | `f2c0df4` |
+| A3 | 射线契约 `TraceRequest/TraceResult` | 值类型 + `Scene::traceRay()` **已接线**（地形/体素/模型三条后端按 fraction 取最近，编辑器拾取改走它） | `f2c0df4` |
 | B1 | glTF 节点树不再烘焙 | 完成（几何存节点局部空间） | `4feb575` |
 | B2 | `.tpack` 资产容器 + 全资源接入 | 完成（glTF/OBJ/SPIR-V/场景 JSON 全走包） | `348dd35` `15585de` |
 | B3 | 材质 JSON 只存非默认字段 | 完成（25 默认材质 4390B→540B，-88%） | `93fd114` |
@@ -48,8 +48,8 @@ updated: 2026-11-17
 
 | 项 | 现状（代码位置） | 缺口 | 量级 |
 |---|---|---|---|
-| A1 接线 | `EntityHandle` 只在 `src/Scene/Trace.h` 里出现，生产代码 0 处使用 | 6 类持有者（编辑器命令/选中态/Play 会话/异步回投/Prefab 引用/`TraceResult.entity`）改用它 | 1–2 天 |
-| A3 接线 | `TraceRequest/TraceResult` 只有定义，无消费方；`pickEntity` 仍走 `Model::intersectRay` | 写 `Scene::traceRay()`，四个既有入口退化成薄壳 | 1 天 |
+| ~~A1 接线~~ | 已完成：`Selection`/选中态/`Gizmo::dragEntity`/`TraceResult.entity` 均改用 `EntityHandle`，编辑器自检新增“选中→销毁→prune”用例 | — | — |
+| ~~A3 接线~~ | 已完成：`Scene::traceRay()` 落地（地形法线用高度场梯度、体素用整数面法线、模型暂不给法线），编辑器 `pickEntity` 已改走它 | — | — |
 | B4b | `TerrainComponent::sculptEdits` 只服务手动地形（`Components.h` 注释写明「流送 chunk 不走这里」） | chunk 差分按 `(chunkX, chunkZ)` 存进 `TerrainStreamingComponent`，并在 `processTerrainGeneration` 的 GPU 高度→GPU 网格两阶段之间回放 | 2–3 天 |
 | C2 收尾 | `CancelToken` 在 JobSystem 之外 0 处使用 | 地形/体素异步改用 `CancelToken`，替掉各自的 `cancelRequested` | 0.5 天 |
 | D4 | `src/RHI/Pipeline.cpp` 仍写死 `pSpecializationInfo = nullptr` | 用 spec constants 合并 shader 变体（现在 48 个手写变体） | 1–2 天 |

@@ -6,6 +6,7 @@
 #include "Scene/SystemScheduler.h"
 #include "Scene/Camera.h"
 #include "Scene/CharacterCollision.h"
+#include "Scene/Trace.h"
 #include "Scene/CameraController.h"
 #include "Scene/SpatialIndex.h"
 #include "Core/MaterialSystem.h"
@@ -407,6 +408,10 @@ public:
                              glm::vec3& outHitPoint,
                              entt::entity& outEntity,
                              float& outDistance) const;
+
+    // M1-A3：统一射线入口。地形、体素、模型三条后端都收在这里，
+    // 外部只认这一个入口（既有 raycast* 仍是内部实现）。
+    scene::TraceResult traceRay(const scene::TraceRequest& request) const;
 
     // Pure build helper exposed for editor commands and scene self-tests.
     // outHeightField is optional; when supplied it receives the same CPU grid
