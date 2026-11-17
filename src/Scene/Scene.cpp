@@ -1180,7 +1180,7 @@ void Scene::refreshSpatialIndex()
 
         const MeshComponent* mesh = registry.try_get<MeshComponent>(entity);
         const RenderTagComponent* tag = registry.try_get<RenderTagComponent>(entity);
-        if (!mesh || !mesh->model || (tag && tag->isSkybox))
+        if (!mesh || !mesh->model || (tag && (tag->isSkybox || tag->isSkyGeometry)))
         {
             spatialIndex.remove(entity);
             indexedBounds.erase(entity);
@@ -1244,7 +1244,7 @@ void Scene::updateVisibility(const glm::mat4& viewProjection)
     {
         (void)mesh;
         const auto* tag = registry.try_get<RenderTagComponent>(entity);
-        if (tag != nullptr && tag->isSkybox)
+        if (tag != nullptr && (tag->isSkybox || tag->isSkyGeometry))
         {
             // 天空盒跟相机走，永远要画。
             visibleEntities.push_back(entity);
@@ -1558,7 +1558,7 @@ bool Scene::selfTest()
         componentCount = scene.getComponentRegistry().descriptors().size();
         systemCount = scene.getSystemScheduler().systemCount();
         // C4b 之后是 32 个组件（新增 audio.source / audio.listener）与 9 个系统（新增 audio.sources）。
-        if (componentCount != 33 || systemCount != 9)
+        if (componentCount != 34 || systemCount != 9)
         {
             std::cerr << "[Scene] selfTest FAIL: built-in component/system registration mismatch\n";
             ok = false;

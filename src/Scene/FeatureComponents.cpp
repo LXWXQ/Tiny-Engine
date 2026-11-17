@@ -958,6 +958,15 @@ void registerFeatureComponents(ComponentRegistry& registry)
           makeVec3Property<ViewModelComponent>("color", "Color", &ViewModelComponent::color, 0.01f,
                                                "手持物基色（与光照相乘）") }));
 
+    registry.add(makeComponentDescriptor<SkyCameraComponent>(
+        "sky.camera", "Sky Camera", "渲染",
+        { makeBoolProperty<SkyCameraComponent>("enabled", "Enabled", &SkyCameraComponent::enabled,
+                                               "关掉后远景天空不再做相机锁定（保持原位，会随玩家走近）"),
+          makeVec3Property<SkyCameraComponent>("origin", "Origin", &SkyCameraComponent::origin, 0.1f,
+                                               "微缩世界里对应玩家位置的那个点（通常摆在山脚下）"),
+          makeFloatProperty<SkyCameraComponent>("scale", "Scale", &SkyCameraComponent::scale,
+                                                0.001f, 1.0f,
+                                                "微缩比例：0.0625 = 1/16，越小天空显得越远", 0.001f) }));
     registry.add(makeComponentDescriptor<ParticleEmitterComponent>(
         "effects.particles", "Particle Emitter", "效果",
         { makeBoolProperty<ParticleEmitterComponent>(

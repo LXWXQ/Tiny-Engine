@@ -260,6 +260,19 @@ struct RenderTagComponent
     bool isSkybox = false;
     bool isGrid = false;
     bool isTerrain = false;
+    // D3b：几何天空（1/16 微缩的远景）。它像普通实体一样有网格与材质，
+    // 但模型矩阵要先过 scene::skyEntityMatrix() 做相机锁定，并且画在远平面。
+    bool isSkyGeometry = false;
+};
+
+// D3b：整块几何天空的相机锁定参数（每个场景最多生效一个）。
+struct SkyCameraComponent
+{
+    bool enabled = true;
+    // 微缩世界里对应玩家所在位置的那个点。
+    glm::vec3 origin{ 0.0f, 0.0f, 0.0f };
+    // 0.0625 = 1/16，与 Source 的 sky_camera 一致。
+    float scale = 0.0625f;
 };
 
 // Manager component for a streamed terrain made of independent chunk entities.

@@ -41,6 +41,8 @@
 #include "Render/SunFlarePass.h"
 #include "Render/ShadowPass.h"
 #include "Scene/FeatureComponents.h"
+#include "Scene/Components.h"
+#include "Scene/SkyCamera.h"
 #include "Voxel/VoxelChunk.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
@@ -2033,6 +2035,7 @@ int FirstApp::runHeadlessSelfTest(int frames)
 		throw std::runtime_error("Voxel mesh selfTest failed");
 	if (!scene->voxelSelfTest())
 		throw std::runtime_error("Voxel scene selfTest failed");
+
 
 	// UX-19：窗口尺寸要按工作区收敛 —— 1366x768 的笔记本上 1920x1080 会把
 	// 状态栏和右下角面板推到屏幕外；150% 缩放下工作区只有 1280x720 更严重。

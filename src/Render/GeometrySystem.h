@@ -71,6 +71,8 @@ private:
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     std::unique_ptr<Pipeline> geometryPipeline;
     std::unique_ptr<Pipeline> skyboxPipeline;
+    // D3b：几何天空（1/16 微缩远景）走独立管线，画在远平面。
+    std::unique_ptr<Pipeline> skyGeometryPipeline;
     std::unique_ptr<Pipeline> gridPipeline;
 
     // 没有材质槽位的子网格会每帧走一次 fallback 分支。提示只发一次：

@@ -494,7 +494,7 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
         if (!mesh.model || registry.all_of<TerrainComponent>(entity))
             continue;
         if (const auto* tag = registry.try_get<RenderTagComponent>(entity);
-            tag != nullptr && tag->isSkybox)
+            tag != nullptr && (tag->isSkybox || tag->isSkyGeometry))
             continue;
         const auto* world = registry.try_get<WorldTransformComponent>(entity);
         if (world == nullptr || !world->valid)

@@ -675,7 +675,7 @@ uint64_t SceneGpuBatch::computeStructureSignature(const FrameInfo& frameInfo) co
         if (!mesh.model || !worldTransform.valid || mesh.model->getIndexCount() == 0)
             continue;
         const RenderTagComponent* tag = frameInfo.registry.try_get<RenderTagComponent>(entity);
-        if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
+        if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain || tag->isSkyGeometry))
             continue;
         if (isArenaBackedVoxel(frameInfo.registry, entity))
             continue;
@@ -750,7 +750,7 @@ void SceneGpuBatch::refreshDebugExternalInstances(FrameInfo& frameInfo)
         if (!mesh.model || !worldTransform.valid || mesh.model->getIndexCount() == 0)
             continue;
         const RenderTagComponent* tag = frameInfo.registry.try_get<RenderTagComponent>(entity);
-        if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
+        if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain || tag->isSkyGeometry))
             continue;
         const std::vector<SubMesh>& subMeshes = mesh.model->getSubMeshes();
         for (uint32_t i = 0; i < static_cast<uint32_t>(subMeshes.size()); ++i)
@@ -807,7 +807,7 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
                 continue;
             const RenderTagComponent* tag =
                 frameInfo.registry.try_get<RenderTagComponent>(entity);
-            if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain))
+            if (tag && (tag->isSkybox || tag->isGrid || tag->isTerrain || tag->isSkyGeometry))
                 continue;
             if (isArenaBackedVoxel(frameInfo.registry, entity))
                 continue;

@@ -6,6 +6,7 @@
 #include "Render/SubMeshCulling.h"
 #include "Render/SceneGpuBatch.h"
 #include "Scene/RenderInterpolation.h"
+#include "Scene/SkyCamera.h"
 #include <iostream>
 #include <algorithm>
 #include <array>
@@ -527,6 +528,11 @@ void GeometrySystem::createPipelines()
     config.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     skyboxPipeline = std::make_unique<Pipeline>(vulkanDevice,
         TINY_SHADER_DIR "skybox_mrt.vert.spv", TINY_SHADER_DIR "skybox_mrt.frag.spv", config);
+
+    // D3b：几何天空用同一套"不写深度 + LESS_OR_EQUAL"配置，但着色器自己把
+    // 顶点压到远平面（gl_Position.z = w * 0.999999）。
+    skyGeometryPipeline = std::make_unique<Pipeline>(vulkanDevice,
+        TINY_SHADER_DIR "sky_geometry.vert.spv", TINY_SHADER_DIR "sky_geometry.frag.spv", config);
 }
 
 void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
@@ -643,7 +649,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
             auto* voxelCommands = static_cast<VkDrawIndexedIndirectCommand*>(
                 voxelIndirectBuffers[frameInfo.frameInFlightIndex].mapped);
             bool capacityExceeded = false;
-            for (entt::entity entity : frameInfo.visibleEntities)
+    for (entt::entity entity : frameInfo.visibleEntities)
             {
                 const MeshComponent* mesh = frameInfo.registry.try_get<MeshComponent>(entity);
                 const WorldTransformComponent* world = frameInfo.registry.try_get<WorldTransformComponent>(entity);
@@ -754,6 +760,20 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
         }
     }
 
+    // D3b：几何天空的相机锁定参数（每个场景最多一个，取第一个启用的）。
+    scene::SkyCameraSettings skyCameraSettings;
+    bool hasSkyCamera = false;
+    for (auto skyEntity : frameInfo.registry.view<SkyCameraComponent>())
+    {
+        const auto& skyCamera = frameInfo.registry.get<SkyCameraComponent>(skyEntity);
+        if (!skyCamera.enabled)
+            continue;
+        skyCameraSettings.origin = skyCamera.origin;
+        skyCameraSettings.scale = skyCamera.scale;
+        hasSkyCamera = true;
+        break;
+    }
+
     for (entt::entity entity : frameInfo.visibleEntities)
     {
         const MeshComponent* mesh = frameInfo.registry.try_get<MeshComponent>(entity);
@@ -771,6 +791,11 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
         const bool isSkybox = tag && tag->isSkybox;
         const bool isGrid = tag && tag->isGrid;
         const bool isTerrain = tag && tag->isTerrain;
+        const bool isSkyGeometry = tag && tag->isSkyGeometry;
+        // D3b：场景里有几何天空时，2D 天空盒退场 —— 两者都画在远平面、
+        // 都不写深度，谁后画谁覆盖，留着只会把几何天空盖掉。
+        if (isSkybox && hasSkyCamera)
+            continue;
         // 反射里不重建编辑器网格辅助线；它没有材质，只会多出一层线。
         if (reflection && isGrid)
             continue;
@@ -795,7 +820,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
         // F1：普通网格交给 SceneGpuBatch 的 GPU 驱动提交（实例缓冲 + compute 剔除 +
         // indirect draw）。天空盒、网格辅助线、地形仍然留在下面的 CPU 路径。
         if (!reflection && sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
-            !isSkybox && !isGrid && !isTerrain && !voxelArenaBacked &&
+            !isSkybox && !isGrid && !isTerrain && !isSkyGeometry && !voxelArenaBacked &&
             !mesh->model->isDynamic() &&
             mesh->model->getIndexCount() > 0)
         {
@@ -938,20 +963,29 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
         // editor play mode renderAlpha is 0 and this is the authoritative matrix.
         const bool interpolateEntity = scene::shouldInterpolateTransform(
             *worldTransform, frameInfo.renderAlpha, frameInfo.renderTick);
-        const glm::mat4 entityMatrix = interpolateEntity
+        glm::mat4 entityMatrix = interpolateEntity
             ? scene::interpolateTransform(worldTransform->previousMatrix,
                                           worldTransform->matrix, frameInfo.renderAlpha)
             : worldTransform->matrix;
+        glm::mat4 entityNormalMatrix = interpolateEntity
+            ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(entityMatrix))))
+            : worldTransform->normalMatrix;
+
+        if (isSkyGeometry)
+        {
+            // D3b：先把 1/16 的微缩世界放大回原尺寸，再锁定到相机位置。
+            // 顺序不能反 —— 反了会让整块天空随相机缩放。
+            entityMatrix = scene::skyEntityMatrix(skyCameraSettings, cameraPosition, entityMatrix);
+            entityNormalMatrix = glm::mat4(glm::transpose(glm::inverse(glm::mat3(entityMatrix))));
+        }
 
         SimplePushConstantData push{};
         push.modelMatrix = entityMatrix;
-        push.normalMatrix = interpolateEntity
-            ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(entityMatrix))))
-            : worldTransform->normalMatrix;
+        push.normalMatrix = entityNormalMatrix;
         push.clipY = viewOverride != nullptr ? viewOverride->clipY : 0.0f;
         push.clipMode = viewOverride != nullptr ? viewOverride->clipMode : 0u;
 
-        const bool objectUsesMaterial = !isSkybox && !isGrid && !isTerrain;
+        const bool objectUsesMaterial = !isSkybox && !isGrid && !isTerrain && !isSkyGeometry;
         push.materialValid = objectUsesMaterial ? 1u : 0u;
         push.materialId = fallbackMatId;
         push.terrainMode = isTerrain ? 1u : 0u;
@@ -1027,6 +1061,7 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
         auto* pipe = &geometryPipeline;
         if (isSkybox)    pipe = &skyboxPipeline;
         else if (isGrid) pipe = &gridPipeline;
+        else if (isSkyGeometry) pipe = &skyGeometryPipeline;
 
         (*pipe)->bind(commandBuffer);
         // F2-f / V-04：地形与体素几何都在共享 arena 里（Model 只剩元数据），

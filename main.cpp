@@ -14,6 +14,7 @@
 #include "src/Scene/CharacterCollision.h"
 #include "src/Scene/CharacterSimulation.h"
 #include "src/Scene/ViewModel.h"
+#include "src/Scene/SkyCamera.h"
 #include "src/Scene/SimulationReplay.h"
 #include "src/Scene/FeatureComponents.h"
 #include "src/Audio/AudioMixer.h"
@@ -152,6 +153,7 @@ const UsageLine kUsageLines[] = {
         { "自检", "--character-collision-test", "角色扫掠盒/滑动/上台阶契约自检（不需要 Vulkan / 窗口）" },
         { "自检", "--replay-test", "角色步进纯函数与输入录制/回放一致性自检（不需要 Vulkan / 窗口）" },
         { "自检", "--viewmodel-test", "viewmodel 投影与偏移矩阵自检（不需要 Vulkan / 窗口）" },
+        { "自检", "--sky3d-test", "3D 天空盒相机锁定矩阵自检（不需要 Vulkan / 窗口）" },
         { "自检", "--particle-bench", "粒子上限下的模拟耗时测量（不需要 Vulkan / 窗口）" },
     { "音频", "--audio-test", "音频混音器契约自检（不需要声卡 / 窗口）" },
     { "音频", "--audio-play", "打开声卡播一段 440Hz 测试音（需要音频设备）" },
@@ -231,6 +233,7 @@ int main(int argc, char** argv)
     bool characterCollisionTest = false;
     bool replayTest = false;
     bool viewModelTest = false;
+    bool sky3dTest = false;
     bool particleBench = false;
 bool audioTest = false;
 bool audioPlay = false;
@@ -417,6 +420,7 @@ bool audioSpatialTest = false;
         else if (arg == "--character-collision-test") characterCollisionTest = true;
         else if (arg == "--replay-test") replayTest = true;
     else if (arg == "--viewmodel-test") viewModelTest = true;
+    else if (arg == "--sky3d-test") sky3dTest = true;
         else if (arg == "--particle-bench") particleBench = true;
     else if (arg == "--audio-test") audioTest = true;
     else if (arg == "--audio-play") audioPlay = true;
@@ -603,6 +607,9 @@ bool audioSpatialTest = false;
 
         if (viewModelTest)
             return scene::viewModelSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+
+        if (sky3dTest)
+            return scene::skyCameraSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 
 
         if (audioTest)
