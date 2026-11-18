@@ -114,7 +114,7 @@ void Pipeline::createGraphicsPipeline(const std::string& vertFilepath, const std
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineInfo.basePipelineIndex = -1;
 
-    if (vkCreateGraphicsPipelines(device.getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) 
+    if (vkCreateGraphicsPipelines(device.getDevice(), device.getPipelineCache(), 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) 
     {
         throw std::runtime_error("failed to create graphics pipeline!");
     }
@@ -213,7 +213,7 @@ ComputePipeline::ComputePipeline(Device& device, const std::string& compFilepath
     info.stage = stage;
     info.layout = pipelineLayout;
 
-    if (vkCreateComputePipelines(device.getDevice(), VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
+    if (vkCreateComputePipelines(device.getDevice(), device.getPipelineCache(), 1, &info, nullptr, &pipeline) != VK_SUCCESS)
         throw std::runtime_error("failed to create compute pipeline!");
 }
 

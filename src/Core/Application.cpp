@@ -57,6 +57,7 @@
 #include <stb_image_write.h>
 #include "Core/Profiler.h"
 #include "RHI/GpuProfiler.h"
+#include "RHI/Breadcrumbs.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -2029,6 +2030,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// F6：级联阴影的数学自检（split 递增、角点落在裁剪体内、远处被剔除）。
 	if (!ShadowPass::selfTest())
 		throw std::runtime_error("ShadowPass selfTest failed");
+
+	// ②：GPU breadcrumbs 的纯逻辑自检 —— 槽位映射、标记编解码往返、名字截断。
+	if (!Breadcrumbs::selfTest())
+		throw std::runtime_error("Breadcrumbs selfTest failed");
 
 	// F3：体素世界（建 3x3 chunk、射线打地、挖一格、放回、地面高度）。
 	if (!voxel::selfTest())

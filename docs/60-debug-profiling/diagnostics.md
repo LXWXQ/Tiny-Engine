@@ -2,10 +2,10 @@
 id: debug-profiling/diagnostics
 title: 诊断基础设施实现
 type: debug
-scope: src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*
-read-when: 修改验证层回调、GPU 计时、截图或抓帧
-size: ~200 行
-updated: 2026-10-30
+scope: src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*
+read-when: 修改验证层回调、GPU 计时、截图、抓帧，或排查 device lost
+size: ~136 行
+updated: 2026-11-18
 ---
 
 # 诊断基础设施实现
@@ -101,3 +101,36 @@ Device::debugCallback
 - **限制**：该查询**只能在设备已 lost 时调用**
   （`VUID-vkGetDeviceFaultInfoEXT-device-07336`）。所以健康设备上只能校验
   "扩展已启用 + 入口点已解析"，真实故障路径靠 Renderer 的 device-lost 分支覆盖。
+
+## 9. GPU breadcrumbs（P2-5）
+
+`VK_EXT_device_fault` 只回答"哪条指令踩了哪块内存"，回答不了"崩在第几帧的哪个
+Pass"。`Breadcrumbs`（`src/RHI/Breadcrumbs.*`）补的就是这一层：每个 Pass 前后往
+一个 4 字节游标写序号，CPU 侧留一张"序号 -> 帧号/Pass 名"的表，device lost 之后
+读游标查表。核心洞察是**真相在 CPU 侧，GPU 只带一个游标**。
+
+三种落地方式，按可用性自动降级：
+
+1. `VK_NV_device_diagnostic_checkpoints`：`vkCmdSetCheckpointNV` 写
+   `(slot << 32) | counter`，崩溃后 `vkGetQueueCheckpointData2NV` 逐队列取回。
+   硬件缓冲，无命令开销，渲染通道内外都能用。取回顺序不保证，但 counter 单调，
+   所以"每槽取最大"就是最后执行到的那条。
+2. `VK_AMD_buffer_marker`：`vkCmdWriteBufferMarkerAMD(TOP_OF_PIPE, ...)` 写游标缓冲。
+   用 `TOP_OF_PIPE` 是刻意的 —— 语义是"命令流到了这里"，不是"这个 Pass 做完了"。
+3. 都没有时退化成 `vkCmdUpdateBuffer`：它在渲染通道内非法，所以只能按 Pass 粒度。
+
+- 槽位 = 帧槽 × {graphics, compute}，共 4 个（`Breadcrumbs::kSlotCount`），
+  两帧在飞各有独立游标，不会互相覆盖。
+- 游标缓冲是 **HOST_VISIBLE 常驻映射**的。device lost 之后不能再提交任何命令，
+  只能直接读 CPU 映射的那块内存 —— 这是设计前提，不是优化。
+- 触发点：`Renderer::endFrame` 三处 `VK_ERROR_DEVICE_LOST` 分支调
+  `Device::reportDeviceFault(queue)`，函数**第一件事**就是跑 breadcrumbs，
+  所以没有 `VK_EXT_device_fault` 的机器上也能拿到"崩在哪个 Pass"。
+- 输出：`[Breadcrumbs] 崩溃点 slot=N frame=M "PassName"` + 之前 8 条 trail，
+  并走 `tiny::writeStartupErrorLog` 落盘（`main.cpp` 的错误对话框会指向该文件）。
+- 纯逻辑自检：`Breadcrumbs::selfTest()`（槽位映射、标记编解码往返、名字截断），
+  挂在 `runHeadlessSelfTest` 里，不需要 GPU 也能跑。
+- **坑**：`Breadcrumbs::shutdown()` 必须在析构里调。`Device` 只是
+  `breadcrumbs.reset()`，隐式析构不会调用它，游标缓冲会活到
+  `vmaDestroyAllocator` 之后，触发 VMA 的 `Some allocations were not freed` 断言
+  （见 [troubleshooting §3.2](../40-build/troubleshooting.md)）。

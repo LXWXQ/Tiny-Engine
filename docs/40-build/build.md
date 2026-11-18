@@ -4,7 +4,7 @@ title: 构建流程与隐形规则
 type: build
 scope: CMakeLists.txt, cmake/AssetPaths.h.in
 read-when: 每次构建；或新增源文件、改 CMake 选项
-size: ~170 行
+size: ~132 行
 updated: 2026-10-30
 ---
 
@@ -54,7 +54,7 @@ cmake --build build --config Debug --target TinyEditor
 4. **全局编译选项**：`/utf-8`（源码与执行字符集都是 UTF-8）、
    `TINYGLTF_NO_STB_IMAGE` / `TINYGLTF_NO_STB_IMAGE_WRITE`。
 
-## 3. 三条隐形规则（都会导致"看起来莫名其妙的错误"）
+## 3. 四条隐形规则（都会导致"看起来莫名其妙的错误"）
 
 ### 3.1 新增 `src/*.cpp` 必须重新 configure
 
@@ -81,6 +81,22 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 - **带 BOM 的 shader 会编译失败**（见 [shaders](../20-pipeline/shaders.md) §4）。
 - 不要用 PowerShell 的 `Set-Content` / `Out-File` 改源码——会按 ANSI 重编码或加 BOM。
 
+### 3.4 改过 `RHI/Device.h` 这类"到处被 include"的头之后，必须 `--clean-first`
+
+增量构建只看时间戳。往 `Device` 里加一个成员（例如 `std::unique_ptr`）会让**所有
+包含该头的翻译单元**`sizeof(Device)` 变化；只要有一个 `.obj` 没重编，链接出来的
+程序里就存在两套布局。
+
+现象是最难查的那一类：不是编译错误，而是**运行时崩在第一个 Vulkan 调用**
+（`checkValidationLayerSupport()` 里的 `vkEnumerateInstanceLayerProperties`），
+退出码在 `0xC0000374`（堆损坏）和 `0xC0000005`（访问违例）之间摇摆，
+而 `git stash` 回改动前一切正常 —— 很容易误判成「新写的代码有 bug」。
+
+```powershell
+cmake --build build --config Debug --clean-first
+```
+
+改过 `src/RHI/Device.h` / `src/RHI/VmaConfig.h`（VMA 配置相关）之后无条件走这条。
 ## 4. CMake 选项
 
 | 选项 | 默认 | 作用 |

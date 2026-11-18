@@ -4,8 +4,8 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~330 行
-updated: 2026-10-30
+size: ~230 行
+updated: 2026-11-18
 ---
 
 # 关键设计决策
@@ -208,3 +208,23 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
   折中，不是 bug。
 - **代价**：没有 `BoundsComponent` 的实体退回 AABB 显示；细长/旋转物体的
   点选范围会比 OBB 略大。
+
+## 决策 24：管线缓存落盘，且必须过三道校验
+
+- **要解决的问题**：`vkCreatePipelineCache` 传空 cache 也能跑，代价是每次启动都要
+  重新编译全部着色器流水线。桌面 NVIDIA 驱动自己就有磁盘级缓存，所以本机测不出
+  差距（`--selftest 60` 冷 102.8 / 热 98.9 FPS，就是噪声）；真正疼的是
+  Android / Steam Deck 这类"驱动不提供磁盘缓存"的场景，以及将来上
+  `VK_KHR_pipeline_binary` 做预烘焙。
+- **为什么不能"试试看"**：换驱动/换卡之后把旧 blob 喂给驱动是未定义行为，轻则
+  `VK_ERROR_INVALID_PIPELINE_CACHE_DATA`，重则驱动内部崩。所以文件头里记
+  `magic / version / vendorId / deviceId / driverVersion / apiVersion /
+  payloadBytes / payloadHash(FNV-1a) / pipelineCacheUUID`，加载时按
+  UUID → 长度 → 哈希 三道校验，任一不符**整份丢弃**并打一行`丢弃旧缓存：原因`。
+- **落盘必须原子**：先写 `pipeline_cache.bin.tmp`，再 remove + rename。直接覆盖
+  唯一一份可用缓存，等于"崩一次就把优化成果清零"。载荷 <= 8 字节（空驱动头）时
+  直接不写，避免用空文件盖掉上一份有用的。
+- **可写性要探测**：`%LOCALAPPDATA%` 建得出来不等于写得进去（沙盒/受限账户会
+  `EACCES`）。探测失败就退回工作目录 —— 缓存放哪儿不重要，有没有才重要。
+- **失败不是错误**：`vkCreatePipelineCache` 失败就退回 `VK_NULL_HANDLE` 并打印
+  "禁用管线缓存"。缓存是纯优化，任何情况下都不许让启动失败。

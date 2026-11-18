@@ -1,5 +1,7 @@
 #include "Device.h"
 #include "Core/StartupLog.h"
+#include "RHI/PipelineCache.h"
+#include "RHI/Breadcrumbs.h"
 #include <iostream>
 #include <stdexcept>
 #include <set>
@@ -79,6 +81,12 @@ Device::Device(GLFWwindow* window, const diag::Options& options) : window(window
 
 Device::~Device() 
 {
+    // ① / ② 必须在 VMA 与 VkDevice 之前释放：breadcrumbs 持有 VMA 缓冲、
+    // pipelineCache 会调 vkDestroyPipelineCache 并顺手把缓存写盘
+    // （写盘时还要读 physicalDevice properties，所以也不能在 vkDestroyInstance 之后）。
+    breadcrumbs.reset();
+    pipelineCache.reset();
+
     vmaDestroyAllocator(vmaAllocator);
     vkDestroyDevice(device, nullptr);
 
@@ -89,6 +97,12 @@ Device::~Device()
 
     vkDestroySurfaceKHR(instance, surface, nullptr);
     vkDestroyInstance(instance, nullptr);
+}
+
+VkPipelineCache Device::getPipelineCache() const
+{
+    // 定义在 .cpp 是因为头文件里 PipelineCache 只有前置声明。
+    return pipelineCache ? pipelineCache->get() : VK_NULL_HANDLE;
 }
 
 size_t Device::reportVmaStats(const char* stage)
@@ -121,8 +135,13 @@ size_t Device::reportVmaStats(const char* stage)
     return totalAllocs;
 }
 
-bool Device::reportDeviceFault()
+bool Device::reportDeviceFault(VkQueue queue)
 {
+    // ② 先跑 breadcrumbs。它不依赖 VK_EXT_device_fault，所以正好补上下面那条
+    // early-return 分支的空白：没有扩展时至少还能告诉你「崩在哪一帧的哪个 pass」。
+    if (breadcrumbs && breadcrumbs->isActive())
+        breadcrumbs->reportAfterDeviceLost(queue);
+
     if (!deviceFaultSupported || pfnGetDeviceFaultInfoEXT == nullptr)
     {
         std::cout << "[DeviceFault] VK_EXT_device_fault not enabled on this device" << std::endl;
@@ -451,6 +470,19 @@ void Device::createLogicalDevice()
         deviceFaultSupported = true;
     }
 
+    // ②：breadcrumbs 的两种「硬件标记」方式。有哪个用哪个，都没有时
+    // Breadcrumbs 会退化到 vkCmdUpdateBuffer（pass 粒度）。
+    if (deviceHasExtension(physicalDevice, VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME))
+    {
+        enabledDeviceExtensions.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+        nvDiagnosticCheckpointsSupported = true;
+    }
+    if (deviceHasExtension(physicalDevice, VK_AMD_BUFFER_MARKER_EXTENSION_NAME))
+    {
+        enabledDeviceExtensions.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
+        amdBufferMarkerSupported = true;
+    }
+
     createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledDeviceExtensions.size());
     createInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
 
@@ -497,6 +529,14 @@ void Device::createLogicalDevice()
     allocatorInfo.device = device;
     allocatorInfo.instance = instance;
     vmaCreateAllocator(&allocatorInfo, &vmaAllocator);
+
+    // ①：管线缓存。放在这里是因为它只依赖 device + physicalDevice，
+    // 而放在构造函数最前面会让「缓存创建失败」看起来像设备创建失败。
+    pipelineCache = std::make_unique<PipelineCache>(*this);
+
+    // ②：breadcrumbs 依赖 VMA（游标缓冲），必须在 vmaCreateAllocator 之后。
+    breadcrumbs = std::make_unique<Breadcrumbs>();
+    breadcrumbs->init(*this);
 }
 
 bool Device::isDeviceSuitable(VkPhysicalDevice device) 

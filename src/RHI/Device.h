@@ -8,8 +8,12 @@
 #include <vector>
 #include <optional>
 #include <string>
+#include <memory>
 
 #include "Core/Diagnostics.h"   // diag::Options（P0：调试/验证开关）
+
+class PipelineCache;   // ① 管线缓存持久化（RHI/PipelineCache.h）
+class Breadcrumbs;     // ② GPU 崩溃定位（RHI/Breadcrumbs.h）
 
 struct QueueFamilyIndices 
 {
@@ -47,9 +51,20 @@ public:
 
 // P2-4：VK_EXT_device_fault。设备不支持时 reportDeviceFault() 返回 false。
 bool isDeviceFaultSupported() const { return deviceFaultSupported; }
-bool reportDeviceFault();
+bool reportDeviceFault(VkQueue queue = VK_NULL_HANDLE);
 bool hasDeviceFaultEntryPoint() const { return pfnGetDeviceFaultInfoEXT != nullptr; }
 	VmaAllocator getVmaAllocator() { return vmaAllocator; }
+
+	// ①：持久化的 VkPipelineCache。创建失败或被提前释放时是 VK_NULL_HANDLE，
+	// 调用方直接把返回值传给 vkCreate*Pipelines 即可（NULL = 不用缓存，行为正确只是慢）。
+	VkPipelineCache getPipelineCache() const;
+	PipelineCache* getPipelineCacheObject() { return pipelineCache.get(); }
+
+	// ②：GPU 崩溃定位。没有扩展支持时返回的对象依然可以取，只是 isActive() 为 false。
+	Breadcrumbs* getBreadcrumbs() { return breadcrumbs.get(); }
+	bool hasNvDiagnosticCheckpoints() const { return nvDiagnosticCheckpointsSupported; }
+	bool hasAmdBufferMarker() const { return amdBufferMarkerSupported; }
+
 
 	// 打印 VMA 统计，并返回"还有多少个分配没释放"。
 	// 为什么需要：vmaDestroyAllocator 在前者不为 0 时会直接断言崩掉，而断言
@@ -97,6 +112,17 @@ bool deviceFaultSupported = false;
 // P2-4：扩展函数必须经 vkGetDeviceProcAddr 获取（导入库不导出它）。
 PFN_vkGetDeviceFaultInfoEXT pfnGetDeviceFaultInfoEXT = nullptr;
 	VmaAllocator vmaAllocator;
+
+	// ②：标记方式依赖的可选扩展（有哪个用哪个，都没有就退化成 vkCmdUpdateBuffer）。
+	bool nvDiagnosticCheckpointsSupported = false;
+	bool amdBufferMarkerSupported = false;
+
+	// ① / ② 的对象本体定义在 .cpp（需要完整类型），这里只持指针。
+	// 两者都必须在 ~Device 里、vmaDestroyAllocator/vkDestroyDevice 之前释放：
+	// breadcrumbs 用 VMA 缓冲，pipelineCache 用 VkDevice。
+	std::unique_ptr<PipelineCache> pipelineCache;
+	std::unique_ptr<Breadcrumbs> breadcrumbs;
+
 
     // P0-2：验证层增强（best practices / 同步校验），来自命令行 --validation-features。
     bool validationBestPractices = false;

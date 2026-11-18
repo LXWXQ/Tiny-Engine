@@ -1,6 +1,7 @@
 #include "GpuProfiler.h"
 #include "RHI/RenderGraph.h"
 #include "RHI/CommandUtils.h"
+#include "RHI/Breadcrumbs.h"
 
 #include <stdexcept>
 #include <iostream>
@@ -109,6 +110,17 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     crossQueueDependencies = {};
     currentFrameSlot = frameSlot;
 
+    // ②：每帧把两条命令流的 GPU 游标清零，并把帧号记进 CPU 侧表。
+    // device lost 之后就是靠「CPU 表 + GPU 里的那一个 32 位游标」还原现场。
+    if (Breadcrumbs* crumbs = device.getBreadcrumbs(); crumbs != nullptr && crumbs->isActive())
+    {
+        if (cmd != VK_NULL_HANDLE)
+            crumbs->beginSlot(cmd, Breadcrumbs::slotFor(frameSlot, false), frameNumber);
+        if (computeCmd != VK_NULL_HANDLE)
+            crumbs->beginSlot(computeCmd, Breadcrumbs::slotFor(frameSlot, true), frameNumber);
+    }
+
+
     // P0-4：GPU 计时。关闭时 gpuTimer 为 nullptr，一个分支都不进。
 #ifdef TINY_ENABLE_GPU_TIMING
     if (gpuTimer && cmd != VK_NULL_HANDLE)
@@ -179,6 +191,16 @@ void RenderGraph::endFrame()
         lastFrameExecutedPasses.push_back(pass.name);
 
         const VkCommandBuffer passCmd = pass.isCompute ? computeCmd : cmd;
+
+        // ②：本 pass 的标记。崩溃后 breadcrumbs 会把「最后到达的那个名字」
+        // 打出来 —— 这比对着一个故障地址二分注释代码快得多。
+        Breadcrumbs* crumbs = nullptr;
+        if (Breadcrumbs* tracked = device.getBreadcrumbs(); tracked != nullptr && tracked->isActive())
+        {
+            crumbs = tracked;
+            crumbs->beginPass(passCmd, Breadcrumbs::slotFor(currentFrameSlot, pass.isCompute), pass.name.c_str());
+        }
+
 
         // P0-4：本 pass 的 GPU 计时开始（仅 graphics）。
         if (!pass.isCompute)
@@ -363,6 +385,11 @@ void RenderGraph::endFrame()
             onPassTimingEnd(passCmd, timedPassIndex);
             ++timedPassIndex;
         }
+
+        // ②：pass 结束。放在 vkCmdEndRendering 之后 —— 降级路径用
+        // vkCmdUpdateBuffer，而传输命令在渲染通道内非法。
+        if (crumbs != nullptr)
+            crumbs->endPass(passCmd, Breadcrumbs::slotFor(currentFrameSlot, pass.isCompute), pass.name.c_str());
         }   // P1-1：结束本 pass 的 GPU zone 作用域
 
         // ---- 5) 记录本 Pass 造成的最终状态，供下一个 Pass 推导屏障 ----
@@ -393,6 +420,16 @@ void RenderGraph::endFrame()
     }
 
     reportUnmatchedPassOverrides();
+
+    // ②：标记两条命令流「跑完了」。读回哨兵值就说明崩溃不在这条流上，
+    // 省掉一半的嫌疑范围。
+    if (Breadcrumbs* crumbs = device.getBreadcrumbs(); crumbs != nullptr && crumbs->isActive())
+    {
+        if (cmd != VK_NULL_HANDLE)
+            crumbs->finishSlot(cmd, Breadcrumbs::slotFor(currentFrameSlot, false));
+        if (computeCmd != VK_NULL_HANDLE)
+            crumbs->finishSlot(computeCmd, Breadcrumbs::slotFor(currentFrameSlot, true));
+    }
 
     for (std::unique_ptr<Pass>& p : passes)
         p.reset();

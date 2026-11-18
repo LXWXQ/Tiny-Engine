@@ -256,7 +256,7 @@ void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphi
         const VkResult computeSubmit = vkQueueSubmit(vulkanDevice.getComputeQueue(), 1, &submitInfo, VK_NULL_HANDLE);
         if (computeSubmit != VK_SUCCESS)
         {
-            if (computeSubmit == VK_ERROR_DEVICE_LOST) vulkanDevice.reportDeviceFault();
+            if (computeSubmit == VK_ERROR_DEVICE_LOST) vulkanDevice.reportDeviceFault(vulkanDevice.getComputeQueue());
             throw std::runtime_error("failed to submit compute command buffer!");
         }
 
@@ -306,7 +306,7 @@ void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphi
         const VkResult graphicsSubmit = vkQueueSubmit(vulkanDevice.getGraphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
         if (graphicsSubmit != VK_SUCCESS)
         {
-            if (graphicsSubmit == VK_ERROR_DEVICE_LOST) vulkanDevice.reportDeviceFault();
+            if (graphicsSubmit == VK_ERROR_DEVICE_LOST) vulkanDevice.reportDeviceFault(vulkanDevice.getGraphicsQueue());
             throw std::runtime_error("failed to submit draw command buffer!");
         }
 
@@ -345,7 +345,7 @@ void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphi
     }
     if (presentResult != VK_SUCCESS)
     {
-        if (presentResult == VK_ERROR_DEVICE_LOST) vulkanDevice.reportDeviceFault();
+        if (presentResult == VK_ERROR_DEVICE_LOST) vulkanDevice.reportDeviceFault(vulkanDevice.getGraphicsQueue());
         throw std::runtime_error("failed to present swapchain image!");
     }
 }
