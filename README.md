@@ -141,7 +141,7 @@ glTF 内部节点层级在导入时烘焙到世界空间。完整清单见 [`doc
 | [`docs/50-validation/`](docs/50-validation/README.md) | CLI 全量参数、80 项回归矩阵、验收标准 | 加测试 / 定位回归 |
 | [`docs/60-debug-profiling/`](docs/60-debug-profiling/README.md) | 零开销开关模型、工具速查、诊断实现、**坑清单** | 加调试能力 / **改任何代码前** |
 | [`docs/70-status/`](docs/70-status/README.md) | 里程碑、技术债、已知边界 | 决定"下一步做什么" |
-| [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7 | 开新主功能前 |
+| [`docs/80-roadmap/`](docs/80-roadmap/README.md) | 主功能路线 F1~F7、可借鉴技术清单 TM | 开新主功能前 |
 | [`docs/90-editor/`](docs/90-editor/README.md) | 编辑器架构、撤销栈、场景序列化、面板布局、UX 判据与改造协议 | **改 `src/Editor/` 之前** |
 
 ---

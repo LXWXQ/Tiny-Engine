@@ -4,8 +4,8 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~180 行
-updated: 2026-11-13
+size: ~185 行
+updated: 2026-11-19
 ---
 
 # 代码 <-> 文档反查表
@@ -29,6 +29,8 @@ updated: 2026-11-13
 | `ScreenshotCapture.h/.cpp` | 交换链读回写 PNG | [diagnostics](../60-debug-profiling/diagnostics.md) | diagnostics |
 | `RenderDocHook.h/.cpp` | in-app 抓帧 | [tools](../60-debug-profiling/tools.md) | tools |
 | `CommandUtils.h` / `VmaConfig.h` / `VmaNaming.h` | 命令缓冲单次提交、VMA 配置、分配命名 | [resource-lifetime](../10-architecture/resource-lifetime.md) | resource-lifetime |
+| `PipelineCache.h/.cpp` | 管线缓存磁盘头（magic / version / 驱动 UUID / 载荷长度 / FNV-1a）、原子落盘、目录不可写回退 | [decisions](../10-architecture/decisions.md) 决策 24 | decisions |
+| `Breadcrumbs.h/.cpp` / `BreadcrumbsReport.cpp` | GPU 侧 4 槽游标 + CPU 名字表；NV checkpoint / AMD marker / updateBuffer 三档降级；崩溃后读 HOST_VISIBLE 映射得 pass 名 | [diagnostics](../60-debug-profiling/diagnostics.md) 第 9 节 | diagnostics |
 
 ## 2. Render 层（`src/Render/`）
 

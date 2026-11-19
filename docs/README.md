@@ -4,8 +4,8 @@ title: 文档系统总纲
 type: meta
 scope: docs/
 read-when: 第一次接触本项目、或要新增/移动/删除文档
-size: ~200 行
-updated: 2026-11-11
+size: ~247 行
+updated: 2026-11-19
 ---
 # 文档系统总纲
 
@@ -117,6 +117,7 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     ├── 80-roadmap/
     │   ├── README.md
     │   ├── roadmap.md           F1~F7 主功能路线
+    │   ├── borrowed-techniques.md 可借鉴技术清单（TM 系列）
     │   └── terrain-plan.md      程序化地形实施方案（F2 / D-18）
     └── 90-editor/
         ├── README.md            编辑器总览与面板清单
@@ -151,8 +152,8 @@ title: 渲染图
 type: architecture
 scope: src/RHI/RenderGraph.{h,cpp}
 read-when: 修改 Pass 声明、屏障、子资源校验时
-size: ~380 行
-updated: 2026-10-30
+size: ~247 行
+updated: 2026-11-19
 ---
 ```
 
@@ -231,6 +232,7 @@ updated: 2026-10-30
 | status | [known-limits](70-status/known-limits.md) | 判断需求可行性 |
 | roadmap | [roadmap](80-roadmap/roadmap.md) | 开新主功能前 |
 | roadmap | [terrain-plan](80-roadmap/terrain-plan.md) | 做地形 F2 / D-18 |
+| roadmap | [borrowed-techniques](80-roadmap/borrowed-techniques.md) | 决定下一项基础改造 |
 | editor | [editor](90-editor/README.md) | **做编辑器任何改动前** |
 | editor | [architecture](90-editor/architecture.md) | 加面板 / 改接缝 |
 | editor | [commands](90-editor/commands.md) | 加可撤销操作 |
