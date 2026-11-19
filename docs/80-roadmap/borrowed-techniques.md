@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~224 行
+size: ~228 行
 updated: 2026-11-19
 ---
 
@@ -58,7 +58,7 @@ TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--sta
 
 T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表）已于 2026-11-19 完成并移入 §3，这一档不再有待办。
 
-下一批从 §5 的 T2 开始。TM-06 的统计部分、TM-07、TM-08 的第一步、TM-10 都已落地（前两者的第二步、TM-10 的并行按数据判定不做），建议顺序改为 TM-11（描述符混合模型）或 TM-12（反射结果变构建产物）。TM-09（跨队列 EXCLUSIVE 所有权转移）已评估、判定本结构下不做，理由与验证层报文见[决策 28](../10-architecture/decisions.md)。
+下一批从 §6 的 T3 开始。T1 三项、TM-06 的统计部分、TM-07、TM-08 的第一步、TM-10、TM-12 都已落地；TM-09（跨队列 EXCLUSIVE）、TM-11（描述符三档）、TM-06 的按需建管线、TM-08 的第二步经数据或结构判定不做。建议顺序改为 TM-13（clustered lighting）→ TM-14（SPD 降采样链），其余穿插。TM-09（跨队列 EXCLUSIVE 所有权转移）已评估、判定本结构下不做，理由与验证层报文见[决策 28](../10-architecture/decisions.md)。
 
 
 ## 5. T2：要改热路径
@@ -122,19 +122,23 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 ### TM-11 描述符的混合模型
 
-- **现状**：bindless 材质已是 1 个 set 4 个纹理数组加 push constant（desc binds 104 → 1，见 [descriptors](../10-architecture/descriptors.md)）。**当前没有压力**，只在出现"每帧新建 set 组合"时才有价值。
+- **状态**：已评估，保持现状；触发条件已写进 [descriptors](../10-architecture/descriptors.md) 第 10 节（[决策 31](../10-architecture/decisions.md)）。
+- **现状（含实测）**：bindless 材质已是 1 个 set 4 个纹理数组加 push constant（desc binds 104 → 1，见 [descriptors](../10-architecture/descriptors.md)）。全仓库 `vkUpdateDescriptorSets` 31 处调用点，但每帧只有 12~15 次、每次 1~2 个 binding；`UPDATE_AFTER_BIND` / `vkCreateDescriptorUpdateTemplate` / `vkCmdPushDescriptorSet` / `VK_EXT_descriptor_buffer` 全部 0 命中。CPU 侧每帧十几微秒。
 - **参考**：`vulkan/descriptor_set.hpp`（per-type 位掩码 + `ArraySizeAccessMeta meta[VULKAN_NUM_BINDINGS]` + `UNSIZED_ARRAY = 0x7f`；`VULKAN_NUM_SETS_PER_POOL = 64`、`VULKAN_DESCRIPTOR_RING_SIZE = 16`）、`vulkan/descriptor_set.cpp:39`（`bindless = layout.meta[0].array_size == UNSIZED_ARRAY`，同一个 allocator 自动切 bindless）、`:388-395`（`descriptorPoolOverallocation` 可用则加 `ALLOW_OVERALLOCATION_POOLS/SETS_BIT_NV` 复用 pool）、`:215-230`（`vkGetDescriptorSetLayoutSizeEXT` / `vkGetDescriptorSetLayoutBindingOffsetEXT` 记 desc buffer 偏移）。
-- **落地**：保持现状；等出现压力时按"池化 set → push descriptor → descriptor buffer"逐档上。
-- **验收**：暂不排期；触发条件写进 [descriptors](../10-architecture/descriptors.md)，出现时改那篇。
-- **预估**：3 天，风险中。
+- **落地**：保持现状；出现压力时按"池化 set → push descriptor → descriptor buffer"逐档上。三档各自的触发条件、成本与参考实现行号见 [descriptors](../10-architecture/descriptors.md) 第 10 节。
+- **验收（已满足的部分）**：触发条件写成可判定的数字；描述符相关文档与实际调用点数一致。
+- **预估**：3 天，风险中（当前不排期）。
 
 ### TM-12 把反射结果变成构建产物
 
-- **现状**：shader 由 `glslangValidator` 预编译加 `spirv-val` 静态校验（`CMakeLists.txt`），运行期不做反射；binding 号靠手写常量与约定对齐，改一个 binding 漏改 C++ 常量时要等验证层报错。
+- **状态**：已完成（[决策 30](../10-architecture/decisions.md)，用法见 [shaders](../20-pipeline/shaders.md) 第 6 节）。
+- **现状（落地前）**：shader 由 `glslangValidator` 预编译加 `spirv-val` 静态校验（`CMakeLists.txt`），运行期不做反射；binding 号靠手写常量与约定对齐，改一个 binding 漏改 C++ 常量时要等验证层报错。
 - **参考**：`vulkan/shader.cpp:781-817`（反射结果的缓存与复用）。
-- **落地**：在 **构建期** 生成反射结果（`spirv-cross --reflect` 或 `spirv-reflect`），输出成 `shaders/<name>.reflect.h`，运行期只读。这不是运行期反射，而是把反射结果变成可 diff 的产物。
-- **验收**：故意把某个 binding 号改错，编译期就报错（而不是运行期验证层报"descriptor 类型不匹配"）。
-- **预估**：2 天，风险低。
+- **已完成**：`tools/SpirvReflect.cpp`（自己解析 SPIR-V，不依赖外部工具的块大小口径）生成 `build/shaders/<name>.reflect.h`（set / binding / count、块大小与成员偏移、stage、entry point）；CMake 每个 shader 两条 custom command（`.spv` 一条、`.reflect.h` 依赖 `.spv` 一条 —— VS 生成器对多 OUTPUT 的增量判断不可靠）；`build/shaders` 进 `tiny_core` 的 include，并 `add_dependencies(tiny_core TinyShaders)`；SSAOPass 已接入（`static_assert` 对齐 `sizeof` / `offsetof` / 数组长度 / set 号，binding 全走生成常量）。
+- **结论**：52 个 shader 全部生成成功，与 `spirv-reflect` 的 15 处差异复核后全是口径差异；漂移实验（在 `ssao.frag` 插一个 `vec4`）被 6 条 `static_assert` 当场拦住。
+- **验收（已满足的部分）**：改 GLSL 结构体不改 C++ → 编译期报错（`error C2338: static_assert failed`）；`--selftest 30` exit=0、stderr 0 字节、`[Validation] errors=0 warnings=0`；`--selftest 60 --gpu-scene` 91.17 FPS。
+- **已知边界**：std140 尾部填充、变长数组块只给偏移、全局 set 0 仍由 `DescriptorManager` 单点定义。
+- **预估**：2 天，风险低（实际约一天半）。
 ## 6. T3：功能缺口
 
 ### TM-13 Clustered lighting

@@ -4,7 +4,7 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~191 行
+size: ~192 行
 updated: 2026-11-19
 ---
 
@@ -140,6 +140,7 @@ updated: 2026-11-19
 | `tools/Validate.ps1` | 主回归（80 项 + 文档检查） | [test-matrix](../50-validation/test-matrix.md) | test-matrix |
 | `tools/SetupDependencies.ps1` | 8 个依赖的固定版本安装 | [dependencies](../40-build/dependencies.md) | dependencies |
 | `tools/DocCheck.ps1` | 本文档系统的自动校验 | [doc-rules](doc-rules.md) | doc-rules |
+| `tools/SpirvReflect.cpp` | 构建期解析 `.spv`，生成 `build/shaders/<name>.reflect.h`（set / binding / 块大小与成员偏移） | [shaders](../20-pipeline/shaders.md) 第 6 节 | shaders |
 | `tools/Baseline.ps1` / `DebugBundle.ps1` / `DeepValidation.ps1` / `Screenshot.ps1` / `Capture.ps1` / `Profile.ps1` | 剖析与证据收集 | [tools](../60-debug-profiling/tools.md) | tools |
 | `config/engine.json` | 运行时配置（version 2） | [config](../30-systems/config.md) | config |
 | `CMakeLists.txt` | 两个可执行目标（`TinyEngine` / `TinyEditor`）+ `tiny_core` 对象库 + `TinyShaders` | [build](../40-build/build.md) | build |

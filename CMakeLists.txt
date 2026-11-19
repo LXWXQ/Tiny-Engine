@@ -216,6 +216,15 @@ if(TINY_ENABLE_RENDERDOC)
         message(WARNING "TINY_ENABLE_RENDERDOC=ON but 3rdParty/renderdoc/renderdoc_app.h not found; disabled.")
     endif()
 endif()
+# ---------------------------------------------------------------------------
+# TM-12：构建期反射工具。
+#
+# 把 .spv 里的 set / binding / 块成员偏移与总大小导出成一个 C++ 头文件，让 C++
+# 侧的常量与 GLSL 只有一份来源。它是宿主机工具（不链 Vulkan、不链 glm），因此
+# 不会拖慢引擎本身的构建；产物是可 diff 的文本，改一个 binding 会在 diff 里看见。
+# ---------------------------------------------------------------------------
+add_executable(SpirvReflect tools/SpirvReflect.cpp)
+
 # shader 编译器同样由 Vulkan SDK 的 CMake 包给出，避免第二处硬编码路径。
 set(GLSL_VALIDATOR "${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}")
 if(NOT GLSL_VALIDATOR OR NOT EXISTS "${GLSL_VALIDATOR}")
@@ -239,6 +248,9 @@ set(OUTPUT_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 
 file(MAKE_DIRECTORY ${OUTPUT_SHADER_DIR})
 
+# TM-12：构建期生成的反射头（<shader>.spv.reflect.h）落在这里，引擎源码直接 include。
+target_include_directories(tiny_core PUBLIC "${OUTPUT_SHADER_DIR}")
+
 file(GLOB SHADER_FILES CONFIGURE_DEPENDS "${SHADER_DIR}/*.vert" "${SHADER_DIR}/*.frag" "${SHADER_DIR}/*.comp")
 foreach(SHADER_FILE ${SHADER_FILES})
     get_filename_component(FILE_NAME ${SHADER_FILE} NAME)
@@ -253,6 +265,10 @@ foreach(SHADER_FILE ${SHADER_FILES})
 
     # 用 OUTPUT 依赖而不是 PRE_BUILD：PRE_BUILD 每次构建都会重编**全部** shader，
     # 而 OUTPUT 形式只在对应 .vert/.frag/.comp 真的变了时才重编那一个。
+    # 反射头与 .spv 一起作为同一条规则的产物：改 GLSL 时两者一起更新，
+    # 不会出现「.spv 是新的、反射头是旧的」这种半新半旧的状态。
+    set(REFLECT_OUTPUT "${OUTPUT_SHADER_DIR}/${FILE_NAME}.reflect.h")
+
     add_custom_command(
         OUTPUT "${SHADER_OUTPUT}"
         # --target-env vulkan1.3 隐含 SPIR-V 1.6：compute 会改用 LocalSizeId 执行模式，
@@ -263,10 +279,23 @@ foreach(SHADER_FILE ${SHADER_FILES})
         COMMENT "自动编译并校验 Shader: ${FILE_NAME}"
         VERBATIM
     )
-    list(APPEND SHADER_OUTPUTS "${SHADER_OUTPUT}")
+    # 反射头单独一条规则：Visual Studio 生成器对「一条规则多个 OUTPUT」的增量判断
+    # 不可靠（.spv 已存在、.h 缺失时不会重跑），拆成两条就没有这个坑。
+    add_custom_command(
+        OUTPUT "${REFLECT_OUTPUT}"
+        COMMAND $<TARGET_FILE:SpirvReflect> "${SHADER_OUTPUT}" "${REFLECT_OUTPUT}" "${FILE_NAME}"
+        DEPENDS "${SHADER_OUTPUT}"
+        COMMENT "反射 Shader: ${FILE_NAME} -> ${FILE_NAME}.reflect.h"
+        VERBATIM
+    )
+
+    list(APPEND SHADER_OUTPUTS "${SHADER_OUTPUT}" "${REFLECT_OUTPUT}")
 endforeach()
 
 # 两个可执行文件共享同一批 .spv，所以 shader 只编一次。
 add_custom_target(TinyShaders ALL DEPENDS ${SHADER_OUTPUTS})
+add_dependencies(TinyShaders SpirvReflect)
+# TM-12：引擎源码 include 生成的反射头，所以编译前必须先把 shader 与反射头生成出来。
+add_dependencies(tiny_core TinyShaders)
 add_dependencies(${PROJECT_NAME} TinyShaders)
 add_dependencies(TinyEditor TinyShaders)

@@ -2,10 +2,10 @@
 id: build/build
 title: 构建流程与隐形规则
 type: build
-scope: CMakeLists.txt, cmake/AssetPaths.h.in
+scope: CMakeLists.txt, cmake/AssetPaths.h.in, tools/SpirvReflect.cpp
 read-when: 每次构建；或新增源文件、改 CMake 选项
-size: ~132 行
-updated: 2026-10-30
+size: ~137 行
+updated: 2026-11-19
 ---
 
 # 构建流程与隐形规则
@@ -49,9 +49,14 @@ cmake --build build --config Debug --target TinyEditor
 1. **依赖检查**：8 个必需文件逐个 `EXISTS` 判断。
 2. **shader 编译**：每个 `shaders/*.{vert,frag,comp}` 编译成
    `build/shaders/<name>.spv`，随后 `spirv-val` 静态校验。
-3. **资源路径注入**：`cmake/AssetPaths.h.in` -> `build/generated/AssetPaths.h`，
+3. **反射头生成**：`tools/SpirvReflect` 读同一个 `.spv`，写出
+   `build/shaders/<name>.reflect.h`（set / binding / 块大小与成员偏移）。
+   `build/shaders` 在 `tiny_core` 的 include 路径上，引擎源码直接 `#include`；
+   `add_dependencies(tiny_core TinyShaders)` 保证先生成再编译。详见
+   [shaders](../20-pipeline/shaders.md) 第 6 节。
+4. **资源路径注入**：`cmake/AssetPaths.h.in` -> `build/generated/AssetPaths.h`，
    把 `Resources/` 的**绝对路径**写进头文件。
-4. **全局编译选项**：`/utf-8`（源码与执行字符集都是 UTF-8）、
+5. **全局编译选项**：`/utf-8`（源码与执行字符集都是 UTF-8）、
    `TINYGLTF_NO_STB_IMAGE` / `TINYGLTF_NO_STB_IMAGE_WRITE`。
 
 ## 3. 四条隐形规则（都会导致"看起来莫名其妙的错误"）

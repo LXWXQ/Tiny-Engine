@@ -3,8 +3,30 @@
 #include "RHI/ScratchArena.h"
 #include "AssetPaths.h"
 
+// TM-12：这两个头文件是构建期从 .spv 反射出来的（tools/SpirvReflect.cpp），
+// 里面的 set / binding / 偏移都是编译器认可的事实，不是手写的数字。
+#include "ssao.frag.reflect.h"
+#include "ssao_blur.frag.reflect.h"
+
+namespace ssaoReflect = tiny::reflect::ssao_frag;
+namespace ssaoBlurReflect = tiny::reflect::ssao_blur_frag;
+
+// 布局一致性由构建期保证：GLSL 里改一个字段、C++ 里忘改，这里先炸。
+static_assert(sizeof(SSAOUbo) == ssaoReflect::kUboBlockSize,
+              "SSAOUbo 与 ssao.frag 里的 SSAOUbo 块大小不一致（看 build/shaders/ssao.frag.reflect.h）");
+static_assert(offsetof(SSAOUbo, projection) == ssaoReflect::kUboProjectionOffset, "projection 偏移漂移");
+static_assert(offsetof(SSAOUbo, view) == ssaoReflect::kUboViewOffset, "view 偏移漂移");
+static_assert(offsetof(SSAOUbo, samples) == ssaoReflect::kUboSamplesOffset, "samples 偏移漂移");
+static_assert(offsetof(SSAOUbo, kernelSize) == ssaoReflect::kUboKernelSizeOffset, "kernelSize 偏移漂移");
+static_assert(offsetof(SSAOUbo, radius) == ssaoReflect::kUboRadiusOffset, "radius 偏移漂移");
+static_assert(offsetof(SSAOUbo, bias) == ssaoReflect::kUboBiasOffset, "bias 偏移漂移");
+static_assert(offsetof(SSAOUbo, enabled) == ssaoReflect::kUboEnabledOffset, "enabled 偏移漂移");
+static_assert(sizeof(SSAOUbo::samples) / sizeof(glm::vec4) == ssaoReflect::kUboSamplesCount,
+              "samples 的数组长度与 ssao.frag 声明不一致");
+
 #include <random>
 #include <stdexcept>
+#include <cstddef>     // offsetof（TM-12 的静态断言）
 #include <cstring>
 #include <cstdlib>     // std::getenv（反面用例：TINY_SIMULATE_SSAO_SKIP）
 #include <array>
@@ -203,12 +225,14 @@ void SSAOPass::createNoiseTexture()
 
 void SSAOPass::createLocalDescriptors()
 {
+    // binding 号来自 ssao.frag 的反射结果：着色器里改 layout(binding = )，
+    // 这里跟着变，改错了 build 就过不去。
     std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
-    bindings[0].binding = 0;
+    bindings[0].binding = ssaoReflect::kUboBinding;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[0].descriptorCount = 1;
+    bindings[0].descriptorCount = ssaoReflect::kUboCount;
     bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[1].binding = 1;
+    bindings[1].binding = ssaoReflect::kTexNoiseBinding;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -226,7 +250,7 @@ void SSAOPass::createLocalDescriptors()
 
         VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
         write.dstSet = localSets[frame];
-        write.dstBinding = 1;
+        write.dstBinding = ssaoReflect::kTexNoiseBinding;
         write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         write.descriptorCount = 1;
         write.pImageInfo = &noiseInfo;
@@ -247,7 +271,7 @@ void SSAOPass::updateBlurDescriptor(uint32_t frame)
 
     VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     write.dstSet = blurSets[frame];
-    write.dstBinding = 0;
+    write.dstBinding = ssaoBlurReflect::kAoTextureBinding;
     write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     write.descriptorCount = 1;
     write.pImageInfo = &aoInfo;
@@ -257,7 +281,7 @@ void SSAOPass::updateBlurDescriptor(uint32_t frame)
 void SSAOPass::createBlurPipeline()
 {
     VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
+    binding.binding = ssaoBlurReflect::kAoTextureBinding;
     binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     binding.descriptorCount = 1;
     binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -345,9 +369,9 @@ void SSAOPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     VkDescriptorBufferInfo uboInfo{ block.buffer, block.offset, sizeof(SSAOUbo) };
     VkWriteDescriptorSet uboWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     uboWrite.dstSet = localSets[frame];
-    uboWrite.dstBinding = 0;
+    uboWrite.dstBinding = ssaoReflect::kUboBinding;
     uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    uboWrite.descriptorCount = 1;
+    uboWrite.descriptorCount = ssaoReflect::kUboCount;
     uboWrite.pBufferInfo = &uboInfo;
     vkUpdateDescriptorSets(device.getDevice(), 1, &uboWrite, 0, nullptr);
 

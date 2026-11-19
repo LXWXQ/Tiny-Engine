@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~298 行
+size: ~317 行
 updated: 2026-11-19
 ---
 
@@ -296,3 +296,22 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 - **结论**：不并行。21 个 Pass 的准备合计只有 36 us，占一帧（约 10 ms）的 0.3%；而把 21 个任务丢进工作窃取池、再等它们做完的开销是 160 us 量级 —— 线程唤醒延迟远大于被并行的工作量本身。要让并行赢，得让每个 Pass 的准备重到几十微秒（例如真的在准备阶段做 SPIR-V 反射或管线状态推导），当前不是。
 - **保留的东西**：准备 / 录制的拆分本身留下（`preparePass()` 与 `PreparedPass`），因为屏障推导与数据准备的边界现在写在类型上，读代码不用再区分哪几句碰了命令缓冲；`--stats-rendergraph` 打印两段耗时；`--parallel-prepare` 保留为可复现的对照开关，默认关闭。
 - **不引入的**：跨帧缓存 PreparedPass（Pass 的声明基本不变，缓存能省掉 36 us 里的一部分，但每帧都要校验句柄与 usage，缓存失效条件比省下的时间更难维护）、把录制也并行化（`vkCmd*` 只能在各自队列的命令缓冲上串行录制）。
+
+## 决策 30：把反射结果变成构建产物，而不是运行期反射（TM-12）
+
+- **问题**：binding 号、set 号、UBO / push constant 的成员偏移全靠手抄。写错一个数字，验证层要等到那一刻才报（descriptor 类型不匹配 / 越界），而"块大小改了 C++ 结构体没改"这类错误往往表现为画面错乱，不是崩溃。
+- **做法**：构建期为每个 shader 生成 `build/shaders/<name>.reflect.h`（`tools/SpirvReflect.cpp`，自己解析 SPIR-V）。C++ 侧 `#include` 之后用 `static_assert` 对齐 `sizeof` 与 `offsetof`，binding / set 号直接用生成常量。
+- **为什么自己写解析器**：`spirv-reflect` / `spirv-cross` 的块大小口径与我们不同（它们会把 push constant 补齐到 16、对 SSBO 报 0），而 `static_assert` 比的是 C++ 的 `sizeof`。用外部工具就要在文档里记住"它们的数字要换算"，那等于把坑换了个位置。
+- **为什么不是运行期反射**：运行期反射要求 shader 以 SPIR-V 形式随包发布并调用 `vkCreateShaderModule` + 自己解析，既增加启动时间，又让"binding 变了"变成运行期才能发现的事；构建期生成还能进 diff。
+- **实测（52 个 shader）**：全部生成成功；与 `spirv-reflect` 逐块对比，15 处差异经复核全是口径差异，我们的数值与 C++ 结构体一致（`ssao.frag` 的块 1168 字节、偏移 0/64/128/1152/1156/1160/1164、`samples` 长度 64）。
+- **验收证据**：在 `shaders/ssao.frag` 里临时插 `vec4 dbgMargin;`，构建立刻被 6 条 `static_assert` 拦住（块大小 + samples / kernelSize / radius / bias / enabled 偏移）；改回后一次通过。
+- **已知边界**：std140 尾部填充（末尾是 `vec3` 时块大小会进位）、变长数组块只给偏移不给大小、全局 set 0 仍由 `DescriptorManager` 单点定义。
+- **不引入的**：把反射结果做进运行期缓存、按 shader 生成描述符 set 布局（布局顺序在管线布局里是有序的，生成反而更难读）。
+
+## 决策 31：描述符保持现状，先写触发条件再谈升级（TM-11）
+
+- **问题**：参考实现在同一套代码里并存"池化 set / push descriptor / descriptor buffer"三条路径。要不要跟？
+- **实测（2026-11-19）**：全仓库 `vkUpdateDescriptorSets` 31 处调用点，但按频率看每帧只有 12~15 次、每次 1~2 个 binding（BloomPass 3 次、Cloud / FogVolume / SSR / SunFlare 各 1、SSAOPass 模糊 1、PresentPass 1、TAA 1）；`UPDATE_AFTER_BIND`、`vkCreateDescriptorUpdateTemplate`、`vkCmdPushDescriptorSet`、`VK_EXT_descriptor_buffer` 全部 0 命中。CPU 侧开销在每帧十几微秒量级，占一帧的千分之一量级。
+- **结论**：不升。三档阶梯的**触发条件**写进 [descriptors](descriptors.md) 第 10 节（每帧新建 set 组合 > 16 / 每帧重写 > 200 次 / 需要 GPU 写描述符），出现时照那节走。
+- **为什么现在就写触发条件**：这类"基础设施升级"最容易在没有信号时凭感觉做，做完还要长期维护三条路径。把判据写成数字，下一次就不用重新讨论。
+- **升级前必须先做的**：set 0 的 15 个 binding 收敛到单一事实来源（现在散在 `DescriptorManager` 与各 Pass 的约定里），否则池化只会把"写错 binding"变成"写错 set"。

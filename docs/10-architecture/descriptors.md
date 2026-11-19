@@ -3,9 +3,9 @@ id: architecture/descriptors
 title: 描述符布局与 bindless 材质
 type: architecture
 scope: src/Core/DescriptorManager.*, src/Render/TerrainMaterial.*, src/Terrain/TerrainTextureGenerator.*, src/Render/GeometrySystem.cpp, shaders/mrt.frag, shaders/water.frag
-read-when: 修改材质/地形纹理系统、描述符布局、材质槽位分配或回收
-size: ~175 行
-updated: 2026-11-06
+read-when: 修改材质/地形纹理系统、描述符布局、材质槽位分配或回收；或判断要不要上 push descriptor / descriptor buffer
+size: ~219 行
+updated: 2026-11-19
 ---
 
 # 描述符布局与 bindless 材质
@@ -172,3 +172,48 @@ releaseMaterialSet(slot)
 - [ ] 描述符集是否按帧槽开了两份？（Set 2 terrain 是场景级单份、只读）
 - [ ] 使用新纹理前是否已经调用 `updateTerrainTextures()`？
 - [ ] 跑 `--material-stress` 与 `--validation-features gpuav`（后者专抓 bindless 越界）
+
+## 10. 什么时候该往上走一档（TM-11）
+
+这一节记的是**升级的触发条件**，不是计划：当前实现够用，出现下面表里的信号时再动。
+
+### 10.1 现在的量（2026-11-19 实测）
+
+| 项 | 数量 |
+|---|---|
+| `vkCreateDescriptorSetLayout` | 16 |
+| `vkCreateDescriptorPool` | 10 |
+| `vkAllocateDescriptorSets` | 11 |
+| `vkUpdateDescriptorSets` | 31 |
+| `VK_DESCRIPTOR_TYPE_UPDATE_AFTER_BIND` | 0 |
+| `vkCreateDescriptorUpdateTemplate` | 0 |
+| `vkCmdPushDescriptorSet` | 0 |
+| `VK_EXT_descriptor_buffer` | 0 |
+| `vkCreateSampler` | 20 |
+
+`vkUpdateDescriptorSets` 的分布是：DescriptorManager 6、SceneGpuBatch 5、SSAOPass 3、GeometrySystem 3、PresentPass 2、BloomPass 2，其余 10 个文件各 1。**但要按调用频率看**：`SceneGpuBatch::writeDescriptors` 只在容量翻倍或 G-Buffer 重建时跑；真正每帧都写的只有几处 —— BloomPass 每帧 3 次（约 7~9 个 binding）、Cloud / FogVolume / SSR / SunFlare 各 1 次、SSAOPass 的模糊通道 1 次、PresentPass 按 bloom 开关 1 次、TAA 1 次。合计每帧 12~15 次 `vkUpdateDescriptorSets`、每次 1~2 个 binding。
+
+### 10.2 三档阶梯与各自的触发条件
+
+| 档 | 做法 | 值得做的信号 | 成本 |
+|---|---|---|---|
+| 池化 set + 环形分配 | 每线程每帧一个 pool，set 从环里取（参考 `VULKAN_DESCRIPTOR_RING_SIZE = 16`、`VULKAN_NUM_SETS_PER_POOL = 64`） | 每帧**新建** set 的组合数 > 16，或 `vkAllocateDescriptorSets` 每帧 > 32 次 | 1~2 天 |
+| push descriptor | `vkCmdPushDescriptorSet` 把 1~2 个 binding 直接推进命令缓冲，不碰 pool | 每帧重写 > 200 次，且每次只改 1~2 个 binding | 2 天 |
+| descriptor buffer | `VK_EXT_descriptor_buffer`，描述符当内存写，set 退化成地址 | 同一批视图要按物体反复打包，或要让 GPU 自己写描述符（bindless 动态增长） | 4~5 天 |
+
+三档都只在解决"每帧重写描述符的 CPU 开销"。当前这个量级是每帧十几微秒，占一帧（约 10 ms）的千分之一量级 —— 所以真正该等的不是"什么时候顺手做"，而是表里那些**数量级信号**。
+
+### 10.3 参考实现的位置
+
+Granite 是三条路径并存的写法，真要上某一档时看它对应部分：
+
+- per-type 位掩码 + `ArraySizeAccessMeta meta[VULKAN_NUM_BINDINGS]` + `UNSIZED_ARRAY = 0x7f`（`vulkan/descriptor_set.hpp`）；
+- `bindless = layout.meta[0].array_size == UNSIZED_ARRAY`（`vulkan/descriptor_set.cpp:39`）—— 同一个 allocator 自动切 bindless，不需要两个类；
+- `descriptorPoolOverallocation` 可用时加 `ALLOW_OVERALLOCATION_POOLS / SETS_BIT_NV` 复用 pool（`vulkan/descriptor_set.cpp:388-395`）；
+- `vkGetDescriptorSetLayoutSizeEXT` / `vkGetDescriptorSetLayoutBindingOffsetEXT` 记 desc buffer 偏移（`vulkan/descriptor_set.cpp:215-230`）。
+
+### 10.4 升级前先做的事
+
+1. **set 0 的单一事实来源**：15 个全局 binding 现在由 `DescriptorManager` 定义、各 Pass 靠约定引用。上任何一档之前，先把它收敛成一处导出（binding 号 + 类型 + stage），否则池化只会把"写错 binding"变成"写错 set"。
+2. **shader 侧已经不用手抄了**：binding 号与结构体布局由构建期反射给出（[shaders](../20-pipeline/shaders.md) 第 6 节），C++ 侧照抄即可被编译器拦住。
+3. **先量化再动**：加计数（每帧 set 新建数 / 重写数）比换机制便宜，与 `--stats-pipelines`、`--stats-scratch` 同一套做法。
