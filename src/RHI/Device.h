@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "Core/Diagnostics.h"   // diag::Options（P0：调试/验证开关）
+#include "RHI/DeviceQuirks.h"
 
 class PipelineCache;   // ① 管线缓存持久化（RHI/PipelineCache.h）
 class Breadcrumbs;     // ② GPU 崩溃定位（RHI/Breadcrumbs.h）
@@ -58,6 +59,8 @@ bool hasDeviceFaultEntryPoint() const { return pfnGetDeviceFaultInfoEXT != nullp
 	// ①：持久化的 VkPipelineCache。创建失败或被提前释放时是 VK_NULL_HANDLE，
 	// 调用方直接把返回值传给 vkCreate*Pipelines 即可（NULL = 不用缓存，行为正确只是慢）。
 	VkPipelineCache getPipelineCache() const;
+    // TM-05：驱动/硬件怪癖表（只读）。
+    const tiny::DeviceQuirks& getQuirks() const { return quirks; }
 	PipelineCache* getPipelineCacheObject() { return pipelineCache.get(); }
 
 	// ②：GPU 崩溃定位。没有扩展支持时返回的对象依然可以取，只是 isActive() 为 false。
@@ -122,6 +125,7 @@ PFN_vkGetDeviceFaultInfoEXT pfnGetDeviceFaultInfoEXT = nullptr;
 	// breadcrumbs 用 VMA 缓冲，pipelineCache 用 VkDevice。
 	std::unique_ptr<PipelineCache> pipelineCache;
 	std::unique_ptr<Breadcrumbs> breadcrumbs;
+    tiny::DeviceQuirks quirks;
 
 
     // P0-2：验证层增强（best practices / 同步校验），来自命令行 --validation-features。

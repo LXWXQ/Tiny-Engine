@@ -58,6 +58,7 @@
 #include "Core/Profiler.h"
 #include "RHI/GpuProfiler.h"
 #include "RHI/Breadcrumbs.h"
+#include "Core/TemporaryHashmap.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -2034,6 +2035,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// ②：GPU breadcrumbs 的纯逻辑自检 —— 槽位映射、标记编解码往返、名字截断。
 	if (!Breadcrumbs::selfTest())
 		throw std::runtime_error("Breadcrumbs selfTest failed");
+
+// TM-03/TM-04：环形临时表与对象池的纯逻辑自检 —— 环轮转生死线、跨环不串、池回收。
+if (!tiny::containers::selfTest())
+throw std::runtime_error("Containers selfTest failed");
 
 	// F3：体素世界（建 3x3 chunk、射线打地、挖一格、放回、地面高度）。
 	if (!voxel::selfTest())

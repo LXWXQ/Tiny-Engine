@@ -164,7 +164,12 @@ void GlassPass::createPipeline()
 
 void GlassPass::refreshChunkStatesAndRebuild(FrameInfo& frameInfo)
 {
-    std::unordered_map<uint32_t, ChunkState> current;
+    // 每帧只做一次环轮转：最老那一帧的 ChunkState 被回收放回对象池，
+    // 这一帧要么捡到上一帧的对象就地更新，要么新建一个。全程没有堆分配。
+    chunkStates.beginFrame();
+
+    bool changed = false;
+    uint32_t visited = 0;
     auto view = frameInfo.registry.view<VoxelChunkComponent>();
     for (auto entity : view)
     {
@@ -172,33 +177,38 @@ void GlassPass::refreshChunkStatesAndRebuild(FrameInfo& frameInfo)
         if (chunk.glassFaceCount == 0u || !chunk.glassMesh)
             continue;
 
-        const WorldTransformComponent* world =
-            frameInfo.registry.try_get<WorldTransformComponent>(entity);
-        ChunkState state;
-        state.meshRevision = chunk.revision;
-        state.transformRevision = world != nullptr ? world->sourceRevision : 0ull;
-        current.emplace(static_cast<uint32_t>(entity), state);
-    }
+        const WorldTransformComponent* world = frameInfo.registry.try_get<WorldTransformComponent>(entity);
+        const uint64_t meshRevision = chunk.revision;
+        const uint64_t transformRevision = world != nullptr ? world->sourceRevision : 0ull;
+        const uint64_t key = static_cast<uint64_t>(static_cast<uint32_t>(entity));
+        ++visited;
 
-    bool changed = current.size() != chunkStates.size();
-    if (!changed)
-    {
-        for (const auto& [key, state] : current)
+        ChunkState* state = chunkStates.request(key);
+        if (state == nullptr)
         {
-            const auto it = chunkStates.find(key);
-            if (it == chunkStates.end() ||
-                it->second.meshRevision != state.meshRevision ||
-                it->second.transformRevision != state.transformRevision)
-            {
-                changed = true;
-                break;
-            }
+            // 新出现的 chunk（或条目已经过期）：直接建，这一帧必须重建几何。
+            state = chunkStates.getOrCreate(key);
+            state->meshRevision = meshRevision;
+            state->transformRevision = transformRevision;
+            changed = true;
+            continue;
+        }
+
+        if (state->meshRevision != meshRevision || state->transformRevision != transformRevision)
+        {
+            state->meshRevision = meshRevision;
+            state->transformRevision = transformRevision;
+            changed = true;
         }
     }
+
+    // chunk 数量变了说明有 chunk 消失（消失不会在遍历里被看到），也要重建。
+    if (visited != lastVisitedChunks)
+        changed = true;
+    lastVisitedChunks = visited;
     if (!changed)
         return;
 
-    chunkStates = std::move(current);
     rebuildVertexPool(frameInfo);
 }
 
@@ -221,8 +231,7 @@ void GlassPass::rebuildVertexPool(FrameInfo& frameInfo)
         if (chunk.glassFaceCount == 0u || !chunk.glassMesh)
             continue;
 
-        const WorldTransformComponent* world =
-            frameInfo.registry.try_get<WorldTransformComponent>(entity);
+        const WorldTransformComponent* world = frameInfo.registry.try_get<WorldTransformComponent>(entity);
         if (world == nullptr)
             continue;
 

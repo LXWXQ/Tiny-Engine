@@ -2,6 +2,7 @@
 #include "Core/StartupLog.h"
 #include "RHI/PipelineCache.h"
 #include "RHI/Breadcrumbs.h"
+#include "RHI/DeviceQuirks.h"
 #include <iostream>
 #include <stdexcept>
 #include <set>
@@ -514,7 +515,7 @@ void Device::createLogicalDevice()
         if (pfnGetDeviceFaultInfoEXT == nullptr)
         {
             deviceFaultSupported = false;
-            std::cout << "[DeviceFault] VK_EXT_device_fault 已启用但取不到入口点，功能关闭\\n";
+            std::cout << "[DeviceFault] VK_EXT_device_fault 已启用但取不到入口点，功能关闭\n";
         }
     }
 
@@ -523,6 +524,15 @@ void Device::createLogicalDevice()
               << " compute=" << indices.computeFamily.value()
               << (dedicatedComputeQueue ? " (dedicated async compute)" : " (fallback: graphics queue)")
               << "\n";
+
+    // TM-05：驱动怪癖表。采集一次（厂商/设备类型/分组操作能力/队列形态），
+    // 之后渲染路径只读字段做判断，不再各处散落 vendorId 比较。
+    {
+        VkPhysicalDeviceProperties deviceProperties{};
+        vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+        quirks = tiny::detectDeviceQuirks(physicalDevice, deviceProperties, dedicatedComputeQueue);
+        std::cout << "[Device] quirks: " << quirks.describe() << "\n";
+    }
 
     VmaAllocatorCreateInfo allocatorInfo{};
     allocatorInfo.physicalDevice = physicalDevice;

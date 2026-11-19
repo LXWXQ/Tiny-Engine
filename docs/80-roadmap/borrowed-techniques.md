@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~221 行
+size: ~208 行
 updated: 2026-11-19
 ---
 
@@ -48,34 +48,19 @@ updated: 2026-11-19
 |---|---|---|---|
 | TM-01 | 管线缓存持久化 | 磁盘头过三道校验（驱动 `pipelineCacheUUID` → 载荷长度 → FNV-1a），原子落盘（`.tmp` + remove + rename），目录不可写退回工作目录；桌面 N 卡实测冷 102.8 / 热 98.9 FPS，**无收益**，价值在移动端与将来 `VK_KHR_pipeline_binary` | 决策 24（[decisions](../10-architecture/decisions.md)） |
 | TM-02 | GPU breadcrumbs | 三档降级 NV checkpoint → AMD marker → `vkCmdUpdateBuffer`；4 槽（2 帧在飞 × graphics/compute）；崩溃后读 HOST_VISIBLE 映射得"第几帧 / 哪个 Pass"；每条 marker 前有只覆盖 4 字节的 TRANSFER_WRITE 屏障 | 第 9 节（[diagnostics](../60-debug-profiling/diagnostics.md)） |
+| TM-03 | 环形临时表（TemporaryHashmap） | `src/Core/TemporaryHashmap.h` + `src/Core/IntrusiveList.h`（RingSize 个环、固定桶侵入式哈希、对象池；命中老环时把条目提升到当前环）。**关键坑**：不做提升时常用 key 会每 `RingSize` 帧被销毁重建 —— `GlassPass` 接入前实测 30 帧重建 15 次（缓存每两帧失效一次，比不用缓存更糟），修好后 30 帧只重建 1 次。已接入 `GlassPass::refreshChunkStatesAndRebuild`（`src/Render/GlassPass.cpp`） | 决策 25（[decisions](../10-architecture/decisions.md)） |
+| TM-04 | 对象池（ObjectPool） | `src/Core/ObjectPool.h`：64 个对象起步、每开新块翻倍的 aligned 块 + vacants 栈 + placement new；契约是"必须显式 `destroy()`，池不管生命周期"，Debug 下析构时仍有存活对象直接断言。TM-03 的环回收就靠它归零 | 决策 25 |
+| TM-05 | 设备能力与厂商怪癖表（DeviceQuirks） | `src/RHI/DeviceQuirks.h/.cpp`：一次采集厂商 / 设备类型 / subgroup 支持阶段与操作 / 独立 compute 队列，推出 `asyncComputePost`（核显关）、`subgroupOpsUsable` 等策略位；启动打印 `[Device] quirks: NVIDIA | 独立显卡 | subgroup={size=32 stages=0x3FFF shuffle=1} | 异步compute=1 | 独立compute队列=1`。参考实现里与 subpass/transient 相关的字段未搬（本项目用 dynamic rendering，没有 subpass 可合并） | 决策 25 |
 
 TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--stats-pipelines` 打印 PSO 命中/新建）与**粒度**（breadcrumbs 目前到 pass 级，到 draw 级要几百条 marker/帧）。前者并入 TM-06 的验收，后者并入 TM-02 的后续。
 
-## 4. T1：立即可做
+## 4. T1：已清空
 
-### TM-03 环形临时表（TemporaryHashmap）
+T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表）已于 2026-11-19 完成并移入 §3，这一档不再有待办。
 
-- **现状**：需要"按帧存活、按 key 查、下一帧自动回收"的表时，只能在各自模块里手写 map 加清理：`RenderGraph` 的 `std::vector<std::unique_ptr<Pass>> passes`（`src/RHI/RenderGraph.h:443`）每帧 `reset` + `clear`（`src/RHI/RenderGraph.cpp:397-399`），`SubMeshCulling`、`TextureBudget` 各有一套。没有通用容器。
-- **参考**：`util/temporary_hashmap.hpp:62` 的 `template <typename T, unsigned RingSize = 4, bool ReuseObjects = false>`；`:91 begin_frame()` 轮转 ring 并回收；`:106 T *request(Hash hash)`。内部是 IntrusiveList 的 ring 数组 + ObjectPool + IntrusiveHashMap。用法示例：`vulkan/render_pass.hpp:236` 与 `:266`（`FramebufferAllocator`、`TransientAttachmentAllocator` 都用 `TemporaryHashmap<Node, VULKAN_FRAMEBUFFER_RING_SIZE = 16, false>`）。
-- **落地**：① 连同依赖一起搬：`util/intrusive_list.hpp`、`intrusive_hash_map.hpp`、TM-04 的 `ObjectPool`；② 至少接一处真实调用（建议 `SubMeshCulling` 的每帧缓存）；③ 补纯逻辑 selfTest（ring 轮转、request 命中与未命中、跨环不串）。
-- **验收**：`[TempHashMap] selfTest PASS`；`--selftest 60` 帧率不回归；被接入模块每帧的 map 重建次数降到 0（加计数器）。
-- **预估**：0.5 天，风险低。
+下一批从 §5 的 T2 开始。建议顺序仍是 TM-06（图形状态打包 + 按需建管线）→ TM-07（scratch 线性分配）：两者的验收都需要"每帧 PSO 新建数为 0"与"每帧暂存区分配次数为常数"，先做 TM-06 能把 `--stats-pipelines` 这个统计口径一并落地。
 
-### TM-04 对象池与每帧对象复用
 
-- **现状**：`RenderGraph` 每个 pass 每帧新建对象（`std::make_unique<Pass>`）再销毁，名字是 `std::string`；21 个 pass 就是每帧 21 次堆分配加 21 次释放。
-- **参考**：`util/object_pool.hpp` —— `num_objects = 64u << memory.size()` 分块 `memalign` 分配 + vacants 栈 + placement new，另有 `ThreadSafeObjectPool` 版本；同一思路在 breadcrumbs 侧是固定 64 字节的 checkpoint 对象（`vulkan/breadcrumbs.hpp:157`，`static_assert(sizeof(T) <= CheckpointObjectSize)`）。
-- **落地**：① `Pass` 改成池化对象并用 IntrusiveList 串起来；② `std::string name` 换成定长 64 字节加截断（同 breadcrumbs 的 `kMaxLabelLength = 40`）；③ 加自检确认池不跨帧泄漏。
-- **验收**：`--selftest 60` 期间 `Pass` 构造次数为 0（加计数器）；`[RenderGraph] pass bookkeeping selfTest PASS | executed=21 skipped=0` 不变；截图逐像素一致。
-- **预估**：1 天，风险中（触及每帧路径）。
-
-### TM-05 设备能力与厂商怪癖表（DeviceQuirks）
-
-- **现状**：能力探测散在两处 —— `src/RHI/Device.cpp:446-455` 逐个 `deviceHasExtension` 后 `push_back`，`src/RHI/Device.h:94-98` 各留一个 bool（multiDrawIndirect / drawIndirectCount / deviceFault / nvCheckpoint / amdMarker）。没有"厂商怪癖"这一层。
-- **参考**：`vulkan/quirks.hpp` 的 `struct ImplementationQuirks`（instance_deferred_lights、merge_subpasses、use_transient_color、use_transient_depth_stencil、queue_wait_on_submission、use_async_compute_post、render_graph_force_single_queue、force_no_subgroups、force_no_subgroup_shuffle、force_no_subgroup_size_control）与 `struct ImplementationWorkarounds`（emulate_event_as_pipeline_barrier、broken_pipeline_cache_control、force_host_cached、broken_present_fence），都是静态单例。
-- **落地**：新增 `src/RHI/DeviceQuirks.h`（纯数据 + 一个 `probe(VkPhysicalDevice, const std::vector<const char*>&)` 纯函数），Device 持有 `DeviceQuirks quirks`，把现有 bool 搬进去但访问器名不变 —— 先改名不改行为。
-- **验收**：纯重构：`--selftest 60` 输出与改前逐行一致（时间与帧率除外）；验证层 0 errors。
-- **预估**：0.5 天，风险低。
 ## 5. T2：要改热路径
 
 ### TM-06 图形状态打包 + 按需建管线
@@ -216,7 +201,8 @@ TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--sta
 
 ## 9. 维护方式
 
-1. 开工前在 [backlog](../70-status/backlog.md) 队列加一行并把状态写成"进行中"；做完改"已完成"，同时把本条从这里移到 §3。
+1. 状态就在本文件里：开工前把条目标成"进行中"，做完移到 §3 并写清关键结论。
+   本页是基础改造的台账；[backlog](../70-status/backlog.md) 只管地形与规模化任务，两者不混。
 2. 落地后在 [decisions](../10-architecture/decisions.md) 落一条决策（取舍、触发条件、反面结论），本文件只留摘要加链接。
 3. 新增条目必须四件齐全：现状证据（路径:行或数字）、参考实现（路径:行）、可量化的验收判据、预估与风险。缺验收判据的条目不进本文件。
 4. 前提被推翻的条目要删（例如本项目结构变了、或外部实现已改），不要留着凑数。

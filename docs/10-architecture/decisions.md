@@ -4,8 +4,8 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~230 行
-updated: 2026-11-18
+size: ~254 行
+updated: 2026-11-19
 ---
 
 # 关键设计决策
@@ -228,3 +228,27 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
   `EACCES`）。探测失败就退回工作目录 —— 缓存放哪儿不重要，有没有才重要。
 - **失败不是错误**：`vkCreatePipelineCache` 失败就退回 `VK_NULL_HANDLE` 并打印
   "禁用管线缓存"。缓存是纯优化，任何情况下都不许让启动失败。
+
+## 决策 25：容器用"池 + 环"，且命中必须提升（TM-03 / TM-04 / TM-05）
+
+- **问题**：每帧都要建/拆一批"按 key 查、只活一两帧"的表（`GlassPass` 的 chunk 状态、
+  将来的材质解析与视锥缓存）。写成 `std::unordered_map` 每帧 clear + 重填，代价不在查找，
+  而在每帧几百次节点 new/delete —— 时间花在堆上，不是花在渲染上。
+- **做法**：`src/Core/ObjectPool.h`（分块对齐分配 + vacants 栈 + placement new）+
+  `src/Core/IntrusiveList.h`（节点挂在对象自己身上）+ `src/Core/TemporaryHashmap.h`
+  （RingSize 个环，每环一张固定桶侵入式哈希表；`beginFrame()` 轮转到下一个环并回收它）。
+  环回收把对象还回池，下一帧复用同一批指针，稳态下零分配。
+- **必须有命中提升**：`request()` 命中老环时把条目重新链进当前环。没有这一步，
+  条目会跟着"创建它的那一帧"一起过期 —— 一个每帧都在用的 key 每 `RingSize` 帧被销毁重建一次。
+  实测代价：`GlassPass` 接成 RingSize=2 而没做提升时，30 帧里重建了 15 次几何（等于缓存
+  每两帧失效一次，比不用缓存更糟）；补上提升后 30 帧只重建 1 次，池存活数恒定。
+- **所有权**：条目归表所有，`~TemporaryHashmap()` 自己 `clear()`；`ObjectPool` 只管内存，
+  对象仍须显式 `destroy()`，Debug 下析构时若还有存活对象直接断言 —— 宁可当场停，
+  也不要在发布版里悄悄泄漏。
+- **驱动怪癖单独一层**：`src/RHI/DeviceQuirks.h` 把"探测到的事实"（厂商、设备类型、
+  subgroup 支持的阶段与操作、是否有独立 compute 队列）和"由事实推出的策略位"
+  （`asyncComputePost`、`subgroupOpsUsable`）集中成一个纯数据结构，启动打印一行。
+  判断点只读字段，不再各处散落 `vendorId == 0x10DE`。核显上异步 compute 默认关：
+  与图形共用同一批执行单元，抢占只会让总时间变长。
+- **不引入的**：参考实现的 subpass 合并 / transient 相关怪癖位（本项目用 dynamic rendering，
+  没有 subpass 可合并），以及线程安全版本的对象池（当前所有使用点都在主线程）。

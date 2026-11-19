@@ -7,6 +7,7 @@
 #include "Render/RenderResources.h"
 #include "Core/DescriptorManager.h"
 #include "Core/FrameInFlight.h"
+#include "Core/TemporaryHashmap.h"
 #include "Scene/Model.h"
 
 #include <glm/glm.hpp>
@@ -56,10 +57,16 @@ private:
     };
 
     // 用来判断「玻璃几何是否需要重建」：chunk 的网格版本 + 世界变换版本。
-    struct ChunkState
+    // 继承 ListHook + hashValue：这样它能挂在 TemporaryHashmap 的环上，
+    // 每帧只更新版本号，不再每帧重建一张 unordered_map。
+    struct ChunkState : tiny::containers::ListHook
     {
         uint64_t meshRevision = 0;
         uint64_t transformRevision = 0;
+        uint64_t keyHash = 0;
+
+        uint64_t hashValue() const { return keyHash; }
+        void setHashValue(uint64_t hash) { keyHash = hash; }
     };
 
     void createBuffers();
@@ -100,7 +107,10 @@ private:
 
     std::vector<FaceRecord> faces;
     std::vector<uint32_t> sortedFaces;
-    std::unordered_map<uint32_t, ChunkState> chunkStates;
+    // 环形临时表：条目活 2 帧（覆盖两帧在飞），环被轮转时对象还回池复用。
+    tiny::containers::TemporaryHashmap<ChunkState, 2> chunkStates;
+    // 上一帧参与比较的 chunk 数：数量变化说明有 chunk 出现/消失，必须重建。
+    uint32_t lastVisitedChunks = 0xFFFFFFFFu;
 
     bool poolOverflowLogged = false;
     uint32_t lastLoggedFaceCount = 0xFFFFFFFFu;

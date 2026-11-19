@@ -4,7 +4,7 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~185 行
+size: ~188 行
 updated: 2026-11-19
 ---
 
@@ -31,6 +31,7 @@ updated: 2026-11-19
 | `CommandUtils.h` / `VmaConfig.h` / `VmaNaming.h` | 命令缓冲单次提交、VMA 配置、分配命名 | [resource-lifetime](../10-architecture/resource-lifetime.md) | resource-lifetime |
 | `PipelineCache.h/.cpp` | 管线缓存磁盘头（magic / version / 驱动 UUID / 载荷长度 / FNV-1a）、原子落盘、目录不可写回退 | [decisions](../10-architecture/decisions.md) 决策 24 | decisions |
 | `Breadcrumbs.h/.cpp` / `BreadcrumbsReport.cpp` | GPU 侧 4 槽游标 + CPU 名字表；NV checkpoint / AMD marker / updateBuffer 三档降级；崩溃后读 HOST_VISIBLE 映射得 pass 名 | [diagnostics](../60-debug-profiling/diagnostics.md) 第 9 节 | diagnostics |
+| `DeviceQuirks.h/.cpp` | 厂商 / 设备类型 / subgroup 支持阶段与操作 / 独立 compute 队列 → 策略位（`asyncComputePost`、`subgroupOpsUsable`），启动打印一行摘要 | [borrowed-techniques](../80-roadmap/borrowed-techniques.md) 决策 25 | decisions |
 
 ## 2. Render 层（`src/Render/`）
 
@@ -67,6 +68,8 @@ updated: 2026-11-19
 | `EngineConfig.h/.cpp` | v2 配置、迁移、备份、原子写 | [config](../30-systems/config.md) | config |
 | `Diagnostics.h/.cpp` | 验证层结构化计数、JSONL、`--build-info`、自检 | [diagnostics](../60-debug-profiling/diagnostics.md) | diagnostics |
 | `JobSystem.h/.cpp` | worker pool、`submit`、`parallelFor` | [jobsystem](../30-systems/jobsystem.md) | jobsystem |
+| `TemporaryHashmap.h/.cpp` / `IntrusiveList.h` | 按帧存活的 key→对象表：RingSize 个环 + 固定桶侵入式哈希 + 池；命中老环时必须提升到当前环 | [borrowed-techniques](../80-roadmap/borrowed-techniques.md) 决策 25 | decisions |
+| `ObjectPool.h` | 分块对齐分配 + vacants 栈 + placement new；对象必须显式 `destroy()`，池不管生命周期 | [borrowed-techniques](../80-roadmap/borrowed-techniques.md) 决策 25 | decisions |
 | `ImGuiSystem.h/.cpp` | 后端初始化（docking）、面板、ASCII 约束、交换链重建时与 PresentPass/UiCompositePass 的指针同步 | [imgui](../30-systems/imgui.md)、[viewport](../90-editor/viewport.md) | imgui、viewport |
 | `FrameInfo.h` / `FrameInFlight.h` | 每帧数据总线、`kFramesInFlight` | [synchronization](../10-architecture/synchronization.md) | synchronization |
 | `Material.h` / `MaterialSystem.*` / `MaterialSlot.h` | 材质数据、槽位哨兵 `kInvalidMaterialSlot` | [descriptors](../10-architecture/descriptors.md) | descriptors |
