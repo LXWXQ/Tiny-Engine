@@ -5,7 +5,7 @@ type: status
 scope: 空
 read-when: 判断某个需求现在能不能做
 size: ~165 行
-updated: 2026-11-17
+updated: 2026-11-19
 ---
 
 # 已知边界
@@ -30,7 +30,7 @@ updated: 2026-11-17
 
 | 限制 | 后果 | 详见 |
 |---|---|---|
-| 跨队列资源走 `CONCURRENT` sharing | 未实现 ownership transfer；带宽不是最优 | [weak-points](../10-architecture/weak-points.md) #1 |
+| 跨队列资源走 `CONCURRENT` sharing | 未实现 ownership transfer；带宽不是最优；已评估，本结构下不做（[决策 28](../10-architecture/decisions.md)） | [weak-points](../10-architecture/weak-points.md) #1 |
 | glTF 几何烘焙到世界空间 | Sponza 内部节点不是独立 entity，不能局部动 | 决策 13 |
 | SpatialIndex 仅 streamed chunk 有 XZ region bucket | 非 chunk 实体仍走统一 3D 网格；大世界仍需分块剔除 | [scene-ecs](../30-systems/scene-ecs.md) §3 |
 | 线性渲染图 | 无自动重排/别名化/死代码剔除 | 决策 2 |

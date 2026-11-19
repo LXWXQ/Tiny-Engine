@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~265 行
+size: ~289 行
 updated: 2026-11-19
 ---
 
@@ -274,3 +274,16 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 - **判据与兼容规则写在代码里**：合并前提是「格式 / 尺寸 / mip / 层数全同」，比 Vulkan 允许的更保守 —— 松一档就要顺带验证 image view 的兼容性，那是第二步要付的成本，不是第一步的。
 - **保留的东西**：`--alias-report` 与 `[Alias] selfTest`（生命周期装箱 + 形状兼容 + 字节估算）常驻。哪天渲染图开始持有 GBuffer，这个开关会立刻给出新的数字。
 - **不引入的**：`VK_IMAGE_CREATE_ALIAS_BIT` 的实际绑定（未启用）、显式子分配策略（`VmaAllocation` 仍在渲染图手里按资源分配）。
+## 决策 28：跨队列所有权转移（EXCLUSIVE）本结构下不做（TM-09）
+
+- **问题**：跨队列资源现在一律 `VK_SHARING_MODE_CONCURRENT`（建资源时 `queueFamilyIndexCount = 2` 加 graphics / compute 两个族），靠 timeline semaphore 串依赖。CONCURRENT 的代价是驱动不能假设单一队列独占，可能在压缩与布局上保守；EXCLUSIVE 加 release / acquire 是另一条路。
+- **做法（已实现并回退）**：`crossQueue` 资源在开关打开时按 EXCLUSIVE 建（`queueFamilyIndexCount = 1`），`SubresourceState` / `BufferEntry` 记 `ownerQueue` / `releasedFrom` / `transferCount`，在 `emitBarrierIfNeeded` / `emitBufferBarrierIfNeeded` 里发 release（写进上一个队列的命令流）加 acquire（写进当前 pass 的命令流），帧末再把仍持有的资源 release 回另一条队列。探针数据两个方向都正确（`[TD02] graphics->compute verified` 与 `compute->graphics verified`，checksum 与 count 一致），但验证层始终有 error。
+- **验证层真实报文（逐版记录）**：
+  - 创建用 `queueFamilyIndexCount = 0`、首次用 IGNORED 到 family 的 acquire：6 个 error，`acquiring ownership of VkImage ... from srcQueueFamilyIndex 4294967295 to dstQueueFamilyIndex 0 has no matching release barrier queued for execution.` —— 无所有者这条路验证层不认。
+  - 创建即归 graphics、用时成对 release 加 acquire：3 个 error，`from srcQueueFamilyIndex 0 to dstQueueFamilyIndex 2 has no matching release barrier queued for execution.`
+  - 把全零的 `srcStageMask` 换成 `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT`（全零掩码的屏障不被当成 release）：仍是 3 个 error。
+  - 加帧末 release 加用时懒 acquire：降到 2 error 加 2 warning，`releasing queue ownership ... from srcQueueFamilyIndex 0 to dstQueueFamilyIndex 2 duplicates existing barrier recorded in this command buffer.` 与 `acquiring ownership ... from srcQueueFamilyIndex 0 to dstQueueFamilyIndex 2 has no matching release barrier queued for execution.`
+- **根因（结构性）**：每条队列一帧只有一条命令流、一次提交，提交顺序由数据依赖方向决定（`src/RHI/Renderer.cpp:317-328`，生产者在先）。release 必须出现在源队列已提交的命令流里，所以一次转移只能沿提交方向发生。`--cross-queue-test` 的探针在同一帧里两个方向都要（偶数帧 compute 产、graphics 消费；奇数帧 graphics 产、compute 消费），必然有一半转移逆着提交顺序 —— 这不是实现细节，是单提交结构表达不了跨队列乒乓所有权。
+- **结论**：不实现。单向跨队列（一帧内只沿一个方向转交）在原理上可行，但当前唯一的跨队列消费者就是那个双向探针，没有可验证的落点；按 [borrowed-techniques](../80-roadmap/borrowed-techniques.md) §2 的闸门（必须有可量化验收），不满足条件。
+- **保留的东西**：`weak-points` 第 1 条与 `known-limits` 第 33 行的问题描述仍成立，但补上了「已评估，见决策 28」；`--cross-queue-test` 与 TD-02 探针继续作为 CONCURRENT 路径的正反例跑在验证矩阵里。
+- **不引入的**：`VK_QUEUE_FAMILY_EXTERNAL` / foreign 队列族的间接所有权（会把外部同步责任引进来）、把渲染图拆成每队列一帧多提交（那是另一套架构，代价远大于这点带宽收益）。

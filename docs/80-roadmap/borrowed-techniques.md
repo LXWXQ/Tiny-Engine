@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~219 行
+size: ~222 行
 updated: 2026-11-19
 ---
 
@@ -58,7 +58,7 @@ TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--sta
 
 T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表）已于 2026-11-19 完成并移入 §3，这一档不再有待办。
 
-下一批从 §5 的 T2 开始。TM-06 的统计部分、TM-07、TM-08 的第一步都已落地（前两者的第二步按数据判定不做），建议顺序改为 TM-09（跨队列 EXCLUSIVE 所有权转移），它是 [weak-points](../10-architecture/weak-points.md) 第 1 条与 [known-limits](../70-status/known-limits.md) 第 33 行明确记着的边界。
+下一批从 §5 的 T2 开始。TM-06 的统计部分、TM-07、TM-08 的第一步都已落地（前两者的第二步按数据判定不做），建议顺序改为 TM-10（Pass 准备阶段并行）。TM-09（跨队列 EXCLUSIVE 所有权转移）已评估、判定本结构下不做，理由与验证层报文见[决策 28](../10-architecture/decisions.md)。
 
 
 ## 5. T2：要改热路径
@@ -103,11 +103,13 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 ### TM-09 跨队列 EXCLUSIVE 所有权转移
 
+- **状态**：已评估，本结构下不做。release / acquire 的全套通路实现过并跑通了探针，但清不掉验证层错误，根因是单提交结构表达不了双向转移 —— 证据与报文见[决策 28](../10-architecture/decisions.md)。
 - **现状**：[weak-points](../10-architecture/weak-points.md) 第 1 条与 [known-limits](../70-status/known-limits.md) 第 33 行：跨队列资源走 `CONCURRENT` sharing，未实现 ownership transfer；RenderGraph 用 `VK_SHARING_MODE_CONCURRENT` 加 timeline semaphore 串依赖。
 - **参考**：`vulkan/command_buffer.hpp:428-439`（`release_/acquire_buffer_barrier`、`release_/acquire_image_barrier`）；`renderer/render_graph.hpp` 的 `RenderPassExternalLockInterface`（`external_acquire_semaphore` / `mark_access_in_queue` / `acquire_internal` / `release_internal` / `inline_queue_invalidate` / `inline_queue_flush`），`uses_semaphore()`（`:223-233`）判断这次访问是否真跨物理队列。
-- **落地**：① 记录每次异步 compute 的 src/dst 队列族；② 在跨队列边界插 release / acquire（EXCLUSIVE），叠在现有 timeline 信号前后；③ 保留 `--cross-queue-test` 作正反例。
-- **验收**：`--selftest 60 --validation-features sync` 0 errors；`--cross-queue-test` 通过；CONCURRENT 资源数下降（加计数器打印）。
-- **预估**：3~4 天，风险高。
+- **做法（已回退，代码不保留）**：`crossQueue` 资源按 EXCLUSIVE 建（`queueFamilyIndexCount = 1`），逐 subresource 记 `ownerQueue` / `releasedFrom`，跨队列访问时发 release 加 acquire，帧末把仍持有的资源 release 回另一条队列。
+- **结论**：不实现。一次所有权转移只能沿提交方向发生（release 必须落在源队列已提交的命令流里，而提交顺序由数据依赖方向决定，见 `src/RHI/Renderer.cpp:317-328`）；`--cross-queue-test` 的探针同一帧里两个方向都要，必然有一半逆序。单向跨队列在原理上可行，但当前没有单向的跨队列消费者，按 §2 的闸门（必须有可量化验收）不满足条件。
+- **验收（已满足的部分）**：CONCURRENT 路径 `--selftest 30 --cross-queue-test --validation-features sync` 得到 errors=0 warnings=0、stderr 0 字节、`[TD02] graphics->compute verified: frame 1 checksum 4096` 与 `[TD02] compute->graphics verified: frame 2 checksum 2218407808` 两向都通过、61.4 FPS。
+- **预估**：3~4 天，风险高；现已确认不只是难，而是与单提交结构冲突 —— 真要做得先把渲染图改成每队列多提交，那属于架构级改动。
 
 ### TM-10 Pass 准备阶段并行
 

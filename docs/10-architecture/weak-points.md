@@ -4,8 +4,8 @@ title: 架构薄弱点
 type: architecture
 scope: 空（跨代码库）
 read-when: 评估改动风险、或决定"下一步该修什么"
-size: ~90 行
-updated: 2026-11-01
+size: ~37 行
+updated: 2026-11-19
 ---
 
 # 架构薄弱点（按影响排序）
@@ -15,7 +15,7 @@ updated: 2026-11-01
 
 | # | 薄弱点 | 影响 | 什么时候必须处理 |
 |---|---|---|---|
-| 1 | 跨队列资源走 `CONCURRENT` sharing，未实现 EXCLUSIVE ownership transfer | 无法做细粒度的队列所有权转交，带宽上不是最优 | 接入 GPU culling / 体素间接缓冲时 |
+| 1 | 跨队列资源走 `CONCURRENT` sharing，未实现 EXCLUSIVE ownership transfer | 无法做细粒度的队列所有权转交，带宽上不是最优 | 接入 GPU culling / 体素间接缓冲时；已评估过，本结构下不做，见[决策 28](decisions.md) |
 | 2 | glTF 几何烘焙到世界空间，丢失节点层级 | Sponza 内部节点不能单独驱动；阻塞局部动态物体与实例化 | 资产管线升级 / 地形体素前 |
 | 3 | ECS 销毁契约仍靠约定：`registry.destroy()` 可绕过 Scene 清理；区域索引只覆盖 streaming terrain chunk，其他实体仍用统一网格 | 外部扩展误用会留下 Model/空间索引残留；非 chunk 查询仍是全局网格 | 编辑器插件 / 外部扩展时 |
 | 4 | `LightingPass` 兼任"导入交换链" | Pass 职责不对称，init 顺序有隐式依赖 | 清理窗口期 |

@@ -44,3 +44,9 @@ config/*.ini.bak
 # 本地跑 tools/Validate.ps1 时的输出（后台重定向的产物，不入库）
 validate_bg.log
 validate_bg.err
+# 本地一次性取证产物：重定向日志、比对脚本、截图（不入库）
+_*.log
+_*.err
+_*.jsonl
+_*.png
+_*.py
