@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~214 行
+size: ~219 行
 updated: 2026-11-19
 ---
 
@@ -58,7 +58,7 @@ TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--sta
 
 T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表）已于 2026-11-19 完成并移入 §3，这一档不再有待办。
 
-下一批从 §5 的 T2 开始。TM-06 的统计部分与 TM-07 已落地（按需建不做），建议顺序改为 TM-08（资源别名化）：两者的验收都需要"每帧 PSO 新建数为 0"与"每帧暂存区分配次数为常数"，先做 TM-06 能把 `--stats-pipelines` 这个统计口径一并落地。
+下一批从 §5 的 T2 开始。TM-06 的统计部分、TM-07、TM-08 的第一步都已落地（前两者的第二步按数据判定不做），建议顺序改为 TM-09（跨队列 EXCLUSIVE 所有权转移），它是 [weak-points](../10-architecture/weak-points.md) 第 1 条与 [known-limits](../70-status/known-limits.md) 第 33 行明确记着的边界。
 
 
 ## 5. T2：要改热路径
@@ -89,9 +89,16 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 - **现状**：`src/RHI/RenderGraph.h:14-35` 自述"线性渲染图、Pass 严格按声明顺序、**不做重排 / 别名化 / 自动剔除**"，注释里写着"将来要加自动剔除 / 内存别名化时，这个结构也留了位置"；[known-limits](../70-status/known-limits.md) 第 36 行记为"决策 2"的边界。
 - **参考**：`renderer/render_graph.cpp:628` 的 `// Find resources which can alias safely`；`set_physical_index` 分配物理索引，冲突即 `throw std::logic_error("Cannot alias resources. Index already claimed.")`（`:699/:726/:753/:791/:897`）；`physical_dimensions[]` 记 levels / flags / queues（`:785-786`）；输入附件最后分配，好与同一 subpass 的 color / depth 别名（`:917-918`）；`add_fake_resource_write_alias`（`:345/:933/:1171`）。
-- **落地**：① 先只算生命周期区间（first-write / last-read 的 pass 索引）并打印可别名候选对，**不改分配行为**；② 加 `--alias-report` 逐对校验；③ 确认无误后再打开复用，且一次只让一个中间目标别名。
-- **验收**：`--alias-report` 给出候选对数与预估节省字节；打开后 `reportVmaStats` 的显存峰值下降、截图逐像素一致、`--validation-features sync` 0 errors。
-- **预估**：5~7 天，风险高（必须有开关）。
+- **状态**：第一步（生命周期区间 + `--alias-report` 只读报告）已完成；第二步（真打开复用）经数据判定不做。
+- **已完成**：`src/RHI/RenderGraphAlias.h/.cpp`（`tiny::aliasreport`）——`Resource`（名字 / 字节 / `firstWrite` / `lastUse` / 格式 / 尺寸 / `owned` / `transient`）、`pack()`（按 `firstWrite` 升序线性扫描、best-fit，只有格式 / 尺寸 / mip / 层数全同才允许落在一起）、`report()`、`estimateBytes()`、`selfTest()`；`RenderGraph` 在 Pass 循环里用 `lastFrameExecutedPasses.size() - 1` 当 Pass 序号（跳过的 Pass 不占号），`endFrame` 末尾把本帧清单交给报告模块，开关关掉时整段不执行。
+- **结论（本机 `--selftest 30 --alias-report`，1920x1080）**：
+  - 渲染图自己持有的每帧目标只有 8 个、合计 40.8 MiB，生命周期全部重叠，**可省 0**。
+  - 真正占显存的是 13 个每帧重建但**导入**的目标（合计 181.9 MiB，GBuffer 的 5 张附件与深度都在这里）：显存不归渲染图管，别名化在它们身上无从谈起。
+  - 另有 4 个常驻导入目标（229.4 MiB，IBL cubemap 一类），本来就不该参与。
+  - 明细举例：`HDR.Scene.Frame1 [Pass 8..11]`、`TAA.Output.Frame1 [Pass 11..19]`、`Bloom.Frame1.Level0..3 [Pass 12..19]` —— TAA 输出与整条 bloom 链全程重叠，而且 Pass 11 同时读 HDR、写 TAA，连首尾相接都不成立。
+- **要真省，得先满足三条前提**（这是第二步不做的理由）：① 让渲染图持有 GBuffer 与深度的显存（现在由 `src/Render/GeometryPass.cpp:33` 建好后 `importTexture`）；② 让 bloom 链与 TAA 的生命周期错开（现在是嵌套的 up / down sample 链）；③ 放宽并验证格式兼容规则（现在要求同格式同尺寸）。
+- **验收（已满足的部分）**：`--alias-report` 给出候选对数与预估节省字节（0）；`[Alias] selfTest PASS | 生命周期装箱 + 形状兼容 + 字节估算`；关掉开关时零开销（`--selftest 30` 输出与基线一致、`[Diag] zero-overhead guard PASS`）。
+- **预估**：报告部分 1 天（已完成）；真打开复用 5~7 天，且要先做上面三条结构改造，风险高。
 - **注意**：本项目是 dynamic rendering、没有 `VkRenderPass`，别名判据只用 pass 顺序加读写集合，比参考实现（还含 subpass 合并）简单一档 —— **先做别名，不碰 subpass 合并**。
 
 ### TM-09 跨队列 EXCLUSIVE 所有权转移

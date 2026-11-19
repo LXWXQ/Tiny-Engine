@@ -263,3 +263,14 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 - **描述符必须带偏移**：`Block.offset` 每帧都可能不同，用它绑 uniform / storage 的描述符要每帧重写。写死 `offset = 0` 会读到别人的数据，而且只在扩容或分配顺序变化时才出错。
 - **COHERENT 就别刷**：内存类型是 `HOST_COHERENT` 时跳过 `vmaFlushAllocation`（本机 30 帧全部跳过）。实测收益不在每帧几微秒，而在三件事：帧内分配可见（`--stats-scratch`）、写死尺寸的自建 buffer 不再散落、新消费者不必再造一份 VMA 分配。
 - **不做一次性大改**：先只迁 `SSAOPass`（每帧一段 UBO）。其余消费者（`FogVolumePass` / `ReflectionPass` / `ParticlePass` / `VegetationPass` / `EditorOverlayPass` / 全局 UBO）按「下次改到它时顺手迁」推进 —— 每个都牵描述符写入时机，一次全迁会让一次像素回归极难归因。
+
+## 决策 27：资源别名化先量后做，本结构下不做（TM-08）
+
+- **问题**：显存里同时活着的中间目标越多，峰值越高。参考实现把「生命周期不重叠的资源放进同一块显存」列为显存优化的重要手段（`renderer/render_graph.cpp:628` 的 `// Find resources which can alias safely`）。
+- **做法**：先只出报告，不改任何分配 —— `src/RHI/RenderGraphAlias.h/.cpp` 在 `RenderGraph::endFrame` 里取每个纹理的 `firstWritePass` / `lastUsePass`（Pass 序号用 `lastFrameExecutedPasses.size() - 1`，跳过的 Pass 不占号），`pack()` 按 `firstWrite` 升序做线性扫描 + best-fit 装箱，`--alias-report` 打印候选与预估节省。
+- **为什么先只报告**：别名写错的症状是「特定分辨率或特定 Pass 开关组合下偶尔花屏」，不是崩溃；而它要动的是分配器与 image view 的兼容性约束。先让数字可见、逐对核对，再决定要不要复用。
+- **实测结论（1920x1080，`--selftest 30 --alias-report`）**：渲染图自己持有的每帧目标 8 个、40.8 MiB，生命周期全部重叠，**可省 0**；真正占显存的是 13 个每帧重建但导入的目标（181.9 MiB，GBuffer 5 张附件 + 深度），显存不归渲染图管；另有 4 个常驻导入目标（229.4 MiB）本就不该参与。
+- **不做第二步**：要真省必须先做三件结构改造 —— 让渲染图持有 GBuffer 与深度的显存（现在是 `src/Render/GeometryPass.cpp:33` 建好后 `importTexture`）、让 bloom 链与 TAA 的生命周期错开（现在是嵌套的 up / down sample 链）、放宽并验证格式兼容规则（现在要求同格式同尺寸）。三条都不便宜，而当前 8 个目标合计才 40.8 MiB。
+- **判据与兼容规则写在代码里**：合并前提是「格式 / 尺寸 / mip / 层数全同」，比 Vulkan 允许的更保守 —— 松一档就要顺带验证 image view 的兼容性，那是第二步要付的成本，不是第一步的。
+- **保留的东西**：`--alias-report` 与 `[Alias] selfTest`（生命周期装箱 + 形状兼容 + 字节估算）常驻。哪天渲染图开始持有 GBuffer，这个开关会立刻给出新的数字。
+- **不引入的**：`VK_IMAGE_CREATE_ALIAS_BIT` 的实际绑定（未启用）、显式子分配策略（`VmaAllocation` 仍在渲染图手里按资源分配）。

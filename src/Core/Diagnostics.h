@@ -53,6 +53,9 @@ namespace diag
         // --stats-scratch：退出时打印每帧暂存区的分配次数、字节数、扩容与刷新次数（TM-07）。
         bool statsScratch = false;
 
+        // --alias-report：退出时打印渲染图资源别名候选对与预估可省显存（TM-08，只读报告）。
+        bool aliasReport = false;
+
         bool gpuTiming = false;
         std::string gpuTimingCsvPath = "gpu_timing.csv";
 

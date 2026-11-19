@@ -35,6 +35,7 @@ updated: 2026-11-19
 | `PipelineStats.h/.cpp` | 图形状态字（`GraphicsStateKey`，8 个语义字段 + 管线布局）与建管线计时；`--stats-pipelines` 打印数量 / 耗时 / 状态种类 / 完全相同的管线 | [diagnostics](../60-debug-profiling/diagnostics.md) 第 10 节 | diagnostics |
 | `ScratchArena.h/.cpp` | 每帧暂存区：按帧槽轮转、bump 分配、uniform 256 对齐、扩容时旧块进 retired、COHERENT 跳过刷新 | [resource-lifetime](../10-architecture/resource-lifetime.md) 第 8 节 | resource-lifetime |
 
+| `RenderGraphAlias.h/.cpp` | 资源别名化的只读报告：按 Pass 序号算 `firstWrite` / `lastUse`，线性扫描 best-fit 装箱（格式 / 尺寸 / mip / 层数全同才合并）；区分渲染图持有与导入目标；`--alias-report` | [diagnostics](../60-debug-profiling/diagnostics.md) 第 11 节、[borrowed-techniques](../80-roadmap/borrowed-techniques.md) TM-08 | diagnostics |
 ## 2. Render 层（`src/Render/`）
 
 | 源文件 | 内容 | 必读文档 | 回写 |

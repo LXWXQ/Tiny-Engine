@@ -394,6 +394,12 @@ private:
         //         「内容未定义」而丢弃。
         bool resetEachFrame = true;
 
+        // TM-08：本帧的生命周期边界（Pass 序号，取 lastFrameExecutedPasses 的下标）。
+        // 跳过的 Pass 不占号，所以这里和调试面板看到的顺序一致。
+        // firstWritePass < 0 表示整帧没人写 —— 这种资源不能参与别名（内容无意义）。
+        int32_t firstWritePass = -1;
+        int32_t lastUsePass = -1;
+
         // 每个 mip/layer 独立记录上一次访问后的状态。
         struct SubresourceState
         {

@@ -8,6 +8,7 @@
 #include "src/Core/AssetPack.h"
 #include "src/RHI/TextureBudget.h"
 #include "src/RHI/PipelineStats.h"
+#include "src/RHI/RenderGraphAlias.h"
 #include "src/Editor/SceneSerializer.h"
 #include "src/Terrain/TerrainSculptDelta.h"
 #include "src/Scene/SimulationClock.h"
@@ -74,6 +75,7 @@
 //   --gpu-timing                  每 pass GPU 计时，退出时写 gpu_timing.csv
 //   --stats-pipelines             退出时打印管线统计：数量、建管线耗时、状态去重
 //   --stats-scratch               退出时打印每帧暂存区的分配次数、字节数、扩容与刷新
+//   --alias-report                退出时打印渲染图资源别名候选对与预估可省显存（只读报告）
 //   --gpu-timing-csv <path>       指定 CSV 路径（隐含 --gpu-timing）
 //   --validation-features <list>  启用验证层增强：bp(=best practices) / sync(=同步校验)，逗号分隔或 all
 //   --validation-jsonl <path>     把验证层消息写成 JSONL（默认不落盘，也不写 stderr）
@@ -169,6 +171,7 @@ const UsageLine kUsageLines[] = {
     { "剖析", "--update-profile", "每 60 帧打印 Scene::update 分段耗时" },
     { "剖析", "--stats-pipelines", "退出时打印管线数量、建管线耗时与状态去重（TM-06）" },
     { "剖析", "--stats-scratch", "退出时打印每帧暂存区的分配次数、字节数、扩容与刷新次数（TM-07）" },
+    { "剖析", "--alias-report", "退出时打印渲染图资源别名候选对与预估可省显存（TM-08，只读报告）" },
     { "帮助", "--help / -h", "打印这张表并退出（退出码 0）" },
 };
 
@@ -470,7 +473,8 @@ bool audioSpatialTest = false;
         else if (arg == "--screenshot-viewport") diagOptions.screenshotViewport = true;
         else if (arg == "--update-profile") diagOptions.updateProfile = true;
         else if (arg == "--stats-pipelines") diagOptions.statsPipelines = true;
-    else if (arg == "--stats-scratch") diagOptions.statsScratch = true;
+        else if (arg == "--stats-scratch") diagOptions.statsScratch = true;
+        else if (arg == "--alias-report") diagOptions.aliasReport = true;
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
         else if (arg == "--runtime-mode") diagOptions.runtimeMode = true;
         else if (arg == "--terrain-test") diagOptions.terrainTest = true;
@@ -527,6 +531,9 @@ bool audioSpatialTest = false;
     // 管线状态判重表只在 --stats-pipelines 下维护：关掉时 recordGraphics 只做加减，
     // 不建哈希表、不存名字 —— 与 zero-overhead 规则一致。
     tiny::pipelinestats::setEnabled(diagOptions.statsPipelines);
+
+    // 别名报告同样按开关决定记不记：关掉时 RenderGraph 里那一段整个不执行。
+    tiny::aliasreport::setEnabled(diagOptions.aliasReport);
 
     // UX-02（B1）：未知参数在创建窗口/设备之前就退出，避免"参数写错却照常启动"。
     if (!unknownArgs.empty())

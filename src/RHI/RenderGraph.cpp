@@ -4,6 +4,8 @@
 #include "RHI/Breadcrumbs.h"
 #include "RHI/ScratchArena.h"
 
+// TM-08：资源别名化的只读报告（只出数字，不改分配）。
+#include "RHI/RenderGraphAlias.h"
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
@@ -150,6 +152,13 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
             state.access = VK_ACCESS_2_NONE;
             state.lastAccessQueue = -1;
         }
+    }
+
+    // TM-08：生命周期边界每帧重算（常驻资源也复位 —— 报告看的是本帧的用法）。
+    for (TextureEntry& e : textures)
+    {
+        e.firstWritePass = -1;
+        e.lastUsePass = -1;
     }
 
     for (BufferEntry& b : buffers)
@@ -400,6 +409,11 @@ void RenderGraph::endFrame()
         for (const Access& acc : accesses)
         {
             TextureEntry& te = textures[acc.texture.id];
+            // TM-08：第一次被打上「写」的那一个 Pass 就是生命周期起点。
+            const int32_t passIndex = static_cast<int32_t>(lastFrameExecutedPasses.size()) - 1;
+            if ((acc.access & kWriteBits) != 0 && te.firstWritePass < 0)
+                te.firstWritePass = passIndex;
+            te.lastUsePass = passIndex;
             const SubresourceRange range = normalizeTextureRange(te, acc.range);
             for (uint32_t layer = range.baseArrayLayer; layer < range.baseArrayLayer + range.layerCount; ++layer)
             {
@@ -421,6 +435,34 @@ void RenderGraph::endFrame()
             be.access = acc.access;
             be.lastAccessQueue = pass.isCompute ? 1 : 0;
         }
+    }
+
+    // TM-08：把本帧每个中间目标的字节数与生命周期交给报告模块。
+    // 只在 --alias-report 打开时走这一段 —— 关掉时零开销，连 vector 都不建。
+    if (tiny::aliasreport::enabled())
+    {
+        std::vector<tiny::aliasreport::Resource> resources;
+        resources.reserve(textures.size());
+        for (const TextureEntry& te : textures)
+        {
+            tiny::aliasreport::Resource r;
+            r.name = te.desc.name;
+            r.bytes = tiny::aliasreport::estimateBytes(te.desc.format, te.desc.extent.width,
+                te.desc.extent.height, te.desc.mipLevels, te.desc.arrayLayers);
+            r.firstWrite = te.firstWritePass;
+            r.lastUse = te.lastUsePass;
+            r.format = te.desc.format;
+            r.width = te.desc.extent.width;
+            r.height = te.desc.extent.height;
+            r.mipLevels = te.desc.mipLevels;
+            r.arrayLayers = te.desc.arrayLayers;
+            // 导入的外部资源（owned=false）不归渲染图分配，也就谈不上别名；
+            // 常驻资源整帧只读，生命周期覆盖全帧，永远不可能和别人错开。
+            r.owned = te.owned;
+            r.transient = !te.desc.persistent;
+            resources.push_back(std::move(r));
+        }
+        tiny::aliasreport::recordFrame(std::move(resources));
     }
 
     reportUnmatchedPassOverrides();

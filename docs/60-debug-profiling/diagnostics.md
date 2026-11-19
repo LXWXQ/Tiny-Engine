@@ -2,9 +2,9 @@
 id: debug-profiling/diagnostics
 title: 诊断基础设施实现
 type: debug
-scope: src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*
-read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计
-size: ~156 行
+scope: src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
+read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
+size: ~190 行
 updated: 2026-11-19
 ---
 
@@ -154,3 +154,37 @@ Pass"。`Breadcrumbs`（`src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*`）补�
 结论：桌面有驱动磁盘缓存时，启动期建管线不过几十毫秒，**没有值得做的按需建**；
 这项的价值在 Android / 冷启动 / 管线爆炸（成百上千条）的场景。零开销路径同样验证过：
 不带 `--stats-pipelines` 时只累加整数，不建表，输出与基线逐字节一致。
+
+## 11. 资源别名报告（TM-08）
+
+`--alias-report` 在退出时打印本帧中间目标的显存账本。它只读：不改任何分配、不绑定
+`VK_IMAGE_CREATE_ALIAS_BIT`，目的就是先让"能不能省"这个问题的答案变成数字。
+
+- **生命周期**：每个纹理记两个 Pass 序号 —— `firstWrite`（第一次被打上写访问的那个 Pass）
+  与 `lastUse`（最后一次读或写）。序号取 `lastFrameExecutedPasses.size() - 1`，所以被
+  `setEnabled(false)` 跳过的 Pass 不占号，与调试面板看到的顺序一致。
+- **装箱**：按 `firstWrite` 升序线性扫描，`best fit` 放进"已经空出来"的块里；合并前提是
+  格式 / 尺寸 / mip / 层数全同（比 Vulkan 允许的更保守，松一档就要顺带验证 image view 兼容性）。
+- **三类目标分开报**：渲染图自己持有的（可谈别名）、每帧重建但导入的（显存不归渲染图管）、
+  跨帧常驻的（本就不该参与）。混在一起报会给出误导性的节省数字。
+
+本机实测（RTX 2070，1920x1080，`--selftest 30 --alias-report`）：
+
+```
+[Alias] 一帧 8 个瞬时目标，合计 40.8 MiB
+[Alias] 线性扫描后 8 块（最大 15.8 MiB），可省 0（0%）
+[Alias]   SSAO.Raw.Frame1 [Pass 6..7] 2.0 MiB
+[Alias]   SSAO.Frame1 [Pass 7..8] 2.0 MiB
+[Alias]   HDR.Scene.Frame1 [Pass 8..11] 15.8 MiB
+[Alias]   TAA.Output.Frame1 [Pass 11..19] 15.8 MiB
+[Alias]   Bloom.Frame1.Level0 [Pass 12..19] 4.0 MiB
+[Alias] 另有 13 个每帧重建的导入目标（合计 181.9 MiB）：它们才是有价值的目标，但显存不归渲染图管
+[Alias] 常驻导入目标 4 个（合计 229.4 MiB，跨帧复用同一块，不该参与别名）
+```
+
+为什么是 0：TAA 输出覆盖了整条 bloom 链（`[11..19]` 对 `[12..19]`），HDR 与 TAA 在 Pass 11
+上首尾相接（同一 Pass 读 HDR、写 TAA），SSAO 的两张图在 Pass 7 上重叠。三个方向都被堵死，
+所以本结构下别名化省不出显存 —— 详细取舍见 [decisions](../10-architecture/decisions.md) 决策 27。
+
+零开销路径：不带 `--alias-report` 时 `RenderGraph::endFrame` 里那一段整个不执行（连 vector
+都不建），`--selftest 30` 的输出与基线一致，`[Diag] zero-overhead guard PASS` 仍然通过。

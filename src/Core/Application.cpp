@@ -18,6 +18,7 @@
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
 #include "RHI/ScratchArena.h"
+#include "RHI/RenderGraphAlias.h"
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -2050,6 +2051,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!tiny::ScratchArena::selfTest())
 		throw std::runtime_error("ScratchArena selfTest failed");
 
+	// TM-08：别名报告的生命周期装箱判据（纯逻辑：重叠不能合并、形状不同不能合并）。
+	if (!tiny::aliasreport::selfTest())
+		throw std::runtime_error("AliasReport selfTest failed");
+
 	// F3：体素世界（建 3x3 chunk、射线打地、挖一格、放回、地面高度）。
 	if (!voxel::selfTest())
 		throw std::runtime_error("Voxel mesh selfTest failed");
@@ -2945,6 +2950,10 @@ void FirstApp::finalizeDiagnostics()
     // TM-07：暂存区统计同样要在 device 还活着时打印（数字来自 VMA 分配信息）。
     if (diagnosticsOptions.statsScratch)
         vulkanDevice->getScratch().report();
+
+    // TM-08：别名报告是纯 CPU 数据（最后一帧的清单），打印时机没有设备依赖。
+    if (diagnosticsOptions.aliasReport)
+        tiny::aliasreport::report();
 
     diag::printValidationSummary();
 
