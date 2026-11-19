@@ -19,6 +19,9 @@ namespace diag
     // ---- 编译期能力（CMake option -> 宏）----
     struct CompileTimeFeatures
     {
+        // --stats-pipelines：退出时打印管线数量、建管线耗时、状态去重结果（TM-06）。
+        bool statsPipelines = false;
+
         bool gpuTiming = false;
         bool validationFeatures = false;
         bool buildInfo = false;
@@ -41,6 +44,9 @@ namespace diag
         std::string validationJsonlPath;   // 空 = 不落盘
 
         // GPU 计时
+        // --stats-pipelines：退出时打印管线数量、建管线耗时、状态去重结果（TM-06）。
+        bool statsPipelines = false;
+
         bool gpuTiming = false;
         std::string gpuTimingCsvPath = "gpu_timing.csv";
 

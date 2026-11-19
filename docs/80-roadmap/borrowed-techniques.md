@@ -52,23 +52,26 @@ updated: 2026-11-19
 | TM-04 | 对象池（ObjectPool） | `src/Core/ObjectPool.h`：64 个对象起步、每开新块翻倍的 aligned 块 + vacants 栈 + placement new；契约是"必须显式 `destroy()`，池不管生命周期"，Debug 下析构时仍有存活对象直接断言。TM-03 的环回收就靠它归零 | 决策 25 |
 | TM-05 | 设备能力与厂商怪癖表（DeviceQuirks） | `src/RHI/DeviceQuirks.h/.cpp`：一次采集厂商 / 设备类型 / subgroup 支持阶段与操作 / 独立 compute 队列，推出 `asyncComputePost`（核显关）、`subgroupOpsUsable` 等策略位；启动打印 `[Device] quirks: NVIDIA | 独立显卡 | subgroup={size=32 stages=0x3FFF shuffle=1} | 异步compute=1 | 独立compute队列=1`。参考实现里与 subpass/transient 相关的字段未搬（本项目用 dynamic rendering，没有 subpass 可合并） | 决策 25 |
 
-TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--stats-pipelines` 打印 PSO 命中/新建）与**粒度**（breadcrumbs 目前到 pass 级，到 draw 级要几百条 marker/帧）。前者并入 TM-06 的验收，后者并入 TM-02 的后续。
+TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--stats-pipelines` 打印 PSO 命中/新建）与**粒度**（breadcrumbs 目前到 pass 级，到 draw 级要几百条 marker/帧）。前者已随 TM-06 落地（`--stats-pipelines`，见 [diagnostics 第 10 节](../60-debug-profiling/diagnostics.md)），后者并入 TM-02 的后续。
 
 ## 4. T1：已清空
 
 T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表）已于 2026-11-19 完成并移入 §3，这一档不再有待办。
 
-下一批从 §5 的 T2 开始。建议顺序仍是 TM-06（图形状态打包 + 按需建管线）→ TM-07（scratch 线性分配）：两者的验收都需要"每帧 PSO 新建数为 0"与"每帧暂存区分配次数为常数"，先做 TM-06 能把 `--stats-pipelines` 这个统计口径一并落地。
+下一批从 §5 的 T2 开始。TM-06 的统计部分已落地（按需建不做），建议顺序改为 TM-07（scratch 线性分配）→ TM-08（资源别名化）：两者的验收都需要"每帧 PSO 新建数为 0"与"每帧暂存区分配次数为常数"，先做 TM-06 能把 `--stats-pipelines` 这个统计口径一并落地。
 
 
 ## 5. T2：要改热路径
 
 ### TM-06 图形状态打包 + 按需建管线
 
+- **状态**：第一步（状态字 + `--stats-pipelines` 统计）已完成，见 [diagnostics 第 10 节](../60-debug-profiling/diagnostics.md)；**第二步（按需建管线）经数据判定不做**，理由见下面的结论。
 - **现状**：22 个 `*Pass.cpp` 各自在 init 里手写 `PipelineConfigInfo`（`src/RHI/Pipeline.h:7-32`，含 viewport / scissor / rasterization / multisample / `vector<VkPipelineColorBlendAttachmentState>` / depthStencil / pipelineLayout / `vector<VkFormat> colorAttachmentFormats` / binding / attribute / dynamicStates），`Pipeline` 与 `ComputePipeline`（`src/RHI/Pipeline.h:34-55`、`:59-77`）一对一包一个 `VkPipeline`。既没有"状态 → 管线"的查表，也没有绘制时按需编译（grep `unordered_map<...VkPipeline`、`stateKey` 在 `src/RHI/` 下 0 命中）。
 - **参考**：`vulkan/command_buffer.hpp:127-144` 的 `CommandBufferDirtyBits`；`:154-207` 的 `union PipelineState { struct { 位域 } state; uint32_t words[4]; }`（整套图形状态压成 16 字节，可直接 memcmp / hash）；`:275` 的 `DeferredPipelineCompile`；`:868 extract_pipeline_state()`、`:876-878 build_graphics_pipeline / build_compute_pipeline / flush_pipeline_state_without_blocking()`。
 - **落地**：① 定义 `GraphicsStateKey`（定长、可 memcmp、`static_assert(sizeof(...) == N)`）；② 新增 `PipelineLibrary::getOrCreate(key)`，内部 `unordered_map` + `device.getPipelineCache()`（TM-01 已就位）；③ 每个 Pass 从"持有 Pipeline"改成"提供 makeKey()"，绘制时才取；④ 加命中 / 新建计数，接 `--stats-pipelines`。
-- **验收**：`--stats-pipelines` 输出新建与命中数；首次运行新建 ≤ 22、第二次运行命中数等于首次新建数；截图逐像素一致；验证层 0 errors。
+- **已完成**：`src/RHI/PipelineStats.h/.cpp`（`GraphicsStateKey` 定长、逐字段 FNV-1a、8 个语义字段各进哈希、`pipelineLayout` 也参与）；`Pipeline` / `ComputePipeline` 建管线时计时并登记；`--stats-pipelines` 退出时打印数量 / 耗时 / 状态去重。本机实测（RTX 2070，`--selftest 30`）：图形 30 条 + compute 8 条、68 个模块、0.41 MB SPIR-V，冷启动 total=50.5ms、热缓存 total=24.7ms（0.65ms/条），30 条图形管线只有 26 种状态、完全相同的管线 0 条。
+- **结论**：桌面有驱动磁盘缓存时，整个启动期建管线只有二十几毫秒，且没有可合并的重复管线，按需建管线的收益小于它带来的风险（要把每个 Pass 从持有 Pipeline 改成提供 makeKey，碰所有初始化顺序）。这条留着，等出现管线成百上千条或移动端冷启动时再启用。
+- **验收（已满足的部分）**：`--stats-pipelines` 打印数量 / 耗时 / 状态种类 / 完全相同的管线；不带该开关时零开销（输出与基线逐字节一致、stderr 0 字节）；验证层 0 errors。
 - **预估**：2~3 天，风险中高（碰所有 Pass 的初始化顺序，必须一次只迁一个 Pass）。
 
 ### TM-07 每帧暂存（scratch）线性分配器

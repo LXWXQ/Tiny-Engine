@@ -4,7 +4,7 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~188 行
+size: ~189 行
 updated: 2026-11-19
 ---
 
@@ -32,6 +32,7 @@ updated: 2026-11-19
 | `PipelineCache.h/.cpp` | 管线缓存磁盘头（magic / version / 驱动 UUID / 载荷长度 / FNV-1a）、原子落盘、目录不可写回退 | [decisions](../10-architecture/decisions.md) 决策 24 | decisions |
 | `Breadcrumbs.h/.cpp` / `BreadcrumbsReport.cpp` | GPU 侧 4 槽游标 + CPU 名字表；NV checkpoint / AMD marker / updateBuffer 三档降级；崩溃后读 HOST_VISIBLE 映射得 pass 名 | [diagnostics](../60-debug-profiling/diagnostics.md) 第 9 节 | diagnostics |
 | `DeviceQuirks.h/.cpp` | 厂商 / 设备类型 / subgroup 支持阶段与操作 / 独立 compute 队列 → 策略位（`asyncComputePost`、`subgroupOpsUsable`），启动打印一行摘要 | [borrowed-techniques](../80-roadmap/borrowed-techniques.md) 决策 25 | decisions |
+| `PipelineStats.h/.cpp` | 图形状态字（`GraphicsStateKey`，8 个语义字段 + 管线布局）与建管线计时；`--stats-pipelines` 打印数量 / 耗时 / 状态种类 / 完全相同的管线 | [diagnostics](../60-debug-profiling/diagnostics.md) 第 10 节 | diagnostics |
 
 ## 2. Render 层（`src/Render/`）
 

@@ -7,6 +7,7 @@
 #include "src/Scene/Model.h"
 #include "src/Core/AssetPack.h"
 #include "src/RHI/TextureBudget.h"
+#include "src/RHI/PipelineStats.h"
 #include "src/Editor/SceneSerializer.h"
 #include "src/Terrain/TerrainSculptDelta.h"
 #include "src/Scene/SimulationClock.h"
@@ -71,6 +72,7 @@
 //   ---- P0：调试 / 剖析能力（随用随开，默认关闭）----
 //   --build-info                  打印本二进制编译进的 & 本次开启的调试能力后退出
 //   --gpu-timing                  每 pass GPU 计时，退出时写 gpu_timing.csv
+//   --stats-pipelines             退出时打印管线统计：数量、建管线耗时、状态去重
 //   --gpu-timing-csv <path>       指定 CSV 路径（隐含 --gpu-timing）
 //   --validation-features <list>  启用验证层增强：bp(=best practices) / sync(=同步校验)，逗号分隔或 all
 //   --validation-jsonl <path>     把验证层消息写成 JSONL（默认不落盘，也不写 stderr）
@@ -164,6 +166,7 @@ const UsageLine kUsageLines[] = {
     { "剖析", "--validation-features <list>", "验证层增强：bp / sync / all" },
     { "剖析", "--validation-jsonl <path>", "验证层消息写 JSONL" },
     { "剖析", "--update-profile", "每 60 帧打印 Scene::update 分段耗时" },
+    { "剖析", "--stats-pipelines", "退出时打印管线数量、建管线耗时与状态去重（TM-06）" },
     { "帮助", "--help / -h", "打印这张表并退出（退出码 0）" },
 };
 
@@ -464,6 +467,7 @@ bool audioSpatialTest = false;
         else if (arg == "--editor") editorMode = true;
         else if (arg == "--screenshot-viewport") diagOptions.screenshotViewport = true;
         else if (arg == "--update-profile") diagOptions.updateProfile = true;
+        else if (arg == "--stats-pipelines") diagOptions.statsPipelines = true;
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
         else if (arg == "--runtime-mode") diagOptions.runtimeMode = true;
         else if (arg == "--terrain-test") diagOptions.terrainTest = true;
@@ -516,6 +520,10 @@ bool audioSpatialTest = false;
             unknownArgs.push_back(arg);
         }
     }
+
+    // 管线状态判重表只在 --stats-pipelines 下维护：关掉时 recordGraphics 只做加减，
+    // 不建哈希表、不存名字 —— 与 zero-overhead 规则一致。
+    tiny::pipelinestats::setEnabled(diagOptions.statsPipelines);
 
     // UX-02（B1）：未知参数在创建窗口/设备之前就退出，避免"参数写错却照常启动"。
     if (!unknownArgs.empty())

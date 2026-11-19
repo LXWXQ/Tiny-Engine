@@ -1,5 +1,6 @@
 #include "RHI/PipelineCache.h"
 #include "RHI/Device.h"
+#include "PipelineStats.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -108,6 +109,8 @@ PipelineCache::PipelineCache(Device& device, std::string cachePath)
 
     loaded = haveBlob;
     bytesLoaded = haveBlob ? payload.size() : 0;
+    // 报告里要能对上「这次到底喂了多大一份 blob 给驱动」，否则「缓存命中却还慢」无从判断。
+    tiny::pipelinestats::setCacheLoadedBytes(bytesLoaded);
 
     if (loaded)
         std::cout << "[PipelineCache] 命中旧缓存：" << bytesLoaded << " 字节 <- " << path << std::endl;

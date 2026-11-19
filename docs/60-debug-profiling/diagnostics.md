@@ -2,10 +2,10 @@
 id: debug-profiling/diagnostics
 title: 诊断基础设施实现
 type: debug
-scope: src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*
-read-when: 修改验证层回调、GPU 计时、截图、抓帧，或排查 device lost
-size: ~136 行
-updated: 2026-11-18
+scope: src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*
+read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计
+size: ~155 行
+updated: 2026-11-19
 ---
 
 # 诊断基础设施实现
@@ -105,7 +105,7 @@ Device::debugCallback
 ## 9. GPU breadcrumbs（P2-5）
 
 `VK_EXT_device_fault` 只回答"哪条指令踩了哪块内存"，回答不了"崩在第几帧的哪个
-Pass"。`Breadcrumbs`（`src/RHI/Breadcrumbs.*`）补的就是这一层：每个 Pass 前后往
+Pass"。`Breadcrumbs`（`src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*`）补的就是这一层：每个 Pass 前后往
 一个 4 字节游标写序号，CPU 侧留一张"序号 -> 帧号/Pass 名"的表，device lost 之后
 读游标查表。核心洞察是**真相在 CPU 侧，GPU 只带一个游标**。
 
@@ -134,3 +134,23 @@ Pass"。`Breadcrumbs`（`src/RHI/Breadcrumbs.*`）补的就是这一层：每个
   `breadcrumbs.reset()`，隐式析构不会调用它，游标缓冲会活到
   `vmaDestroyAllocator` 之后，触发 VMA 的 `Some allocations were not freed` 断言
   （见 [troubleshooting §3.2](../40-build/troubleshooting.md)）。
+
+## 10. 管线统计（TM-06）
+
+`--stats-pipelines` 在退出时打印本次运行的管线账本：
+
+- 图形 / compute 各建了几条，shader 模块几个、读了多少 MB SPIR-V；
+- 建管线总耗时与均值（计时覆盖"读 SPIR-V + 建模块 + 建管线"，真正慢的是驱动编译）；
+- **状态种类**与**完全相同的管线**是两个数：前者是 `GraphicsStateKey` 的去重结果，
+  后者还要两个 shader 路径也一致。状态相同但 shader 不同完全正常（IBL 的几条只有
+  片元不同），混成一个数会得出"重复很多"的错误结论。
+- `GraphicsStateKey.pipelineLayout` 必须参与哈希：不同布局的管线不能互换，漏算就会
+  把真正不同的管线判成重复。
+
+本机实测（RTX 2070，`--selftest 30`）：图形 30 条 / compute 8 条 / 68 个模块 /
+0.41 MB SPIR-V；冷启动无缓存 total=50.5ms，热缓存 total=24.7ms（平均 0.65ms/条）；
+30 条图形管线里状态只有 26 种，完全相同的管线 0 条。
+
+结论：桌面有驱动磁盘缓存时，启动期建管线不过几十毫秒，**没有值得做的按需建**；
+这项的价值在 Android / 冷启动 / 管线爆炸（成百上千条）的场景。零开销路径同样验证过：
+不带 `--stats-pipelines` 时只累加整数，不建表，输出与基线逐字节一致。

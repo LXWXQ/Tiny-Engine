@@ -16,6 +16,7 @@
 #include "AssetPaths.h"
 #include "Core/FrameInfo.h"
 #include "Core/StartupLog.h"
+#include "RHI/PipelineStats.h"
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -2036,9 +2037,13 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!Breadcrumbs::selfTest())
 		throw std::runtime_error("Breadcrumbs selfTest failed");
 
-// TM-03/TM-04：环形临时表与对象池的纯逻辑自检 —— 环轮转生死线、跨环不串、池回收。
-if (!tiny::containers::selfTest())
-throw std::runtime_error("Containers selfTest failed");
+	// TM-03/TM-04：环形临时表与对象池的纯逻辑自检 —— 环轮转生死线、跨环不串、池回收。
+	if (!tiny::containers::selfTest())
+		throw std::runtime_error("Containers selfTest failed");
+
+	// TM-06：管线状态字对语义字段敏感（漏一个字段 = 两条不同管线被判成同一条）。
+	if (!tiny::pipelinestats::selfTest())
+		throw std::runtime_error("PipelineStats selfTest failed");
 
 	// F3：体素世界（建 3x3 chunk、射线打地、挖一格、放回、地面高度）。
 	if (!voxel::selfTest())
@@ -2926,6 +2931,11 @@ void FirstApp::finalizeDiagnostics()
     screenshotCapture.destroy();
     renderDoc.destroy();
     gpuProfiler.destroy();
+
+    // 管线统计要在 device 销毁之前打印：数字在启动阶段就固定了，
+    // 但缓存字节数与退出时的落盘必须分开看（这里只报载入量）。
+    if (diagnosticsOptions.statsPipelines)
+        tiny::pipelinestats::report();
 
     diag::printValidationSummary();
 

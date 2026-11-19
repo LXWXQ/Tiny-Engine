@@ -4,6 +4,9 @@
 #include <fstream>
 #include <stdexcept>
 #include <iostream>
+#include <chrono>
+
+#include "PipelineStats.h"
 
 Pipeline::Pipeline(Device& device, const std::string& vertFilepath, const std::string& fragFilepath, const PipelineConfigInfo& configInfo)
     : device(device) 
@@ -40,6 +43,10 @@ std::vector<char> Pipeline::readFile(const std::string& filepath)
 
 void Pipeline::createGraphicsPipeline(const std::string& vertFilepath, const std::string& fragFilepath, const PipelineConfigInfo& configInfo) 
 {
+    // 计时覆盖「读 SPIR-V + 建 shader 模块 + 建管线」整段：真正拖慢启动的是
+    // 驱动里的着色器编译，只测 vkCreateGraphicsPipelines 会漏掉前两段。
+    const auto startTime = std::chrono::steady_clock::now();
+
     auto vertCode = readFile(vertFilepath);
     auto fragCode = readFile(fragFilepath);
 
@@ -114,10 +121,43 @@ void Pipeline::createGraphicsPipeline(const std::string& vertFilepath, const std
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineInfo.basePipelineIndex = -1;
 
+    // 状态字：只收「会改变驱动派生代码」的字段（详见 PipelineStats.h）。
+    tiny::pipelinestats::GraphicsStateKey stateKey = tiny::pipelinestats::makeEmptyKey();
+    stateKey.topology = configInfo.inputAssemblyInfo.topology;
+    stateKey.cullMode = configInfo.rasterizationInfo.cullMode;
+    stateKey.frontFace = configInfo.rasterizationInfo.frontFace;
+    stateKey.depthBias = configInfo.rasterizationInfo.depthBiasEnable == VK_TRUE;
+    stateKey.depthCompare = configInfo.depthStencilInfo.depthCompareOp;
+    stateKey.depthTest = configInfo.depthStencilInfo.depthTestEnable == VK_TRUE;
+    stateKey.depthWrite = configInfo.depthStencilInfo.depthWriteEnable == VK_TRUE;
+    if (!configInfo.colorBlendAttachments.empty())
+    {
+        const VkPipelineColorBlendAttachmentState& attachment = configInfo.colorBlendAttachments[0];
+        stateKey.blend = attachment.blendEnable == VK_TRUE;
+        stateKey.srcColorBlend = attachment.srcColorBlendFactor;
+        stateKey.dstColorBlend = attachment.dstColorBlendFactor;
+        stateKey.colorBlendOp = attachment.colorBlendOp;
+        stateKey.srcAlphaBlend = attachment.srcAlphaBlendFactor;
+        stateKey.dstAlphaBlend = attachment.dstAlphaBlendFactor;
+        stateKey.alphaBlendOp = attachment.alphaBlendOp;
+    }
+    stateKey.colorAttachmentCount = static_cast<uint32_t>(configInfo.colorAttachmentFormats.size());
+    stateKey.colorFormat = configInfo.colorAttachmentFormats.empty()
+        ? VK_FORMAT_UNDEFINED : configInfo.colorAttachmentFormats[0];
+    stateKey.depthFormat = configInfo.depthAttachmentFormat;
+    stateKey.bindingCount = static_cast<uint32_t>(configInfo.bindingDescriptions.size());
+    stateKey.attributeCount = static_cast<uint32_t>(configInfo.attributeDescriptions.size());
+    stateKey.pipelineLayout = reinterpret_cast<uint64_t>(configInfo.pipelineLayout);
+
     if (vkCreateGraphicsPipelines(device.getDevice(), device.getPipelineCache(), 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) 
     {
+        tiny::pipelinestats::recordFailure();
         throw std::runtime_error("failed to create graphics pipeline!");
     }
+
+    const double elapsedMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - startTime).count();
+    tiny::pipelinestats::recordGraphics(stateKey, vertFilepath.c_str(), fragFilepath.c_str(), elapsedMs);
 }
 
 void Pipeline::createShaderModule(const std::vector<char>& code, VkShaderModule* shaderModule) 
@@ -129,8 +169,12 @@ void Pipeline::createShaderModule(const std::vector<char>& code, VkShaderModule*
 
     if (vkCreateShaderModule(device.getDevice(), &createInfo, nullptr, shaderModule) != VK_SUCCESS) 
     {
+        tiny::pipelinestats::recordFailure();
         throw std::runtime_error("failed to create shader module!");
     }
+    // 记录 SPIR-V 体量：启动读了多少 MB 是"要不要把反射/编译结果做成构建产物"
+    // 的直接依据（TM-12），比凭感觉猜有用。
+    tiny::pipelinestats::recordShaderModule(static_cast<uint64_t>(code.size()));
 }
 
 void Pipeline::bind(VkCommandBuffer commandBuffer) 
@@ -199,6 +243,7 @@ ComputePipeline::ComputePipeline(Device& device, const std::string& compFilepath
                                  VkPipelineLayout pipelineLayout)
     : device(device)
 {
+    const auto startTime = std::chrono::steady_clock::now();
     const std::vector<char> code = readFile(compFilepath);
     createShaderModule(device, code, &shaderModule);
 
@@ -214,7 +259,14 @@ ComputePipeline::ComputePipeline(Device& device, const std::string& compFilepath
     info.layout = pipelineLayout;
 
     if (vkCreateComputePipelines(device.getDevice(), device.getPipelineCache(), 1, &info, nullptr, &pipeline) != VK_SUCCESS)
+    {
+        tiny::pipelinestats::recordFailure();
         throw std::runtime_error("failed to create compute pipeline!");
+    }
+
+    const double elapsedMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - startTime).count();
+    tiny::pipelinestats::recordCompute(compFilepath.c_str(), elapsedMs);
 }
 
 ComputePipeline::~ComputePipeline()
@@ -256,5 +308,9 @@ void ComputePipeline::createShaderModule(Device& device, const std::vector<char>
     info.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
     if (vkCreateShaderModule(device.getDevice(), &info, nullptr, module) != VK_SUCCESS)
+    {
+        tiny::pipelinestats::recordFailure();
         throw std::runtime_error("failed to create compute shader module!");
+    }
+    tiny::pipelinestats::recordShaderModule(static_cast<uint64_t>(code.size()));
 }
