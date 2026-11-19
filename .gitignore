@@ -40,3 +40,7 @@ pipeline_cache.bin
 # 本地临时文件 / 编辑器布局备份
 /tmp_*
 config/*.ini.bak
+
+# 本地跑 tools/Validate.ps1 时的输出（后台重定向的产物，不入库）
+validate_bg.log
+validate_bg.err
