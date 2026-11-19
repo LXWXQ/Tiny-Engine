@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~222 行
+size: ~224 行
 updated: 2026-11-19
 ---
 
@@ -58,7 +58,7 @@ TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--sta
 
 T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表）已于 2026-11-19 完成并移入 §3，这一档不再有待办。
 
-下一批从 §5 的 T2 开始。TM-06 的统计部分、TM-07、TM-08 的第一步都已落地（前两者的第二步按数据判定不做），建议顺序改为 TM-10（Pass 准备阶段并行）。TM-09（跨队列 EXCLUSIVE 所有权转移）已评估、判定本结构下不做，理由与验证层报文见[决策 28](../10-architecture/decisions.md)。
+下一批从 §5 的 T2 开始。TM-06 的统计部分、TM-07、TM-08 的第一步、TM-10 都已落地（前两者的第二步、TM-10 的并行按数据判定不做），建议顺序改为 TM-11（描述符混合模型）或 TM-12（反射结果变构建产物）。TM-09（跨队列 EXCLUSIVE 所有权转移）已评估、判定本结构下不做，理由与验证层报文见[决策 28](../10-architecture/decisions.md)。
 
 
 ## 5. T2：要改热路径
@@ -113,11 +113,12 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 ### TM-10 Pass 准备阶段并行
 
-- **现状**：JobSystem 已有 `submitAfter(std::vector<JobHandle>, ...)`、`parallelFor`、`selfTest`（`src/Core/JobSystem.h:93/99/108`），但 RenderGraph 的 pass 准备（去重资源访问、推导屏障）仍是单线程顺序循环（`src/RHI/RenderGraph.cpp:171` 起）。
-- **参考**：`threading/task_composer.hpp:36 begin_pipeline_stage()`、`:41 get_pipeline_stage_dependency()`、`:49 get_deferred_enqueue_handle()`（子任务自行派生任务时，下一阶段不提前开始）。
-- **落地**：把 pass 循环拆成"收集 → 并行准备（纯数据，不碰 `VkCommandBuffer`）→ 串行录制"三段，前两段进 JobSystem。
-- **验收**：21 个 pass 的准备耗时下降（用现有 `--selftest` 的计时口径对比）；`[RenderGraph] pass bookkeeping selfTest PASS | executed=21 skipped=0` 不变；截图一致。
-- **预估**：2~3 天，风险中（并行边界先只覆盖纯数据段）。
+- **状态**：已完成（拆分已落地，并行经数据判定不做）。
+- **现状（当初的判断逐条修正）**：JobSystem 确实已有 `parallelFor` / `submitAfter`（`src/Core/JobSystem.h:93/99/108`），但"准备阶段耗时值得并行"这个前提是错的 —— 21 个 Pass 的准备（去重资源访问 + 校验声明 + 组装附件描述）合计只有 36 us/帧，约占一帧的 0.3%。
+- **已完成**：`RenderGraph::endFrame` 拆成"串行挑 Pass → `preparePass()`（纯数据，错误只记进 `PreparedPass::error`）→ 串行按 Pass 顺序抛错 → 串行录制"四段；准备阶段可选择走 `JobSystem::parallelFor`（`--parallel-prepare`，默认关闭）；`--stats-rendergraph` 打印两段各自的每帧耗时。详见[决策 29](../10-architecture/decisions.md)与[诊断 12](../60-debug-profiling/diagnostics.md)。
+- **结论（本机 RTX 2070，1920x1080，各 3 次）**：准备阶段串行 35.5 / 35.9 / 36.9 us，并行 176.9 / 203.2 / 207.7 us —— 并行慢 4.9~5.8 倍；录制时间（1435~1532 us）不变。原因是把 21 个任务丢进工作窃取池再等它们完成的开销（160 us 量级）远大于被并行的工作量。**因此准备阶段保持串行**，开关留着只为可复现对照。
+- **验收（已满足的部分）**：`[RenderGraph] pass bookkeeping selfTest PASS | executed=21 skipped=0` 不变；两种模式下 `[Validation] errors=0 warnings=0`、stderr 0 字节；截图与改动前逐像素一致（差异只落在 HUD 的 FPS 读数区域）。
+- **什么时候重新评估**：准备阶段重到几十微秒/Pass（例如真的在准备阶段做 SPIR-V 反射或管线状态推导），或者 Pass 数量涨到上百个。
 
 ### TM-11 描述符的混合模型
 

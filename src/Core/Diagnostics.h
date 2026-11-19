@@ -56,6 +56,14 @@ namespace diag
         // --alias-report：退出时打印渲染图资源别名候选对与预估可省显存（TM-08，只读报告）。
         bool aliasReport = false;
 
+        // --parallel-prepare：Pass 的准备阶段（访问去重 + 声明校验 + 组装附件描述）
+        // 交给作业系统并行，录制仍然是串行的（TM-10）。默认关闭 —— 先用
+        // --stats-rendergraph 看两边的耗时再决定要不要翻默认。
+        bool parallelPrepare = false;
+
+        // --stats-rendergraph：退出时打印准备 / 录制各自的每帧耗时（TM-10）。
+        bool statsRenderGraph = false;
+
         bool gpuTiming = false;
         std::string gpuTimingCsvPath = "gpu_timing.csv";
 

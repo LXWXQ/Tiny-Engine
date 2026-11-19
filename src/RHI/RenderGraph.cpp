@@ -9,6 +9,11 @@
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+
+// TM-10：准备阶段的并行跑在作业系统上。
+#include "Core/JobSystem.h"
 
 namespace
 {
@@ -170,67 +175,26 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     }
 }
 
-void RenderGraph::endFrame()
+// TM-10：一个 Pass 的「准备」阶段 —— 全是纯数据工作。
+// 这里刻意不碰 VkCommandBuffer、也不写 textures / buffers 的可变字段（那些是
+// 屏障推导用的顺序状态），才能安全并行；同理这里不能抛异常，错误先存进
+// prepared.error，回到串行阶段按 Pass 顺序抛。
+void RenderGraph::preparePass(PreparedPass& prepared)
 {
-    if (cmd == VK_NULL_HANDLE)
-        throw std::runtime_error("RenderGraph: 调用 endFrame 之前必须先 beginFrame");
+    Pass& pass = *prepared.pass;
 
-    const bool hasComputePass = std::any_of(passes.begin(), passes.end(),
-        [](const std::unique_ptr<Pass>& p) { return p->isCompute && p->enabled; });
-    if (hasComputePass && computeCmd == VK_NULL_HANDLE)
-        throw std::runtime_error("RenderGraph: 包含了 compute pass，但 beginFrame 没有提供 compute command buffer");
-
-    // ---- 语义校验：先查"谁能读到没人写的东西"，再开始录制 ----
-    // 放在最前面，是为了让错误在"这一帧的 GPU 命令还没提交"时就抛出来，
-    // 而不是让画面先花一帧。
-    validateWriteCoverage();
-
-    // 本帧 Pass 执行 / 跳过清单：setPassEnabled 的语义靠它可断言，
-    // 调试面板也能直接显示这一帧到底跑了哪些 Pass。
-    lastFrameExecutedPasses.clear();
-    lastFrameSkippedPasses.clear();
-
-    // P0-4：只对 graphics pass 计时；compute 队列的时间戳另算。
-    uint32_t timedPassIndex = 0;
-
-    for (std::unique_ptr<Pass>& passPtr : passes)
+    try
     {
-        Pass& pass = *passPtr;
-        if (!pass.enabled)
-        {
-            lastFrameSkippedPasses.push_back(pass.name);
-            continue;
-        }
-        lastFrameExecutedPasses.push_back(pass.name);
-
-        const VkCommandBuffer passCmd = pass.isCompute ? computeCmd : cmd;
-
-        // ②：本 pass 的标记。崩溃后 breadcrumbs 会把「最后到达的那个名字」
-        // 打出来 —— 这比对着一个故障地址二分注释代码快得多。
-        Breadcrumbs* crumbs = nullptr;
-        if (Breadcrumbs* tracked = device.getBreadcrumbs(); tracked != nullptr && tracked->isActive())
-        {
-            crumbs = tracked;
-            crumbs->beginPass(passCmd, Breadcrumbs::slotFor(currentFrameSlot, pass.isCompute), pass.name.c_str());
-        }
-
-
-        // P0-4：本 pass 的 GPU 计时开始（仅 graphics）。
-        if (!pass.isCompute)
-            onPassTimingBegin(passCmd, timedPassIndex, pass.name.c_str());
-
-        // ---- 0) 同一个 Pass 里对同一张图可能声明了多次访问 ----
-        // 典型是 Bloom 的上采样：它既要把粗级结果当纹理采样，
-        // 又要把本级当颜色附件累加写入。按声明顺序插入的屏障会变成
-        // "转到 SHADER_READ、再转回 COLOR_ATTACHMENT"，白白多发一次。
-        // 只保留最后一次声明即可 —— 屏障本来就只需要保证
-        // "进入这个 Pass 时资源处于正确的布局"。
-        std::vector<Access> accesses;
-        accesses.reserve(pass.accesses.size());
+        // 0) 同一个 Pass 里对同一张图可能声明了多次访问。
+        // 典型是 Bloom 的上采样：既要把粗级结果当纹理采样，又要把本级当颜色
+        // 附件累加写入。按声明顺序插屏障会变成「转到 SHADER_READ、再转回
+        // COLOR_ATTACHMENT」，白白多发一次。只保留最后一次声明即可 ——
+        // 屏障本来就只需要保证「进入这个 Pass 时资源处于正确的布局」。
+        prepared.accesses.reserve(pass.accesses.size());
         for (const Access& acc : pass.accesses)
         {
             if (!acc.texture.valid()) continue;
-            auto it = std::find_if(accesses.begin(), accesses.end(),
+            auto it = std::find_if(prepared.accesses.begin(), prepared.accesses.end(),
                 [&](const Access& a)
                 {
                     return a.texture.id == acc.texture.id &&
@@ -239,17 +203,16 @@ void RenderGraph::endFrame()
                         a.range.baseArrayLayer == acc.range.baseArrayLayer &&
                         a.range.layerCount == acc.range.layerCount;
                 });
-            if (it != accesses.end())
+            if (it != prepared.accesses.end())
                 *it = acc;
             else
-                accesses.push_back(acc);
+                prepared.accesses.push_back(acc);
         }
 
-        // ---- 0.5) 声明合法性校验 ----
-        // 渲染图的核心承诺是「声明即同步」，代价是漏声明不会报错，只会出
-        // 屏障缺失或 usage 不匹配的怪画面。这里把最常见的两类错误在
-        // 录制前就挑出来：句柄越界、以及拿没有对应 usage 的图当附件用。
-        for (const Access& acc : accesses)
+        // 0.5) 声明合法性校验：句柄越界、拿没有对应 usage 的图当附件用。
+        // 渲染图的承诺是「声明即同步」，代价是漏声明不报错、只出怪画面，
+        // 所以把最常见的两类错误在录制前挑出来。
+        for (const Access& acc : prepared.accesses)
         {
             if (acc.texture.id >= textures.size())
             {
@@ -281,25 +244,24 @@ void RenderGraph::endFrame()
                     "\" 被当作存储图像，但创建时没有声明 STORAGE usage");
         }
 
-        std::vector<BufferAccess> bufferAccesses;
-        bufferAccesses.reserve(pass.bufferAccesses.size());
+        prepared.bufferAccesses.reserve(pass.bufferAccesses.size());
         for (const BufferAccess& acc : pass.bufferAccesses)
         {
             if (!acc.buffer.valid()) continue;
-            auto it = std::find_if(bufferAccesses.begin(), bufferAccesses.end(),
+            auto it = std::find_if(prepared.bufferAccesses.begin(), prepared.bufferAccesses.end(),
                 [&](const BufferAccess& a)
                 {
                     return a.buffer.id == acc.buffer.id &&
                         a.range.offset == acc.range.offset &&
                         a.range.size == acc.range.size;
                 });
-            if (it != bufferAccesses.end())
+            if (it != prepared.bufferAccesses.end())
                 *it = acc;
             else
-                bufferAccesses.push_back(acc);
+                prepared.bufferAccesses.push_back(acc);
         }
 
-        for (const BufferAccess& acc : bufferAccesses)
+        for (const BufferAccess& acc : prepared.bufferAccesses)
         {
             if (acc.buffer.id >= buffers.size())
             {
@@ -319,98 +281,225 @@ void RenderGraph::endFrame()
         if (pass.isCompute && (!pass.colors.empty() || !pass.depths.empty()))
             throw std::runtime_error("RenderGraph: compute pass \"" + pass.name + "\" 不能声明颜色/深度附件");
 
+        // ---- 组装动态渲染的附件描述 ----
+        prepared.raster = !pass.isCompute && (!pass.colors.empty() || !pass.depths.empty());
+        if (!prepared.raster)
+            return;
+
+        prepared.colorInfos.resize(pass.colors.size());
+        for (size_t i = 0; i < pass.colors.size(); ++i)
+        {
+            const ColorAttachment& ca = pass.colors[i];
+            const TextureEntry& te = textures[ca.texture.id];
+
+            prepared.colorInfos[i] = VkRenderingAttachmentInfo{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+            prepared.colorInfos[i].imageView = te.view;
+            prepared.colorInfos[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            prepared.colorInfos[i].loadOp = ca.loadOp;
+            prepared.colorInfos[i].storeOp = ca.storeOp;
+            prepared.colorInfos[i].clearValue = ca.clearValue;
+        }
+
+        prepared.hasDepth = !pass.depths.empty();
+        if (prepared.hasDepth)
+        {
+            const DepthAttachment& da = pass.depths[0];
+            const TextureEntry& te = textures[da.texture.id];
+            prepared.depthInfo.imageView = te.view;
+            prepared.depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            prepared.depthInfo.loadOp = da.loadOp;
+            prepared.depthInfo.storeOp = da.storeOp;
+            prepared.depthInfo.clearValue = da.clearValue;
+        }
+
+        // 尺寸：优先用显式指定的，否则取第一个附件的
+        prepared.extent = pass.extent;
+        if (!pass.hasExtent)
+        {
+            const TextureHandle ref = pass.colors.empty() ? pass.depths[0].texture : pass.colors[0].texture;
+            prepared.extent = textures[ref.id].desc.extent;
+        }
+
+        prepared.info = VkRenderingInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        prepared.info.renderArea.offset = { 0, 0 };
+        prepared.info.renderArea.extent = prepared.extent;
+        prepared.info.layerCount = 1;
+        prepared.info.colorAttachmentCount = static_cast<uint32_t>(prepared.colorInfos.size());
+        prepared.info.pColorAttachments = prepared.colorInfos.empty() ? nullptr : prepared.colorInfos.data();
+        prepared.info.pDepthAttachment = prepared.hasDepth ? &prepared.depthInfo : nullptr;
+    }
+    catch (const std::exception& e)
+    {
+        prepared.error = e.what();
+    }
+}
+
+void RenderGraph::reportPrepareStats() const
+{
+    if (statsFrames == 0)
+        return;
+
+    const double frames = static_cast<double>(statsFrames);
+    std::printf("[RenderGraph] 准备 %.2f us/帧 | 录制 %.2f us/帧 | 并行=%s | 本帧 %zu 个 Pass\n",
+        static_cast<double>(prepareMicrosTotal) / frames,
+        static_cast<double>(recordMicrosTotal) / frames,
+        parallelPrepare ? "开" : "关",
+        lastFrameExecutedPasses.size());
+}
+void RenderGraph::endFrame()
+{
+    if (cmd == VK_NULL_HANDLE)
+        throw std::runtime_error("RenderGraph: 调用 endFrame 之前必须先 beginFrame");
+
+    const bool hasComputePass = std::any_of(passes.begin(), passes.end(),
+        [](const std::unique_ptr<Pass>& p) { return p->isCompute && p->enabled; });
+    if (hasComputePass && computeCmd == VK_NULL_HANDLE)
+        throw std::runtime_error("RenderGraph: 包含了 compute pass，但 beginFrame 没有提供 compute command buffer");
+
+    // ---- 语义校验：先查"谁能读到没人写的东西"，再开始录制 ----
+    // 放在最前面，是为了让错误在"这一帧的 GPU 命令还没提交"时就抛出来，
+    // 而不是让画面先花一帧。
+    validateWriteCoverage();
+
+    // 本帧 Pass 执行 / 跳过清单：setPassEnabled 的语义靠它可断言，
+    // 调试面板也能直接显示这一帧到底跑了哪些 Pass。
+    lastFrameExecutedPasses.clear();
+    lastFrameSkippedPasses.clear();
+
+    const auto frameClock = std::chrono::steady_clock::now();
+
+    // 串行：挑出这一帧真正要跑的 Pass，并分配计时序号。
+    // 顺序、清单、计时序号必须与「逐个跑」时完全一致 —— setPassEnabled 的语义、
+    // [RenderGraph] pass bookkeeping selfTest、TM-08 的生命周期序号都靠这个顺序。
+    std::vector<Pass*> activePasses;
+    activePasses.reserve(passes.size());
+    for (std::unique_ptr<Pass>& passPtr : passes)
+    {
+        Pass& pass = *passPtr;
+        if (!pass.enabled)
+        {
+            lastFrameSkippedPasses.push_back(pass.name);
+            continue;
+        }
+        lastFrameExecutedPasses.push_back(pass.name);
+        activePasses.push_back(&pass);
+    }
+
+    while (preparedPasses.size() < activePasses.size())
+        preparedPasses.push_back(std::make_unique<PreparedPass>());
+
+    uint32_t timedPassIndex = 0;
+    for (size_t i = 0; i < activePasses.size(); ++i)
+    {
+        PreparedPass& prepared = *preparedPasses[i];
+        prepared.pass = activePasses[i];
+        prepared.cmd = prepared.pass->isCompute ? computeCmd : cmd;
+        prepared.passIndex = static_cast<int32_t>(i);
+        prepared.timedPassIndex = 0;
+        prepared.raster = false;
+        prepared.hasDepth = false;
+        prepared.error.clear();
+        prepared.accesses.clear();
+        prepared.bufferAccesses.clear();
+        prepared.colorInfos.clear();
+        // P0-4：只对 graphics pass 计时；compute 队列的时间戳另算。
+        if (!prepared.pass->isCompute)
+            prepared.timedPassIndex = timedPassIndex++;
+    }
+
+    // 并行（或串行）准备。每个 Pass 只碰自己的声明与 textures / buffers 的
+    // 只读字段，互不引用，所以能直接并行；pass 数很少时并行反而更慢，所以
+    // 少于 2 个就直接串行。
+    if (parallelPrepare && jobSystem != nullptr && activePasses.size() > 1)
+    {
+        jobSystem->parallelFor(0, static_cast<uint32_t>(activePasses.size()), 1,
+            [this](uint32_t begin, uint32_t end)
+            {
+                for (uint32_t i = begin; i < end; ++i)
+                    preparePass(*preparedPasses[i]);
+            });
+    }
+    else
+    {
+        for (size_t i = 0; i < activePasses.size(); ++i)
+            preparePass(*preparedPasses[i]);
+    }
+
+    // 错误按 Pass 顺序统一抛。并行跑的时候不能在 worker 里抛 —— 报错顺序会随
+    // 线程调度变化，排查时看到的第一个错就不一定是第一个错了。
+    for (size_t i = 0; i < activePasses.size(); ++i)
+    {
+        const std::string& error = preparedPasses[i]->error;
+        if (!error.empty())
+            throw std::runtime_error(error);
+    }
+
+    const auto prepareEnd = std::chrono::steady_clock::now();
+
+    // ---- 串行录制 ----
+    for (size_t i = 0; i < activePasses.size(); ++i)
+    {
+        PreparedPass& prepared = *preparedPasses[i];
+        Pass& pass = *prepared.pass;
+        const VkCommandBuffer passCmd = prepared.cmd;
+
+        // ②：本 pass 的标记。崩溃后 breadcrumbs 会把「最后到达的那个名字」
+        // 打出来 —— 这比对着一个故障地址二分注释代码快得多。
+        Breadcrumbs* crumbs = nullptr;
+        if (Breadcrumbs* tracked = device.getBreadcrumbs(); tracked != nullptr && tracked->isActive())
+        {
+            crumbs = tracked;
+            crumbs->beginPass(passCmd, Breadcrumbs::slotFor(currentFrameSlot, pass.isCompute), pass.name.c_str());
+        }
+
+        // P0-4：本 pass 的 GPU 计时开始（仅 graphics）。
+        if (!pass.isCompute)
+            onPassTimingBegin(passCmd, prepared.timedPassIndex, pass.name.c_str());
+
         // P1-1：Tracy GPU zone 覆盖本 pass 的屏障 + 渲染 + 回调。
-        // active=false（compute pass 或未启用）时是空操作。
         {
             TINY_GPU_ZONE_SCOPE(gpuProfiler, passCmd, pass.name.c_str(), !pass.isCompute);
 
-        // ---- 1) 资源屏障：由声明自动推导 ----
-        for (const Access& acc : accesses)
-            emitBarrierIfNeeded(acc, passCmd, pass.isCompute);
-        for (const BufferAccess& acc : bufferAccesses)
-            emitBufferBarrierIfNeeded(acc, passCmd, pass.isCompute);
+            // ---- 1) 资源屏障：由声明自动推导 ----
+            // 这一段必须串行：屏障取决于上一个 Pass 留下的布局。
+            for (const Access& acc : prepared.accesses)
+                emitBarrierIfNeeded(acc, passCmd, pass.isCompute);
+            for (const BufferAccess& acc : prepared.bufferAccesses)
+                emitBufferBarrierIfNeeded(acc, passCmd, pass.isCompute);
 
-        // ---- 2) 动态渲染 ----
-        const bool raster = !pass.isCompute && (!pass.colors.empty() || !pass.depths.empty());
-
-        if (raster)
-        {
-            std::vector<VkRenderingAttachmentInfo> colorInfos(pass.colors.size());
-            for (size_t i = 0; i < pass.colors.size(); ++i)
+            // ---- 2) 动态渲染 ----
+            if (prepared.raster)
             {
-                const ColorAttachment& ca = pass.colors[i];
-                const TextureEntry& te = textures[ca.texture.id];
+                vkCmdBeginRendering(passCmd, &prepared.info);
 
-                colorInfos[i] = VkRenderingAttachmentInfo{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-                colorInfos[i].imageView = te.view;
-                colorInfos[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                colorInfos[i].loadOp = ca.loadOp;
-                colorInfos[i].storeOp = ca.storeOp;
-                colorInfos[i].clearValue = ca.clearValue;
+                // viewport / scissor 在所有管线里都设成动态状态，必须显式设置
+                cmdSetFullViewportAndScissor(passCmd, prepared.extent);
             }
 
-            VkRenderingAttachmentInfo depthInfo{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-            const bool hasDepth = !pass.depths.empty();
-            if (hasDepth)
-            {
-                const DepthAttachment& da = pass.depths[0];
-                const TextureEntry& te = textures[da.texture.id];
-                depthInfo.imageView = te.view;
-                depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                depthInfo.loadOp = da.loadOp;
-                depthInfo.storeOp = da.storeOp;
-                depthInfo.clearValue = da.clearValue;
-            }
+            // ---- 3) 用户回调（真正的绘制 / dispatch）----
+            if (pass.callback)
+                pass.callback(passCmd);
 
-            // 尺寸：优先用显式指定的，否则取第一个附件的
-            VkExtent2D extent = pass.extent;
-            if (!pass.hasExtent)
-            {
-                const TextureHandle ref = pass.colors.empty() ? pass.depths[0].texture : pass.colors[0].texture;
-                extent = textures[ref.id].desc.extent;
-            }
+            // ---- 4) 结束动态渲染 ----
+            if (prepared.raster)
+                vkCmdEndRendering(passCmd);
 
-            VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
-            info.renderArea.offset = { 0, 0 };
-            info.renderArea.extent = extent;
-            info.layerCount = 1;
-            info.colorAttachmentCount = static_cast<uint32_t>(colorInfos.size());
-            info.pColorAttachments = colorInfos.empty() ? nullptr : colorInfos.data();
-            info.pDepthAttachment = hasDepth ? &depthInfo : nullptr;
+            // P0-4：本 pass 的 GPU 计时结束。
+            if (!pass.isCompute)
+                onPassTimingEnd(passCmd, prepared.timedPassIndex);
 
-            vkCmdBeginRendering(passCmd, &info);
-
-            // viewport / scissor 在所有管线里都设成动态状态，必须显式设置
-            cmdSetFullViewportAndScissor(passCmd, extent);
-        }
-
-        // ---- 3) 用户回调（真正的绘制 / dispatch）----
-        if (pass.callback)
-            pass.callback(passCmd);
-
-        // ---- 4) 结束动态渲染 ----
-        if (raster)
-            vkCmdEndRendering(passCmd);
-
-        // P0-4：本 pass 的 GPU 计时结束。
-        if (!pass.isCompute)
-        {
-            onPassTimingEnd(passCmd, timedPassIndex);
-            ++timedPassIndex;
-        }
-
-        // ②：pass 结束。放在 vkCmdEndRendering 之后 —— 降级路径用
-        // vkCmdUpdateBuffer，而传输命令在渲染通道内非法。
-        if (crumbs != nullptr)
-            crumbs->endPass(passCmd, Breadcrumbs::slotFor(currentFrameSlot, pass.isCompute), pass.name.c_str());
+            // ②：pass 结束。放在 vkCmdEndRendering 之后 —— 降级路径用
+            // vkCmdUpdateBuffer，而传输命令在渲染通道内非法。
+            if (crumbs != nullptr)
+                crumbs->endPass(passCmd, Breadcrumbs::slotFor(currentFrameSlot, pass.isCompute), pass.name.c_str());
         }   // P1-1：结束本 pass 的 GPU zone 作用域
 
         // ---- 5) 记录本 Pass 造成的最终状态，供下一个 Pass 推导屏障 ----
-        for (const Access& acc : accesses)
+        const int32_t passIndex = prepared.passIndex;
+        for (const Access& acc : prepared.accesses)
         {
             TextureEntry& te = textures[acc.texture.id];
             // TM-08：第一次被打上「写」的那一个 Pass 就是生命周期起点。
-            const int32_t passIndex = static_cast<int32_t>(lastFrameExecutedPasses.size()) - 1;
             if ((acc.access & kWriteBits) != 0 && te.firstWritePass < 0)
                 te.firstWritePass = passIndex;
             te.lastUsePass = passIndex;
@@ -428,7 +517,7 @@ void RenderGraph::endFrame()
                 }
             }
         }
-        for (const BufferAccess& acc : bufferAccesses)
+        for (const BufferAccess& acc : prepared.bufferAccesses)
         {
             BufferEntry& be = buffers[acc.buffer.id];
             be.stage = acc.stage;
@@ -436,6 +525,15 @@ void RenderGraph::endFrame()
             be.lastAccessQueue = pass.isCompute ? 1 : 0;
         }
     }
+
+    // TM-10：准备 / 录制各自的耗时。只在 --stats-rendergraph 打开时打印，
+    // 但计时本身总是累加（两次 steady_clock 读取，远小于一次屏障推导）。
+    prepareMicrosTotal += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(prepareEnd - frameClock).count());
+    recordMicrosTotal += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - prepareEnd).count());
+    ++statsFrames;
 
     // TM-08：把本帧每个中间目标的字节数与生命周期交给报告模块。
     // 只在 --alias-report 打开时走这一段 —— 关掉时零开销，连 vector 都不建。

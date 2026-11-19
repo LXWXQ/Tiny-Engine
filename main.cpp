@@ -76,6 +76,8 @@
 //   --stats-pipelines             退出时打印管线统计：数量、建管线耗时、状态去重
 //   --stats-scratch               退出时打印每帧暂存区的分配次数、字节数、扩容与刷新
 //   --alias-report                退出时打印渲染图资源别名候选对与预估可省显存（只读报告）
+//   --parallel-prepare            Pass 的准备阶段交给作业系统并行（TM-10）
+//   --stats-rendergraph           退出时打印 Pass 准备 / 录制各自的每帧耗时（TM-10）
 //   --gpu-timing-csv <path>       指定 CSV 路径（隐含 --gpu-timing）
 //   --validation-features <list>  启用验证层增强：bp(=best practices) / sync(=同步校验)，逗号分隔或 all
 //   --validation-jsonl <path>     把验证层消息写成 JSONL（默认不落盘，也不写 stderr）
@@ -172,6 +174,8 @@ const UsageLine kUsageLines[] = {
     { "剖析", "--stats-pipelines", "退出时打印管线数量、建管线耗时与状态去重（TM-06）" },
     { "剖析", "--stats-scratch", "退出时打印每帧暂存区的分配次数、字节数、扩容与刷新次数（TM-07）" },
     { "剖析", "--alias-report", "退出时打印渲染图资源别名候选对与预估可省显存（TM-08，只读报告）" },
+{ "剖析", "--parallel-prepare", "Pass 的准备阶段（访问去重 + 校验 + 组装附件描述）交给作业系统并行（TM-10）" },
+{ "剖析", "--stats-rendergraph", "退出时打印 Pass 准备 / 录制各自的每帧耗时（TM-10）" },
     { "帮助", "--help / -h", "打印这张表并退出（退出码 0）" },
 };
 
@@ -475,6 +479,8 @@ bool audioSpatialTest = false;
         else if (arg == "--stats-pipelines") diagOptions.statsPipelines = true;
         else if (arg == "--stats-scratch") diagOptions.statsScratch = true;
         else if (arg == "--alias-report") diagOptions.aliasReport = true;
+else if (arg == "--parallel-prepare") diagOptions.parallelPrepare = true;
+else if (arg == "--stats-rendergraph") diagOptions.statsRenderGraph = true;
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
         else if (arg == "--runtime-mode") diagOptions.runtimeMode = true;
         else if (arg == "--terrain-test") diagOptions.terrainTest = true;

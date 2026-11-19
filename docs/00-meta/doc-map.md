@@ -4,7 +4,7 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~190 行
+size: ~191 行
 updated: 2026-11-19
 ---
 
@@ -16,7 +16,7 @@ updated: 2026-11-19
 
 | 源文件 | 内容 | 必读文档 | 回写 |
 |---|---|---|---|
-| `RenderGraph.h/.cpp` (49KB) | 栅栏推导、子资源状态、buffer 区间、语义校验、跨队列依赖 | [rendergraph](../10-architecture/rendergraph.md) | rendergraph |
+| `RenderGraph.h/.cpp` (49KB) | 栅栏推导、子资源状态、buffer 区间、语义校验、跨队列依赖；Pass 的准备 / 录制拆分与耗时统计（`--stats-rendergraph`） | [rendergraph](../10-architecture/rendergraph.md)、[diagnostics](../60-debug-profiling/diagnostics.md) 第 12 节 | rendergraph |
 | `Renderer.h/.cpp` | frame slot、timeline、submit/present 顺序、resize | [synchronization](../10-architecture/synchronization.md) | synchronization |
 | `Device.h/.cpp` | instance/device/queue/feature/VMA、验证层回调 | [layering](../10-architecture/layering.md)、[diagnostics](../60-debug-profiling/diagnostics.md) | layering、diagnostics |
 | `Swapchain.h/.cpp` | 交换链、重建、格式 | [synchronization](../10-architecture/synchronization.md) | synchronization |

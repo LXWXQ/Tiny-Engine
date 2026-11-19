@@ -2,9 +2,9 @@
 id: debug-profiling/diagnostics
 title: 诊断基础设施实现
 type: debug
-scope: src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
+scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~190 行
+size: ~217 行
 updated: 2026-11-19
 ---
 
@@ -188,3 +188,30 @@ Pass"。`Breadcrumbs`（`src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*`）补�
 
 零开销路径：不带 `--alias-report` 时 `RenderGraph::endFrame` 里那一段整个不执行（连 vector
 都不建），`--selftest 30` 的输出与基线一致，`[Diag] zero-overhead guard PASS` 仍然通过。
+## 12. 渲染图准备 / 录制耗时（TM-10）
+
+`RenderGraph::endFrame` 把每个 Pass 的工作拆成两段：
+
+- **准备**：访问去重（同一个 Pass 里对同一张图声明多次时只保留最后一次）、声明合法性校验（句柄越界、usage 不匹配）、组装 `VkRenderingInfo` 与附件描述。纯数据，不碰 `VkCommandBuffer`。
+- **录制**：屏障推导（依赖上一个 Pass 留下的布局）+ `vkCmdBeginRendering` + 用户回调 + `vkCmdEndRendering`。必须串行。
+
+两段各自的耗时常年累加，`--stats-rendergraph` 在退出时打印每帧平均值：
+
+```
+build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
+[RenderGraph] 准备 35.92 us/帧 | 录制 1464.78 us/帧 | 并行=关 | 本帧 21 个 Pass
+```
+
+### 12.1 为什么不把准备阶段并行
+
+`--parallel-prepare` 会让准备阶段走 `JobSystem::parallelFor`（一个 Pass 一个任务）。实测（RTX 2070，1920x1080，各 3 次）准备从 35.5 / 35.9 / 36.9 us 变成 176.9 / 203.2 / 207.7 us —— 慢 4.9~5.8 倍，录制时间不变。原因是 21 个 Pass 的准备合计只有 36 us，而把任务丢进工作窃取池再等它们做完是 160 us 量级：线程唤醒的延迟远大于被并行的工作量。
+
+这条测量结果就是结论：准备阶段保持串行，开关留着只为可复现对照（默认关闭）。
+
+### 12.2 错误为什么在串行阶段统一抛
+
+并行时如果从 worker 里抛异常，报错顺序会随线程调度变化 —— 排查时看到的第一个错不一定是第一个错。所以 `PreparedPass` 带一个 `error` 字段，准备阶段只记录，回到串行阶段按 Pass 序号依次检查，报错文案与串行路径逐字一致（`RenderGraph: Pass "X" 引用了越界的纹理句柄` 这类）。
+
+### 12.3 与其它统计开关的关系
+
+`--stats-pipelines`（第 10 节）看的是管线构建，`--stats-scratch`（第 7 节）看的是暂存区分配，`--alias-report`（第 11 节）看的是资源生命周期；本节看的是每帧渲染图的 CPU 开销。四个开关互不影响，可以同时打开。

@@ -4,6 +4,7 @@
 #include "GpuTimer.h"   // P0-4：每 pass GPU 计时
 
 class GpuProfiler;   // P1-1：Tracy GPU zone（前置声明，避免头文件污染）
+class JobSystem;     // TM-10：Pass 准备阶段并行（前置声明，别把线程池的头拖进来）
 #include <vulkan/vulkan.h>
 #include <string>
 #include <cstddef>
@@ -288,6 +289,16 @@ public:
                     uint64_t frameNumber = 0);
     void endFrame();     // 按顺序执行所有 Pass
 
+    // TM-10：把每个 Pass 的「准备」（访问去重、声明校验、组装附件描述）与
+    // 「录制」（屏障 + vkCmdBeginRendering + 回调）分开。准备阶段只读写 Pass
+    // 自己的声明和 textures / buffers 的只读字段，不碰 VkCommandBuffer，可以并行；
+    // 录制阶段依赖上一个 Pass 留下的布局，必须串行。默认关闭（--parallel-prepare）。
+    void setJobSystem(JobSystem* jobs) { jobSystem = jobs; }
+    void setParallelPrepare(bool enabled) { parallelPrepare = enabled; }
+    bool isParallelPrepare() const { return parallelPrepare; }
+    // 准备与录制各自的每帧耗时（--stats-rendergraph）。
+    void reportPrepareStats() const;
+
     // P0-4：每 pass GPU 计时挂钩。TINY_ENABLE_GPU_TIMING 关闭时是空实现，
     // 默认构建为此一处也不产生（零分支、零命令）。
     void setGpuTimer(GpuTimer* timer) { gpuTimer = timer; }
@@ -431,6 +442,29 @@ private:
     void emitBarrierIfNeeded(const Access& acc, VkCommandBuffer target, bool currentQueueIsCompute);
     void emitBufferBarrierIfNeeded(const BufferAccess& acc, VkCommandBuffer target, bool currentQueueIsCompute);
 
+    // TM-10：一个 Pass 的准备工作结果。全部是纯数据 —— 指针指向自己的 vector，
+    // 所以对象必须放在堆上（preparedPasses 存 unique_ptr）：vector 一旦搬家，
+    // VkRenderingInfo 里的 pColorAttachments 就成了悬空指针。
+    struct PreparedPass
+    {
+        Pass* pass = nullptr;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        uint32_t timedPassIndex = 0;   // 只有 graphics pass 有（P0-4 的序号）
+        int32_t passIndex = -1;        // 本帧执行序号（TM-08 的生命周期口径）
+        bool raster = false;
+        VkExtent2D extent{ 0, 0 };
+        std::vector<Access> accesses;              // 去重后的纹理访问
+        std::vector<BufferAccess> bufferAccesses;  // 去重后的 buffer 访问
+        std::vector<VkRenderingAttachmentInfo> colorInfos;
+        VkRenderingAttachmentInfo depthInfo{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        bool hasDepth = false;
+        VkRenderingInfo info{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        // 并行阶段不能抛异常（抛出会随线程调度改变报错顺序），错误先记在这里，
+        // 回到串行阶段按 Pass 顺序抛。
+        std::string error;
+    };
+
+    void preparePass(PreparedPass& prepared);
     // 语义校验：瞬时资源每帧必须有人写。
     // 与屏障推导（同步正确性）是两件不同的事 —— 这个查的是"语义正确性"，
     // 验证层对此一言不发（从 UNDEFINED 布局转出来本身完全合法）。
@@ -440,6 +474,15 @@ private:
     GpuTimer* gpuTimer = nullptr;
     GpuProfiler* gpuProfiler = nullptr;   // P1-1
     uint32_t currentFrameSlot = 0;
+
+    // TM-10：准备阶段并行。jobSystem 为空时无条件走串行路径（headless 测试也走）。
+    JobSystem* jobSystem = nullptr;
+    bool parallelPrepare = false;
+    // 每帧复用，避免每个 Pass 都重新分配 vector（沿用容量）。
+    std::vector<std::unique_ptr<PreparedPass>> preparedPasses;
+    uint64_t statsFrames = 0;
+    uint64_t prepareMicrosTotal = 0;
+    uint64_t recordMicrosTotal = 0;
 
     Device& device;
     VkCommandBuffer cmd = VK_NULL_HANDLE;          // graphics command buffer

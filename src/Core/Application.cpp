@@ -126,6 +126,11 @@ FirstApp::FirstApp(const diag::Options& options)
 	// D-1(b)：渲染图必须在各 Pass 之前创建 —— Pass 的 init() 会往里注册资源
 	renderGraph = std::make_unique<RenderGraph>(*vulkanDevice);
 
+	// TM-10：准备阶段并行。先把作业系统注入，再按开关打开 —— 反过来的话第一帧
+	// 会退化成串行（不影响正确性，但统计里会多一个异常值）。
+	renderGraph->setJobSystem(jobSystem.get());
+	renderGraph->setParallelPrepare(diagnosticsOptions.parallelPrepare);
+
 	// P0-4：GPU 计时。编译期或运行期任一关闭时 init 直接返回，不创建任何资源。
 	gpuTimer.init(vulkanDevice->getDevice(), vulkanDevice->getPhysicalDevice(),
 		vulkanDevice->findPhysicalQueueFamilies().graphicsFamily.value(),
@@ -2954,6 +2959,10 @@ void FirstApp::finalizeDiagnostics()
     // TM-08：别名报告是纯 CPU 数据（最后一帧的清单），打印时机没有设备依赖。
     if (diagnosticsOptions.aliasReport)
         tiny::aliasreport::report();
+
+    // TM-10：准备 / 录制各自的每帧耗时。渲染图此刻还活着，统计才有内容。
+    if (diagnosticsOptions.statsRenderGraph)
+        renderGraph->reportPrepareStats();
 
     diag::printValidationSummary();
 
