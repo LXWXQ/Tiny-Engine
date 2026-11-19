@@ -68,9 +68,7 @@ private:
         VkSampler     sampler = VK_NULL_HANDLE;
     } noiseTexture;
 
-    std::array<VkBuffer, kFramesInFlight>      uboBuffers{};
-    std::array<VmaAllocation, kFramesInFlight> uboAllocations{};
-    std::array<void*, kFramesInFlight>         uboMapped{};
+    // TM-07：SSAO 参数改从每帧暂存区分配（见 ScratchArena），这里不再自建 UBO。
 
     VkSampler     outputSampler = VK_NULL_HANDLE;
 

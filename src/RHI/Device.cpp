@@ -2,6 +2,7 @@
 #include "Core/StartupLog.h"
 #include "RHI/PipelineCache.h"
 #include "RHI/Breadcrumbs.h"
+#include "RHI/ScratchArena.h"
 #include "RHI/DeviceQuirks.h"
 #include <iostream>
 #include <stdexcept>
@@ -85,6 +86,7 @@ Device::~Device()
     // ① / ② 必须在 VMA 与 VkDevice 之前释放：breadcrumbs 持有 VMA 缓冲、
     // pipelineCache 会调 vkDestroyPipelineCache 并顺手把缓存写盘
     // （写盘时还要读 physicalDevice properties，所以也不能在 vkDestroyInstance 之后）。
+    scratchArena.reset();   // 用的是 VMA 缓冲，必须先于 vmaDestroyAllocator
     breadcrumbs.reset();
     pipelineCache.reset();
 
@@ -104,6 +106,11 @@ VkPipelineCache Device::getPipelineCache() const
 {
     // 定义在 .cpp 是因为头文件里 PipelineCache 只有前置声明。
     return pipelineCache ? pipelineCache->get() : VK_NULL_HANDLE;
+}
+
+tiny::ScratchArena& Device::getScratch()
+{
+    return *scratchArena;
 }
 
 size_t Device::reportVmaStats(const char* stage)
@@ -545,6 +552,9 @@ void Device::createLogicalDevice()
     pipelineCache = std::make_unique<PipelineCache>(*this);
 
     // ②：breadcrumbs 依赖 VMA（游标缓冲），必须在 vmaCreateAllocator 之后。
+    // TM-07：每帧暂存区。放在 VMA 之后建，它自己就是一块 VMA 缓冲。
+    scratchArena = std::make_unique<tiny::ScratchArena>(*this);
+
     breadcrumbs = std::make_unique<Breadcrumbs>();
     breadcrumbs->init(*this);
 }

@@ -73,6 +73,7 @@
 //   --build-info                  打印本二进制编译进的 & 本次开启的调试能力后退出
 //   --gpu-timing                  每 pass GPU 计时，退出时写 gpu_timing.csv
 //   --stats-pipelines             退出时打印管线统计：数量、建管线耗时、状态去重
+//   --stats-scratch               退出时打印每帧暂存区的分配次数、字节数、扩容与刷新
 //   --gpu-timing-csv <path>       指定 CSV 路径（隐含 --gpu-timing）
 //   --validation-features <list>  启用验证层增强：bp(=best practices) / sync(=同步校验)，逗号分隔或 all
 //   --validation-jsonl <path>     把验证层消息写成 JSONL（默认不落盘，也不写 stderr）
@@ -167,6 +168,7 @@ const UsageLine kUsageLines[] = {
     { "剖析", "--validation-jsonl <path>", "验证层消息写 JSONL" },
     { "剖析", "--update-profile", "每 60 帧打印 Scene::update 分段耗时" },
     { "剖析", "--stats-pipelines", "退出时打印管线数量、建管线耗时与状态去重（TM-06）" },
+    { "剖析", "--stats-scratch", "退出时打印每帧暂存区的分配次数、字节数、扩容与刷新次数（TM-07）" },
     { "帮助", "--help / -h", "打印这张表并退出（退出码 0）" },
 };
 
@@ -468,6 +470,7 @@ bool audioSpatialTest = false;
         else if (arg == "--screenshot-viewport") diagOptions.screenshotViewport = true;
         else if (arg == "--update-profile") diagOptions.updateProfile = true;
         else if (arg == "--stats-pipelines") diagOptions.statsPipelines = true;
+    else if (arg == "--stats-scratch") diagOptions.statsScratch = true;
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
         else if (arg == "--runtime-mode") diagOptions.runtimeMode = true;
         else if (arg == "--terrain-test") diagOptions.terrainTest = true;

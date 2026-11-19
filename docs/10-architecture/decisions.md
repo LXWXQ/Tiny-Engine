@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~254 行
+size: ~265 行
 updated: 2026-11-19
 ---
 
@@ -252,3 +252,14 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
   与图形共用同一批执行单元，抢占只会让总时间变长。
 - **不引入的**：参考实现的 subpass 合并 / transient 相关怪癖位（本项目用 dynamic rendering，
   没有 subpass 可合并），以及线程安全版本的对象池（当前所有使用点都在主线程）。
+
+
+## 决策 26：每帧暂存用一大块 + bump，按帧槽轮转（TM-07）
+
+- **问题**：每帧都要往 GPU 送一批「只活这一帧」的数据（相机与 Pass 参数、实例列表、每帧重建的小段顶点）。原来的做法是每个 Pass 自己建一份 `HOST_VISIBLE | MAPPED` 的 buffer、自己 memcpy、自己 flush，尺寸写死 —— `src/Render/EditorOverlayPass.cpp:103` 的 `bufferSize = sizeof(glm::vec3) * 48` 只够两个盒子，多画一个就越界；而这类分配一共有十几处，串行启动时各建一份，写起来谁也不欠谁。
+- **做法**：`src/RHI/ScratchArena.h/.cpp` 按 `kFramesInFlight` 开槽位，每槽一整块映射 buffer（usage 一次给足 UNIFORM / STORAGE / VERTEX / INDEX / INDIRECT / TRANSFER_DST）。`RenderGraph::beginFrame` 调 `beginFrame(slot)` 把 offset 归零，各 Pass 在 `addToGraph` 里 `allocate(bytes, alignment)`，`RenderGraph::endFrame` 调一次 `flushIfNeeded()`。
+- **uniform 必须 256 对齐**：规范只保证 `minUniformBufferOffsetAlignment` 不超过 256，按 16 对齐会在部分驱动上直接撞 VUID。顶点 / 索引 / 实例用 16 就够。
+- **扩容时旧块不能立刻销毁**：本帧早先拿走的 `Block` 还指着它。旧块挪进 retired，等下一次轮到这个槽位再回收 —— 依据是槽位被复用的前提就是它上一次提交已完成（`Renderer::waitForFrameSlot`）。这条前提变了，回收时机也要跟着变。
+- **描述符必须带偏移**：`Block.offset` 每帧都可能不同，用它绑 uniform / storage 的描述符要每帧重写。写死 `offset = 0` 会读到别人的数据，而且只在扩容或分配顺序变化时才出错。
+- **COHERENT 就别刷**：内存类型是 `HOST_COHERENT` 时跳过 `vmaFlushAllocation`（本机 30 帧全部跳过）。实测收益不在每帧几微秒，而在三件事：帧内分配可见（`--stats-scratch`）、写死尺寸的自建 buffer 不再散落、新消费者不必再造一份 VMA 分配。
+- **不做一次性大改**：先只迁 `SSAOPass`（每帧一段 UBO）。其余消费者（`FogVolumePass` / `ReflectionPass` / `ParticlePass` / `VegetationPass` / `EditorOverlayPass` / 全局 UBO）按「下次改到它时顺手迁」推进 —— 每个都牵描述符写入时机，一次全迁会让一次像素回归极难归因。

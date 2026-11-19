@@ -14,7 +14,8 @@
 #include "RHI/DeviceQuirks.h"
 
 class PipelineCache;   // ① 管线缓存持久化（RHI/PipelineCache.h）
-class Breadcrumbs;     // ② GPU 崩溃定位（RHI/Breadcrumbs.h）
+class Breadcrumbs;     // ② GPU 崩溃定位（RHI/Breadcrumbs.h)
+namespace tiny { class ScratchArena; }   // TM-07 每帧暂存区（RHI/ScratchArena.h）
 
 struct QueueFamilyIndices 
 {
@@ -61,6 +62,8 @@ bool hasDeviceFaultEntryPoint() const { return pfnGetDeviceFaultInfoEXT != nullp
 	VkPipelineCache getPipelineCache() const;
     // TM-05：驱动/硬件怪癖表（只读）。
     const tiny::DeviceQuirks& getQuirks() const { return quirks; }
+    // TM-07：每帧暂存区。帧首由 RenderGraph::beginFrame 轮转，帧尾统一刷新一次。
+    tiny::ScratchArena& getScratch();
 	PipelineCache* getPipelineCacheObject() { return pipelineCache.get(); }
 
 	// ②：GPU 崩溃定位。没有扩展支持时返回的对象依然可以取，只是 isActive() 为 false。
@@ -123,6 +126,8 @@ PFN_vkGetDeviceFaultInfoEXT pfnGetDeviceFaultInfoEXT = nullptr;
 	// ① / ② 的对象本体定义在 .cpp（需要完整类型），这里只持指针。
 	// 两者都必须在 ~Device 里、vmaDestroyAllocator/vkDestroyDevice 之前释放：
 	// breadcrumbs 用 VMA 缓冲，pipelineCache 用 VkDevice。
+	// 暂存区也用 VMA，同样必须在 vmaDestroyAllocator 之前释放。
+	std::unique_ptr<tiny::ScratchArena> scratchArena;
 	std::unique_ptr<PipelineCache> pipelineCache;
 	std::unique_ptr<Breadcrumbs> breadcrumbs;
     tiny::DeviceQuirks quirks;

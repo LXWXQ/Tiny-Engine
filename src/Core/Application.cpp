@@ -17,6 +17,7 @@
 #include "Core/FrameInfo.h"
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
+#include "RHI/ScratchArena.h"
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -2045,6 +2046,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!tiny::pipelinestats::selfTest())
 		throw std::runtime_error("PipelineStats selfTest failed");
 
+	// TM-07：暂存区的对齐与扩容判据（纯算术，不需要 Device）。
+	if (!tiny::ScratchArena::selfTest())
+		throw std::runtime_error("ScratchArena selfTest failed");
+
 	// F3：体素世界（建 3x3 chunk、射线打地、挖一格、放回、地面高度）。
 	if (!voxel::selfTest())
 		throw std::runtime_error("Voxel mesh selfTest failed");
@@ -2936,6 +2941,10 @@ void FirstApp::finalizeDiagnostics()
     // 但缓存字节数与退出时的落盘必须分开看（这里只报载入量）。
     if (diagnosticsOptions.statsPipelines)
         tiny::pipelinestats::report();
+
+    // TM-07：暂存区统计同样要在 device 还活着时打印（数字来自 VMA 分配信息）。
+    if (diagnosticsOptions.statsScratch)
+        vulkanDevice->getScratch().report();
 
     diag::printValidationSummary();
 

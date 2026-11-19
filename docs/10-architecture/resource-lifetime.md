@@ -2,10 +2,10 @@
 id: architecture/resource-lifetime
 title: 资源生命周期
 type: architecture
-scope: src/RHI/RenderGraph.cpp, src/Core/Application.cpp, src/Core/DescriptorManager.cpp, src/RHI/CommandUtils.h
+scope: src/RHI/RenderGraph.cpp, src/RHI/ScratchArena.cpp, src/Core/Application.cpp, src/Core/DescriptorManager.cpp, src/RHI/CommandUtils.h
 read-when: 新增任何 GPU 资源、修改销毁逻辑、处理延迟释放或 resize
-size: ~270 行
-updated: 2026-11-13
+size: ~184 行
+updated: 2026-11-19
 ---
 
 # 资源生命周期
@@ -27,8 +27,9 @@ updated: 2026-11-13
 | 命令缓冲（graphics / compute） | 2 × 2 | `Renderer` |
 | timeline semaphore | 2 × 2 | `Renderer` |
 | 全局 UBO | 2 | `Application` |
+| 每帧暂存区（常量 / 实例 / 顶点） | 2 × 1 MiB | `ScratchArena`（由 `Device` 持有） |
 | G-Buffer（5 附件） | 5 × 2 | `RenderGraph` |
-| SSAO UBO + 输出 | 2 × 2 | `SSAOPass` / 图 |
+| SSAO 参数（每帧一段，来自暂存区） | 每帧 1 段 | `SSAOPass` / `ScratchArena` |
 | hdrScene | 2 | 图 |
 | Bloom 金字塔（4 级） | 4 × 2 | 图 |
 | 描述符集（global / ssao / bloom / present） | 各自 × 2 | 各 Pass |
@@ -154,3 +155,30 @@ cmake -S . -B build -DTINY_VMA_LEAK_CHECK=ON
 `fits=false` 表示已降到 64×64 仍超预算——照常创建并记账，报告里能看到超额（64MB 档的 65.3MB 就是这一笔）。
 
 只做主线程记账：纹理都在主线程创建/销毁，加锁会把一次上传变成锁竞争。
+
+## 8. 每帧暂存区（TM-07）
+
+`ScratchArena`（`src/RHI/ScratchArena.h/.cpp`）是"这一帧才有效"的数据的唯一出口：
+相机/Pass 参数、实例列表、每帧重建的小段顶点。它按帧槽轮转，每个槽位一整块
+`HOST_VISIBLE | HOST_COHERENT` 的映射 buffer，帧首把 offset 归零，之后 bump 分配。
+
+```text
+RenderGraph::beginFrame(slot) → arena.beginFrame(slot)   // offset 归零、回收上一轮淘汰的旧块
+各 Pass 在 addToGraph 里            → arena.allocate(bytes, alignment)
+RenderGraph::endFrame()        → arena.flushIfNeeded()   // 整帧只刷一次（COHERENT 直接跳过）
+```
+
+四条约定：
+
+1. **对齐**：顶点 / 索引 / 实例数据用默认 16；**uniform buffer 必须传 256** ——
+   规范保证 `minUniformBufferOffsetAlignment` 不超过 256，传小了驱动直接报 VUID。
+2. **扩容**：空间不够就整块翻倍（`grownCapacity` 至少取"需要的大小"）。旧块**不能立刻销毁**
+   ——本帧早先拿走的 `Block` 还指着它；它被挪进 `retired`，等下一次轮到这个槽位再回收。
+3. **为什么"轮回来才回收"是安全的**：槽位按 `kFramesInFlight` 轮转，同一个槽位被复用的前提
+   就是它上一次提交已经完成（`Renderer::waitForFrameSlot`）。这条前提变了，这个回收时机也要跟着变。
+4. **描述符带偏移**：`Block.offset` 每帧都可能不同，所以用它做 uniform / storage 绑定的描述符
+   必须每帧重写（`SSAOPass::addToGraph` 就是这么写的）。写死 `offset = 0` 就会读到别人的数据。
+
+统一入口的收益不是"每帧少几微秒"，而是三件结构性的事：帧内分配次数可见（`--stats-scratch`）、
+固定大小的自建 buffer 不再散落在各 Pass（编辑器选中框那种"只留两个盒子的空间"会静默越界）、
+新增消费者不需要再造一份 VMA 分配。

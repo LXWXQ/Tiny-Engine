@@ -2,6 +2,7 @@
 #include "RHI/RenderGraph.h"
 #include "RHI/CommandUtils.h"
 #include "RHI/Breadcrumbs.h"
+#include "RHI/ScratchArena.h"
 
 #include <stdexcept>
 #include <iostream>
@@ -109,6 +110,9 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     computeCmd = computeCommandBuffer;
     crossQueueDependencies = {};
     currentFrameSlot = frameSlot;
+
+    // TM-07：帧首把暂存区轮转到这一帧的槽位（offset 归零、上一轮淘汰的旧块回收）。
+    device.getScratch().beginFrame(frameSlot);
 
     // ②：每帧把两条命令流的 GPU 游标清零，并把帧号记进 CPU 侧表。
     // device lost 之后就是靠「CPU 表 + GPU 里的那一个 32 位游标」还原现场。
@@ -420,6 +424,9 @@ void RenderGraph::endFrame()
     }
 
     reportUnmatchedPassOverrides();
+
+    // TM-07：这一帧所有 Pass 都写完了，整块只刷新一次（COHERENT 内存直接跳过）。
+    device.getScratch().flushIfNeeded();
 
     // ②：标记两条命令流「跑完了」。读回哨兵值就说明崩溃不在这条流上，
     // 省掉一半的嫌疑范围。

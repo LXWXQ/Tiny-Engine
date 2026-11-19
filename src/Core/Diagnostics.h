@@ -22,6 +22,9 @@ namespace diag
         // --stats-pipelines：退出时打印管线数量、建管线耗时、状态去重结果（TM-06）。
         bool statsPipelines = false;
 
+        // --stats-scratch：退出时打印每帧暂存区的分配次数、字节数、扩容与刷新次数（TM-07）。
+        bool statsScratch = false;
+
         bool gpuTiming = false;
         bool validationFeatures = false;
         bool buildInfo = false;
@@ -46,6 +49,9 @@ namespace diag
         // GPU 计时
         // --stats-pipelines：退出时打印管线数量、建管线耗时、状态去重结果（TM-06）。
         bool statsPipelines = false;
+
+        // --stats-scratch：退出时打印每帧暂存区的分配次数、字节数、扩容与刷新次数（TM-07）。
+        bool statsScratch = false;
 
         bool gpuTiming = false;
         std::string gpuTimingCsvPath = "gpu_timing.csv";

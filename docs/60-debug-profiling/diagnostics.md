@@ -4,7 +4,7 @@ title: 诊断基础设施实现
 type: debug
 scope: src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计
-size: ~155 行
+size: ~156 行
 updated: 2026-11-19
 ---
 

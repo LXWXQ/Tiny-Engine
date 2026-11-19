@@ -1,5 +1,6 @@
 #include "Render/SSAOPass.h"
 #include "RHI/CommandUtils.h"
+#include "RHI/ScratchArena.h"
 #include "AssetPaths.h"
 
 #include <random>
@@ -20,11 +21,6 @@ SSAOPass::~SSAOPass()
     if (pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device.getDevice(), pipelineLayout, nullptr);
     if (localSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device.getDevice(), localSetLayout, nullptr);
 
-    for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
-    {
-        if (uboBuffers[frame] != VK_NULL_HANDLE)
-            vmaDestroyBuffer(device.getVmaAllocator(), uboBuffers[frame], uboAllocations[frame]);
-    }
 
     if (noiseTexture.sampler != VK_NULL_HANDLE) vkDestroySampler(device.getDevice(), noiseTexture.sampler, nullptr);
     if (noiseTexture.view != VK_NULL_HANDLE) vkDestroyImageView(device.getDevice(), noiseTexture.view, nullptr);
@@ -73,7 +69,6 @@ void SSAOPass::init()
 
     generateSampleKernel();
     createNoiseTexture();
-    createUniformBuffer();
     createLocalDescriptors();
     createPipeline();
     createBlurPipeline();
@@ -206,36 +201,6 @@ void SSAOPass::createNoiseTexture()
     vkCreateSampler(device.getDevice(), &samplerInfo, nullptr, &noiseTexture.sampler);
 }
 
-void SSAOPass::createUniformBuffer()
-{
-    // 每个 frame slot 一份 UBO。两份 buffer 不能共用一个映射地址，
-    // 否则第 N+1 帧的 memcpy 会覆盖 GPU 仍在读的第 N 帧参数。
-    static const char* const names[kFramesInFlight] = { "SSAOUbo.Frame0", "SSAOUbo.Frame1" };
-
-    for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
-    {
-        VkDeviceSize bufferSize = sizeof(SSAOUbo);
-        VkBufferCreateInfo bufferInfo{};
-        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size = bufferSize;
-        bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-
-        VmaAllocationCreateInfo allocInfo{};
-        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-        allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        allocInfo.flags |= tiny_vmaNameFlag();
-        allocInfo.pUserData = const_cast<char*>(names[frame]);
-
-        if (vmaCreateBuffer(device.getVmaAllocator(), &bufferInfo, &allocInfo,
-            &uboBuffers[frame], &uboAllocations[frame], nullptr) != VK_SUCCESS)
-            throw std::runtime_error("SSAOPass: per-frame UBO 创建失败");
-
-        VmaAllocationInfo info;
-        vmaGetAllocationInfo(device.getVmaAllocator(), uboAllocations[frame], &info);
-        uboMapped[frame] = info.pMappedData;
-    }
-}
-
 void SSAOPass::createLocalDescriptors()
 {
     std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
@@ -255,23 +220,17 @@ void SSAOPass::createLocalDescriptors()
     {
         localSets[frame] = descriptorManager->allocateSet(localSetLayout);
 
-        VkDescriptorBufferInfo bufferInfo{ uboBuffers[frame], 0, sizeof(SSAOUbo) };
+        // 绑 0（SSAO 参数）不在这里写：它每帧的偏移都不同，由 addToGraph 在拿到
+        // 暂存区那一段之后再写。这里只写跨帧不变的噪声纹理。
         VkDescriptorImageInfo noiseInfo{ noiseTexture.sampler, noiseTexture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
-        std::array<VkWriteDescriptorSet, 2> writes{};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = localSets[frame];
-        writes[0].dstBinding = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        writes[0].descriptorCount = 1;
-        writes[0].pBufferInfo = &bufferInfo;
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = localSets[frame];
-        writes[1].dstBinding = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &noiseInfo;
-        vkUpdateDescriptorSets(device.getDevice(), 2, writes.data(), 0, nullptr);
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = localSets[frame];
+        write.dstBinding = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &noiseInfo;
+        vkUpdateDescriptorSets(device.getDevice(), 1, &write, 0, nullptr);
     }
 }
 
@@ -375,8 +334,22 @@ void SSAOPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     ubo.kernelSize = frameInfo.settings.ssaoKernelSize;
     ubo.enabled = frameInfo.settings.ssaoEnabled ? 1.0f : 0.0f;
     memcpy(ubo.samples, ssaoKernel.data(), 64 * sizeof(glm::vec4));
-    memcpy(uboMapped[frame], &ubo, sizeof(ubo));
-    vmaFlushAllocation(device.getVmaAllocator(), uboAllocations[frame], 0, sizeof(ubo));
+
+    // TM-07：参数不再自己养一份映射 UBO，而是从每帧暂存区拿一段。
+    // 256 是 uniform buffer 偏移的对齐硬要求（规范保证 minUniformBufferOffsetAlignment ≤ 256），
+    // 少了它驱动会直接报 VUID；顶点 / 实例数据用默认的 16 就够。
+    const tiny::ScratchArena::Block block = device.getScratch().allocate(sizeof(SSAOUbo), 256);
+    std::memcpy(block.mapped, &ubo, sizeof(ubo));
+
+    // 偏移每帧都可能不同，所以描述符也要每帧重写。只改绑 0，噪声纹理那条不动。
+    VkDescriptorBufferInfo uboInfo{ block.buffer, block.offset, sizeof(SSAOUbo) };
+    VkWriteDescriptorSet uboWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+    uboWrite.dstSet = localSets[frame];
+    uboWrite.dstBinding = 0;
+    uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboWrite.descriptorCount = 1;
+    uboWrite.pBufferInfo = &uboInfo;
+    vkUpdateDescriptorSets(device.getDevice(), 1, &uboWrite, 0, nullptr);
 
     VkClearValue clear{};
     clear.color = { { 1.0f, 1.0f, 1.0f, 1.0f } };

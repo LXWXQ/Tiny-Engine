@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~208 行
+size: ~214 行
 updated: 2026-11-19
 ---
 
@@ -58,7 +58,7 @@ TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--sta
 
 T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表）已于 2026-11-19 完成并移入 §3，这一档不再有待办。
 
-下一批从 §5 的 T2 开始。TM-06 的统计部分已落地（按需建不做），建议顺序改为 TM-07（scratch 线性分配）→ TM-08（资源别名化）：两者的验收都需要"每帧 PSO 新建数为 0"与"每帧暂存区分配次数为常数"，先做 TM-06 能把 `--stats-pipelines` 这个统计口径一并落地。
+下一批从 §5 的 T2 开始。TM-06 的统计部分与 TM-07 已落地（按需建不做），建议顺序改为 TM-08（资源别名化）：两者的验收都需要"每帧 PSO 新建数为 0"与"每帧暂存区分配次数为常数"，先做 TM-06 能把 `--stats-pipelines` 这个统计口径一并落地。
 
 
 ## 5. T2：要改热路径
@@ -76,11 +76,14 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 ### TM-07 每帧暂存（scratch）线性分配器
 
-- **现状**：没有统一的每帧常量 / 顶点 / 索引暂存（grep `scratch|RingBuffer|request_uniform_block|LinearAllocator` 在 `src/RHI/` 下 0 命中），各 Pass 自己管 staging 与 `vkCmdUpdateBuffer`。
+- **状态**：已完成（暂存区 + 第一个消费者 SSAO），见 [resource-lifetime 第 8 节](../10-architecture/resource-lifetime.md)。
+- **现状（当初的判断是错的，以这段为准）**：`vkCmdUpdateBuffer` 全仓库只有 breadcrumbs 在用（`src/RHI/Breadcrumbs.cpp:190`），`ShadowPass` 走的是 push constant —— 所以原验收口径「ShadowPass 每帧 vkCmdUpdateBuffer 降到 0」是个空指标。真实问题是：每个 Pass 各自建 `HOST_VISIBLE | MAPPED` 的每帧 buffer（`Application` 全局 UBO、`FogVolumePass`、`ReflectionPass`、`SSAOPass`、`ParticlePass`、`VegetationPass` 的实例与骨骼、`EditorOverlayPass`），各自 memcpy + flush，而且尺寸写死 —— `src/Render/EditorOverlayPass.cpp:103` 的 `bufferSize = sizeof(glm::vec3) * 48` 只够两个盒子，多一个就越界。
 - **参考**：`vulkan/command_buffer.hpp:522/530/532/534`（`allocate_constant_data` / `allocate_vertex_data` / `allocate_index_data` / `update_buffer`）；实现细节 `vulkan/command_buffer.cpp:2416-2423`（`ubo_block.allocate(size)` 失败就 `device->request_uniform_block(ubo_block, size)` 扩容后重试）、`:2519-2526`（顶点同型）、`:4551-4556`（退出时归还）。
-- **落地**：① 每帧一个大块 `ScratchBuffer`（HOST_VISIBLE | HOST_COHERENT，bump offset）；② 帧首重置 offset；③ 先只把一个 Pass（建议 `ShadowPass`，它按灯逐次更新常量）从 `vkCmdUpdateBuffer` 换成 scratch 加带 offset 的描述符。
-- **验收**：该 Pass 每帧 `vkCmdUpdateBuffer` 调用数降到 0（加计数器）；`--selftest 60` 帧率不回归；截图一致。
-- **预估**：2 天，风险中。
+- **落地**：① 每帧每个槽位一个大块，bump offset，帧首归零；② uniform 分配必须按 256 对齐（`minUniformBufferOffsetAlignment` 的上限），顶点 / 索引用 16；③ 扩容时旧块不能立刻销毁（本帧早先的 `Block` 还指着它），挪进 retired、等下次轮到这个槽位再回收；④ 描述符必须带 `Block.offset` 每帧重写。
+- **已完成**：`src/RHI/ScratchArena.h/.cpp`（`Device` 持有，`beginFrame` / `allocate` / `flushIfNeeded`，由 `RenderGraph::beginFrame` 与 `endFrame` 调）；第一个消费者是 `SSAOPass`（每帧 256 对齐分配一段 `SSAOUbo`，描述符每帧写偏移，原来的 `uboBuffers[2]` 三件套删除）；`--stats-scratch` 打印帧数 / 槽位容量 / 分配次数与字节 / 峰值偏移 / 扩容与刷新次数。实测（`--selftest 30`）：2 × 1.00 MiB 槽位、1.0 次分配/帧、1.1 KB/帧、峰值 1.2 KB、扩容 0 次、刷新 0 次（内存是 COHERENT，30 帧全部跳过）。
+- **结论**：收益不在每帧几微秒，而在三件结构性的事 —— 帧内分配可见、写死尺寸的自建 buffer 不再散落各 Pass、新消费者不必再造一份 VMA 分配。剩余消费者（`FogVolumePass` / `ReflectionPass` / `ParticlePass` / `VegetationPass` / `EditorOverlayPass` / 全局 UBO）按「下次改到它时顺手迁」推进，不做一次性大改：每个都牵描述符写入时机，一次全迁会让一次像素回归极难归因。
+- **验收（已满足的部分）**：`--stats-scratch` 给出分配次数 / 字节 / 扩容 / 刷新；`--selftest 30` exit=0、stderr 0 字节、验证层 0 errors；与上一版截图逐像素比对，差异只有 `Performance` 面板里的 FPS 读数（333 像素，全在 x 95..157 / y 119..129 那一小块），3D 画面完全一致；`--selftest 60` 三次 86.10 / 98.00 / 94.65 FPS，与改动前的 91.99 / 99.52 / 112.62 落在同一噪声区间。
+- **预估**：2 天，风险中（实际只用了半天，因为第一个消费者只有一段 UBO）。
 
 ### TM-08 渲染图资源别名化
 
