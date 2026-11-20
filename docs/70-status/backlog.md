@@ -4,8 +4,8 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~340 行
-updated: 2026-11-13
+size: ~358 行
+updated: 2026-11-20
 ---
 
 # 后续任务台账
@@ -267,7 +267,7 @@ updated: 2026-11-13
 | V-04 | 已完成 | 体素几何走 `TerrainMeshArena` / 间接合批（每 chunk 一份 `Model` + 一次 bind -> 共享 arena + 专用实例表） | F1 合批路径 | 625 块整批只占 1 条 `vkCmdDrawIndexedIndirect`；半径 12 的 arena 725888 顶点 / 1088832 索引不溢出，验证 0/0（日志 `build/validation/20261106-102034`） |
 | V-05 | 未开始 | 体素世界分页/无限世界（当前半径上限 12，`Scene::kMaxVoxelRadius`） | V-04 | 半径 24 显存与实体数可控 |
 | F6-01 | 已完成 | 水面近场 SSR（半分辨率 48 步屏幕空间追踪，读 HDR + G-Buffer 世界位置，与平面反射/IBL 混合） | F6 | 反射可见、与 IBL/平面反射结果有明显差异且无严重噪点；关平面反射+关波浪时 SSR 开/关差异 91918 像素；`f3v-ssr`/`f3v-ssr-off` 通过（日志 `build/validation/20261106-105750`） |
-| F6-02 | 未开始 | 自动曝光（compute 直方图 + 曝光纹理） | F6 | 室内外切换后 2 秒内亮度收敛 |
+| F6-02 | 已完成 | 自动曝光（compute 统计平均对数亮度 + CPU 按帧适应，默认关） | F6 | 已完成，见 [决策 42](../../docs/10-architecture/decisions.md) 与提交 `f47db26` |
 | F6-03 | 未开始 | Compute Bloom（金字塔迁到 compute） | F6 | 输出与当前 bloom 视觉一致、GPU 时间下降 |
 | F6-04 | 未开始 | 切线空间法线贴图（启用 `getNormalFromMap()`，先补切线或 TBN） | F4 | 法线贴图生效；`normalMaps` 不再白绑（tech-debt #3） |
 | F6-05 | 已完成 | 体积云（场景级 `scene.clouds` 组件 + 全屏 raymarch `CloudPass`） | F6 | coverage/密度/高度/厚度可调；透明表面读到带云 HDR；`f6-clouds` 通过；云不进平面反射/阴影作为边界 |

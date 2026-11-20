@@ -152,7 +152,7 @@ Transform/Bounds 字段已私有并通过 setter 自动通知 Scene；streaming 
 | 阴影（已完成，见 [shadow](../20-pipeline/shadow.md)） | 3 级 CSM 2048² + 3×3 PCF，CPU 逐实体提交，方向光专用 | GPU scene buffer |
 | SSR | 屏幕空间反射，读 HDR + depth | HDR 管线已就绪 |
 | 自动曝光（已完成，见 [decisions](../10-architecture/decisions.md) 决策 42） | compute 统计平均对数亮度 + CPU 对数域适应；默认关 | HDR 目标（已有） |
-| Compute Bloom | Bloom 金字塔迁移到 compute | TD-06 / TD-07 已完成 |
+| Compute Bloom | Bloom 金字塔迁移到 compute（已量测：down 链 0.049 ms，合并最多省 ~10 µs，[决策 35](../10-architecture/decisions.md) 判定暂不做） | TD-06 / TD-07 已完成 |
 | TAA（已完成，见 [pass-order](../20-pipeline/pass-order.md)） | Halton 抖动 + 相机重投影 + 3x3 邻域 clamp；无运动向量 | HDR + G-Buffer Position（已有） |
 | 粒子（已完成，见 [scene-ecs](../30-systems/scene-ecs.md)） | 16 属性 CPU 发射器 + 独立前向透明 `ParticlePass`；Water 后、TAA 前，按相机距离排序 | 相机/深度（已有） |
 | 体积云（已完成，见 [pass-order](../20-pipeline/pass-order.md)） | 场景级 `scene.clouds`；64³ 噪声全屏 raymarch + 4 步太阳自阴影，Lighting 后、PlanarReflection 前预乘混合进 HDR | HDR + G-Buffer Position（已有） |

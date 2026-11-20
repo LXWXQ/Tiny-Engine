@@ -4,8 +4,8 @@ title: 当前技术债
 type: status
 scope: 空
 read-when: 决定下一步做什么之前
-size: ~125 行
-updated: 2026-11-17
+size: ~124 行
+updated: 2026-11-20
 ---
 
 # 当前技术债
@@ -72,7 +72,7 @@ updated: 2026-11-17
 
 | # | 内容 | 影响 | 触发条件 |
 |---|---|---|---|
-| 1 | 跨队列资源走 `CONCURRENT` sharing，未实现 EXCLUSIVE ownership transfer | 不是最优路径 | 接入 GPU culling / 体素间接缓冲时 |
+| 1 | 跨队列资源走 `CONCURRENT` sharing，未实现 EXCLUSIVE ownership transfer（**已评估：决策 28 判定本结构下不做，保留作记录**） | 不是最优路径（已验证层确认无法在单提交结构内配对 release） | 若将来改成多提交/多队列并行再评估 |
 | 2 | glTF 内部节点层级被烘焙掉 | 局部动态物体不可动 | 资产管线升级时 |
 | 3 | bindless `normalMaps` 绑了没采样 | 每材质白占 1/4 描述符 | 启用切线空间法线贴图时 |
 | 4 | JobSystem 无 work stealing / 依赖图 / 核心取消令牌 | 大量短任务负载不均；地形目前使用 Scene 级 atomic 协作取消 | 地形/体素接入后按 profile 升级 |
