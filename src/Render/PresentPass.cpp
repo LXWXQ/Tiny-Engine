@@ -230,7 +230,10 @@ void PresentPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     pass.writeColor(target, VK_ATTACHMENT_LOAD_OP_DONT_CARE);
 
     PresentPush push{};
-    push.exposure = frameInfo.settings.exposure;
+    // F6-02：自动曝光给出本帧覆盖值时优先用它（0 = 没开，跟随场景设置）。
+    push.exposure = frameInfo.exposureOverride > 0.0f
+        ? frameInfo.exposureOverride
+        : frameInfo.settings.exposure;
     push.bloomIntensity = bloomEnabled ? frameInfo.settings.bloomIntensity : 0.0f;
     push.bloomEnabled = bloomEnabled ? 1.0f : 0.0f;
     push.motionBlurEnabled = frameInfo.settings.motionBlurEnabled ? 1.0f : 0.0f;

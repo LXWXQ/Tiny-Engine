@@ -4,7 +4,7 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~197 行
+size: ~208 行
 updated: 2026-11-20
 ---
 
@@ -195,3 +195,14 @@ GPU 路径的 dispatch 挂在**图形流**里（`ClusterBuildPass`，`graph.addG
 两个坑写在代码注释里：① 粒子着色器会把颜色乘 1.4，喂纯饱和色会被削顶成白点，所以喂之前先乘 0.62；
 ② 群的中心沿视线摆在相机前方 25 米，不要"猜地面高度"——地形网格与体素世界是两套数据，
 按任一套定高都可能把灯埋进山里或浮到海面上（这两条都实测过）。
+
+## 自动曝光（`--auto-exposure`，默认关）
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| 统计 | `AutoExposure.Reduce`（图形流里的一次 compute dispatch，排在 Present 之前） | 采样 HDR，`log2` 亮度量化后 `atomicAdd` 进 8 字节 SSBO；步长 8，约 3.2 万点 |
+| 适应 | `src/Core/Application.cpp`（`FrameInfo` 构造之后、`endFrame` 之前） | 读**两帧前**的统计，`target = 0.18 / avgLuma`，对数域按 `1 - exp(-dt*1.5)` 靠近 |
+| 使用 | `src/Render/PresentPass.cpp` | `push.exposure = exposureOverride > 0 ? 覆盖值 : 场景设置` |
+
+两个要点：① 曝光值**不写** `SceneSettings::exposure`（会被存进 `config/engine.json`），只走
+`FrameInfo::exposureOverride`；② 它是"慢适应"，两帧延迟是设计的一部分，不是补偿。

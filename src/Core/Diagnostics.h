@@ -74,6 +74,9 @@ namespace diag
     bool printEvents = false;
     // TM-18：探测惰性分配（transient attachment）能否在本机启用，打印后退出
     bool probeTransient = false;
+    // F6-02：自动曝光。GPU 统计平均对数亮度，CPU 按帧适应；
+    // 默认关 —— 默认画面必须与没有这个功能时逐像素一致。
+    bool autoExposure = false;
 
         // TM-13：点光源与聚簇光照。lightStress > 0 时铺这么多盏灯（0 = 不加灯），
         // 用来量"512 盏灯下前向还能不能跑满 60 FPS"。

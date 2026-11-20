@@ -4,7 +4,7 @@ title: 命令行参数全表
 type: validation
 scope: main.cpp、src/Core/CliCatalog.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~179 行
+size: ~180 行
 updated: 2026-11-20
 ---
 
@@ -109,6 +109,7 @@ updated: 2026-11-20
 | `--clustered-gpu-build` | 簇表改由 `cluster_build.comp` 每帧一次 dispatch 生成（需同时给 `--clustered-lighting`）；定长槽位占 3.4 MiB/帧槽，见决策 40 | 0 |
 | `--fireflies <n>` | 区域内点亮 n 个萤火虫式光源（形状 + 颜色 + 照亮地面），夹到 0~256。**默认 0 = 关闭**，不影响默认画面；形状由 `ParticlePass` 的 billboard 画（程序化圆形 + 加法感的软边），光照由 `LightSources` 喂给光照 Pass | 0 |
 | `--fireflies-radius <m>` | 萤火虫群铺开的半径（米，默认 12，夹到 1~500）。群的中心沿视线方向摆在相机前方 25 米处，屏幕上就落在画面中段；单盏灯的照亮半径是 6~9 米，与发光点的直径（0.4~0.85 米）是两件事 | 12 |
+| `--auto-exposure` | 自动曝光：每帧统计 HDR 平均对数亮度并缓慢适应（目标中灰 0.18，速度 1.5/s，夹到 0.05~20）。**默认关**；曝光值不写入 `config/engine.json`，只走 `FrameInfo::exposureOverride`，见决策 42 | 0 |
 | `--stats-clusters` | 退出时打印簇构建次数 / 使用簇数 / 最大簇 / 丢弃灯数 / 半径 | 0 |
 | `--list-options` | 打印选项表后退出（与编辑器「帮助 → 命令行选项」同源） | 0 |
 | `--print-formats` | 打印本机对引擎用到的十个格式的能力（字节/颜色/深度/采样/存储/blit/线性）后退出 | 0 |

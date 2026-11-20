@@ -1,0 +1,40 @@
+#version 450
+
+// F6-02 自动曝光的第一步：在全屏 HDR 上统计平均对数亮度。
+// 只做归约、不决定曝光 —— 曝光值由 CPU 按适应速度推进（见 src/Render/AutoExposurePass.cpp），
+// 这样"慢适应"可自检，也不会出现 GPU 写、GPU 读、CPU 又不知道的循环依赖。
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D hdrScene;
+layout(set = 0, binding = 1) buffer ExposureStats
+{
+    uint sumQ;   // 量化后的 log2 亮度之和
+    uint count;  // 采样点数
+} stats;
+
+layout(push_constant) uniform Push
+{
+    vec4 params;  // xy = 纹理尺寸倒数, z = 最小 log2 亮度, w = 最大 log2 亮度
+    uint stride;  // 采样步长（像素）
+} pc;
+
+float luminance(vec3 c)
+{
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main()
+{
+    ivec2 size = textureSize(hdrScene, 0);
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy) * int(pc.stride);
+    if (pixel.x >= size.x || pixel.y >= size.y)
+        return;
+
+    // 取像素中心：落在像素边界上会引入双线性插值，把高光抹平。
+    vec2 uv = (vec2(pixel) + 0.5) * pc.params.xy;
+    float luma = max(luminance(texture(hdrScene, uv).rgb), 1e-4);
+    float range = max(pc.params.w - pc.params.z, 1e-3);
+    float t = clamp((log2(luma) - pc.params.z) / range, 0.0, 1.0);
+    atomicAdd(stats.sumQ, uint(t * 65535.0));
+    atomicAdd(stats.count, 1u);
+}

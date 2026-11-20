@@ -14,6 +14,7 @@
 #include "Render/LightSources.h"
 #include "Render/ClusteredLighting.h"
 #include "Render/ClusterBuildPass.h"
+#include "Render/AutoExposurePass.h"
 #include "Render/Fireflies.h"
 #include "RHI/RenderGraph.h"
 #include "RHI/GpuTimer.h"
@@ -182,6 +183,9 @@ private:
 	ClusteredLighting clusteredLighting;
 	// TM-13 第二步：GPU 建簇那一次 dispatch 的宿主（不持有所有权，管线由 RenderPipeline 管）。
 	ClusterBuildPass* clusterBuildPassPtr = nullptr;
+	// F6-02：自动曝光的降约 Pass。每帧开头读回统计并推进曝光值，
+	// 结果写进 FrameInfo::exposureOverride（不碰场景设置）。
+	AutoExposurePass* autoExposurePassPtr = nullptr;
 
 	std::array<VkBuffer, kFramesInFlight> globalUboBuffers{};
 	std::array<VmaAllocation, kFramesInFlight> globalUboAllocations{};

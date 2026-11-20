@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~602 行
+size: ~635 行
 updated: 2026-11-20
 ---
 
@@ -600,3 +600,36 @@ CPU vs GPU 逐像素差 213 像素，全部落在 HUD 的 FPS 读数区（x 102.
 **不引入的**：通用 `RenderQueue`（现在的提交路径是 GPU 驱动的，见
 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md)，再插一层 CPU 队列
 只会和它打架）。
+
+## 决策 42：自动曝光先做"GPU 算均值 + CPU 适应"（F6-02）
+
+**问题**：场景整体亮度会在几十倍范围内变化（洞穴、雪地、512 盏灯的压力场）。
+现在曝光值来自场景设置的常数，滑块在 `src/ImGuiSystem.cpp:222`，一换场景就得手调。
+
+**做法**：
+- `shaders/exposure_reduce.comp` 每帧一次 dispatch，按步长 8 采样（1920x1080 约 3.2 万点），
+  把 `log2` 亮度量化成 `uint` 后 `atomicAdd` 进一个 8 字节的 SSBO。
+- `src/Render/AutoExposurePass.*` 每帧开头读**两帧前**那一份统计（帧槽复用后才轮到它，
+  `Renderer::beginFrame` 已经等过这个槽位，所以读它不卡流水线），
+  算出 `target = 0.18 / avgLuma`，再按 `1 - exp(-dt * 1.5)` 在对数域靠近，夹到 `[0.05, 20]`。
+- 曝光值通过 `FrameInfo::exposureOverride` 递给 `PresentPass`，**不写 `SceneSettings::exposure`**。
+
+**为什么适应放在 CPU**：`1 - exp(-dt * speed)` 这条曲线是纯算术，`AutoExposurePass::selfTest`
+能直接证伪"不过冲 / 时间步越大越快 / 目标不变时不漂 / 夹取 / 坏输入不出 NaN"；
+放 GPU 就得靠截图反推，且第一帧还会撞上"GPU 写、GPU 读、CPU 不知道"的循环。
+
+**为什么不写场景设置**：`EngineConfig` 会把 `exposure` 存进 `config/engine.json`（见
+`src/Core/EngineConfig.cpp:185`）。让自动曝光写进去，等于跑一会儿就把用户配置改成当时那一刻的亮度，
+上次相机位姿被写回文件已经踩过一次。
+
+**为什么不用 `ScratchArena`**：这份缓冲要被 CPU 在两帧后精确读回同一份，
+而暂存区会扩容换 buffer；自己建两个 `HOST_COHERENT` 的 8 字节缓冲更省心。
+
+**代价与边界**：曝光值有 2 帧延迟（60 FPS 下约 33 ms），对"缓慢适应"没有影响；
+每帧 3.2 万次采样 + 一次 dispatch，实测 `--selftest 60 --gpu-scene --auto-exposure`
+104.7 FPS（比不开的 46.7~87 FPS 同量级，属运行间噪声）。
+默认关（`--auto-exposure` 才开）—— 默认画面必须与没有这个功能时逐像素一致。
+
+**不引入的**：直方图 + 百分位裁剪（现在用均值，极端高光会拉偏一点；要更稳再上直方图）、
+曝光纹理（把曝光写进一张 1x1 纹理让片段自己读，那是要上 GPU 自适应时才需要）、
+自动白平衡。

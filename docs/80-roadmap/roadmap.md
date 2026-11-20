@@ -4,8 +4,8 @@ title: 主功能路线
 type: roadmap
 scope: 空
 read-when: 开新主功能之前；或判断"某个需求排在哪一阶段"
-size: ~180 行
-updated: 2026-11-10
+size: ~176 行
+updated: 2026-11-20
 ---
 
 # 主功能路线
@@ -151,7 +151,7 @@ Transform/Bounds 字段已私有并通过 setter 自动通知 Scene；streaming 
 |---|---|---|
 | 阴影（已完成，见 [shadow](../20-pipeline/shadow.md)） | 3 级 CSM 2048² + 3×3 PCF，CPU 逐实体提交，方向光专用 | GPU scene buffer |
 | SSR | 屏幕空间反射，读 HDR + depth | HDR 管线已就绪 |
-| 自动曝光 | compute 直方图 + 曝光纹理 | compute/graphics 跨队列（已有基础） |
+| 自动曝光（已完成，见 [decisions](../10-architecture/decisions.md) 决策 42） | compute 统计平均对数亮度 + CPU 对数域适应；默认关 | HDR 目标（已有） |
 | Compute Bloom | Bloom 金字塔迁移到 compute | TD-06 / TD-07 已完成 |
 | TAA（已完成，见 [pass-order](../20-pipeline/pass-order.md)） | Halton 抖动 + 相机重投影 + 3x3 邻域 clamp；无运动向量 | HDR + G-Buffer Position（已有） |
 | 粒子（已完成，见 [scene-ecs](../30-systems/scene-ecs.md)） | 16 属性 CPU 发射器 + 独立前向透明 `ParticlePass`；Water 后、TAA 前，按相机距离排序 | 相机/深度（已有） |

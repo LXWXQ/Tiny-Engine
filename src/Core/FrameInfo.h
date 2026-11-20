@@ -439,6 +439,11 @@ VkCommandBuffer commandBuffer;
     // M1-C1c：刚结束的那个模拟 tick 编号。只有 changedTick 等于它的实体才插值。
     uint64_t renderTick = 0;
 
+    // F6-02：自动曝光算出来的本帧曝光值。0 = 不覆盖，用 SceneSettings::exposure。
+    // 刻意不走 SceneSettings：那条值会被 EngineConfig 存进 config/engine.json，
+    // 等于随时间把用户配置改掉。
+    float exposureOverride = 0.0f;
+
 	// W1：配置存取的入口。
 	// 用回调而不是让 ImGuiSystem 直接持有 FirstApp，是为了不让 UI 层依赖引擎总控 ——
 	// 数据总线（FrameInfo）本来就承担"每帧把东西递给 Pass/UI"的职责，这里沿用同一套。

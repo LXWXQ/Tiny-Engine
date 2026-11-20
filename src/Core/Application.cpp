@@ -60,6 +60,7 @@
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
 #include "Render/SubresourceProbePass.h"
+#include "Render/AutoExposurePass.h"
 #include "Render/ClusterBuildPass.h"
 #include <stdexcept>
 #include <iostream>
@@ -910,6 +911,13 @@ streamingConfig.skirtsEnabled = false;
 	// 日盘不会拖出历史鬼影），Bloom 之前（辉光要吃到日盘的高光）。
 	auto sunFlarePass = std::make_unique<SunFlarePass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
+	// F6-02：自动曝光。统计与适应分开：GPU 每帧只算平均对数亮度，
+	// CPU 读两帧前的统计值并按时间推进曝光。默认关（--auto-exposure 才开）。
+	auto autoExposurePass = std::make_unique<AutoExposurePass>(*vulkanDevice, *renderGraph,
+		*renderResources, descriptorManager.get());
+	autoExposurePass->setEnabled(diagnosticsOptions.autoExposure);
+	autoExposurePass->seedExposure(scene->getSettings().exposure);
+	autoExposurePassPtr = autoExposurePass.get();
 	auto presentPass = std::make_unique<PresentPass>(*vulkanDevice, *vulkanSwapchain, *renderGraph,
 		*renderResources, descriptorManager.get(), descriptorManager->getGlobalSetLayout());
 
@@ -957,6 +965,9 @@ renderPipeline.addPass(std::move(viewModelPass));
 	renderPipeline.addPass(std::move(taaPass));
 	renderPipeline.addPass(std::move(sunFlarePass));
 	renderPipeline.addPass(std::move(bloomPass));
+	// 它只读 HDR 写自己的统计缓冲，放在 Present 之前即可；
+	// 曝光值本身有两帧延迟（帧槽复用后才读得到），位置不影响收敛。
+	renderPipeline.addPass(std::move(autoExposurePass));
 	renderPipeline.addPass(std::move(presentPass));
 	// TD-15：带深度测试的包围盒线框，必须在 Present 之后、UiComposite 之前。
 	renderPipeline.addPass(std::move(editorOverlay));
@@ -2201,6 +2212,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!tiny::transient::selfTest())
 		throw std::runtime_error("TransientProbe selfTest failed");
 
+	// F6-02：适应曲线的收敛、单调与夹取都是纯算术。
+	if (!AutoExposurePass::selfTest())
+		throw std::runtime_error("AutoExposure selfTest failed");
+
 	// TM-13：聚簇的球-盒相交、反投影与切片区间都是纯算术，先在这里证伪。
 	if (!LightSources::selfTest())
 		throw std::runtime_error("LightSources selfTest failed");
@@ -3182,6 +3197,11 @@ if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
 			&scene->getCameraController()
 		};
 
+		// F6-02：读回两帧前的亮度统计并推进曝光。必须在 endFrame 之前 ——
+		// Present 用的是本帧算出来的这个值。
+		if (autoExposurePassPtr != nullptr && diagnosticsOptions.autoExposure)
+			frameInfo.exposureOverride = autoExposurePassPtr->update(frameInFlight, dt);
+
 		// C1c：模拟插值权重由编辑器按播放态写入 Scene，这里每帧搬进帧数据。
 frameInfo.renderAlpha = scene->renderInterpolationAlpha();
     frameInfo.renderTick = scene->simulationTick();
@@ -3314,6 +3334,16 @@ void FirstApp::finalizeDiagnostics()
     // TM-08：别名报告是纯 CPU 数据（最后一帧的清单），打印时机没有设备依赖。
     if (diagnosticsOptions.aliasReport)
         tiny::aliasreport::report();
+
+    // F6-02：自动曝光的落点。开着才打 —— 没开时曝光值根本没被算过。
+    if (diagnosticsOptions.autoExposure && autoExposurePassPtr != nullptr)
+    {
+        std::printf("[Exposure] 平均亮度 %.4f | 采样 %u | 曝光 %.3f（场景设置 %.3f）\n",
+            static_cast<double>(autoExposurePassPtr->lastAverageLuminance()),
+            autoExposurePassPtr->lastSampleCount(),
+            static_cast<double>(autoExposurePassPtr->currentExposure()),
+            static_cast<double>(scene->getSettings().exposure));
+    }
 
     // TM-10：准备 / 录制各自的每帧耗时。渲染图此刻还活着，统计才有内容。
     if (diagnosticsOptions.statsRenderGraph)

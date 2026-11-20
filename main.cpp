@@ -230,6 +230,7 @@ bool audioSpatialTest = false;
         else if (arg == "--hot-reload") diagOptions.hotReload = true;
         else if (arg == "--print-events") diagOptions.printEvents = true;
         else if (arg == "--probe-transient") diagOptions.probeTransient = true;
+        else if (arg == "--auto-exposure") diagOptions.autoExposure = true;
         else if (arg == "--no-ssao")  noSSAO = true;
         else if (arg == "--no-taa")   noTAA = true;
         else if (arg == "--no-water") noWater = true;
