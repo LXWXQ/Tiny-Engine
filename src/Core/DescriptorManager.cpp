@@ -194,7 +194,8 @@ void DescriptorManager::createGlobalLayout()
 		bindings[i].binding = i;
 		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 		bindings[i].descriptorCount = 1;
-		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		// TM-13 第二步：GPU 侧建簇的 compute 着色器也读/写这四张表。
+		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	}
 
 	for (uint32_t i = 1; i <= 9; i++)

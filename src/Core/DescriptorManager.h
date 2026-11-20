@@ -93,6 +93,10 @@ public:
 	// 但 lighting.frag 仍然静态使用那四条 SSBO，不填就是未定义描述符。
 	void applyClusterBindings(VkDescriptorSet set);
 
+	// TM-13 第二步：GPU 建簇那一次 dispatch 要按这份偏移发 buffer 屏障，
+	// 所以把"最近一帧绑定的四张表"读出来。
+	const ClusterBinding& lastClusterBinding() const { return lastClusterBinding_; }
+
 	// ---------------- 材质（D-3 起是 bindless 的）----------------
 	//
 	// 材质不再是"一个材质一个 VkDescriptorSet"，而是**一个 set 里放 4 个纹理数组**：

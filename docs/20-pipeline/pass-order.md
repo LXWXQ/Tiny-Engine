@@ -4,7 +4,7 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~184 行
+size: ~197 行
 updated: 2026-11-20
 ---
 
@@ -158,6 +158,19 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | 1（`--clustered-lighting`） | Set 0 binding 15~18 的簇参数 / ranges / indices / 灯数组 | 所在簇的灯数 |
 
 主视角用聚簇时，平面反射通道仍走逐灯（`reflectionUbo.clusterParams.x = 0`）：它的 Set 0 是 `ReflectionPass` 自己建的，簇表按主视角算，复用会读到与屏幕分块不匹配的区间。
+
+### 簇表从哪来：CPU 还是 GPU
+
+簇表（ranges / indices）有两条产出路径，消费者读法完全相同：
+
+| 路径 | 开关 | 谁在算 | 索引排布 |
+|---|---|---|---|
+| CPU | `--clustered-lighting` | `ClusteredLighting::build`（按灯剪枝 + 计数排序） | 紧凑，总长 = 命中数 |
+| GPU | 再加 `--clustered-gpu-build` | `shaders/cluster_build.comp`，每帧一次 dispatch（54 个 workgroup） | 定长槽位，`3456 x 256 x 4B = 3.4 MiB / 帧槽` |
+
+GPU 路径的 dispatch 挂在**图形流**里（`ClusterBuildPass`，`graph.addGraphicsPass("Clusters.Build")`），
+不是异步 compute：簇表走每帧暂存区、没在渲染图里登记，跨队列依赖建立不起来（决策 40）。
+选 GPU 路径时 CPU 侧不建表，`--stats-clusters` 会直接打「建簇=GPU」而不是一串 0。
 
 压力场（`--light-stress`）不是随便摆几盏灯：它必须铺在**可见几何附近**才有意义。
 最初把它铺在相机前方 22 米的半空，结果每个片元到最近一盏灯的中位距离是 66 米，

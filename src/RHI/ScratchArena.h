@@ -71,6 +71,12 @@ public:
     // beginFrame 的参数同义；同一帧重复开帧不会重置偏移，所以渲染图照常开帧即可。
     Block allocate(uint32_t frameSlot, VkDeviceSize bytes, VkDeviceSize alignment = 16);
 
+    // 先把这一槽位撑到至少 bytes，再开始分配。
+    // 为什么需要它：allocate 在容量不够时会**新建** buffer 并把偏移归零，
+    // 于是同一帧里先后拿到的两个 Block 可能属于不同的 buffer。凡是"一次分配
+    // 一组、之后当作同一块内存用（带偏移写描述符）"的地方，都必须先 reserve。
+    void reserve(uint32_t frameSlot, VkDeviceSize bytes);
+
     // 帧尾：把这一帧写过的槽位刷新一次。COHERENT 内存直接跳过（省掉一次驱动调用）。
     void flushIfNeeded();
 
@@ -98,6 +104,7 @@ private:
         VkDeviceSize capacity = 0;
         VkDeviceSize offset = 0;
         bool dirty = false;
+        // 扩容淘汰的旧 buffer。只在 ScratchArena 析构时销毁 —— 见 beginFrame 里的注释。
         std::vector<Retired> retired;
     };
 

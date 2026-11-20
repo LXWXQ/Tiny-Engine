@@ -88,6 +88,7 @@ const std::vector<UsageLine> kCatalog = {
     { "剖析", "--light-stress", "铺 N 盏点光源做压力场（配合 --clustered-lighting 看聚簇收益）" },
     { "剖析", "--clustered-lighting", "片元按所在簇取灯表，而不是遍历全部点光源（TM-13）" },
     { "剖析", "--stats-clusters", "退出时打印聚簇构建统计：使用簇数 / 最大簇 / 丢弃数（TM-13）" },
+    { "剖析", "--clustered-gpu-build", "建簇改在 GPU 上跑一次 dispatch（定长槽位，索引占 3.4 MiB/帧槽）" },
         { "剖析", "--fireflies <n>", "区域内点亮 n 个萤火虫式光源（形状 + 颜色 + 照亮地面），默认 0 = 关闭" },
         { "剖析", "--fireflies-radius <m>", "萤火虫铺开的半径（米，默认 12）；决定这群灯占多大一片地" },
     { "剖析", "--light-stress-radius <m>", "压力场铺开的半径（米，默认 18）；配合 --light-stress 看稀疏分布下的聚簇收益" },

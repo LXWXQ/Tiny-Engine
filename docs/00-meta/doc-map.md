@@ -4,7 +4,7 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~200 行
+size: ~201 行
 updated: 2026-11-20
 ---
 
@@ -51,7 +51,8 @@ updated: 2026-11-20
 | `SSAOPass.*` | SSAO 输出 + 模糊 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `LightingPass.*` / `LightingSystem.*` | HDR 光照输出、导入交换链 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `LightSources.*` | 点光源数组与压力场（`--light-stress`），两条光照路径的灯来源 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
-| `ClusteredLighting.*` | 16x9x24 视锥分块：按灯剪枝 + 计数排序建簇表 | [pass-order](../20-pipeline/pass-order.md)、[decisions](../10-architecture/decisions.md) 决策 32 | pass-order |
+| `ClusteredLighting.*` | 16x9x24 视锥分块：按灯剪枝 + 计数排序建簇表（CPU 路径）、参数块 | [pass-order](../20-pipeline/pass-order.md)、[decisions](../10-architecture/decisions.md) 决策 32 | pass-order |
+| `ClusterBuildPass.*` / `shaders/cluster_build.comp` | GPU 建簇：每帧一次 dispatch、定长槽位（`3456 x 256`）；挂在图形流里而非异步 compute | [pass-order](../20-pipeline/pass-order.md)「建簇两条路径」、[decisions](../10-architecture/decisions.md) 决策 40 | pass-order |
 | `Fireflies.*` | 区域内 N 个自发光点：确定性布点 + 游走 + 呼吸；样本同时带发光点直径与照亮半径 | [pass-order](../20-pipeline/pass-order.md)、[cli-reference](../50-validation/cli-reference.md) | pass-order |
 | `WaterPass.*` / `water.vert` / `water.frag` | 相机中心径向网格、波浪位移、Fresnel/环境反射/厚度吸收/泡沫，HDR 前向混合 | [water](../30-systems/water.md)、[pass-order](../20-pipeline/pass-order.md) | water、pass-order |
 | `VegetationPass.*` / `vegetation.vert` / `vegetation.frag` | 实例化草/树写 G-Buffer（Geometry 后、SSAO 前），地形高度/坡度放置、风摆、草片元 alpha-test discard | [vegetation](../30-systems/vegetation.md)、[pass-order](../20-pipeline/pass-order.md) | vegetation、pass-order |

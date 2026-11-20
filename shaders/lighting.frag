@@ -45,8 +45,10 @@ layout(set = 0, binding = 11) uniform sampler2DArray shadowMaps;
 // 关闭时 ubo.clusterParams.x = 0，这几张表不会被读。
 layout(set = 0, binding = 15) readonly buffer ClusterParamsBlock {
     mat4 inverseProjection;
+    mat4 view;            // 世界 -> 视空间（GPU 建簇用；片元侧不读）
     vec4 screenParams;   // xy = 分辨率, z = near, w = far
     uvec4 grid;          // xyz = 簇网格, w = 每簇上限
+    uvec4 counts;        // x = 灯数（GPU 建簇用；片元侧不读）
 } clusterParams;
 
 layout(set = 0, binding = 16) readonly buffer ClusterRanges { uvec2 clusterRanges[]; };

@@ -103,12 +103,10 @@ void ScratchArena::beginFrame(uint32_t frameSlot)
     Slot& slot = slots[currentSlot];
 
     // 这个槽位上一次用过的旧块，到这里才确定没人再用（见头文件里的说明）。
-    for (Retired& retired : slot.retired)
-    {
-        if (retired.buffer != VK_NULL_HANDLE)
-            vmaDestroyBuffer(device.getVmaAllocator(), retired.buffer, retired.allocation);
-    }
-    slot.retired.clear();
+    // 旧块**不在这里回收**：它可能已经被别处的描述符集记住（典型：平面反射
+    // 通道自建的 Set 0 用 applyClusterBindings 抓过一次），而那些 set 只在
+    // 重建时才改写。销毁后仍被 draw 引用就是 UAF（验证层会报 08114）。
+    // 扩容本身不频繁（每次翻倍），旧块留到本对象销毁时统一还。
 
     slot.offset = 0;
     slot.dirty = false;
@@ -143,7 +141,7 @@ void ScratchArena::grow(uint32_t index, VkDeviceSize required)
     ++statistics.grows;
     statistics.capacity = capacity;
 
-    std::printf("[Scratch] 扩容到 %.2f MiB（这一槽位之前的分配仍然有效，旧块下一轮回收）\n",
+    std::printf("[Scratch] 扩容到 %.2f MiB（这一槽位之前的分配仍然有效，旧块留到销毁时还",
                 static_cast<double>(capacity) / (1024.0 * 1024.0));
 }
 
@@ -151,6 +149,18 @@ ScratchArena::Block ScratchArena::allocate(uint32_t frameSlot, VkDeviceSize byte
 {
     beginFrame(frameSlot);   // 幂等：同一帧第二次调用不会清掉已分配的偏移
     return allocate(bytes, alignment);
+}
+
+void ScratchArena::reserve(uint32_t frameSlot, VkDeviceSize bytes)
+{
+    beginFrame(frameSlot);
+    if (bytes == 0)
+        return;
+
+    Slot& slot = slots[currentSlot];
+    const VkDeviceSize required = slot.offset + bytes;
+    if (required > slot.capacity)
+        grow(currentSlot, required);
 }
 
 ScratchArena::Block ScratchArena::allocate(VkDeviceSize bytes, VkDeviceSize alignment)

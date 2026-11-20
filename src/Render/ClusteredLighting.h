@@ -17,8 +17,12 @@
 struct ClusterParamsGpu
 {
     glm::mat4 inverseProjection{ 1.f };   // 64 字节
+    glm::mat4 view{ 1.f };                // 64 字节：世界 -> 视空间
     glm::vec4 screenParams{ 0.f };        // xy = 渲染分辨率, z = near, w = far
     glm::uvec4 grid{ 0, 0, 0, 0 };        // xyz = 簇分辨率, w = 每簇上限
+    // x = 灯数。GPU 建簇不再用 SSBO 的 .length()：不同驱动对它的时报有差异，
+    // 显式带一个计数，顺便让「描述符范围比分配小」这种情形也是安全的。
+    glm::uvec4 counts{ 0, 0, 0, 0 };
 };
 
 struct ClusterRange
@@ -35,6 +39,11 @@ public:
     static constexpr uint32_t kGridZ = 24;
     static constexpr uint32_t kClusterCount = kGridX * kGridY * kGridZ;   // 3456
     static constexpr uint32_t kMaxLightsPerCluster = 256;
+
+    // 只填 params（不建表）—— GPU 建簇路径要用它写 ClusterParamsBlock。
+    void prepareParams(const glm::mat4& view, const glm::mat4& projection,
+        float nearZ, float farZ, uint32_t width, uint32_t height,
+        uint32_t lightCount = 0);
 
     void build(const std::vector<GpuPointLight>& lights, const glm::mat4& view,
         const glm::mat4& projection, float nearZ, float farZ,

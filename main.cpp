@@ -82,6 +82,7 @@
 //   --light-stress N              铺 N 盏点光源做压力场（N=0 表示不加灯）
 //   --clustered-lighting          片元按所在簇取灯，而不是遍历全部点光源（TM-13）
 //   --stats-clusters              退出时打印聚簇构建统计：使用簇数 / 最大簇 / 丢弃数
+//   --clustered-gpu-build         建簇改在 GPU 上跑一次 dispatch（TM-13 第二步）
 //   --gpu-timing-csv <path>       指定 CSV 路径（隐含 --gpu-timing）
 //   --validation-features <list>  启用验证层增强：bp(=best practices) / sync(=同步校验)，逗号分隔或 all
 //   --validation-jsonl <path>     把验证层消息写成 JSONL（默认不落盘，也不写 stderr）
@@ -404,6 +405,7 @@ bool audioSpatialTest = false;
         else if (arg == "--stats-rendergraph") diagOptions.statsRenderGraph = true;
         else if (arg == "--clustered-lighting") diagOptions.clusteredLighting = true;
         else if (arg == "--stats-clusters") diagOptions.statsClusters = true;
+        else if (arg == "--clustered-gpu-build") diagOptions.clusteredGpuBuild = true;
         else if (arg == "--fireflies" && i + 1 < argc)
         {
             try

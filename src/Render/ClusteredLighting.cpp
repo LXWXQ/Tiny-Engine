@@ -31,14 +31,23 @@ bool ClusteredLighting::sphereIntersectsAabb(const glm::vec3& center, float radi
     return glm::dot(d, d) <= radius * radius;
 }
 
+void ClusteredLighting::prepareParams(const glm::mat4& view, const glm::mat4& projection,
+    float nearZ, float farZ, uint32_t width, uint32_t height, uint32_t lightCount)
+{
+    params_.inverseProjection = glm::inverse(projection);
+    params_.view = view;
+    params_.screenParams = glm::vec4(static_cast<float>(width), static_cast<float>(height),
+        nearZ, farZ);
+    params_.grid = glm::uvec4(kGridX, kGridY, kGridZ, kMaxLightsPerCluster);
+    params_.counts = glm::uvec4(lightCount, 0u, 0u, 0u);
+}
+
 void ClusteredLighting::build(const std::vector<GpuPointLight>& lights, const glm::mat4& view,
     const glm::mat4& projection, float nearZ, float farZ,
     uint32_t width, uint32_t height)
 {
-    params_.inverseProjection = glm::inverse(projection);
-    params_.screenParams = glm::vec4(static_cast<float>(width), static_cast<float>(height),
-        nearZ, farZ);
-    params_.grid = glm::uvec4(kGridX, kGridY, kGridZ, kMaxLightsPerCluster);
+    prepareParams(view, projection, nearZ, farZ, width, height,
+        static_cast<uint32_t>(lights.size()));
 
     ranges_.assign(kClusterCount, ClusterRange{});
     indices_.clear();

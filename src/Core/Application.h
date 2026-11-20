@@ -13,6 +13,7 @@
 #include "Render/RenderResources.h"
 #include "Render/LightSources.h"
 #include "Render/ClusteredLighting.h"
+#include "Render/ClusterBuildPass.h"
 #include "Render/Fireflies.h"
 #include "RHI/RenderGraph.h"
 #include "RHI/GpuTimer.h"
@@ -179,6 +180,8 @@ private:
 	ParticlePass* particlePassPtr = nullptr;
 	float fireflyClock = 0.0f;
 	ClusteredLighting clusteredLighting;
+	// TM-13 第二步：GPU 建簇那一次 dispatch 的宿主（不持有所有权，管线由 RenderPipeline 管）。
+	ClusterBuildPass* clusterBuildPassPtr = nullptr;
 
 	std::array<VkBuffer, kFramesInFlight> globalUboBuffers{};
 	std::array<VmaAllocation, kFramesInFlight> globalUboAllocations{};

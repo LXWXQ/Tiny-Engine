@@ -1,0 +1,136 @@
+#version 450
+// TM-13 第二步：把聚簇建簇从 CPU 挪到 GPU。
+//
+// 每个线程负责一个簇：算它的视空间 AABB，遍历灯数组做球-盒测试，
+// 命中就写进这簇的**定长槽位**（cluster * 每簇上限）。
+//
+// 为什么用定长槽位而不是"两遍扫描 + 前缀和"：
+//   前缀和版本要三次 dispatch、多一张游标缓冲，收益只是省索引内存；
+//   而定长槽位一次 dispatch 就能写完，着色器侧读取逻辑与 CPU 版完全一致
+//   （都是 ranges[c] = {offset, count}）。代价是每簇 256 槽的索引空间，
+//   3456 簇 × 256 × 4B = 3.4 MiB/帧槽 —— 已在文档里写明。
+//
+// 语义必须与 src/Render/ClusteredLighting.cpp 的 CPU 版逐项对齐：
+//   对数 slice 划分、四个角射线反投影成 AABB、球-盒距离比较。
+layout(local_size_x = 64) in;
+
+struct PointLight
+{
+    vec4 positionRadius;   // xyz = 世界坐标, w = 照亮半径
+    vec4 colorIntensity;   // rgb = 颜色, a = 强度
+};
+
+layout(set = 0, binding = 15) readonly buffer ClusterParamsBlock
+{
+    mat4 inverseProjection;
+    mat4 view;             // 世界 -> 视空间（灯要在这里做球-盒测试）
+    vec4 screenParams;     // xy = 渲染分辨率, z = near, w = far
+    uvec4 grid;            // xyz = 簇分辨率, w = 每簇上限
+    uvec4 counts;          // x = 灯数
+} clusterParams;
+
+layout(set = 0, binding = 16) writeonly buffer ClusterRanges
+{
+    uvec2 clusterRanges[];
+} ranges;
+
+layout(set = 0, binding = 17) writeonly buffer ClusterIndices
+{
+    uint clusterIndices[];
+} indices;
+
+layout(set = 0, binding = 18) readonly buffer ClusterLights
+{
+    PointLight clusterLights[];
+} lights;
+
+// 与 CPU 版同一条数学：透视投影下固定 (ndcX, ndcY) 的点都在过原点的射线上，
+// 所以取深度 1 的点再按 z 比例缩放。引擎的投影是 GL 式 + Y 翻转，正前方是 +z。
+vec3 viewRayPoint(vec2 ndc)
+{
+    vec4 p = clusterParams.inverseProjection * vec4(ndc, 1.0, 1.0);
+    if (abs(p.w) < 1e-8)
+        return vec3(0.0);
+    p /= p.w;
+    if (p.z < 1e-6)
+        return vec3(0.0);
+    return p.xyz / p.z;
+}
+
+bool sphereIntersectsAabb(vec3 center, float radius, vec3 lo, vec3 hi)
+{
+    vec3 closest = clamp(center, lo, hi);
+    vec3 d = center - closest;
+    return dot(d, d) <= radius * radius;
+}
+
+void main()
+{
+    const uint gridX = clusterParams.grid.x;
+    const uint gridY = clusterParams.grid.y;
+    const uint gridZ = clusterParams.grid.z;
+    const uint maxPerCluster = clusterParams.grid.w;
+    const uint clusterCount = gridX * gridY * gridZ;
+
+    const uint id = gl_GlobalInvocationID.x;
+    if (id >= clusterCount)
+        return;
+
+    const uint x = id % gridX;
+    const uint y = (id / gridX) % gridY;
+    const uint z = id / (gridX * gridY);
+
+    const float nearZ = clusterParams.screenParams.z;
+    const float farZ = clusterParams.screenParams.w;
+
+    // slice 边界与 CPU 版相同的对数分布：近处细、远处粗。
+    const float sliceRatio = (farZ > nearZ) ? pow(farZ / nearZ, 1.0 / float(gridZ)) : 1.0;
+    const float sliceNear = nearZ * pow(sliceRatio, float(z));
+    const float sliceFar = nearZ * pow(sliceRatio, float(z + 1));
+
+    const float ndcX0 = -1.0 + 2.0 * float(x) / float(gridX);
+    const float ndcX1 = -1.0 + 2.0 * float(x + 1) / float(gridX);
+    const float ndcY0 = -1.0 + 2.0 * float(y) / float(gridY);
+    const float ndcY1 = -1.0 + 2.0 * float(y + 1) / float(gridY);
+
+    vec3 dirs[4] = vec3[4](
+        viewRayPoint(vec2(ndcX0, ndcY0)),
+        viewRayPoint(vec2(ndcX1, ndcY0)),
+        viewRayPoint(vec2(ndcX0, ndcY1)),
+        viewRayPoint(vec2(ndcX1, ndcY1)));
+
+    vec3 lo = vec3(3.4e38);
+    vec3 hi = vec3(-3.4e38);
+    for (int i = 0; i < 4; ++i)
+    {
+        lo = min(lo, min(dirs[i] * sliceNear, dirs[i] * sliceFar));
+        hi = max(hi, max(dirs[i] * sliceNear, dirs[i] * sliceFar));
+    }
+
+    const uint base = id * maxPerCluster;
+    uint count = 0u;
+    // 灯数从参数块读，而不是 clusterLights.length()：
+    // 描述符范围可能小于分配大小，两者在不同驱动上并不总是一致。
+    const uint lightCount = clusterParams.counts.x;
+
+    for (uint i = 0u; i < lightCount; ++i)
+    {
+        vec4 pr = lights.clusterLights[i].positionRadius;
+        if (pr.w <= 0.0)
+            continue;
+
+        vec3 center = (clusterParams.view * vec4(pr.xyz, 1.0)).xyz;
+        if (!sphereIntersectsAabb(center, pr.w, lo, hi))
+            continue;
+
+        // 超出每簇上限就丢 —— 与 CPU 版的 dropped 语义一致（只是这里不计数，
+        // 因为"丢了几条"对画面没有意义，真要看用 --stats-clusters 的 CPU 版）。
+        if (count >= maxPerCluster)
+            break;
+
+        indices.clusterIndices[base + count] = i;
+        ++count;
+    }
+
+    ranges.clusterRanges[id] = uvec2(base, count);
+}

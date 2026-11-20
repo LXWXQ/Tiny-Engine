@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~529 行
+size: ~576 行
 updated: 2026-11-20
 ---
 
@@ -527,3 +527,50 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 **验证**：`--probe-transient` 打印 6 行表 + "本设备 LAZILY_ALLOCATED 内存类型：0 个"；
 `--selftest 30` 里 `[Transient] selfTest PASS`、`errors=0`、stderr 0 字节；
 `--selftest 60 --gpu-scene` 96.9 FPS、`errors=0`。
+
+## 决策 40：聚簇建簇放在图形流里做，一次 dispatch 取代 CPU 逐灯扫描（TM-13 第二步）
+
+**问题**：TM-13 第一步的建簇在 CPU 上做（按灯剪枝 + 计数排序）。512 盏灯时
+Debug 构建要十几毫秒一帧（早期实测 18.3 ms），Release 也有约 1 ms —— 建簇成了
+「聚簇到底划不划算」里最大的一项开销，而且它随灯数线性增长。
+
+**做法**：`shaders/cluster_build.comp` 每个线程算一个簇（3456 个线程 = 54 个 workgroup），
+反投影出视空间 AABB、遍历灯做球-盒测试，命中就写进**定长槽位**
+（`base = clusterID * 256`），最后把 `uvec2(base, count)` 写进 ranges。CPU 一侧什么都不做，
+只把参数块与三张表的描述符准备好。
+
+**为什么走 `addGraphicsPass` 而不是 `addComputePass`**：`addComputePass` 会把 dispatch
+录进异步 compute 命令流，而簇表走的是每帧暂存区（没有在渲染图里登记成纹理 / 缓冲区），
+渲染图无法为它建立跨队列依赖 —— 这正是 TM-09 撞上的那面墙。ClusterBuildPass 因此
+挂在图形流里、自己发一条 buffer 屏障（COMPUTE_SHADER/SHADER_WRITE → FRAGMENT_SHADER/SHADER_READ）。
+将来如果把簇表登记进渲染图（`importBuffer` 或 `createOwnedBuffer`），可以再挪回 compute。
+
+**定长槽位换什么**：省掉了「前缀和 + 游标缓冲 + 第二次 dispatch」这一整套，
+消费者（`lighting.frag`）读法完全不变；代价是索引表固定占
+`3456 x 256 x 4B = 3.4 MiB / 帧槽`（两个槽位合一 6.8 MiB）。灯多到需要调大每簇上限时，
+这份静态占用还会跟着涨 —— 那时才值得换成前缀和。
+
+**踩到的三个坑**（都写进代码注释）：
+
+- **`clusterLights.length()` 会让驱动在 `vkCreateComputePipelines` 里直接 0xC0000005**。
+  改成从参数块读 `counts.x`（CPU 侧写入），问题消失。结论：这个驱动上不要用 SSBO 的 `.length()`。
+- **`stageFlags` 被后面的赋值覆盖**：Set 0 binding 15~18 的 `stageFlags` 加了
+  `COMPUTE_BIT` 之后，循环末尾还有一行把它改回只有 `FRAGMENT_BIT`，于是验证层报
+  `VUID-VkComputePipelineCreateInfo-layout-07988`（4 条）。顺序要放在最后。
+- **暂存区中途扩容会换 buffer**：`ScratchArena::allocate` 在容量不够时新建 buffer 并把偏移
+  归零，于是「一次分配四段、之后按偏移当同一块内存写描述符」的做法会失效
+  （验证层报 `range-00342`，range 超过 buffer 大小）。修法是先 `reserve` 再分配，
+  并在 Application 里加「四块必须同 buffer」的兜底（不同就退回 CPU）。
+  顺带把旧块的回收时机改成 **只在 arena 析构时**：扩容淘汰的旧 buffer 可能已经被
+  别的描述符集记住（典型是平面反射自建的 Set 0），提前销毁就是 UAF（验证层 08114，12 条）。
+
+**实测（本机 RTX 2070，Debug，`--voxel-world 1 --light-stress 512 --clustered-lighting`，60 帧）**：
+CPU 建簇 51.77 FPS（1.159 s / 60 帧），GPU 建簇 65.37 FPS（0.918 s / 60 帧），**+26%**；
+两种模式 `--validation-features sync` 均 `errors=0`、stderr 0 字节；8 灯同机位截图
+CPU vs GPU 逐像素差 213 像素，全部落在 HUD 的 FPS 读数区（x 102..157 / y 119..129），
+3D 画面一致。
+
+**默认关闭**：`--clustered-gpu-build` 加在 `--clustered-lighting` 之上，两者都不影响默认渲染路径。
+聚簇本身仍默认关闭（决策 32），这一步只是把「将来翻默认」时最大的那项开销先搬走。
+
+**不引入的**：前缀和 / 游标缓冲（定长槽位已经够了）；把建簇挪回异步 compute（等簇表进渲染图再说）。

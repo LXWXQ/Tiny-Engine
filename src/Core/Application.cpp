@@ -60,6 +60,7 @@
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
 #include "Render/SubresourceProbePass.h"
+#include "Render/ClusterBuildPass.h"
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
@@ -851,6 +852,9 @@ streamingConfig.skirtsEnabled = false;
 	shadowPass->setVegetationPass(vegetationPass.get());
 	auto ssaoPass = std::make_unique<SSAOPass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get());
+	auto clusterBuildPass = std::make_unique<ClusterBuildPass>(
+		*vulkanDevice, descriptorManager.get(), descriptorManager->getGlobalSetLayout());
+	clusterBuildPassPtr = clusterBuildPass.get();
 	auto lightPass = std::make_unique<LightingPass>(*vulkanDevice, *gBuffers[0], *vulkanSwapchain,
 		*renderGraph, *renderResources, descriptorManager->getGlobalSetLayout());
 	// F6-05：体积云。必须在 Lighting 之后（混进已着色的 HDR），且在 Reflection/
@@ -938,6 +942,9 @@ streamingConfig.skirtsEnabled = false;
 	renderPipeline.addPass(std::move(geoPass));
 	renderPipeline.addPass(std::move(vegetationPass));
 	renderPipeline.addPass(std::move(ssaoPass));
+	// TM-13 第二步：在图形流里先把簇表算出来，Lighting 才有表可读。
+	// 它不进 addComputePass —— 异步 compute 队列读不到渲染图没登记过的暂存缓冲。
+	renderPipeline.addPass(std::move(clusterBuildPass));
 	renderPipeline.addPass(std::move(lightPass));
 	renderPipeline.addPass(std::move(cloudPass));
 	renderPipeline.addPass(std::move(fogVolumePass));
@@ -3015,35 +3022,79 @@ if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
 
 		ubo.clusterParams = glm::vec4(0.0f, 0.1f, 5000.0f, 0.0f);
 
-		if (diagnosticsOptions.clusteredLighting && !pointLights.empty() && renderExtent.width > 0)
+		const bool clusterEnabled =
+			diagnosticsOptions.clusteredLighting && !pointLights.empty() && renderExtent.width > 0;
+		const bool clusterOnGpu = clusterEnabled && diagnosticsOptions.clusteredGpuBuild;
+		if (clusterBuildPassPtr != nullptr)
+			clusterBuildPassPtr->setEnabled(clusterOnGpu);
+
+		if (clusterEnabled)
 		{
-			clusteredLighting.build(pointLights, scene->getCamera().getView(), unjitteredProjection,
-				0.1f, 5000.0f, renderExtent.width, renderExtent.height);
+			// 两条路径产出同一份消费者输入（ranges / indices）：
+			//   CPU：紧凑排布（内存小，但 512 盏灯在 Debug 下要花十几毫秒）
+			//   GPU：定长槽位（索引固定占 3.4 MiB/帧槽，一次 dispatch 算完）
+			if (clusterOnGpu)
+			{
+				clusteredLighting.prepareParams(scene->getCamera().getView(), unjitteredProjection,
+					0.1f, 5000.0f, renderExtent.width, renderExtent.height,
+					static_cast<uint32_t>(pointLights.size()));
+			}
+			else
+			{
+				clusteredLighting.build(pointLights, scene->getCamera().getView(), unjitteredProjection,
+					0.1f, 5000.0f, renderExtent.width, renderExtent.height);
+			}
 
 			const auto& clusterParams = clusteredLighting.params();
 			const auto& clusterRanges = clusteredLighting.ranges();
 			const auto& clusterIndices = clusteredLighting.indices();
 
 			auto& scratch = vulkanDevice->getScratch();
+			const VkDeviceSize paramsBytes = sizeof(clusterParams);
+			const VkDeviceSize rangesBytes = clusterOnGpu
+				? static_cast<VkDeviceSize>(ClusteredLighting::kClusterCount) * sizeof(ClusterRange)
+				: static_cast<VkDeviceSize>(clusterRanges.size()) * sizeof(ClusterRange);
+			// 索引可能为空（没有一盏灯落进任何簇），但仍然要给描述符一个合法范围。
+			const VkDeviceSize indicesBytes = clusterOnGpu
+				? static_cast<VkDeviceSize>(ClusteredLighting::kClusterCount) *
+					ClusteredLighting::kMaxLightsPerCluster * sizeof(uint32_t)
+				: std::max<VkDeviceSize>(clusterIndices.size() * sizeof(uint32_t), 4);
+			const VkDeviceSize lightsBytes = pointLights.size() * sizeof(GpuPointLight);
+
+			// 四张表按偏移当同一块内存用（一次 vkUpdateDescriptorSets 写四条），
+			// 所以必须先 reserve：否则 allocate 中途扩容会换 buffer，偏移就对不上了。
+			scratch.reserve(frameInFlight,
+				paramsBytes + rangesBytes + indicesBytes + lightsBytes + 4 * 256);
+
 			const tiny::ScratchArena::Block paramsBlock =
-				scratch.allocate(frameInFlight, sizeof(clusterParams), 256);
+				scratch.allocate(frameInFlight, paramsBytes, 256);
 			std::memcpy(paramsBlock.mapped, &clusterParams, sizeof(clusterParams));
 
-			const VkDeviceSize rangesBytes = clusterRanges.size() * sizeof(ClusterRange);
 			const tiny::ScratchArena::Block rangesBlock = scratch.allocate(frameInFlight, rangesBytes, 256);
-			std::memcpy(rangesBlock.mapped, clusterRanges.data(), rangesBytes);
+			if (!clusterOnGpu)
+				std::memcpy(rangesBlock.mapped, clusterRanges.data(), rangesBytes);
 
-			// 索引可能为空（没有一盏灯落进任何簇），但仍然要给描述符一个合法范围。
-			const VkDeviceSize indicesBytes =
-				std::max<VkDeviceSize>(clusterIndices.size() * sizeof(uint32_t), 4);
 			const tiny::ScratchArena::Block indicesBlock = scratch.allocate(frameInFlight, indicesBytes, 256);
-			if (!clusterIndices.empty())
+			if (!clusterOnGpu && !clusterIndices.empty())
 				std::memcpy(indicesBlock.mapped, clusterIndices.data(),
 					clusterIndices.size() * sizeof(uint32_t));
 
-			const VkDeviceSize lightsBytes = pointLights.size() * sizeof(GpuPointLight);
 			const tiny::ScratchArena::Block lightsBlock = scratch.allocate(frameInFlight, lightsBytes, 256);
 			std::memcpy(lightsBlock.mapped, pointLights.data(), lightsBytes);
+
+			// 保险：reserve 之后四块必须同 buffer，否则 GPU 建簇认的偏移就是错的。
+			if (clusterOnGpu && (rangesBlock.buffer != paramsBlock.buffer ||
+					indicesBlock.buffer != paramsBlock.buffer || lightsBlock.buffer != paramsBlock.buffer))
+			{
+				std::fprintf(stderr, "[Clusters] 暂存区四段落在了不同 buffer，本帧退回 CPU 建簇\n");
+				clusterBuildPassPtr->setEnabled(false);
+				clusteredLighting.build(pointLights, scene->getCamera().getView(),
+					unjitteredProjection, 0.1f, 5000.0f, renderExtent.width, renderExtent.height);
+				std::memcpy(rangesBlock.mapped, clusterRanges.data(), rangesBytes);
+				if (!clusterIndices.empty())
+					std::memcpy(indicesBlock.mapped, clusterIndices.data(),
+						clusterIndices.size() * sizeof(uint32_t));
+			}
 
 			DescriptorManager::ClusterBinding binding;
 			binding.buffer = paramsBlock.buffer;
@@ -3271,11 +3322,20 @@ void FirstApp::finalizeDiagnostics()
     // TM-13：聚簇构建的统计（使用簇数 / 最大簇 / 因每簇上限丢弃的灯数）。
     if (diagnosticsOptions.statsClusters)
     {
-        std::printf("[Clusters] 构建 %llu 次 | 使用 %u 簇 | 最大簇 %u 盏 | 丢弃 %llu | 灯 %zu 盏（半径 %.0f m）\n",
-            static_cast<unsigned long long>(clusteredLighting.buildCount()),
-            clusteredLighting.usedClusters(), clusteredLighting.maxClusterSize(),
-            static_cast<unsigned long long>(clusteredLighting.dropped()),
-            lightSources.size(), static_cast<double>(diagnosticsOptions.lightStressRadius));
+		if (diagnosticsOptions.clusteredGpuBuild)
+		{
+			// GPU 建簇时 CPU 侧不建表，簇数/最大簇这些统计没有意义 —— 别打 0 骗人。
+			std::printf("[Clusters] 建簇=GPU（每帧一次 dispatch）| 灯 %zu 盏（半径 %.0f m）\n",
+				lightSources.size(), static_cast<double>(diagnosticsOptions.lightStressRadius));
+		}
+		else
+		{
+			std::printf("[Clusters] 构建 %llu 次 | 使用 %u 簇 | 最大簇 %u 盏 | 丢弃 %llu | 灯 %zu 盏（半径 %.0f m）| 建簇=CPU\n",
+				static_cast<unsigned long long>(clusteredLighting.buildCount()),
+				clusteredLighting.usedClusters(), clusteredLighting.maxClusterSize(),
+				static_cast<unsigned long long>(clusteredLighting.dropped()),
+				lightSources.size(), static_cast<double>(diagnosticsOptions.lightStressRadius));
+		}
     }
 
     diag::printValidationSummary();

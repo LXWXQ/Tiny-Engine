@@ -88,6 +88,8 @@ namespace diag
     float firefliesRadius = 12.0f;
         bool clusteredLighting = false;
         bool statsClusters = false;
+        // TM-13 第二步：建簇放到 GPU（图形流里一次 dispatch），CPU 侧不再建表。
+        bool clusteredGpuBuild = false;
 
         bool gpuTiming = false;
         std::string gpuTimingCsvPath = "gpu_timing.csv";
