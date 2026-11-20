@@ -7,18 +7,52 @@
 #include <chrono>
 
 #include "PipelineStats.h"
+#include "Core/AssetPath.h"
+#include "RHI/ShaderReload.h"
 
 Pipeline::Pipeline(Device& device, const std::string& vertFilepath, const std::string& fragFilepath, const PipelineConfigInfo& configInfo)
-    : device(device) 
+    : device(device), vertPath(vertFilepath), fragPath(fragFilepath), config(configInfo)
 {
     createGraphicsPipeline(vertFilepath, fragFilepath, configInfo);
+
+    // TM-16：把自己登记进热重载表。登记的是**路径**，重载时重新 readFile 一遍。
+    tiny::hotreload::registerGraphics(this, vertFilepath, fragFilepath);
 }
 
 Pipeline::~Pipeline() 
 {
-    vkDestroyShaderModule(device.getDevice(), vertShaderModule, nullptr);
-    vkDestroyShaderModule(device.getDevice(), fragShaderModule, nullptr);
-    vkDestroyPipeline(device.getDevice(), graphicsPipeline, nullptr);
+    tiny::hotreload::unregisterGraphics(this);
+    if (vertShaderModule != VK_NULL_HANDLE)
+        vkDestroyShaderModule(device.getDevice(), vertShaderModule, nullptr);
+    if (fragShaderModule != VK_NULL_HANDLE)
+        vkDestroyShaderModule(device.getDevice(), fragShaderModule, nullptr);
+    if (graphicsPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device.getDevice(), graphicsPipeline, nullptr);
+}
+
+void Pipeline::reloadShaders()
+{
+    // 先把旧的拆掉再重建。调用方（ShaderReload::poll）已经在 vkDeviceWaitIdle
+    // 之后才进来，所以此刻没有任何在飞命令引用这两条管线。
+    if (graphicsPipeline != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device.getDevice(), graphicsPipeline, nullptr);
+        graphicsPipeline = VK_NULL_HANDLE;
+    }
+    if (vertShaderModule != VK_NULL_HANDLE)
+    {
+        vkDestroyShaderModule(device.getDevice(), vertShaderModule, nullptr);
+        vertShaderModule = VK_NULL_HANDLE;
+    }
+    if (fragShaderModule != VK_NULL_HANDLE)
+    {
+        vkDestroyShaderModule(device.getDevice(), fragShaderModule, nullptr);
+        fragShaderModule = VK_NULL_HANDLE;
+    }
+
+    // 路径可能已经被 AssetPath 解析过一次，这里用原始路径重读：
+    // readFile 内部会走 resolve()，换目录后依然能找到文件。
+    createGraphicsPipeline(vertPath, fragPath, config);
 }
 
 std::vector<char> Pipeline::readFile(const std::string& filepath)
@@ -28,10 +62,12 @@ std::vector<char> Pipeline::readFile(const std::string& filepath)
     if (assets::mounts().readFile(filepath, packed))
         return std::vector<char>(packed.begin(), packed.end());
 
-    std::ifstream file(filepath, std::ios::ate | std::ios::binary);
-    if (!file.is_open()) 
+    // TM-16：换目录后构建期绝对路径会失效，这里按 exe 位置回溯一次
+    const std::string resolvedPath = tiny::assetpath::resolve(filepath);
+    std::ifstream file(resolvedPath, std::ios::ate | std::ios::binary);
+    if (!file.is_open())
     {
-        throw std::runtime_error("failed to open file: " + filepath);
+        throw std::runtime_error("failed to open file: " + resolvedPath);
     }
     size_t fileSize = (size_t)file.tellg();
     std::vector<char> buffer(fileSize);
@@ -267,14 +303,50 @@ ComputePipeline::ComputePipeline(Device& device, const std::string& compFilepath
     const double elapsedMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - startTime).count();
     tiny::pipelinestats::recordCompute(compFilepath.c_str(), elapsedMs);
+
+    compPath = compFilepath;
+    layout = pipelineLayout;
+    tiny::hotreload::registerCompute(this, compFilepath);
 }
 
 ComputePipeline::~ComputePipeline()
 {
+    tiny::hotreload::unregisterCompute(this);
     if (pipeline != VK_NULL_HANDLE)
         vkDestroyPipeline(device.getDevice(), pipeline, nullptr);
     if (shaderModule != VK_NULL_HANDLE)
         vkDestroyShaderModule(device.getDevice(), shaderModule, nullptr);
+}
+
+void ComputePipeline::reloadShaders()
+{
+    if (pipeline != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device.getDevice(), pipeline, nullptr);
+        pipeline = VK_NULL_HANDLE;
+    }
+    if (shaderModule != VK_NULL_HANDLE)
+    {
+        vkDestroyShaderModule(device.getDevice(), shaderModule, nullptr);
+        shaderModule = VK_NULL_HANDLE;
+    }
+
+    const std::vector<char> code = readFile(compPath);
+    createShaderModule(device, code, &shaderModule);
+
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = shaderModule;
+    stage.pName = "main";
+
+    VkComputePipelineCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    info.stage = stage;
+    info.layout = layout;
+
+    if (vkCreateComputePipelines(device.getDevice(), device.getPipelineCache(), 1, &info, nullptr, &pipeline) != VK_SUCCESS)
+        throw std::runtime_error("failed to recreate compute pipeline!");
 }
 
 void ComputePipeline::bind(VkCommandBuffer commandBuffer)
@@ -288,9 +360,10 @@ std::vector<char> ComputePipeline::readFile(const std::string& filepath)
     if (assets::mounts().readFile(filepath, packed))
         return std::vector<char>(packed.begin(), packed.end());
 
-    std::ifstream file(filepath, std::ios::ate | std::ios::binary);
+    const std::string resolvedPath = tiny::assetpath::resolve(filepath);
+    std::ifstream file(resolvedPath, std::ios::ate | std::ios::binary);
     if (!file.is_open())
-        throw std::runtime_error("failed to open file: " + filepath);
+        throw std::runtime_error("failed to open file: " + resolvedPath);
 
     const size_t fileSize = static_cast<size_t>(file.tellg());
     std::vector<char> buffer(fileSize);

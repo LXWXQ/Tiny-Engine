@@ -15,6 +15,7 @@
 // 因此必须：先包含一次拿声明（此时宏还没定义），再定义宏包含一次 —— 实现恰好展开一次。
 // 如果反过来（先定义宏再包含），实现会被展开两次，直接重定义编译失败。
 #include "Scene/GLTFLoader.h"
+#include "Core/AssetPath.h"
 
 #define TINYGLTF_IMPLEMENTATION
 #include <tiny_gltf.h>
@@ -987,10 +988,14 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
     std::vector<uint8_t> packedFile;
     const bool fromPack = assets::mounts().readFile(filepath, packedFile);
 
+    // TM-16：先按 exe 位置回溯一次，换目录/换机器后构建期绝对路径可能已失效。
+    // 必须在算 baseDir 之前解析 —— 外部 .bin 与贴图是相对 glTF 文件所在目录找的。
+    const std::string resolvedPath = tiny::assetpath::resolve(filepath);
+
     std::string baseDir;
     {
         std::error_code ec;
-        const std::filesystem::path parent = std::filesystem::path(filepath).parent_path();
+        const std::filesystem::path parent = std::filesystem::path(resolvedPath).parent_path();
         if (!parent.empty())
             baseDir = parent.string();
     }
@@ -1008,15 +1013,15 @@ std::shared_ptr<Model> loadGLTFModel(const GLTFLoadContext& ctx, const std::stri
     else
     {
         ok = isBinary
-            ? loader.LoadBinaryFromFile(&gltf, &err, &warn, filepath)
-            : loader.LoadASCIIFromFile(&gltf, &err, &warn, filepath);
+            ? loader.LoadBinaryFromFile(&gltf, &err, &warn, resolvedPath)
+            : loader.LoadASCIIFromFile(&gltf, &err, &warn, resolvedPath);
     }
 
     if (!warn.empty())
         std::cout << "[GLTF] 警告: " << warn << "\n";
     if (!ok)
     {
-        std::cerr << "[GLTF] 加载失败: " << filepath << "\n        " << err << "\n";
+        std::cerr << "[GLTF] 加载失败: " << resolvedPath << "\n        " << err << "\n";
         return nullptr;
     }
 

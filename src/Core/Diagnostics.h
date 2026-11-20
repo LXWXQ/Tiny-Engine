@@ -66,6 +66,10 @@ namespace diag
         // TM-19：打印本机对本引擎用到的那些格式的能力（颜色/深度/采样/存储/blit/线性过滤），
         // 打印完就退出 —— 改 G-Buffer 格式或加 storage image 之前先跑一次。
         bool printFormats = false;
+    // TM-16：打印三个资产根与热重载登记情况后继续跑（不退出）
+    bool printAssets = false;
+    // TM-16：每帧检查 .spv 的 mtime，变了就重建对应管线
+    bool hotReload = false;
 
         // TM-13：点光源与聚簇光照。lightStress > 0 时铺这么多盏灯（0 = 不加灯），
         // 用来量"512 盏灯下前向还能不能跑满 60 FPS"。

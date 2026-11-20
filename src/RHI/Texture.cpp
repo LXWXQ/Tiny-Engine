@@ -1,6 +1,7 @@
 #include "Texture.h"
 #include "TextureBudget.h"
 #include "Core/AssetPack.h"
+#include "Core/AssetPath.h"
 #include <stdexcept>
 #include <iostream>
 #include <cstring>
@@ -185,7 +186,10 @@ void Texture::loadLDR(const std::string& filepath, VkFormat format, VkCommandPoo
 	}
 	else
 	{
-		pixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		// TM-16：构建期绝对路径可能已失效（换了目录/换了机器），resolve 会按
+		// exe 位置回溯一次；找不到时原样返回，错误信息仍是调用方给的路径。
+		const std::string resolvedPath = tiny::assetpath::resolve(filepath);
+		pixels = stbi_load(resolvedPath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 	}
 
 	if (!pixels)
@@ -212,7 +216,8 @@ void Texture::loadHDR(const std::string& filepath, VkCommandPool commandPool)
 	}
 	else
 	{
-		pixels = stbi_loadf(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		const std::string resolvedPath = tiny::assetpath::resolve(filepath);
+		pixels = stbi_loadf(resolvedPath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 	}
 
 	if (!pixels)

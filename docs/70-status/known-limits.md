@@ -4,8 +4,8 @@ title: 已知边界
 type: status
 scope: 空
 read-when: 判断某个需求现在能不能做
-size: ~165 行
-updated: 2026-11-19
+size: ~169 行
+updated: 2026-11-20
 ---
 
 # 已知边界
@@ -163,3 +163,7 @@ updated: 2026-11-19
 - **回放**：只有角色步进是纯函数，音频/粒子/动画不参与；回放要求同一初始快照；哈希是
   FNV-1a，不是密码学哈希。
 - **物理/碰撞**：手写扫掠盒而非刚体引擎；模型只用世界 AABB；角色互不阻挡；玻璃算实心。
+- **整体搬到没有源码树的机器**：shader / 纹理 / glTF / 配置都能靠 `assetpath::resolve()`
+  回溯到新位置（`--print-assets` 可核对三个根），但退出时仍会撞既有的 VMA teardown 断言
+  （`vk_mem_alloc.h:10975 Some allocations were not freed`）。这与路径解析无关，
+  是资源销毁顺序的历史问题；修它要单独一次改动（见 [decisions](../10-architecture/decisions.md) 决策 37）。

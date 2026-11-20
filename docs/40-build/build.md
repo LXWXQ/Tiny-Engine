@@ -4,8 +4,8 @@ title: 构建流程与隐形规则
 type: build
 scope: CMakeLists.txt, cmake/AssetPaths.h.in, tools/SpirvReflect.cpp
 read-when: 每次构建；或新增源文件、改 CMake 选项
-size: ~137 行
-updated: 2026-11-19
+size: ~149 行
+updated: 2026-11-20
 ---
 
 # 构建流程与隐形规则
@@ -102,6 +102,18 @@ cmake --build build --config Debug --clean-first
 ```
 
 改过 `src/RHI/Device.h` / `src/RHI/VmaConfig.h`（VMA 配置相关）之后无条件走这条。
+## 3.5 换目录与热重载（都不需要重新 configure）
+
+`AssetPaths.h` 里的绝对路径仍然是**第一优先**：文件在，行为和以前完全一样。
+只有在它不存在时，`tiny::assetpath::resolve()` 才按 `/shaders/`、`/Resources/`、
+`/config/` 这些锚点把前缀剥掉，拼到「exe 目录 → exe/../ → exe/../../ → cwd」探到的根上。
+所以：
+
+- 换了机器或挪了构建产物：直接跑，会自己回溯；用 `--print-assets` 看它到底找了哪三个目录。
+- 改了 `.frag` / `.comp`：正常增量构建会重编出新的 `.spv`；引擎带 `--hot-reload` 跑时，
+  下一帧发现 mtime 变了就重建对应管线，不用重启。**改了 binding 数量或附件格式要重启**
+  （管线布局不在重建范围内）。
+
 ## 4. CMake 选项
 
 | 选项 | 默认 | 作用 |

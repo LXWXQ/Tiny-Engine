@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~409 行
+size: ~450 行
 updated: 2026-11-20
 ---
 
@@ -407,3 +407,44 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 `--selftest 30` 走完整自检链、验证层 0 errors。
 
 **不引入的**：`VkFormat` 全量表（160+ 个）、把格式表变成运行时校验器（`findSupportedFormat` 保持原样）。
+
+## 决策 37：资产路径按可执行文件位置回溯；着色器热重载只轮询 `.spv`（TM-16）
+
+**问题**：`cmake/AssetPaths.h.in` 在 configure 阶段把**绝对路径**烧进宏，仓库换目录、或把
+构建产物搬到另一台机器，引擎就去读一个不存在的目录；改 shader 必须重启引擎，一次迭代
+几十秒。
+
+**做法**：
+
+1. `src/Core/AssetPath.{h,cpp}` 提供 `tiny::assetpath::resolve()`：构建期路径**仍然优先**
+   （存在就原样返回，默认行为零变化），只有在它不存在时才按锚点（`/shaders/`、
+   `/Resources/`、`/config/`）把前缀剥掉、拼到运行时根上；运行时根按
+   「exe 目录 → exe/../ → exe/../../ → cwd」的顺序探测。协议写法 `asset://`、
+   `shader://`、`config://` 也支持，空后缀等于根本身。
+2. 接入点只挑"真正把路径交给第三方库"的地方：`Pipeline::readFile`、
+   `Texture` 的 `stbi_load` / `stbi_loadf`、`GLTFLoader` 的 tinygltf 入口、
+   `EngineConfig` 的配置文件路径。`--print-assets` 打印三个根与三个构建期宏的
+   存在/失效状态。
+3. 热重载（`src/RHI/ShaderReload.{h,cpp}`）只监控 `.spv` 的 mtime：`Pipeline` /
+   `ComputePipeline` 在构造时登记、析构时注销，`poll()` 发现变化才
+   `vkDeviceWaitIdle` 并 `reloadShaders()`。每帧的代价是几十次 stat（无变化时 ~0）。
+
+**为什么不在运行期编译 GLSL**：构建期的 glslangValidator + spirv-val 是 CI 验证过的
+行为；运行期再塞一份编译器，等于让"本机跑通"和"CI 验过"分家。
+
+**为什么轮询而不是 `ReadDirectoryChangesW`**：几十个文件一次 stat 只要几十微秒，
+没有线程、没有句柄时序；将来要监控上千个文件时换通知机制，`poll()` 的接口不用变。
+
+**边界（实测）**：
+
+- 只重建 `VkPipeline` / `VkShaderModule`。改了 binding 数量或附件格式要重启 —— 那是接口变了。
+- 仓库整体搬家 + 原树仍然存在时，构建期路径命中，看不出回溯效果；把原 `Resources/`
+  与 `build/shaders/` 改名后跑，shader、纹理、glTF、配置都能从新位置找到
+  （`[GLTF]` 成功加载 Sponza 即为证据）。
+- 上述"原树完全消失"的实验里，退出时仍会触发 VMA 的
+  `Some allocations were not freed...` 断言（`vk_mem_alloc.h:10975`）—— 属于既有的
+  teardown 顺序问题，与路径解析无关，已记入 [known-limits](../70-status/known-limits.md)。
+
+**不引入的**：虚拟文件系统层（内存挂载、目录遍历抽象）；把 `Resources/` 打成 pak 后
+再从 pak 里按协议读（`AssetPack` 已存在，但那是另一件事）。
+

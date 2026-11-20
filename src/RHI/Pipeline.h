@@ -42,6 +42,12 @@ public:
 
     void bind(VkCommandBuffer commandBuffer);
 
+    // TM-16：热重载。用**当前磁盘上的** .spv 重新建管线和着色器模块。
+    // 只重建 VkPipeline / VkShaderModule —— 管线布局、描述符集、渲染图里的
+    // 附件都不动，所以调用方只要保证"接口没变"就安全（改了 binding 数量
+    // 就得重启，这一点写在 docs/40-build/build.md）。
+    void reloadShaders();
+
     static void defaultPipelineConfigInfo(PipelineConfigInfo& configInfo, uint32_t width, uint32_t height);
 
 private:
@@ -52,6 +58,12 @@ private:
     VkPipeline graphicsPipeline;
     VkShaderModule vertShaderModule;
     VkShaderModule fragShaderModule;
+
+    // 重建用的原件：路径与配置必须留一份，否则热重载时无从下手。
+    // configInfo 里带 pipelineLayout 与附件格式，都是不需要重建的句柄/值。
+    std::string vertPath;
+    std::string fragPath;
+    PipelineConfigInfo config;
 };
 // D-5：Compute 管线只包含一个 compute shader，不需要动态渲染附件 / 顶点输入 /
 // 光栅状态。单独成类是为了让图形管线的配置结构保持干净，也避免在
@@ -67,6 +79,9 @@ public:
 
     void bind(VkCommandBuffer commandBuffer);
 
+    // TM-16：同 Pipeline::reloadShaders()，只是 compute 只有一份 .spv
+    void reloadShaders();
+
 private:
     static std::vector<char> readFile(const std::string& filepath);
     static void createShaderModule(Device& device, const std::vector<char>& code, VkShaderModule* module);
@@ -74,4 +89,7 @@ private:
     Device& device;
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkShaderModule shaderModule = VK_NULL_HANDLE;
+
+    std::string compPath;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
 };

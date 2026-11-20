@@ -18,6 +18,8 @@ const std::vector<UsageLine> kCatalog = {
     { "截图", "--screenshot-viewport", "截图只拍编辑器离屏视口（纯 3D，不含 UI）" },
     { "截图", "--capture-frame <n>", "RenderDoc 在第 n 帧抓帧（需注入 RenderDoc）" },
     { "截图", "--render-scale <f>", "动态分辨率初始倍率 0.25..1.0" },
+        { "剖析", "--print-assets", "打印可执行文件目录与 shader / 资源 / 配置三个根的解析结果（TM-16）" },
+        { "剖析", "--hot-reload", "每帧检查 .spv 的修改时间，变了就重建对应管线（改 binding 数量需重启）" },
         { "渲染", "--bloom", "强制打开 Bloom（默认跟随场景里的 Bloom 组件；量测/演示用）" },
         { "调试", "--print-formats", "打印本机对引擎用到的格式的能力表（颜色/深度/采样/存储/blit/线性）后退出" },
     { "渲染", "--no-bloom / --no-ssao / --no-taa / --no-water / --no-ssr", "关掉 Bloom / SSAO / TAA / 水面 / 水面 SSR（同 UI 复选框）" },

@@ -18,6 +18,8 @@
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
 #include "Core/CliCatalog.h"
+#include "Core/AssetPath.h"
+#include "RHI/ShaderReload.h"
 #include "RHI/ScratchArena.h"
 #include "RHI/FormatTable.h"
 #include "RHI/RenderGraphAlias.h"
@@ -75,6 +77,10 @@ FirstApp::FirstApp(const diag::Options& options)
 {
 	diagnosticsOptions = options;
 
+	// TM-16：资产根必须最先解析 —— 配置、shader、纹理全都依赖它，
+	// 而它只读 exe 路径与环境，不依赖窗口/Vulkan。幂等，重复调用无副作用。
+	tiny::assetpath::initialize();
+
 	// W1：配置必须在最前面读 —— 窗口标题就是配置里的一项，而窗口在
 	// initWindow() 里创建，之后再改标题会让用户看到一次闪动。
 	// 这里先读进一个局部对象，等 Scene 就绪后再整体搬过去。
@@ -91,6 +97,11 @@ FirstApp::FirstApp(const diag::Options& options)
 
 	initWindow(loadedSettings.windowTitle);
 	vulkanDevice = std::make_unique<Device>(window, diagnosticsOptions);
+
+	// TM-16：热重载要知道设备句柄才能在重建前 vkDeviceWaitIdle；
+	// 开关在这里定下来，之后每帧只看 diagnosticsOptions.hotReload 决定要不要 poll。
+	tiny::hotreload::setDevice(vulkanDevice->getDevice());
+	tiny::hotreload::setEnabled(diagnosticsOptions.hotReload);
 
 	// 请求尺寸只是期望值。surface 可能因为标题栏/任务栏把它裁小，
 	// 交换链创建时会采用 surface 的 currentExtent；渲染资源必须跟着实际尺寸走。
@@ -1822,6 +1833,14 @@ tiny::formats::print(tiny::formats::query(vulkanDevice->getPhysicalDevice(), for
 return;
 }
 
+	// TM-16：--print-assets 打三个根的解析结果与热重载登记数，然后**继续**跑 ——
+	// 它回答的是"现在到底在找哪个目录"，用户往往紧接着就要看画面。
+	if (diagnosticsOptions.printAssets)
+	{
+		tiny::assetpath::print(stdout);
+		tiny::hotreload::report(stdout);
+	}
+
 	// 编辑器在这里惰性初始化，而不是构造函数里。
 	// 原因：main() 是"先构造 FirstApp，再按命令行参数调 setEditorEnabled"，
 	// 而 initEditor 依赖 ImGui 后端与场景全部就绪 —— 放到 run() 开头两个条件都满足。
@@ -2040,6 +2059,14 @@ void FirstApp::loadConfig()
 
 int FirstApp::runHeadlessSelfTest(int frames)
 {
+	// TM-16：--print-assets 在自检模式下也要能看（--print-assets 会继续跑，
+	// 所以配 --selftest N 是最方便的用法；这里补一次同样的输出）。
+	if (diagnosticsOptions.printAssets)
+	{
+		tiny::assetpath::print(stdout);
+		tiny::hotreload::report(stdout);
+	}
+
 
 	// 自检路径也要能带编辑器跑（--editor --selftest 是无头验证编辑器 UI 的唯一手段）。
 	if (editorRequested && !editorLayer)
@@ -2095,6 +2122,14 @@ int FirstApp::runHeadlessSelfTest(int frames)
 
 	if (!tiny::cli::selfTest())
 		throw std::runtime_error("CliCatalog selfTest failed");
+
+	// TM-16：协议解析 / 失效路径重拼（纯字符串，不需要真文件）。
+	if (!tiny::assetpath::selfTest())
+		throw std::runtime_error("AssetPath selfTest failed");
+
+	// TM-16：mtime 变化判定的四个边界（首次 / 重复 / 消失 / 复现）。
+	if (!tiny::hotreload::selfTest())
+		throw std::runtime_error("ShaderReload selfTest failed");
 
 	// TM-19：格式表的名字映射、字节数与能力位映射（纯逻辑，不需要真设备）。
 	if (!tiny::formats::selfTest())
@@ -3102,6 +3137,11 @@ frameInfo.editorSelection = editorLayer->getState().selection.primary();
 		// P1-1：收集本帧的 Tracy GPU zone（必须在命令缓冲结束前）。
 		gpuProfiler.collect(commandBuffer);
 		renderer->endFrame(crossQueue.computeToGraphics, crossQueue.graphicsToCompute);
+
+		// TM-16：热重载检查放在 endFrame 之后 —— 命令缓冲已提交，录制期结束；
+		// poll 内部发现有变化才会 vkDeviceWaitIdle（没变化只是几十次 stat）。
+		if (diagnosticsOptions.hotReload)
+			tiny::hotreload::poll();
 
 		if (editorLayer)
 			editorLayer->endFrame();

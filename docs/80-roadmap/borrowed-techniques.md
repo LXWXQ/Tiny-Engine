@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~242 行
+size: ~243 行
 updated: 2026-11-20
 ---
 
@@ -177,11 +177,12 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 ### TM-16 资产路径协议与热重载
 
-- **现状**：资源路径靠 `configure_file` 生成 `AssetPaths.h` 注入**绝对路径**（`CMakeLists.txt`），换目录要重新 configure；没有热重载，改 shader 必须重跑。
-- **参考**：`filesystem/` 的 protocol 路径（`builtin://`、`assets://`、`cache://`、`file://`）加变更通知驱动的自动热重载纹理与 shader；`asset_manager`（11 KB）、`volatile_source.hpp`。
-- **落地**：① 先做 `asset://` 解析（相对仓库根或 `Resources/`），替换 `AssetPaths.h` 的绝对路径；② 再做 shader 热重载（Windows 侧 `ReadDirectoryChangesW`）。
-- **验收**：仓库整体换目录后不重新 configure 也能跑 `--selftest 30`；改 `shaders/*.frag` 后 1 秒内画面更新。
-- **预估**：3~5 天，风险中。
+- **状态**：已完成（决策 37）。
+- **已完成**：`src/Core/AssetPath.{h,cpp}` 的 `resolve()`（构建期路径优先、失效才按锚点回溯）+ `asset://`/`shader://`/`config://` 协议；接入 `Pipeline::readFile`、`Texture` 的 `stbi_load`/`stbi_loadf`、`GLTFLoader` 的 tinygltf 入口、`EngineConfig` 配置路径；`--print-assets` 打印三个根与构建期宏状态。
+- **已完成（热重载）**：`src/RHI/ShaderReload.{h,cpp}` 轮询 `.spv` 的 mtime，`Pipeline`/`ComputePipeline` 自己登记与注销，`--hot-reload` 打开；实测改 `cloud.frag.spv` 后日志出现 `[HotReload] 重建管线：…/cloud.frag.spv` 并继续跑。
+- **结论**：只监控 `.spv`、不运行期编译 GLSL；轮询而不是目录通知（几十次 stat 的代价换掉线程与句柄时序）。
+- **已知边界**：只重建管线与模块，改 binding 数量/附件格式要重启；"原树被完全移走"的实验里 shader/纹理/glTF/配置都能找到，但退出时仍撞既有的 VMA teardown 断言（与路径解析无关，见 known-limits）。
+- **验收（已满足的部分）**：`--print-assets` 三个根正确；`--selftest 30` 与 `TinyEditor --selftest 5` 的 `[Assets]`/`[HotReload]` 自检 PASS、验证层 0 errors；`--hot-reload` 下改 `.spv` 会重建。
 - **关联**：F4 资产管线。
 
 ### TM-17 latched 事件

@@ -1,5 +1,6 @@
 #include "Core/EngineConfig.h"
 #include "AssetPaths.h"   // TINY_CONFIG_PATH（CMake 配置阶段生成）
+#include "Core/AssetPath.h"
 
 // nlohmann/json 来自 3rdParty/tinygltf（tinygltf 拉取时带下来的），
 // 不额外引依赖、也不需要联网。它本身是 header-only 的第三方代码，
@@ -24,7 +25,9 @@ namespace
 	using nlohmann::json;
 
 	std::string g_lastStatus = "(no config I/O yet)";
-	std::string g_configPath = TINY_CONFIG_PATH;
+	// TM-16：配置路径也走一次解析 —— 换目录后构建期绝对路径会失效，
+	// resolve 会在原路径不存在时按 exe 位置回溯到 <root>/config/engine.json。
+	std::string g_configPath = tiny::assetpath::resolve(TINY_CONFIG_PATH);
 	bool g_suppressExpectedErrorLog = false;
 	constexpr int kCurrentConfigVersion = 2;
 
