@@ -119,6 +119,7 @@ int main(int argc, char** argv)
 
     bool selfTest = false;
     bool noBloom = false;
+    bool forceBloom = false;   // --bloom：强制打开（默认跟随场景里的 Bloom 组件）
     bool noTAA = false;
     bool noSSAO = false;
     bool noWater = false;
@@ -222,6 +223,8 @@ bool audioSpatialTest = false;
             }
         }
         else if (arg == "--no-bloom") noBloom = true;
+        else if (arg == "--bloom") forceBloom = true;
+        else if (arg == "--print-formats") diagOptions.printFormats = true;
         else if (arg == "--no-ssao")  noSSAO = true;
         else if (arg == "--no-taa")   noTAA = true;
         else if (arg == "--no-water") noWater = true;
@@ -675,6 +678,7 @@ bool audioSpatialTest = false;
 
         if (editorMode) app.setEditorEnabled(true);
         if (noBloom) app.setBloomEnabled(false);
+        if (forceBloom) app.setBloomEnabled(true);
         if (noSSAO) app.setSSAOEnabled(false);
         if (noTAA) app.setTAAEnabled(false);
         if (noWater) app.setWaterEnabled(false);

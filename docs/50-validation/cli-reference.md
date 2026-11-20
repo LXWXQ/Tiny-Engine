@@ -4,7 +4,7 @@ title: 命令行参数全表
 type: validation
 scope: main.cpp、src/Core/CliCatalog.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~172 行
+size: ~174 行
 updated: 2026-11-20
 ---
 
@@ -110,6 +110,8 @@ updated: 2026-11-20
 | `--fireflies-radius <m>` | 萤火虫群铺开的半径（米，默认 12，夹到 1~500）。群的中心沿视线方向摆在相机前方 25 米处，屏幕上就落在画面中段；单盏灯的照亮半径是 6~9 米，与发光点的直径（0.4~0.85 米）是两件事 | 12 |
 | `--stats-clusters` | 退出时打印簇构建次数 / 使用簇数 / 最大簇 / 丢弃灯数 / 半径 | 0 |
 | `--list-options` | 打印选项表后退出（与编辑器「帮助 → 命令行选项」同源） | 0 |
+| `--print-formats` | 打印本机对引擎用到的十个格式的能力（字节/颜色/深度/采样/存储/blit/线性）后退出 | 0 |
+| `--bloom` | 强制打开 Bloom（默认跟随场景组件；量测与演示用） | 0 |
 
 `--validation-features` 的取值：
 

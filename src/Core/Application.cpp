@@ -19,6 +19,7 @@
 #include "RHI/PipelineStats.h"
 #include "Core/CliCatalog.h"
 #include "RHI/ScratchArena.h"
+#include "RHI/FormatTable.h"
 #include "RHI/RenderGraphAlias.h"
 #include <filesystem>
 #include <fstream>
@@ -1800,6 +1801,27 @@ std::cout << "[Tiny] 材质就绪，描述符槽位占用 "
 
 void FirstApp::run()
 {
+// TM-19：--print-formats 只做一件事 —— 把本机对本引擎用到的格式的能力打出来然后退出。
+// 放在 run() 的最前面（而不是 finalizeDiagnostics）是因为它不需要渲染任何一帧：
+// 用户要的是"改格式之前先查一眼"，跑 600 帧再打印就没人愿意用了。
+if (diagnosticsOptions.printFormats)
+{
+const std::vector<VkFormat> formats = {
+GBufferFormat::Position,
+GBufferFormat::Normal,
+GBufferFormat::Albedo,
+GBufferFormat::Pbr,
+vulkanDevice->findDepthFormat(),
+vulkanSwapchain->getSwapChainImageFormat(),
+VK_FORMAT_R16G16B16A16_SFLOAT,   // HDR / TAA / Bloom 金字塔
+VK_FORMAT_R16G16_SFLOAT,         // Hi-Z / 运动矢量一类双通道中间目标
+VK_FORMAT_R32_UINT,              // 簇 / 索引这类整数目标
+VK_FORMAT_B10G11R11_UFLOAT_PACK32,
+};
+tiny::formats::print(tiny::formats::query(vulkanDevice->getPhysicalDevice(), formats), stdout);
+return;
+}
+
 	// 编辑器在这里惰性初始化，而不是构造函数里。
 	// 原因：main() 是"先构造 FirstApp，再按命令行参数调 setEditorEnabled"，
 	// 而 initEditor 依赖 ImGui 后端与场景全部就绪 —— 放到 run() 开头两个条件都满足。
@@ -2073,6 +2095,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 
 	if (!tiny::cli::selfTest())
 		throw std::runtime_error("CliCatalog selfTest failed");
+
+	// TM-19：格式表的名字映射、字节数与能力位映射（纯逻辑，不需要真设备）。
+	if (!tiny::formats::selfTest())
+		throw std::runtime_error("FormatTable selfTest failed");
 
 	// TM-13：聚簇的球-盒相交、反投影与切片区间都是纯算术，先在这里证伪。
 	if (!LightSources::selfTest())

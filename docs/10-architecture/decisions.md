@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~368 行
+size: ~409 行
 updated: 2026-11-20
 ---
 
@@ -366,3 +366,44 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 **不引入的**：灯的可视化 gizmo（编辑器里画线框球）、地面投影贴花、GPU 粒子模拟。
 萤火虫的动画在 CPU 上算 32 个位置，成本可以忽略；等要几千个再谈 compute。
 
+## 决策 35：单趟降采样（SPD）先量后判，本机不做（TM-14）
+
+**问题**：Bloom 的 down 链是三级独立 pass，看起来像"可以合成一次 dispatch"的典型目标。
+
+**做法**：先只加 `--bloom` 开关（强制打开 Bloom）拿到基线，用既有的 `--gpu-timing --gpu-timing-csv` 逐 pass 读 GPU 时间，
+再决定要不要写 compute 版。
+
+**为什么先量**：如果 down 链本身只占一帧的千分之一，写一个 13 抽样 + 双线性必须逐像素一致的 compute 着色器
+就是把风险换成了噪声。
+
+**实测（1920x1080，Debug，40 帧平均）**：`Bright 0.1325 ms`、`Down0 0.0332`、`Down1 0.0102`、`Down2 0.0056`
+（down 链 0.0490）、`Up0 0.0362`、`Up1 0.0113`、`Up2 0.0064`（up 链 0.0539）；Bloom 合计约 0.235 ms/帧。
+同帧 `Cloud 2.3945`、`Geometry 0.9806`、`Lighting 0.9752` —— Bloom 不是瓶颈。
+
+**结论**：合并三级最多省两个 pass 的固定开销（每级约 5 µs，合计约 10 µs/帧），13 抽样的真实工作量不会消失；
+`--stats-rendergraph` 还显示 21 与 23 个 pass 的 CPU 录制时间没有可见差异，"少两个 pass 省 CPU"也不成立。
+因此**不实现**，把力气留给 2.4 ms 量级的 Cloud、或等真的要做 F6 Compute Bloom 时顺手带上。
+
+**保留的**：`--bloom`（量测/演示用，默认仍跟随场景组件）、这条决策里的基线数字、以及"何时重新评估"的触发条件。
+
+**不引入的**：为省 10 µs 而写的 compute 降采样链、把 Bright 也并进 dispatch、up 链改造。
+
+## 决策 36：格式能力集中成一张表，`--print-formats` 出口（TM-19）
+
+**问题**：`VkFormatProperties` 的查询散在各处，同一个"能不能当 storage image"的判断写法不一；
+改 G-Buffer 格式时没人知道它同时影响附件 / 采样 / blit / 线性过滤中的哪些。Vulkan 也没有 `vkFormatToString`，
+日志里出现 "format 37" 无法阅读。
+
+**做法**：`src/RHI/FormatTable.h/.cpp` 提供 `formatName`（只覆盖引擎用到的十几个格式，其余退化成 `VK_FORMAT_<数字>`）、
+`bytesPerPixel`、`describe(format, props)`（只读 `optimalTilingFeatures`，映射成八个布尔位）与 `query/print`；
+`--print-formats` 在 `run()` 最前面打印后直接 `return`，一帧都不渲染。
+
+**为什么放在 run() 而不是 finalizeDiagnostics**：这个开关的用途是"改格式前查一眼"，跑完 600 帧再打印没人会用。
+
+**一处定义的边界**：G-Buffer 的四个格式仍由 `GBufferFormat`（`src/RHI/GBuffer.h`）单点定义，
+格式表只是消费者 —— 表不是新的第二事实来源，它打印的就是那份常量。
+
+**验收**：`--print-formats` 输出八列能力位；`[Formats] selfTest PASS | 名字映射 + 字节数 + 能力位 + 未收录退化`；
+`--selftest 30` 走完整自检链、验证层 0 errors。
+
+**不引入的**：`VkFormat` 全量表（160+ 个）、把格式表变成运行时校验器（`findSupportedFormat` 保持原样）。

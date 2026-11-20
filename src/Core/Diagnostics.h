@@ -63,6 +63,9 @@ namespace diag
 
         // --stats-rendergraph：退出时打印准备 / 录制各自的每帧耗时（TM-10）。
         bool statsRenderGraph = false;
+        // TM-19：打印本机对本引擎用到的那些格式的能力（颜色/深度/采样/存储/blit/线性过滤），
+        // 打印完就退出 —— 改 G-Buffer 格式或加 storage image 之前先跑一次。
+        bool printFormats = false;
 
         // TM-13：点光源与聚簇光照。lightStress > 0 时铺这么多盏灯（0 = 不加灯），
         // 用来量"512 盏灯下前向还能不能跑满 60 FPS"。

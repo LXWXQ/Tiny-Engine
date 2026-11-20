@@ -4,8 +4,8 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~229 行
-updated: 2026-11-19
+size: ~242 行
+updated: 2026-11-20
 ---
 
 # 可借鉴技术清单（TM 系列）
@@ -156,9 +156,17 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 - **现状**：Bloom 是 bright + 3 级 down + 3 级 up（`src/Render/BloomPass.cpp`），每级一次全屏 pass。
 - **参考**：`renderer/post/spd.cpp`（9.4 KB，single-pass downsampler）。
 - **落地**：down 链换成单次 dispatch 的多级写法（compute + 每级 subgroup 归约），up 链暂不动。
-- **验收**：Bloom 金字塔输出与旧路径 `max diff <= 1/255`；down 链 GPU 时间（`GpuTimer` 的每 pass timestamp）下降。
-- **预估**：2~3 天，风险中。
-- **关联**：F6 的 Compute Bloom 项。
+- **已完成**：基线量测（`--bloom --gpu-timing`，40 帧平均，1920x1080）：`Bloom.Bright 0.1325 ms`、
+  `Down0 0.0332`、`Down1 0.0102`、`Down2 0.0056`（**down 链合计 0.0490 ms**）、`Up0 0.0362`、`Up1 0.0113`、`Up2 0.0064`
+  （up 链 0.0539），Bloom 总计约 0.235 ms/帧，而同一帧 `Cloud 2.3945`、`Geometry 0.9806`、`Lighting 0.9752`。
+- **结论（本机，Debug 构建）**：down 链三级里 `Down2` 只有 16x9 像素却仍花 5.6 µs，说明单级固定开销约 5 µs、
+  真正的 13 抽样工作量集中在 `Down0`（33 µs）。合并成单次 dispatch 最多省掉两个 pass 的固定开销（约 10 µs/帧 = 一帧的 0.09%），
+  而 13 抽样与双线性必须原样搬进 compute 才能保住 `max diff <= 1/255`，改动量与收益不成比例。
+  另外实测 `--stats-rendergraph` 的录制时间是 1412~1591 µs/帧，但 21 个 pass 与 23 个 pass 的录制时间没有可见差异 ——
+  "少两个 pass 能省 CPU 录制"这条前提在本引擎上也不成立。
+- **何时重新评估**：Bloom 链本身涨到 1 ms/帧以上（例如 4K + 更多级、或加 DOF/SSR 共用同一条金字塔），
+  或者真的要为 F6 做 Compute Bloom（那时 SPD 是顺带的中间产物，而不是为了省 10 µs 单独做）。
+- **预估**：2~3 天，风险中。**关联**：F6 的 Compute Bloom 项。
 
 ### TM-15 场景排序与批处理三段式
 
@@ -197,7 +205,12 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 - **现状**：`Device::findSupportedFormat` / `findDepthFormat` / `findMemoryType` 按需查询，没有集中的格式能力表；G-Buffer 的 5 个格式定义在 `GBufferFormat`（`src/RHI/GBuffer.h`）。
 - **参考**：`vulkan/format.hpp`（格式特性与兼容表）、`vulkan/limits.hpp`、`vulkan/type_to_string.hpp`（枚举转字符串，省掉到处手写 switch）。
 - **落地**：把 G-Buffer 5 个格式加深度格式做成一张表，附 `VkFormatProperties` 与可打印名字；加 `--print-formats` 输出。
-- **验收**：改 G-Buffer 格式时只改一处；`--print-formats` 能看出每个格式是否支持 `STORAGE` / `BLIT_DST`。
+- **已完成**：新增 `src/RHI/FormatTable.h/.cpp`（`tiny::formats`：`formatName` / `bytesPerPixel` / `describe` /
+  `query` / `print` / `selfTest`）；`--print-formats` 在 `run()` 最前面打印 10 个格式后直接退出（不渲染任何一帧）；
+  G-Buffer 的四个格式仍由 `GBufferFormat`（`src/RHI/GBuffer.h`）单点定义，格式表只是读它。
+- **验收（已满足）**：`TinyEngine.exe --print-formats` 输出「字节 / 颜色 / 深度 / 采样 / 存储 / blit源 / blit目标 / 线性」八列，
+  可直接看出 `VK_FORMAT_R32_UINT` 不支持线性过滤、深度格式不是颜色附件等；`[Formats] selfTest PASS | 名字映射 + 字节数 + 能力位 + 未收录退化`。
+- **已知边界**：只收录引擎实际用到的十几个格式，其余打印成 `VK_FORMAT_<数字>`（字节数 0）；只读 `optimalTilingFeatures`。
 - **预估**：0.5 天，风险低。
 
 ## 7. 明确不借鉴
