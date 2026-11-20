@@ -397,6 +397,28 @@ bool audioSpatialTest = false;
         else if (arg == "--stats-rendergraph") diagOptions.statsRenderGraph = true;
         else if (arg == "--clustered-lighting") diagOptions.clusteredLighting = true;
         else if (arg == "--stats-clusters") diagOptions.statsClusters = true;
+        else if (arg == "--fireflies" && i + 1 < argc)
+        {
+            try
+            {
+                const int value = std::stoi(argv[++i]);
+                diagOptions.fireflies = static_cast<uint32_t>(std::min(std::max(value, 0), 256));
+            }
+            catch (...)
+            {
+            }
+        }
+        else if (arg == "--fireflies-radius" && i + 1 < argc)
+        {
+            try
+            {
+                const float radius = std::stof(argv[++i]);
+                diagOptions.firefliesRadius = std::min(std::max(radius, 1.0f), 500.0f);
+            }
+            catch (...)
+            {
+            }
+        }
         else if (arg == "--light-stress-radius" && i + 1 < argc)
         {
             try

@@ -249,10 +249,16 @@ void ParticlePass::createPipeline()
         TINY_SHADER_DIR "particle.frag.spv", config);
 }
 
+void ParticlePass::setExtraInstances(std::vector<ParticleInstance> extra)
+{
+    extraInstances = std::move(extra);
+}
+
 ParticlePass::BuildResult ParticlePass::buildInstances(FrameInfo& frameInfo,
                                                        const glm::vec3& cameraPosition)
 {
     instances.clear();
+    // 外部实例（萤火虫）先放进来：它们不参与 emitter 的统计，但要参与排序与上传。
     BuildResult result{};
 
     for (auto [entity, emitter] :
@@ -297,6 +303,9 @@ ParticlePass::BuildResult ParticlePass::buildInstances(FrameInfo& frameInfo,
             instances.push_back({ glm::vec4(particle.position, size), color, materialId });
         }
     }
+
+    for (const ParticleInstance& extra : extraInstances)
+        instances.push_back(extra);
 
     if (instances.size() > kMaxParticles)
         instances.resize(kMaxParticles);

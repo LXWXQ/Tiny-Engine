@@ -4,7 +4,7 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~168 行
+size: ~184 行
 updated: 2026-11-20
 ---
 
@@ -166,3 +166,19 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 ③ 单灯半径 12 米、强度 2（强度 20 时红通道直接饱和成硬边橘斑，反而看不出衰减）。
 
 簇表由 `ClusteredLighting` 在 CPU 上每帧构建（16x9x24、每簇上限 256、按灯剪枝 + 计数排序，Release 512 灯约 1.0 ms）。取舍与实测数字见 [decisions](../10-architecture/decisions.md) 决策 32。
+
+## 萤火虫演示（`--fireflies`）
+
+`--fireflies 16|32` 会在视线前方摆一群**看得见本体**的小光源：每个都有直径、颜色和呼吸亮度，
+同时按自己的 6~9 米照亮半径参与点光计算。它刻意不复用压力场那套"只往光照里加数"的做法 ——
+压测灯在屏幕上没有任何本体，用户看到的是"画面变亮了一点"，而不是"这里有灯"。
+
+| 部分 | 谁做 | 关键点 |
+|---|---|---|
+| 发光点本体 | `ParticlePass` 的 billboard（`particle.frag` 的程序化圆形遮罩） | 不新写 pass、不新写着色器；白捡深度测试、按距离排序、Bloom |
+| 照亮地面 | `LightSources` → 光照 Pass（逐灯或聚簇） | 用 `FireflySample::light`（半径/强度），不是粒子直径 |
+| 布点与动画 | `src/Render/Fireflies.*` | splitmix64 确定性布点，游走 + 呼吸只依赖时间；同参数两次运行摆位一致 |
+
+两个坑写在代码注释里：① 粒子着色器会把颜色乘 1.4，喂纯饱和色会被削顶成白点，所以喂之前先乘 0.62；
+② 群的中心沿视线摆在相机前方 25 米，不要"猜地面高度"——地形网格与体素世界是两套数据，
+按任一套定高都可能把灯埋进山里或浮到海面上（这两条都实测过）。

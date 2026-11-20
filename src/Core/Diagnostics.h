@@ -70,6 +70,11 @@ namespace diag
         // --light-stress-radius：压力场铺开的半径（米）。默认 18 米是"贴脸"密度，
         // 每簇塞上百盏灯；调到 100~200 米就是"稀疏分布"，聚簇才有意义的那一档。
         float lightStressRadius = 60.0f;
+
+    // 萤火虫演示：区域内 N 个有形状、有颜色的光源（默认关，绝不动默认画面）。
+    // 形状由 ParticlePass 的 billboard 画，光照由 LightSources 喂给聚簇/逐灯路径。
+    uint32_t fireflies = 0;
+    float firefliesRadius = 12.0f;
         bool clusteredLighting = false;
         bool statsClusters = false;
 

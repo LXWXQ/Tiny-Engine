@@ -48,6 +48,10 @@ public:
 
     void init() override;
     void addToGraph(RenderGraph& graph, FrameInfo& frameInfo) override;
+
+    // 外部实例：每帧由 Application 塞进来（萤火虫的发光点就是这么画的）。
+    // 走同一条 billboard 管线，等于白捡了深度测试、排序和程序化圆形遮罩。
+    void setExtraInstances(std::vector<ParticleInstance> extra);
     std::string getName() const override { return "Particle"; }
 
 private:
@@ -87,6 +91,7 @@ private:
     std::unordered_map<std::string, uint32_t> textureSlots;
 
     std::vector<ParticleInstance> instances;
+    std::vector<ParticleInstance> extraInstances;
     std::chrono::steady_clock::time_point lastLogTime{};
     uint32_t lastLoggedAlive = 0xFFFFFFFFu;
 };

@@ -13,6 +13,7 @@
 #include "Render/RenderResources.h"
 #include "Render/LightSources.h"
 #include "Render/ClusteredLighting.h"
+#include "Render/Fireflies.h"
 #include "RHI/RenderGraph.h"
 #include "RHI/GpuTimer.h"
 #include "RHI/ScreenshotCapture.h"
@@ -34,6 +35,7 @@ class ShadowPass;
 class TAAPass;
 class SubresourceProbePass;
 class GeometryPass;
+class ParticlePass;
 class ReflectionPass;
 class SSRPass;
 class SunFlarePass;
@@ -172,6 +174,10 @@ private:
 
 	// TM-13：点光源清单（CPU 侧）与聚簇构建结果（每帧重建）。
 	LightSources lightSources;
+	// 萤火虫：光源本体要画出来，所以既喂光照（LightSources）也喂粒子管线（ParticlePass）。
+	Fireflies fireflies;
+	ParticlePass* particlePassPtr = nullptr;
+	float fireflyClock = 0.0f;
 	ClusteredLighting clusteredLighting;
 
 	std::array<VkBuffer, kFramesInFlight> globalUboBuffers{};

@@ -879,6 +879,9 @@ streamingConfig.skirtsEnabled = false;
 	auto particlePass = std::make_unique<ParticlePass>(*vulkanDevice, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager.get(),
 		gBuffers[0]->getDepth().format, scene.get());
+	// 萤火虫要往粒子管线里塞实例，而 particlePass 很快会被 move 进 renderPipeline，
+	// 所以先留一个裸指针 —— 它的生命周期由 renderPipeline 负责，比本对象活得久。
+	particlePassPtr = particlePass.get();
 	// TAA：必须在 Glass/Water 之后（要拿混合后的 HDR）、Bloom 之前（辉光作用在
 	// 抗锯齿后的画面上）。每帧都注册 —— 否则 Bloom/Present 会读到没人写的
 	// taaOutput，渲染图的写覆盖校验会直接报错。
@@ -2064,6 +2067,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 		throw std::runtime_error("AliasReport selfTest failed");
 
 	// CLI 选项表的单一来源：分组非空、开关不重复、必含新增项。
+	// 萤火虫：布点确定、范围合法、呼吸不灭（纯算术，先在这里证伪）。
+	if (!Fireflies::selfTest())
+		throw std::runtime_error("Fireflies selfTest failed");
+
 	if (!tiny::cli::selfTest())
 		throw std::runtime_error("CliCatalog selfTest failed");
 
@@ -2775,7 +2782,88 @@ void FirstApp::render(float dt)
 		// lighting.frag 里的逐灯循环是死代码。现在两条路径都填：
 		//   旧路径：灯塞进 UBO 的固定数组（最多 MAX_POINT_LIGHTS 盏）；
 		//   聚簇路径：灯数据走 SSBO，片元只遍历自己所在簇的灯表。
-		if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
+		// 贴地采样：压力场与萤火虫都必须压在地表附近，否则"灯在半空、可见片元在地面"，
+		// 半径再大也照不到。这里按体素地形重算高度（与 createVoxelWorld 同 seed / baseY）。
+		std::unordered_map<uint64_t, voxel::Chunk> groundChunks;
+		const auto sampleGround = [&groundChunks](float x, float z, float& outY) -> bool
+		{
+			const float fx = std::floor(x);
+			const float fz = std::floor(z);
+			const int32_t cx = voxel::Chunk::toChunkCoord(static_cast<int32_t>(fx));
+			const int32_t cz = voxel::Chunk::toChunkCoord(static_cast<int32_t>(fz));
+			const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32)
+				| static_cast<uint64_t>(static_cast<uint32_t>(cz));
+
+			auto it = groundChunks.find(key);
+			if (it == groundChunks.end())
+			{
+				voxel::Chunk chunk;
+				chunk.generate(20251104ull, cx, cz, 0);
+				it = groundChunks.emplace(key, std::move(chunk)).first;
+			}
+
+			const int32_t lx = voxel::Chunk::toLocal(static_cast<int32_t>(fx));
+			const int32_t lz = voxel::Chunk::toLocal(static_cast<int32_t>(fz));
+			for (int32_t y = voxel::Chunk::kSize - 1; y >= 0; --y)
+			{
+				if (voxel::isSolid(it->second.get(lx, y, lz)))
+				{
+					outY = static_cast<float>(y) + 1.0f;
+					return true;
+				}
+			}
+			return false;
+		};
+
+		// 萤火虫：区域内 N 个有形状、有颜色的光源。形状走 ParticlePass 的 billboard，
+		// 光照仍走 LightSources —— 两边用同一份采样，光点与它照亮的地面才对得上。
+		if (diagnosticsOptions.fireflies > 0 && particlePassPtr != nullptr)
+		{
+			if (fireflies.empty())
+			{
+				// 沿视线方向摆，而不是"猜地面高度"：地形网格与体素世界是两套数据，
+				// 拿任一套定高都可能把灯埋进山里或浮到海面上。沿视线摆在画面中段，
+				// 屏幕上看得到、半径也够照到它后面的地面。
+				const glm::mat4 view = scene->getCamera().getView();
+				const glm::vec3 forward(view[0][2], view[1][2], view[2][2]);
+				const glm::vec3 probe = scene->getCameraTransform().getTranslation() + forward * 25.0f;
+
+				fireflies.configure(diagnosticsOptions.fireflies, probe,
+					diagnosticsOptions.firefliesRadius);
+			}
+
+			fireflyClock += dt;
+			fireflies.update(fireflyClock);
+
+			// 光照：萤火虫自己带半径与亮度，直接转成点光源。
+			lightSources.clear();
+			std::vector<ParticleInstance> fireflyInstances;
+			fireflyInstances.reserve(fireflies.size());
+			for (const FireflySample& sample : fireflies.samples())
+			{
+				const glm::vec3 color(sample.color);
+				// 照亮用的是 sample.light（半径 6~9 米），不是发光点的直径（0.4~0.8 米）——
+				// 这两件事混用的话，灯只有几十厘米范围，地面上一点光斑都看不到。
+				lightSources.addPointLight(glm::vec3(sample.positionSize),
+					sample.light.x, color, sample.light.y);
+
+				ParticleInstance instance;
+				instance.positionSize = sample.positionSize;
+				// 粒子着色器会把颜色乘 1.4，所以这里先乘 0.62 保住色相：
+				// 直接给饱和色会被削顶成白点，冷暖两群就分不出来了。
+				const float alpha = std::min(1.0f, sample.color.w * 0.85f);
+				instance.color = glm::vec4(color * 0.62f, alpha);
+				fireflyInstances.push_back(instance);
+			}
+
+			particlePassPtr->setExtraInstances(std::move(fireflyInstances));
+		}
+		else if (particlePassPtr != nullptr)
+		{
+			particlePassPtr->setExtraInstances({});
+		}
+
+if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
 		{
 			// 相机未必看着原点（--selftest 的默认机位离原点很远），压力场必须铺在
 			// 相机前方，否则量到的是"一盏灯都没进视锥"。引擎的投影是 GL 式加 Y 翻转，
@@ -2791,37 +2879,6 @@ void FirstApp::render(float dt)
 			// 贴地采样：压力场默认铺在相机前方半空，但可见片元在地面上，距离常常二三十米，
 			// 单灯半径 8 米照不到 —— 实测就是"加了灯画面几乎不变"。这里按体素地形重算高度
 			// （与 createVoxelWorld 同一个 seed / baseY），把灯压到地表上方 1.2 米。
-			std::unordered_map<uint64_t, voxel::Chunk> groundChunks;
-			const auto sampleGround = [&groundChunks](float x, float z, float& outY) -> bool
-			{
-				const float fx = std::floor(x);
-				const float fz = std::floor(z);
-				const int32_t cx = voxel::Chunk::toChunkCoord(static_cast<int32_t>(fx));
-				const int32_t cz = voxel::Chunk::toChunkCoord(static_cast<int32_t>(fz));
-				const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32)
-					| static_cast<uint64_t>(static_cast<uint32_t>(cz));
-
-				auto it = groundChunks.find(key);
-				if (it == groundChunks.end())
-				{
-					voxel::Chunk chunk;
-					chunk.generate(20251104ull, cx, cz, 0);
-					it = groundChunks.emplace(key, std::move(chunk)).first;
-				}
-
-				const int32_t lx = voxel::Chunk::toLocal(static_cast<int32_t>(fx));
-				const int32_t lz = voxel::Chunk::toLocal(static_cast<int32_t>(fz));
-				for (int32_t y = voxel::Chunk::kSize - 1; y >= 0; --y)
-				{
-					if (voxel::isSolid(it->second.get(lx, y, lz)))
-					{
-						outY = static_cast<float>(y) + 1.0f;
-						return true;
-					}
-				}
-				return false;
-			};
-
 			lightSources.buildStressField(diagnosticsOptions.lightStress, stressCenter,
 				diagnosticsOptions.lightStressRadius, sampleGround);
 		}
