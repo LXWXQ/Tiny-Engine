@@ -4,8 +4,8 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~135 行
-updated: 2026-11-11
+size: ~162 行
+updated: 2026-11-19
 ---
 
 # Pass 顺序与原因
@@ -147,3 +147,16 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 4. 如果需要中间目标，在渲染图 `createTexture` 并登记到 `RenderResources`；
 5. 如果可关闭，加命令行开关 + 在 `tools/Validate.ps1` 加一项回归；
 6. 更新 [shaders](shaders.md) 清单与本文件 §1。
+
+## 点光源的两条路径（TM-13）
+
+光照 Pass 与平面反射的光照各用一份 `lighting.frag`。点光来源由 UBO 尾部的 `clusterParams.x` 决定：
+
+| `clusterParams.x` | 灯从哪里读 | 每片元成本 |
+|---|---|---|
+| 0（默认） | `ubo.pointLights[MAX_POINT_LIGHTS]`，逐盏遍历 | 最多 100 盏 |
+| 1（`--clustered-lighting`） | Set 0 binding 15~18 的簇参数 / ranges / indices / 灯数组 | 所在簇的灯数 |
+
+主视角用聚簇时，平面反射通道仍走逐灯（`reflectionUbo.clusterParams.x = 0`）：它的 Set 0 是 `ReflectionPass` 自己建的，簇表按主视角算，复用会读到与屏幕分块不匹配的区间。
+
+簇表由 `ClusteredLighting` 在 CPU 上每帧构建（16x9x24、每簇上限 256、按灯剪枝 + 计数排序，Release 512 灯约 1.0 ms）。取舍与实测数字见 [decisions](../10-architecture/decisions.md) 决策 32。

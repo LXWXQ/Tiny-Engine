@@ -4,7 +4,7 @@ title: 描述符布局与 bindless 材质
 type: architecture
 scope: src/Core/DescriptorManager.*, src/Render/TerrainMaterial.*, src/Terrain/TerrainTextureGenerator.*, src/Render/GeometrySystem.cpp, shaders/mrt.frag, shaders/water.frag
 read-when: 修改材质/地形纹理系统、描述符布局、材质槽位分配或回收；或判断要不要上 push descriptor / descriptor buffer
-size: ~219 行
+size: ~228 行
 updated: 2026-11-19
 ---
 
@@ -12,7 +12,7 @@ updated: 2026-11-19
 
 `DescriptorManager` 管理**三个主描述符布局**（Set 0 全局、Set 1 bindless 材质、Set 2 地形纹理），其余 Pass 用自己的局部布局。
 
-## 1. Set 0 —— 全局（15 个 binding）
+## 1. Set 0 —— 全局（19 个 binding）
 
 启动时构建（`Application::buildGlobalSet`），反射/SSR 开关变化时重建；之后所有 Pass 只读。
 
@@ -33,6 +33,15 @@ updated: 2026-11-19
 | 12 | 同上 | 半分辨率平面反射颜色，关闭时回退环境图 | FRAGMENT |
 | 13 | 同上 | 半分辨率水面 SSR 结果，关闭时回退环境图 | FRAGMENT |
 | 14 | 同上 | 1024x1024 无缝水面法线，世界 XZ 两层平铺 | FRAGMENT |
+| 15 | `STORAGE_BUFFER` | 聚簇参数（`inverseProjection` / `screenParams` / `grid`） | FRAGMENT |
+| 16 | 同上 | 每簇灯区间（`uvec2 offset/count`），3456 项 | FRAGMENT |
+| 17 | 同上 | 簇内灯索引表（`uint[]`） | FRAGMENT |
+| 18 | 同上 | 灯数组（`PointLight[]`，与 UBO 里的同构） | FRAGMENT |
+
+> binding 15~18 每帧由 `DescriptorManager::updateClusterBindings` 用 `ScratchArena` 的四个切片重写；
+> **重建 Set 0 时必须补一句 `applyClusterBindings(globalSets[frame])`，否则占位数据会盖掉簇表** ——
+> 着色器把材质 factor 缓冲当簇参数读会让簇下标越界，实测直接挂驱动（决策 32）。
+> 另外 `ReflectionPass` 自建的 Set 0 只写 0~12，同样要补 15~18，否则验证层报 "never been updated"。
 
 > 采样器不由渲染图管理（图只管图像）。`ssaoSampler` 来自 `SSAOPass`，
 > IBL 三个来自 `IBLBaker` / `CubemapTexture`，G-Buffer 采样器来自 `GBuffer`。

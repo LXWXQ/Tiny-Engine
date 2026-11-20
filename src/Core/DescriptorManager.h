@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdio>
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstdint>
@@ -74,6 +75,23 @@ public:
 	{
 		return globalSets[frameInFlightIndex];
 	}
+
+	// TM-13：聚簇光照的四张表（set 0, binding 15~18），全部来自同一个每帧暂存块，
+	// 只是偏移不同 —— 一次 vkUpdateDescriptorSets 写四条就够。
+	struct ClusterBinding
+	{
+		VkBuffer buffer = VK_NULL_HANDLE;
+		VkDeviceSize paramsOffset = 0, paramsSize = 0;
+		VkDeviceSize rangesOffset = 0, rangesSize = 0;
+		VkDeviceSize indicesOffset = 0, indicesSize = 0;
+		VkDeviceSize lightsOffset = 0, lightsSize = 0;
+	};
+	void updateClusterBindings(uint32_t frameInFlightIndex, const ClusterBinding& binding);
+
+	// 把最近一帧的聚簇四张表写到任意一个用 globalSetLayout 建的 set 上。
+	// 平面反射通道自己建了一套 set 0（有自己的 G-Buffer 与反射目标），
+	// 但 lighting.frag 仍然静态使用那四条 SSBO，不填就是未定义描述符。
+	void applyClusterBindings(VkDescriptorSet set);
 
 	// ---------------- 材质（D-3 起是 bindless 的）----------------
 	//
@@ -179,6 +197,7 @@ private:
 	VkDescriptorSetLayout terrainSetLayout = VK_NULL_HANDLE;
 
 	std::vector<VkDescriptorSet> globalSets;
+	ClusterBinding lastClusterBinding_{};
 
 	// D-3：材质只剩这一个 set，里面是 4 个纹理数组。
 	// 数组长度（材质容量）在分配时通过 variable descriptor count 指定，

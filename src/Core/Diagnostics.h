@@ -64,6 +64,12 @@ namespace diag
         // --stats-rendergraph：退出时打印准备 / 录制各自的每帧耗时（TM-10）。
         bool statsRenderGraph = false;
 
+        // TM-13：点光源与聚簇光照。lightStress > 0 时铺这么多盏灯（0 = 不加灯），
+        // 用来量"512 盏灯下前向还能不能跑满 60 FPS"。
+        uint32_t lightStress = 0;
+        bool clusteredLighting = false;
+        bool statsClusters = false;
+
         bool gpuTiming = false;
         std::string gpuTimingCsvPath = "gpu_timing.csv";
 

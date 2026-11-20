@@ -11,6 +11,8 @@
 #include "Render/RenderPipeline.h"
 #include "Render/IBLBaker.h"
 #include "Render/RenderResources.h"
+#include "Render/LightSources.h"
+#include "Render/ClusteredLighting.h"
 #include "RHI/RenderGraph.h"
 #include "RHI/GpuTimer.h"
 #include "RHI/ScreenshotCapture.h"
@@ -167,6 +169,10 @@ private:
 	bool screenshotAutoTarget = false;
 	bool diagnosticsFinalized = false;
 	std::unique_ptr<RenderResources> renderResources;
+
+	// TM-13：点光源清单（CPU 侧）与聚簇构建结果（每帧重建）。
+	LightSources lightSources;
+	ClusteredLighting clusteredLighting;
 
 	std::array<VkBuffer, kFramesInFlight> globalUboBuffers{};
 	std::array<VmaAllocation, kFramesInFlight> globalUboAllocations{};

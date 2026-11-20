@@ -93,7 +93,11 @@ void ScratchArena::createSlotBuffer(uint32_t index, VkDeviceSize capacity)
 
 void ScratchArena::beginFrame(uint32_t frameSlot)
 {
-    currentSlot = frameSlot % kFramesInFlight;
+    const uint32_t slotIndex = frameSlot % kFramesInFlight;
+    if (inFrame && currentSlot == slotIndex)
+        return;   // 同一帧重复开帧（UBO 先取暂存）：保留已经用掉的偏移
+
+    currentSlot = slotIndex;
     inFrame = true;
 
     Slot& slot = slots[currentSlot];
@@ -141,6 +145,12 @@ void ScratchArena::grow(uint32_t index, VkDeviceSize required)
 
     std::printf("[Scratch] 扩容到 %.2f MiB（这一槽位之前的分配仍然有效，旧块下一轮回收）\n",
                 static_cast<double>(capacity) / (1024.0 * 1024.0));
+}
+
+ScratchArena::Block ScratchArena::allocate(uint32_t frameSlot, VkDeviceSize bytes, VkDeviceSize alignment)
+{
+    beginFrame(frameSlot);   // 幂等：同一帧第二次调用不会清掉已分配的偏移
+    return allocate(bytes, alignment);
 }
 
 ScratchArena::Block ScratchArena::allocate(VkDeviceSize bytes, VkDeviceSize alignment)

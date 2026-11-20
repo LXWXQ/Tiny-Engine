@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~317 行
+size: ~329 行
 updated: 2026-11-19
 ---
 
@@ -315,3 +315,15 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 - **结论**：不升。三档阶梯的**触发条件**写进 [descriptors](descriptors.md) 第 10 节（每帧新建 set 组合 > 16 / 每帧重写 > 200 次 / 需要 GPU 写描述符），出现时照那节走。
 - **为什么现在就写触发条件**：这类"基础设施升级"最容易在没有信号时凭感觉做，做完还要长期维护三条路径。把判据写成数字，下一次就不用重新讨论。
 - **升级前必须先做的**：set 0 的 15 个 binding 收敛到单一事实来源（现在散在 `DescriptorManager` 与各 Pass 的约定里），否则池化只会把"写错 binding"变成"写错 set"。
+
+## 决策 32：点光源走两条路径，聚簇默认关闭（TM-13）
+
+- **问题**：引擎此前根本没有点光源 —— `ubo.numLights` 恒为 0，`lighting.frag` 里 `for (int i = 0; i < ubo.numLights; i++)` 是死代码。要做聚簇，先得有灯。
+- **做法**：`LightSources` 存灯（`GpuPointLight{ positionRadius, colorIntensity }`），`ClusteredLighting` 建 16x9x24 的视锥分块表（计数排序，`kMaxLightsPerCluster = 256`），参数块 / ranges / indices / 灯数组走 Set 0 新增的 binding 15~18，每帧从 `ScratchArena` 切四段写。着色器按 `ubo.clusterParams.x` 在「聚簇查表」与「逐灯遍历」之间二选一。
+- **为什么先 CPU 建簇**：Release 实测 8 灯 49.7 us、128 灯 250.7 us、512 灯 1004.9 us。建簇改成「每盏灯先算候选簇范围 + 计数排序」后比最初的全量扫描快约 5 倍（Debug 512 灯 90.3 ms → 18.3 ms），暂时不需要 compute 版本。
+- **实测（`--selftest 60 --voxel-world 1`，RTX 2070，Debug）**：8 灯 —— 逐灯 65.8 / 71.0 FPS，聚簇 61.4 / 58.6 FPS；512 灯 —— 逐灯 69.4 / 64.5 FPS（每片元最多 `MAX_POINT_LIGHTS = 100` 盏），聚簇 28.3 / 28.8 FPS（最挤的簇 202 盏）。
+- **结论**：默认关闭，`--clustered-lighting` 才开。不是「聚簇没用」，而是这批灯太密：512 盏铺在相机前方 40 米见方的空域里，最挤的簇 202 盏，比旧路径截断到 100 盏还贵。它的目标区间是「总数上千、每簇几盏」的稀疏分布，等有那种场景再翻默认。
+- **踩到的两个坑（都会挂驱动）**：① `DescriptorManager::buildGlobalSet` 给 15~18 写的是占位，而它可能在 `updateClusterBindings` **之后**被调用（重建 G-Buffer 视图时），占位把真数据盖掉 → 着色器把材质 factor 缓冲当簇参数读 → 簇下标越界 → `range.y` 巨大 → 死循环 → `failed to submit compute command buffer!`。修法：`buildGlobalSet` 末尾补 `applyClusterBindings(globalSets[frame])`。② 平面反射通道复用同一组 G-Buffer，`viewDepth` 可能出现负值甚至 NaN；`clamp()` 挡不住 NaN，而 `uint(NaN)` 是未定义行为 —— 改成「不大于 near 就回落到 near」的写法。
+- **顺带修的**：反射通道自建的 Set 0（`ReflectionPass.cpp` 里的 `allocateSet(globalSetLayout)`）只写 binding 0~12，新增的 15~18 必须用 `applyClusterBindings` 补齐，否则验证层直接报「never been updated」。
+- **验收方法的教训**：引擎每帧把相机位姿写回 `config/engine.json`，两次独立运行的截图会因机位不同而完全不可比（我第一次量到的「583979 像素差异」就是这么来的）。要逐像素比对，必须固定机位或用同一次运行里的两个模式做 A/B。
+- **不引入的**：compute 建簇、阴影 / 雾 / 贴花共用簇表、每簇位掩码（当前整数索引表够用）。等真实场景压出瓶颈再说。

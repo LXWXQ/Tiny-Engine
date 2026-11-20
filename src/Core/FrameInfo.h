@@ -54,6 +54,10 @@ struct GlobalUbo
 	// x = 阴影滤波模式：0 = PCF，1 = PCSS。其它分量保留。
 	// 单独开一个 vec4 而不是复用 fogParams.z，避免雾/阴影参数互相污染。
 	alignas(16) glm::vec4 shadowFilterParams{ 0.f, 0.f, 0.f, 0.f };
+
+	// TM-13：x = 是否按簇取灯（0 = 逐灯遍历）, y = near, z = far, w 保留。
+	// 放在 UBO 尾部：四个旧着色器只声明到 pointLights，加在末尾不动已有偏移。
+	alignas(16) glm::vec4 clusterParams{ 0.f, 0.1f, 5000.f, 0.f };
 };
 
 // ---------------------------------------------------------------------------
@@ -89,7 +93,7 @@ static_assert(offsetof(GlobalUbo, shadowFilterParams) ==
 		3 * sizeof(glm::vec4),
 	"GlobalUbo.shadowFilterParams offset mismatch");
 static_assert(sizeof(GlobalUbo) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) +
-		4 * sizeof(glm::vec4),
+		5 * sizeof(glm::vec4),
 	"GlobalUbo size mismatch");
 
 struct SimplePushConstantData

@@ -1,4 +1,4 @@
-#include "ReflectionPass.h"
+﻿#include "ReflectionPass.h"
 
 #include "Core/DescriptorManager.h"
 #include "Render/GeometrySystem.h"
@@ -304,6 +304,9 @@ void ReflectionPass::rebuildDescriptors()
         addImage(12, &colorInfo);
 
         descriptorManager->writeSet(reflectionSets[frame], writes);
+        // lighting.frag 静态使用 binding 15~18（聚簇四张表）。这个 set 是反射通道
+        // 自己建的，不会被 buildGlobalSet 覆盖，必须显式补齐，否则验证层会报未更新。
+        descriptorManager->applyClusterBindings(reflectionSets[frame]);
     }
 }
 
@@ -349,6 +352,9 @@ void ReflectionPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         GlobalUbo reflectionUbo = frameUbo;
         reflectionUbo.projectionView = reflectionProjectionView;
         reflectionUbo.cameraPos = glm::vec4(reflectionCamera, 1.0f);
+        // 反射通道走逐灯遍历：它的 set 0 是自己建的，聚簇表的偏移按主视角算，
+        // 在这里复用会导致读到与屏幕分块不匹配的区间（实测会挂驱动）。
+        reflectionUbo.clusterParams.x = 0.0f;
         std::memcpy(uboMapped[frame], &reflectionUbo, sizeof(reflectionUbo));
         vmaFlushAllocation(device.getVmaAllocator(), uboAllocations[frame], 0, sizeof(reflectionUbo));
 
@@ -377,6 +383,7 @@ void ReflectionPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         }
     });
 
+
     auto& lightingPass = graph.addGraphicsPass("PlanarReflection.Lighting");
     for (uint32_t i = 0; i < 4; ++i)
         lightingPass.read(gbufferTextures[frame][i]);
@@ -395,6 +402,7 @@ void ReflectionPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
                                 lightingSystem->getPipelineLayout(), 0, 1, &set, 0, nullptr);
         lightingSystem->render(cmd, frameInfo);
     });
+
 }
 
 VkImageView ReflectionPass::getColorView(uint32_t frame) const

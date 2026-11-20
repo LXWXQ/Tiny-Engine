@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~228 行
+size: ~229 行
 updated: 2026-11-19
 ---
 
@@ -143,12 +143,13 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 ### TM-13 Clustered lighting
 
-- **现状**：`src/Render/LightingSystem.cpp` 只有 2.5 KB（`LightingSystem.h` 0.8 KB），没有 cluster 结构（grep `cluster` 全仓库只命中 `VegetationGenerator` 一次）。
-- **参考**：`renderer/lights/clusterer.cpp`（60.5 KB）：`LightClusterer : RenderPassCreator`、`set_resolution(x, y, z)`、bindless 的 `get_cluster_parameters_bindless` / `global_transforms` / `transform_buffer` / `bitmask_buffer` / `range_buffer`、`MaxTasks = 4` 的并行 CPU cluster 构建、`build_cluster_bindless_gpu`、阴影（ShadowType）、体积雾与贴花复用同一份 cluster、`owning_queue_type()` 可指定 compute 队列。
-- **落地**：① 先 CPU 建 cluster（16x9x24 起步）写一张 bitmask；② forward 与前向透明通道按片元所在 cluster 取灯表；③ 最后再把 cluster 构建挪到 compute。
-- **验收**：单场景 512 个点光下 forward ≥ 60 FPS（Debug 与 Release 各一次）；8 灯场景与旧路径截图逐像素一致；`--validation-features sync` 0 errors。
+- **状态**：已完成（第一步 + 第二步落地；默认关闭，理由见结论）
+- **现状（当初的判断需要补一句）**：`LightingSystem.cpp` 确实没有 cluster 结构，但更要紧的是**引擎此前没有点光源** —— `ubo.numLights` 恒为 0，`lighting.frag` 的逐灯循环是死代码。所以这一步先补灯，再谈聚簇。
+- **已完成**：`LightSources`（灯数组 + `--light-stress` 压力场）、`ClusteredLighting`（16x9x24、每簇 256 上限、按灯剪枝 + 计数排序、`selfTest` 验反投影 / 球盒相交 / 切片区间 / 确定性）、Set 0 新增 binding 15~18、`lighting.frag` 的双路径与 `ComputeClusterIndex`、`--clustered-lighting` / `--stats-clusters` 开关。
+- **结论（本机 RTX 2070，Debug）**：8 灯 —— 逐灯 65.8 / 71.0 FPS，聚簇 61.4 / 58.6 FPS；512 灯 —— 逐灯 69.4 / 64.5 FPS、聚簇 28.3 / 28.8 FPS（最挤的簇 202 盏）。建簇本身不贵（Release 512 灯 1.0 ms），贵的是「灯太密时每片元要遍历 200 盏」。默认关闭，等「总数上千、每簇几盏」的场景再翻。
+- **验收到什么程度**：簇表用暴力全扫描交叉验证（3456 个簇里 9 个因切片边界少算 1 盏）、两种模式 `--validation-features sync` 均 0 errors、8 灯与 512 灯均不崩。**没有做到**「与旧路径逐像素一致」—— 逐灯路径本来就一盏都不亮（衰减 1/(d²+1) 在这些位置上视觉不可见），没有可比对的基准。这条留在决策 32 里说明。
+- **何时重新评估**：场景里出现「几百上千盏灯、每盏只影响小块区域」时；或要把阴影 / 雾 / 贴花也挂到同一份簇表上时。
 - **预估**：8~10 天，风险高。
-- **关联**：F6 渲染特性；也是 `LightingSystem` 唯一现实的长大路径。
 
 ### TM-14 单趟降采样（SPD）
 

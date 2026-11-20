@@ -25,6 +25,8 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     vec4 shadowParams;          // x = 1/分辨率, y = 强度, z = PCF 半径, w = 启用
     vec4 fogParams;             // x = 起始距离, y = 密度, z = 保留, w = 启用
     vec4 shadowFilterParams;    // x = 0 PCF / 1 PCSS, yzw 保留
+    // TM-13：x = 是否按簇取灯（0 = 逐灯遍历）, y = near, z = far, w 保留
+    vec4 clusterParams;
 } ubo;
 
 layout(set = 0, binding = 1) uniform sampler2D environmentMap;
@@ -38,6 +40,18 @@ layout(set = 0, binding = 6) uniform sampler2D inSSAO;
 // IBL 三件套（由 IBLBaker 在初始化阶段预烘焙）
 // F6：3 级联阴影图（每级一个 layer）。
 layout(set = 0, binding = 11) uniform sampler2DArray shadowMaps;
+
+// TM-13 聚簇光照：参数 + 三张表（set 0, binding 15~18）。
+// 关闭时 ubo.clusterParams.x = 0，这几张表不会被读。
+layout(set = 0, binding = 15) readonly buffer ClusterParamsBlock {
+    mat4 inverseProjection;
+    vec4 screenParams;   // xy = 分辨率, z = near, w = far
+    uvec4 grid;          // xyz = 簇网格, w = 每簇上限
+} clusterParams;
+
+layout(set = 0, binding = 16) readonly buffer ClusterRanges { uvec2 clusterRanges[]; };
+layout(set = 0, binding = 17) readonly buffer ClusterIndices { uint clusterIndices[]; };
+layout(set = 0, binding = 18) readonly buffer ClusterLights { PointLight clusterLights[]; };
 
 layout(set = 0, binding = 7) uniform samplerCube irradianceMap;   // 漫反射：余弦卷积
 layout(set = 0, binding = 8) uniform samplerCube prefilteredMap;  // 镜面：GGX 预过滤 + mip 链
@@ -221,6 +235,31 @@ vec3 CalcPointLight(PointLight light, vec3 N, vec3 fragPos, vec3 V, vec3 albedo,
     return CalcLightBRDF(L, V, N, albedo, roughness, metallic, F0, radiance);
 }
 
+// TM-13：屏幕坐标 + 视深度 -> 簇下标。切片用对数分布（与 CPU 侧 build 一致），
+// 屏幕方向按 tile 划分。索引布局与 ClusteredLighting::clusterIndex 相同：
+// (z * gridY + y) * gridX + x。
+uint ComputeClusterIndex(vec2 fragCoord, float viewDepth) {
+    const vec3 gridSize = vec3(clusterParams.grid.xyz);
+    const float nearZ = clusterParams.screenParams.z;
+    const float farZ = clusterParams.screenParams.w;
+
+    // viewDepth 可能来自别处写出的 G-Buffer：平面反射通道复用了同一组纹理，
+    // 镜像过的位置算出来的 w 可能出现负值甚至 NaN（清屏色不外插就是 0/0）。
+    // clamp() 挡不住 NaN，而 uint(NaN) 是未定义行为 —— 实测直接让驱动报设备丢失。
+    // NaN 的任何比较都为 false，所以用"不大于就回落到 nearZ"的写法一次挡住两种坏值。
+    float depth = viewDepth;
+    if (!(depth > nearZ)) depth = nearZ;
+    if (depth > farZ) depth = farZ;
+
+    const float slice = log2(depth / nearZ) / log2(farZ / nearZ) * gridSize.z;
+    const uint z = uint(clamp(slice, 0.0, gridSize.z - 1.0));
+
+    const vec2 uv = fragCoord / max(clusterParams.screenParams.xy, vec2(1.0));
+    const uint x = uint(clamp(uv.x * gridSize.x, 0.0, gridSize.x - 1.0));
+    const uint y = uint(clamp(uv.y * gridSize.y, 0.0, gridSize.y - 1.0));
+    return (z * uint(gridSize.y) + y) * uint(gridSize.x) + x;
+}
+
 void main() {
     vec3 fragPosWorld = texture(inPosition, inUV).xyz;
     vec3 N            = texture(inNormal, inUV).xyz;
@@ -246,8 +285,22 @@ void main() {
     float viewDepth = (ubo.projectionView * vec4(fragPosWorld, 1.0)).w;
     Lo += CalcDirectionalLight(N, V, albedo, roughness, metallic, F0, fragPosWorld, viewDepth);
 
-    for (int i = 0; i < ubo.numLights; i++)
-        Lo += CalcPointLight(ubo.pointLights[i], N, fragPosWorld, V, albedo, roughness, metallic, F0);
+    // TM-13：两条路径共用同一个 CalcPointLight，只是灯来源不同。
+    if (ubo.clusterParams.x > 0.5)
+    {
+        const uint cluster = ComputeClusterIndex(gl_FragCoord.xy, viewDepth);
+        const uvec2 range = clusterRanges[cluster];
+        for (uint i = 0u; i < range.y; ++i)
+        {
+            const uint lightIndex = clusterIndices[range.x + i];
+            Lo += CalcPointLight(clusterLights[lightIndex], N, fragPosWorld, V, albedo, roughness, metallic, F0);
+        }
+    }
+    else
+    {
+        for (int i = 0; i < ubo.numLights; i++)
+            Lo += CalcPointLight(ubo.pointLights[i], N, fragPosWorld, V, albedo, roughness, metallic, F0);
+    }
 
     // ---------------- IBL（split-sum 近似）----------------
     // 漫反射：直接用预烘焙的 irradiance cubemap（已做余弦卷积）

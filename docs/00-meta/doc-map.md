@@ -4,7 +4,7 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~192 行
+size: ~194 行
 updated: 2026-11-19
 ---
 
@@ -49,6 +49,8 @@ updated: 2026-11-19
 | `SubMeshCulling.*` | 纯 CPU frustum-AABB、世界 bounds 与地形 LOD 距离选择 | [terrain](../30-systems/terrain.md)、[descriptors](../10-architecture/descriptors.md) | terrain、descriptors |
 | `SSAOPass.*` | SSAO 输出 + 模糊 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
 | `LightingPass.*` / `LightingSystem.*` | HDR 光照输出、导入交换链 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
+| `LightSources.*` | 点光源数组与压力场（`--light-stress`），两条光照路径的灯来源 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
+| `ClusteredLighting.*` | 16x9x24 视锥分块：按灯剪枝 + 计数排序建簇表 | [pass-order](../20-pipeline/pass-order.md)、[decisions](../10-architecture/decisions.md) 决策 32 | pass-order |
 | `WaterPass.*` / `water.vert` / `water.frag` | 相机中心径向网格、波浪位移、Fresnel/环境反射/厚度吸收/泡沫，HDR 前向混合 | [water](../30-systems/water.md)、[pass-order](../20-pipeline/pass-order.md) | water、pass-order |
 | `VegetationPass.*` / `vegetation.vert` / `vegetation.frag` | 实例化草/树写 G-Buffer（Geometry 后、SSAO 前），地形高度/坡度放置、风摆、草片元 alpha-test discard | [vegetation](../30-systems/vegetation.md)、[pass-order](../20-pipeline/pass-order.md) | vegetation、pass-order |
 | `ParticlePass.*` / `particle.vert` / `particle.frag` | 每帧 host-visible 粒子实例、billboard、圆形软遮罩，Water 后/TAA 前前向混合 HDR，按相机距离排序 | [particles](../30-systems/particles.md)、[scene-ecs](../30-systems/scene-ecs.md)、[pass-order](../20-pipeline/pass-order.md) | particles、scene-ecs、pass-order |

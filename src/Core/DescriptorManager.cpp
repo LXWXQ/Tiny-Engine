@@ -154,7 +154,8 @@ void DescriptorManager::createGlobalLayout()
 	// C1：binding 12 = 平面反射颜色（半分辨率）。
 	// F6-01：binding 13 = 水面 SSR 结果（半分辨率）。
 	// R-06：binding 14 = 水面法线贴图（世界 XZ 平铺）。
-	std::vector<VkDescriptorSetLayoutBinding> bindings(15);
+	// TM-13：binding 15~18 = 聚簇光照的参数与三张表（storage buffer）。
+	std::vector<VkDescriptorSetLayoutBinding> bindings(19);
 
 	bindings[0].binding = 0;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -186,6 +187,15 @@ void DescriptorManager::createGlobalLayout()
 	bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	bindings[14].descriptorCount = 1;
 	bindings[14].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	// TM-13：15 参数（mat4 + vec4 + uvec4）、16 簇区间、17 灯索引、18 灯数组。
+	for (uint32_t i = 15; i <= 18; ++i)
+	{
+		bindings[i].binding = i;
+		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		bindings[i].descriptorCount = 1;
+		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	}
 
 	for (uint32_t i = 1; i <= 9; i++)
 	{
@@ -391,7 +401,7 @@ void DescriptorManager::buildGlobalSet(
 			irradianceCopy, prefilteredCopy, brdfLutCopy
 		};
 
-		std::array<VkWriteDescriptorSet, 15> writes{};
+		std::array<VkWriteDescriptorSet, 19> writes{};
 
 		VkDescriptorImageInfo shadowInfo{ shadowSampler, shadowViews[frame],
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -443,6 +453,18 @@ void DescriptorManager::buildGlobalSet(
 		writes[10].descriptorCount = 1;
 		writes[10].pBufferInfo = &factorBufferInfo;
 
+		// TM-13：聚簇四张表先绑材质 factor 缓冲占位。真正的内容每帧由
+		// updateClusterBindings() 覆盖；关掉聚簇时着色器不会读这几条。
+		for (uint32_t i = 15; i <= 18; ++i)
+		{
+			writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			writes[i].dstSet = globalSets[frame];
+			writes[i].dstBinding = i;
+			writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			writes[i].descriptorCount = 1;
+			writes[i].pBufferInfo = &factorBufferInfo;
+		}
+
 		for (uint32_t i = 0; i < 9; ++i)
 		{
 			writes[i + 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -455,9 +477,74 @@ void DescriptorManager::buildGlobalSet(
 
 		vkUpdateDescriptorSets(device->getDevice(),
 			static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+		// TM-13：上面那 19 条里的 15~18 只是占位。这个函数可能在建完聚簇表之后
+		// 才被调用（重建 G-Buffer 视图等），所以最后再用最近一帧的四张表覆盖一遍，
+		// 否则着色器会把材质 factor 缓冲当成簇参数读 —— 阈值全是垃圾，实测挂驱动。
+		applyClusterBindings(globalSets[frame]);
 	}
 }
 
+void DescriptorManager::updateClusterBindings(uint32_t frameInFlightIndex, const ClusterBinding& binding)
+{
+	if (frameInFlightIndex >= globalSets.size() || globalSets[frameInFlightIndex] == VK_NULL_HANDLE)
+		return;
+	if (binding.buffer == VK_NULL_HANDLE)
+		return;
+
+	// 四段都落在同一块暂存缓冲里，偏移由 ScratchArena 给。size 为 0 时用整块
+	// （空表在着色器里不会被遍历，绑什么都不会读）。
+	lastClusterBinding_ = binding;
+
+	VkDescriptorBufferInfo infos[4] = {
+		{ binding.buffer, binding.paramsOffset, binding.paramsSize ? binding.paramsSize : VK_WHOLE_SIZE },
+		{ binding.buffer, binding.rangesOffset, binding.rangesSize ? binding.rangesSize : VK_WHOLE_SIZE },
+		{ binding.buffer, binding.indicesOffset, binding.indicesSize ? binding.indicesSize : VK_WHOLE_SIZE },
+		{ binding.buffer, binding.lightsOffset, binding.lightsSize ? binding.lightsSize : VK_WHOLE_SIZE },
+	};
+
+	std::array<VkWriteDescriptorSet, 4> writes{};
+	for (uint32_t i = 0; i < 4; ++i)
+	{
+		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[i].dstSet = globalSets[frameInFlightIndex];
+		writes[i].dstBinding = 15 + i;
+		writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		writes[i].descriptorCount = 1;
+		writes[i].pBufferInfo = &infos[i];
+	}
+	vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+}
+
+void DescriptorManager::applyClusterBindings(VkDescriptorSet set)
+{
+	if (set == VK_NULL_HANDLE)
+		return;
+
+	const ClusterBinding& binding = lastClusterBinding_;
+	// 聚簇没开启时这四条也没有真数据，但 lighting.frag 静态使用它们，
+	// 所以照样要写一遍占位 —— 未更新过的描述符是验证层错误，不是"没用到"。
+	const VkBuffer buffer = binding.buffer != VK_NULL_HANDLE ? binding.buffer : getMaterialFactorBuffer();
+	const bool placeholder = binding.buffer == VK_NULL_HANDLE;
+	VkDescriptorBufferInfo infos[4] = {
+		{ buffer, placeholder ? 0 : binding.paramsOffset, placeholder ? VK_WHOLE_SIZE : (binding.paramsSize ? binding.paramsSize : VK_WHOLE_SIZE) },
+		{ buffer, placeholder ? 0 : binding.rangesOffset, placeholder ? VK_WHOLE_SIZE : (binding.rangesSize ? binding.rangesSize : VK_WHOLE_SIZE) },
+		{ buffer, placeholder ? 0 : binding.indicesOffset, placeholder ? VK_WHOLE_SIZE : (binding.indicesSize ? binding.indicesSize : VK_WHOLE_SIZE) },
+		{ buffer, placeholder ? 0 : binding.lightsOffset, placeholder ? VK_WHOLE_SIZE : (binding.lightsSize ? binding.lightsSize : VK_WHOLE_SIZE) },
+	};
+
+	std::array<VkWriteDescriptorSet, 4> writes{};
+	for (uint32_t i = 0; i < 4; ++i)
+	{
+		writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[i].dstSet = set;
+		writes[i].dstBinding = 15 + i;
+		writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		writes[i].descriptorCount = 1;
+		writes[i].pBufferInfo = &infos[i];
+	}
+	vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+}
 void DescriptorManager::setFrameTimelineCallbacks(std::function<uint64_t()> completed,
 	std::function<void(uint64_t)> waitUntil,
 	std::function<uint64_t()> lastSubmitted)

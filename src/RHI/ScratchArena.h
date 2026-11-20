@@ -67,6 +67,10 @@ public:
     // uniform buffer 必须传 256 —— 规范保证 minUniformBufferOffsetAlignment 不会超过它。
     Block allocate(VkDeviceSize bytes, VkDeviceSize alignment = 16);
 
+    // 在 beginFrame 之前取暂存（UBO 要在渲染图开帧前就填好）。frameSlot 与
+    // beginFrame 的参数同义；同一帧重复开帧不会重置偏移，所以渲染图照常开帧即可。
+    Block allocate(uint32_t frameSlot, VkDeviceSize bytes, VkDeviceSize alignment = 16);
+
     // 帧尾：把这一帧写过的槽位刷新一次。COHERENT 内存直接跳过（省掉一次驱动调用）。
     void flushIfNeeded();
 

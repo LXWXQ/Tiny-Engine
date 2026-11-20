@@ -1,4 +1,4 @@
-#include "Application.h"
+﻿#include "Application.h"
 
 // Win32 文件对话框（编辑器 Open/Save 用）。
 // 放在引擎侧而不是编辑器层：编辑器不应依赖 windows.h。
@@ -1671,7 +1671,6 @@ void FirstApp::recreateSwapchain(VkExtent2D framebufferExtent)
 }
 
 
-
 void FirstApp::createUniformBuffers()
 {
 	// D-4：每帧槽位一份 UBO。单份 UBO 在 CPU/GPU 重叠时会被下一帧的 memcpy
@@ -2060,12 +2059,17 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!tiny::aliasreport::selfTest())
 		throw std::runtime_error("AliasReport selfTest failed");
 
+	// TM-13：聚簇的球-盒相交、反投影与切片区间都是纯算术，先在这里证伪。
+	if (!LightSources::selfTest())
+		throw std::runtime_error("LightSources selfTest failed");
+	if (!ClusteredLighting::selfTest())
+		throw std::runtime_error("ClusteredLighting selfTest failed");
+
 	// F3：体素世界（建 3x3 chunk、射线打地、挖一格、放回、地面高度）。
 	if (!voxel::selfTest())
 		throw std::runtime_error("Voxel mesh selfTest failed");
 	if (!scene->voxelSelfTest())
 		throw std::runtime_error("Voxel scene selfTest failed");
-
 
 	// UX-19：窗口尺寸要按工作区收敛 —— 1366x768 的笔记本上 1920x1080 会把
 	// 状态栏和右下角面板推到屏幕外；150% 缩放下工作区只有 1280x720 更严重。
@@ -2759,7 +2763,79 @@ void FirstApp::render(float dt)
 		ubo.cameraPos = glm::vec4(scene->getCameraTransform().getTranslation(), 1.0f);
 		ubo.lightDirection = scene->getSettings().directionalLightDir;
 		ubo.lightColor = scene->getSettings().directionalLightColor;
-		ubo.numLights = 0;
+		// TM-13：点光源。以前这里是 ubo.numLights = 0 —— 引擎此前根本没有点光源，
+		// lighting.frag 里的逐灯循环是死代码。现在两条路径都填：
+		//   旧路径：灯塞进 UBO 的固定数组（最多 MAX_POINT_LIGHTS 盏）；
+		//   聚簇路径：灯数据走 SSBO，片元只遍历自己所在簇的灯表。
+		if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
+		{
+			// 相机未必看着原点（--selftest 的默认机位离原点很远），压力场必须铺在
+			// 相机前方，否则量到的是"一盏灯都没进视锥"。引擎的投影是 GL 式加 Y 翻转，
+			// 剪裁空间 w 等于视空间 z，可见几何的 z 为正 —— 所以视图矩阵的第三行
+			// 就是世界前方向量，不需要取负。
+			const glm::mat4 stressView = scene->getCamera().getView();
+			const glm::vec3 stressForward(stressView[0][2], stressView[1][2], stressView[2][2]);
+			const glm::vec3 stressCenter = scene->getCameraTransform().getTranslation()
+				+ stressForward * 22.0f + glm::vec3(0.f, 1.5f, 0.f);
+			lightSources.buildStressField(diagnosticsOptions.lightStress, stressCenter, 18.0f);
+		}
+
+		const auto& pointLights = lightSources.lights();
+		const uint32_t legacyLightCount = static_cast<uint32_t>(
+			std::min<size_t>(pointLights.size(), MAX_POINT_LIGHTS));
+		for (uint32_t i = 0; i < legacyLightCount; ++i)
+		{
+			ubo.pointLights[i].position = pointLights[i].positionRadius;
+			ubo.pointLights[i].color = pointLights[i].colorIntensity;
+		}
+		ubo.numLights = static_cast<int>(legacyLightCount);
+
+		ubo.clusterParams = glm::vec4(0.0f, 0.1f, 5000.0f, 0.0f);
+
+		if (diagnosticsOptions.clusteredLighting && !pointLights.empty() && renderExtent.width > 0)
+		{
+			clusteredLighting.build(pointLights, scene->getCamera().getView(), unjitteredProjection,
+				0.1f, 5000.0f, renderExtent.width, renderExtent.height);
+
+			const auto& clusterParams = clusteredLighting.params();
+			const auto& clusterRanges = clusteredLighting.ranges();
+			const auto& clusterIndices = clusteredLighting.indices();
+
+			auto& scratch = vulkanDevice->getScratch();
+			const tiny::ScratchArena::Block paramsBlock =
+				scratch.allocate(frameInFlight, sizeof(clusterParams), 256);
+			std::memcpy(paramsBlock.mapped, &clusterParams, sizeof(clusterParams));
+
+			const VkDeviceSize rangesBytes = clusterRanges.size() * sizeof(ClusterRange);
+			const tiny::ScratchArena::Block rangesBlock = scratch.allocate(frameInFlight, rangesBytes, 256);
+			std::memcpy(rangesBlock.mapped, clusterRanges.data(), rangesBytes);
+
+			// 索引可能为空（没有一盏灯落进任何簇），但仍然要给描述符一个合法范围。
+			const VkDeviceSize indicesBytes =
+				std::max<VkDeviceSize>(clusterIndices.size() * sizeof(uint32_t), 4);
+			const tiny::ScratchArena::Block indicesBlock = scratch.allocate(frameInFlight, indicesBytes, 256);
+			if (!clusterIndices.empty())
+				std::memcpy(indicesBlock.mapped, clusterIndices.data(),
+					clusterIndices.size() * sizeof(uint32_t));
+
+			const VkDeviceSize lightsBytes = pointLights.size() * sizeof(GpuPointLight);
+			const tiny::ScratchArena::Block lightsBlock = scratch.allocate(frameInFlight, lightsBytes, 256);
+			std::memcpy(lightsBlock.mapped, pointLights.data(), lightsBytes);
+
+			DescriptorManager::ClusterBinding binding;
+			binding.buffer = paramsBlock.buffer;
+			binding.paramsOffset = paramsBlock.offset;
+			binding.paramsSize = paramsBlock.size;
+			binding.rangesOffset = rangesBlock.offset;
+			binding.rangesSize = rangesBlock.size;
+			binding.indicesOffset = indicesBlock.offset;
+			binding.indicesSize = indicesBlock.size;
+			binding.lightsOffset = lightsBlock.offset;
+			binding.lightsSize = lightsBlock.size;
+			descriptorManager->updateClusterBindings(frameInFlight, binding);
+
+			ubo.clusterParams = glm::vec4(1.0f, 0.1f, 5000.0f, 0.0f);
+		}
 		ubo.exposure = scene->getSettings().exposure;
 
 		// F6：级联矩阵每帧重算（相机一动阴影就要跟），然后写进 UBO 尾部。
@@ -2963,6 +3039,16 @@ void FirstApp::finalizeDiagnostics()
     // TM-10：准备 / 录制各自的每帧耗时。渲染图此刻还活着，统计才有内容。
     if (diagnosticsOptions.statsRenderGraph)
         renderGraph->reportPrepareStats();
+
+    // TM-13：聚簇构建的统计（使用簇数 / 最大簇 / 因每簇上限丢弃的灯数）。
+    if (diagnosticsOptions.statsClusters)
+    {
+        std::printf("[Clusters] 构建 %llu 次 | 使用 %u 簇 | 最大簇 %u 盏 | 丢弃 %llu | 灯 %zu 盏\n",
+            static_cast<unsigned long long>(clusteredLighting.buildCount()),
+            clusteredLighting.usedClusters(), clusteredLighting.maxClusterSize(),
+            static_cast<unsigned long long>(clusteredLighting.dropped()),
+            lightSources.size());
+    }
 
     diag::printValidationSummary();
 
