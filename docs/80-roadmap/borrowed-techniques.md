@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~251 行
+size: ~262 行
 updated: 2026-11-20
 ---
 
@@ -58,7 +58,10 @@ TM-01 与 TM-02 各留了一条尾巴，都不阻塞：**统计口径**（`--sta
 
 T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表）已于 2026-11-19 完成并移入 §3，这一档不再有待办。
 
-下一批从 §6 的 T3 开始。T1 三项、TM-06 的统计部分、TM-07、TM-08 的第一步、TM-10、TM-12 都已落地；TM-09（跨队列 EXCLUSIVE）、TM-11（描述符三档）、TM-06 的按需建管线、TM-08 的第二步经数据或结构判定不做。建议顺序改为 TM-13（clustered lighting）→ TM-14（SPD 降采样链），其余穿插。TM-09（跨队列 EXCLUSIVE 所有权转移）已评估、判定本结构下不做，理由与验证层报文见[决策 28](../10-architecture/decisions.md)。
+**清单已收口**：TM-06（统计部分）、TM-07、TM-08（第一步）、TM-10、TM-12、TM-13（两步）、TM-16、TM-17、TM-18、TM-19 均已落地；
+TM-09（跨队列 EXCLUSIVE 所有权转移）、TM-11（描述符三档）、TM-06 的按需建管线、TM-08 的第二步、TM-14（SPD 降采样链）、TM-18 的实际启用，
+均经数据或结构判定不做，理由见[决策 28 / 29 / 27 / 35 / 39](../10-architecture/decisions.md)。
+唯一还没开工的是 **TM-15（场景排序与批处理）**，它的触发条件是"前向 Pass 超过 5 个或透明物体超过 2000"，当前都没到。
 
 
 ## 5. T2：要改热路径
@@ -203,11 +206,19 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 ### TM-18 transient attachment
 
-- **现状**：`src/RHI/` 下 `LAZILY_ALLOCATED`、`TransientAttachment`、`ImageDomain` 均 0 命中；所有中间目标都是普通 device-local image。
+- **状态**：已完成（只做能力探测，不改分配）。见[决策 39](../10-architecture/decisions.md)。
+- **现状（当初的判断）**：`src/RHI/` 下 `LAZILY_ALLOCATED`、`TransientAttachment`、`ImageDomain` 均 0 命中；所有中间目标都是普通 device-local image。
 - **参考**：`vulkan/render_pass.hpp:240 TransientAttachmentAllocator`、`:248 request_attachment(width, height, format, index, samples, layers)`；`vulkan/image.hpp:252-255` 的 `enum class ImageDomain { ..., Transient }`、`:358 transient_render_target()`；`RenderPassOpFlags` 里的 `ENABLE_TRANSIENT_STORE/LOAD_BIT`。
-- **落地**：与 TM-08 同一底层（生命周期区间），**先做别名**；transient 只在移动端有真实收益（桌面没有 tiler）。
-- **验收**：桌面端只做能力探测（`VK_FORMAT_FEATURE_LAZILY_ALLOCATED`），不改分配策略；真实启用等移动端目标出现。
-- **预估**：探测 0.5 天。
+- **已完成**：`src/RHI/TransientProbe.h/.cpp` + `--probe-transient`。判据只有两条 ——
+  ① 驱动接受用法组合（`vkGetPhysicalDeviceImageFormatProperties` 用 `TRANSIENT_ATTACHMENT | COLOR_ATTACHMENT | INPUT_ATTACHMENT`；
+  深度目标换 `DEPTH_STENCIL_ATTACHMENT`）；② 设备上存在 `VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT` 的内存类型。
+  **本页原先写的 `VK_FORMAT_FEATURE_LAZILY_ALLOCATED` 并不存在**（第一次实现就撞 `error C2065`），已按代码改正。
+- **结论（本机 RTX 2070 + AMD 核显）**：6 个候选格式第 ① 条全部"接受"，第 ② 条 **0 个**惰性内存类型 →
+  桌面端没有任何收益：没有 tile memory 可省带宽，驱动还会把 `TRANSIENT_ATTACHMENT` 退化成普通分配。
+- **验收（已满足）**：`--probe-transient` 打印 6 行表（目标 / 格式 / 用法 / 结论）+ "本设备 LAZILY_ALLOCATED 内存类型：0 个"；
+  `--selftest 30` 里 `[Transient] selfTest PASS`、`errors=0`、stderr 0 字节。
+- **何时重新评估**：出现移动端 / 带 tile 的集显目标，或 WSI 换成 Android surface；届时才改分配器，
+  并按 TM-08 的生命周期区间挑目标。
 
 ### TM-19 格式与能力表
 

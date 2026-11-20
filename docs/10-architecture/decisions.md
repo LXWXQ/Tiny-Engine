@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~493 行
+size: ~529 行
 updated: 2026-11-20
 ---
 
@@ -491,3 +491,39 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 `[Events] selfTest PASS`；`--selftest 60 --resize-test --validation-features sync`
 连做 4 次交换链重建 + 2 次动态分辨率，`errors=0`、stderr 0 字节；
 `--resize-test --screenshot` 在 5 次重建后仍能写出 1920x1080 PNG。
+
+## 决策 39：惰性分配只探测不改分配（TM-18）
+
+**问题**：移动端 GPU 的 tile memory 可以承载"用完即丢"的中间目标
+（`VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT` + `LAZILY_ALLOCATED` 内存），
+省带宽也省显存。本项目的中间目标（HDR 场景、TAA 输出、Bloom 金字塔、SSAO 两张）
+每帧都在，看起来是候选。
+
+**先纠正一处**：手头资料里写的"格式支持惰性分配（`VK_FORMAT_FEATURE_LAZILY_ALLOCATED_BIT`）"
+并不存在 —— 第一次实现就撞 `error C2065`。Vulkan 只有两条判据：
+
+1. 驱动接受这个用法组合：`vkGetPhysicalDeviceImageFormatProperties(...,
+   TRANSIENT_ATTACHMENT | COLOR_ATTACHMENT | INPUT_ATTACHMENT, ...)` 返回 `VK_SUCCESS`；
+   深度目标要换成 `DEPTH_STENCIL_ATTACHMENT`，把深度格式按颜色用法去问会被直接拒绝
+   （实测第一版就报"不接受"，属于问法错，不是能力缺失）。
+2. 设备上真的有 `VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT` 的内存类型。
+
+**本机实测（RTX 2070 Ti + AMD 核显，1920x1080）**：6 个候选格式第 1 条全部"接受"，
+第 2 条是 **0 个**惰性内存类型 → 结论"用法被接受，但本设备没有惰性分配内存类型"。
+
+**为什么不改分配**：没有那个内存类型时，`TRANSIENT_ATTACHMENT` 只会让驱动退化成
+普通 `device-local` 分配 —— 显存一分不省，而"这个目标能不能和别的目标重叠"的
+生命周期推理（TM-08 已经量过：本结构下可省 0）全都要重做一遍。收益为零、风险非零。
+
+**做了什么**：`src/RHI/TransientProbe.h/.cpp`（两条判据 + 三种结论 + 空设备安全）与
+`--probe-transient`（打印 6 个候选目标，然后直接退出，不改任何分配策略）。
+
+**何时重新评估**：出现移动端 / 带 tile 的集显目标；或 WSI 变成 Android surface。
+那时才需要把中间目标改成 `TRANSIENT_ATTACHMENT`，并按 TM-08 的生命周期区间挑目标。
+
+**不引入的**：运行期按设备能力切换分配路径（两条路径都要维护，收益只在移动端）；
+`VK_IMAGE_CREATE_ALIAS_BIT` 的实际绑定（那是 TM-08 第二步的事，已判定不做）。
+
+**验证**：`--probe-transient` 打印 6 行表 + "本设备 LAZILY_ALLOCATED 内存类型：0 个"；
+`--selftest 30` 里 `[Transient] selfTest PASS`、`errors=0`、stderr 0 字节；
+`--selftest 60 --gpu-scene` 96.9 FPS、`errors=0`。

@@ -35,7 +35,7 @@ updated: 2026-11-20
 | `PipelineStats.h/.cpp` | 图形状态字（`GraphicsStateKey`，8 个语义字段 + 管线布局）与建管线计时；`--stats-pipelines` 打印数量 / 耗时 / 状态种类 / 完全相同的管线 | [diagnostics](../60-debug-profiling/diagnostics.md) 第 10 节 | diagnostics |
 | `ScratchArena.h/.cpp` | 每帧暂存区：按帧槽轮转、bump 分配、uniform 256 对齐、扩容时旧块进 retired、COHERENT 跳过刷新 | [resource-lifetime](../10-architecture/resource-lifetime.md) 第 8 节 | resource-lifetime |
 | `FormatTable.h/.cpp` | 格式名字/字节数/能力位（颜色·深度·采样·存储·blit·线性）与 `--print-formats` | [decisions](../10-architecture/decisions.md) 决策 36 | decisions |
-
+| `TransientProbe.h/.cpp` | 惰性分配两条判据（用法被接受 + 存在 `LAZILY_ALLOCATED` 内存类型）与 `--probe-transient` | [decisions](../10-architecture/decisions.md) 决策 39 | decisions |
 | `RenderGraphAlias.h/.cpp` | 资源别名化的只读报告：按 Pass 序号算 `firstWrite` / `lastUse`，线性扫描 best-fit 装箱（格式 / 尺寸 / mip / 层数全同才合并）；区分渲染图持有与导入目标；`--alias-report` | [diagnostics](../60-debug-profiling/diagnostics.md) 第 11 节、[borrowed-techniques](../80-roadmap/borrowed-techniques.md) TM-08 | diagnostics |
 ## 2. Render 层（`src/Render/`）
 

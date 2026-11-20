@@ -72,6 +72,8 @@ namespace diag
     bool hotReload = false;
     // TM-17：打印 latched 事件（交换链重建 / 渲染目标尺寸）的当前值与订阅数
     bool printEvents = false;
+    // TM-18：探测惰性分配（transient attachment）能否在本机启用，打印后退出
+    bool probeTransient = false;
 
         // TM-13：点光源与聚簇光照。lightStress > 0 时铺这么多盏灯（0 = 不加灯），
         // 用来量"512 盏灯下前向还能不能跑满 60 FPS"。

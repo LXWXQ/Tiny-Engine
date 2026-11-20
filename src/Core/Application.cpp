@@ -24,6 +24,7 @@
 #include "RHI/ShaderReload.h"
 #include "RHI/ScratchArena.h"
 #include "RHI/FormatTable.h"
+#include "RHI/TransientProbe.h"
 #include "RHI/RenderGraphAlias.h"
 #include <filesystem>
 #include <fstream>
@@ -1856,6 +1857,25 @@ tiny::formats::print(tiny::formats::query(vulkanDevice->getPhysicalDevice(), for
 return;
 }
 
+	// TM-18：--probe-transient 只回答一个问题 —— 本机能不能用惰性分配。
+	// 桌面独显几乎总是「没有那个内存类型」，所以打印完就退出，不改任何分配策略。
+	if (diagnosticsOptions.probeTransient)
+	{
+		const std::vector<tiny::transient::Target> targets = {
+			{ "HDR 场景", kHdrSceneFormat },
+			{ "TAA 输出", kHdrSceneFormat },
+			{ "Bloom 金字塔", kHdrSceneFormat },
+			{ "SSAO 输出", VK_FORMAT_R8_UNORM },
+			{ "SSAO 模糊源", VK_FORMAT_R32G32B32A32_SFLOAT },
+			{ "深度", vulkanDevice->findDepthFormat(), true },
+		};
+		const uint32_t lazyTypes =
+			tiny::transient::countLazilyAllocatedMemoryTypes(vulkanDevice->getPhysicalDevice());
+		tiny::transient::print(
+			tiny::transient::probe(vulkanDevice->getPhysicalDevice(), targets), lazyTypes, stdout);
+		return;
+	}
+
 	// TM-16：--print-assets 打三个根的解析结果与热重载登记数，然后**继续**跑 ——
 	// 它回答的是"现在到底在找哪个目录"，用户往往紧接着就要看画面。
 	if (diagnosticsOptions.printAssets)
@@ -2169,6 +2189,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// TM-17：latched 事件（补发 / 退订 / 顺序 / 回调里退订）。
 	if (!tiny::events::selfTest())
 		throw std::runtime_error("EventBus selfTest failed");
+
+	// TM-18：惰性分配的三条判据组合（纯逻辑，不需要真设备）。
+	if (!tiny::transient::selfTest())
+		throw std::runtime_error("TransientProbe selfTest failed");
 
 	// TM-13：聚簇的球-盒相交、反投影与切片区间都是纯算术，先在这里证伪。
 	if (!LightSources::selfTest())
