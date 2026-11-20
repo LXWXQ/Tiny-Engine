@@ -51,6 +51,14 @@ void ScreenshotCapture::init(VkDevice dev, VmaAllocator alloc, VkFormat fmt,
 
     createStaging(extent);
     enabled = (stagingBuffer != VK_NULL_HANDLE);
+
+    // TM-17：只在真正启用时订阅 —— 关掉截图时连一个空的回调都不注册，
+    // 保持「零开销守卫」那条性质（stagedBytes()==0 的检查仍然成立）。
+    if (enabled)
+    {
+        swapchainSubscription = tiny::events::bus().subscribe<tiny::events::SwapchainRecreated>(
+            [this](const tiny::events::SwapchainRecreated& event) { onSwapchainRecreated(event); });
+    }
     if (enabled)
         std::cout << "[Diag] screenshot enabled: " << extent.width << "x" << extent.height << "\n";
 }
@@ -91,6 +99,13 @@ void ScreenshotCapture::createStaging(VkExtent2D extent)
         return;
     }
     stagingMapped = info.pMappedData;
+}
+
+void ScreenshotCapture::onSwapchainRecreated(const tiny::events::SwapchainRecreated& event)
+{
+    // 只关心尺寸：格式一变说明这次重建换了 swapchain 格式，staging buffer
+    // 的内容布局也会变，但重建流程里本来就会重新 init，这里按尺寸走够用。
+    onResize(VkExtent2D{ event.swapchainWidth, event.swapchainHeight });
 }
 
 void ScreenshotCapture::onResize(VkExtent2D extent)

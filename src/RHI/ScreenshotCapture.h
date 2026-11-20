@@ -3,6 +3,8 @@
 #include "RHI/VmaConfig.h"
 #include <vk_mem_alloc.h>
 #include "RHI/VmaNaming.h"
+#include "Core/AppEvents.h"
+#include "Core/EventBus.h"
 #include <cstdint>
 #include <string>
 
@@ -47,8 +49,14 @@ public:
     // 提交完成（调用方需先 vkDeviceWaitIdle）后写出 PNG。
     bool writePng(const std::string& path);
 
+    // TM-17：交换链重建时自己在事件里跟上（以前由 Application 手写调用）。
+    void onSwapchainRecreated(const tiny::events::SwapchainRecreated& event);
+
 private:
     void createStaging(VkExtent2D extent);
+
+    // 订阅句柄：RAII，析构即退订。
+    tiny::events::Subscription swapchainSubscription;
 
     VkDevice device = VK_NULL_HANDLE;
     VmaAllocator allocator = VK_NULL_HANDLE;

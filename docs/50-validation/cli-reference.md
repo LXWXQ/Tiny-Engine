@@ -4,7 +4,7 @@ title: 命令行参数全表
 type: validation
 scope: main.cpp、src/Core/CliCatalog.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~176 行
+size: ~177 行
 updated: 2026-11-20
 ---
 
@@ -113,6 +113,7 @@ updated: 2026-11-20
 | `--print-formats` | 打印本机对引擎用到的十个格式的能力（字节/颜色/深度/采样/存储/blit/线性）后退出 | 0 |
 | `--bloom` | 强制打开 Bloom（默认跟随场景组件；量测与演示用） | 0 |
 | `--print-assets` | 打印可执行目录与 shader / 资源 / 配置三个根的解析结果（继续跑，配 `--selftest N` 看） | 0 |
+| `--print-events` | 打印 latched 事件的当前值与订阅者数量（交换链重建 / 渲染目标尺寸） | 0 |
 | `--hot-reload` | 每帧检查 `.spv` 的修改时间，变了就重建对应管线（改 binding 数量需重启） | 0 |
 
 `--validation-features` 的取值：

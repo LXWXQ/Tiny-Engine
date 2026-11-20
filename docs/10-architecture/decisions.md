@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~450 行
+size: ~493 行
 updated: 2026-11-20
 ---
 
@@ -448,3 +448,46 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 **不引入的**：虚拟文件系统层（内存挂载、目录遍历抽象）；把 `Resources/` 打成 pak 后
 再从 pak 里按协议读（`AssetPack` 已存在，但那是另一件事）。
 
+## 决策 38：只用 latched 事件解「谁先初始化」，immediate 类不做（TM-17）
+
+**问题**：交换链重建那条路上有十一步，顺序写死在
+`Application::recreateSwapchain()` 里。加一个 Pass 就得记得去那里补一行
+`resizeAll`；忘了就是描述符指向旧尺寸、或者截图还按旧 extent 拷。这类
+「谁先初始化 / 谁先被通知」的耦合，编译器一句都不提醒。
+
+**做法**：引入一个极小的 latched 事件总线（`src/Core/EventBus.h/.cpp`），
+只做「状态变化广播」这一种语义：
+
+- **事件值会被记住**。后订阅的人立刻收到一次补发，不用等下一次发布 —— 这
+  正是解「初始化顺序」的关键：订阅晚的人也能拿到已经发生的事实。
+- `Subscription` 是 RAII：析构自动退订，订阅者不用在析构里记得清理。
+- 发布时先拷贝订阅列表再回调，所以回调里订阅/退订都是安全的（自检里有一条
+  专门盯这个）。
+- 目前只有两个事件：`SwapchainRecreated`、`RenderTargetsResized`
+  （`src/Core/AppEvents.h`，载荷只用整数，不让 Core 的订阅者为了一个事件
+  把 `vulkan.h` 再 include 一遍）。
+
+**删掉的手工调用点**（这就是验收口径）：
+
+| 以前 | 现在 |
+|---|---|
+| `recreateSwapchain()` 里 `screenshotCapture.onResize(extent)` | `ScreenshotCapture::init()` 里订阅 `SwapchainRecreated` |
+| `recreateSwapchain()` 里 `renderPipeline.resizeAll(renderExtent)` | `RenderPipeline::attachResizeEvents()` 订阅两个尺寸事件 |
+| `recreateRenderTargets()` 里 `renderPipeline.resizeAll(renderExtent)` | 发布 `RenderTargetsResized` |
+
+`RenderPipeline::attachResizeEvents()` 必须在 `initAll()` 之后调用：Pass 的
+`resize()` 会重建附件与导入视图，早于 `init()` 调等于拿半初始化的对象干活。
+这条顺序现在写在一个函数里、有注释，而不是散落在 Application 的两条路径上。
+
+**为什么不把 `Renderer::onSwapchainRecreated()` 也改成订阅**：它重建的是
+「每张影像一个 renderFinished 信号量」，而发布事件之后订阅者可能立刻用新的
+尺寸重建附件 —— 信号量必须先于广播就位。它保留在 `publish` 之前显式调用，
+是**有意为之的顺序**，不是遗漏。
+
+**不引入的**：immediate 类事件（键盘/鼠标：需要每帧分发、消费与顺序，属于
+输入系统的活）；事件优先级与取消；跨线程发布（当前所有发布点都在主线程）。
+
+**验证**：`--print-events` 打出两个事件的值与订阅数；`--selftest 30` 里
+`[Events] selfTest PASS`；`--selftest 60 --resize-test --validation-features sync`
+连做 4 次交换链重建 + 2 次动态分辨率，`errors=0`、stderr 0 字节；
+`--resize-test --screenshot` 在 5 次重建后仍能写出 1920x1080 PNG。

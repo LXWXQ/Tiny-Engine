@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~243 行
+size: ~251 行
 updated: 2026-11-20
 ---
 
@@ -187,11 +187,19 @@ T1 的三项（TM-03 环形临时表、TM-04 对象池、TM-05 设备怪癖表�
 
 ### TM-17 latched 事件
 
-- **现状**：没有事件层，初始化顺序靠 `Application` 构造函数里的手工次序（[weak-points](../10-architecture/weak-points.md) 第 6 条）。
-- **参考**：`event/`（全局事件管理器，分 latched 与 immediate 两类；新注册者会立刻收到已发生的 latched 事件；`EVENT_MANAGER_REGISTER_LATCH` / `EVENT_MANAGER_REGISTER`）。
-- **落地**：只引入 latched 一类（device created / swapchain created / config loaded），Pass 与编辑器面板按需订阅。
-- **验收**：删掉至少一处"谁先初始化"的手工调用点；`--resize-test` 通过；验证层 0 errors。
-- **预估**：2 天，风险低。
+- **状态**：已完成（只做 latched 一类）。
+- **现状（当初的判断）**：没有事件层，初始化顺序靠 `Application` 构造函数里的手工次序。
+- **已完成**：`src/Core/EventBus.h/.cpp`（latched 总线 + RAII 订阅）+ `src/Core/AppEvents.h`
+  两个事件（`SwapchainRecreated`、`RenderTargetsResized`）；删掉三处手工调用
+  （`screenshotCapture.onResize`、`renderPipeline.resizeAll` 两条路径）；
+  `--print-events` 打值与订阅数；自检四边界（补发 / 退订 / 顺序 / 回调里退订）。
+- **结论**：latched 语义正好解「后订阅者也要知道已经发生的事情」，而不必引入
+  输入事件那套分发/消费；`Renderer::onSwapchainRecreated()` 仍显式调用，因为
+  信号量必须先于广播就位（见[决策 38](../10-architecture/decisions.md)）。
+- **验收（已满足）**：`--selftest 60 --resize-test --validation-features sync`
+  （4 次交换链重建 + 2 次动态分辨率）`errors=0`、stderr 0 字节；
+  `--resize-test --screenshot` 在 5 次重建后仍写出 1920x1080 PNG。
+- **不引入**：immediate 类（键盘/鼠标）、事件优先级、跨线程发布。
 
 ### TM-18 transient attachment
 

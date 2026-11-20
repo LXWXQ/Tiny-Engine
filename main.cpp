@@ -227,6 +227,7 @@ bool audioSpatialTest = false;
         else if (arg == "--print-formats") diagOptions.printFormats = true;
         else if (arg == "--print-assets") diagOptions.printAssets = true;
         else if (arg == "--hot-reload") diagOptions.hotReload = true;
+        else if (arg == "--print-events") diagOptions.printEvents = true;
         else if (arg == "--no-ssao")  noSSAO = true;
         else if (arg == "--no-taa")   noTAA = true;
         else if (arg == "--no-water") noWater = true;

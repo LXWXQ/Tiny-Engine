@@ -19,6 +19,8 @@
 #include "RHI/PipelineStats.h"
 #include "Core/CliCatalog.h"
 #include "Core/AssetPath.h"
+#include "Core/AppEvents.h"
+#include "Core/EventBus.h"
 #include "RHI/ShaderReload.h"
 #include "RHI/ScratchArena.h"
 #include "RHI/FormatTable.h"
@@ -957,6 +959,10 @@ renderPipeline.addPass(std::move(viewModelPass));
 
 	renderPipeline.initAll();
 
+	// TM-17：交换链/渲染目标尺寸变化改成事件通知。必须在 initAll 之后订阅：
+	// Pass 的 resize 会重建附件与导入视图，早于 init 调等于拿半初始化的对象干活。
+	renderPipeline.attachResizeEvents();
+
 	// GeometrySystem 是 GeometryPass::init 里创建的，只能在 initAll 之后注入。
 	if (reflectionPassPtr != nullptr && geometryPassPtr != nullptr)
 		reflectionPassPtr->setGeometrySystem(geometryPassPtr->getGeometrySystem());
@@ -1632,7 +1638,12 @@ void FirstApp::recreateRenderTargets(VkExtent2D renderExtent)
 	for (auto& gBuffer : gBuffers)
 	gBuffer->resize(renderExtent);
 
-	renderPipeline.resizeAll(renderExtent);
+	// TM-17：G-Buffer 已按新尺寸重建，其余 Pass 各自订阅了这个事件。
+	// 以前这里是 renderPipeline.resizeAll(renderExtent)：每加一个 Pass 都得
+	// 记得让 Application 认识它，忘了就是花屏。
+	tiny::events::bus().publish(tiny::events::RenderTargetsResized{
+		renderExtent.width, renderExtent.height });
+
 	rebuildGlobalDescriptors();
 	currentRenderExtent = renderExtent;
 
@@ -1651,7 +1662,8 @@ void FirstApp::recreateSwapchain(VkExtent2D framebufferExtent)
 
 	vulkanSwapchain->recreate(framebufferExtent);
 	renderer->onSwapchainRecreated();
-	screenshotCapture.onResize(vulkanSwapchain->getSwapChainExtent());
+	// TM-17：截图用的 staging buffer 由 ScreenshotCapture 自己订阅
+	// SwapchainRecreated 后重建，不再在这里手写一行 onResize。
 
     // ImGui's Vulkan backend caches image count and output format. Rebuild it
     // only with the swapchain; dynamic resolution keeps the same backend.
@@ -1679,7 +1691,18 @@ void FirstApp::recreateSwapchain(VkExtent2D framebufferExtent)
 	for (auto& gBuffer : gBuffers)
 	gBuffer->resize(renderExtent);
 
-	renderPipeline.resizeAll(renderExtent);
+	// TM-17：交换链尺寸 + 渲染目标尺寸一次广播。订阅者（RenderPipeline、
+	// ScreenshotCapture）各自跟上；以前这里是 resizeAll 加 onResize 两行
+	// 手工调用，顺序错了就花屏。
+	tiny::events::bus().publish(tiny::events::SwapchainRecreated{
+		vulkanSwapchain->getSwapChainExtent().width,
+		vulkanSwapchain->getSwapChainExtent().height,
+		renderExtent.width,
+		renderExtent.height,
+		vulkanSwapchain->imageCount(),
+		static_cast<int32_t>(vulkanSwapchain->getSwapChainImageFormat()),
+		false });
+
 	rebuildGlobalDescriptors();
 	currentRenderExtent = renderExtent;
 
@@ -1840,6 +1863,10 @@ return;
 		tiny::assetpath::print(stdout);
 		tiny::hotreload::report(stdout);
 	}
+
+	// TM-17：--print-events 打 latched 事件的当前值与订阅者数量。
+	if (diagnosticsOptions.printEvents)
+		tiny::events::print(stdout);
 
 	// 编辑器在这里惰性初始化，而不是构造函数里。
 	// 原因：main() 是"先构造 FirstApp，再按命令行参数调 setEditorEnabled"，
@@ -2067,6 +2094,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 		tiny::hotreload::report(stdout);
 	}
 
+	// TM-17：--print-events 打 latched 事件的当前值与订阅者数量。
+	if (diagnosticsOptions.printEvents)
+		tiny::events::print(stdout);
+
 
 	// 自检路径也要能带编辑器跑（--editor --selftest 是无头验证编辑器 UI 的唯一手段）。
 	if (editorRequested && !editorLayer)
@@ -2134,6 +2165,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// TM-19：格式表的名字映射、字节数与能力位映射（纯逻辑，不需要真设备）。
 	if (!tiny::formats::selfTest())
 		throw std::runtime_error("FormatTable selfTest failed");
+
+	// TM-17：latched 事件（补发 / 退订 / 顺序 / 回调里退订）。
+	if (!tiny::events::selfTest())
+		throw std::runtime_error("EventBus selfTest failed");
 
 	// TM-13：聚簇的球-盒相交、反投影与切片区间都是纯算术，先在这里证伪。
 	if (!LightSources::selfTest())

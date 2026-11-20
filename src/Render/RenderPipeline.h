@@ -1,6 +1,8 @@
 #pragma once
 #include "IRenderPass.h"
 #include "RHI/RenderGraph.h"
+#include "Core/AppEvents.h"
+#include "Core/EventBus.h"
 
 // 有序持有若干 IRenderPass，逐通道执行。
 // D-1(b) 起改为「注册进渲染图」，而不是各自录制命令。
@@ -23,6 +25,29 @@ public:
     void resizeAll(VkExtent2D extent)
     {
         for (auto& pass : passes) pass->resize(extent);
+    }
+
+    // TM-17：订阅"尺寸变了"，不再由 Application 手写 resizeAll。
+    // 必须在 initAll() 之后调用：Pass 的 resize 会重建附件与导入视图，
+    // 早于 init 调等于拿半初始化的对象干活。订阅晚也能拿到已经发生过的事件
+    // （latched），所以顺序由这里显式控制，而不是靠"谁先构造"。
+    void attachResizeEvents()
+    {
+        swapchainSubscription = tiny::events::bus().subscribe<tiny::events::SwapchainRecreated>(
+            [this](const tiny::events::SwapchainRecreated& event)
+            {
+                if (passes.empty())
+                    return;
+                resizeAll(VkExtent2D{ event.renderWidth, event.renderHeight });
+            });
+
+        targetsSubscription = tiny::events::bus().subscribe<tiny::events::RenderTargetsResized>(
+            [this](const tiny::events::RenderTargetsResized& event)
+            {
+                if (passes.empty())
+                    return;
+                resizeAll(VkExtent2D{ event.width, event.height });
+            });
     }
 
     // 显式销毁所有 Pass。之所以不依赖成员的自动析构：
@@ -51,4 +76,6 @@ public:
 
 private:
     std::vector<std::unique_ptr<IRenderPass>> passes;
+    tiny::events::Subscription swapchainSubscription;
+    tiny::events::Subscription targetsSubscription;
 };

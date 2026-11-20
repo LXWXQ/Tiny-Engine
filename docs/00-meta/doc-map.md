@@ -4,7 +4,7 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~199 行
+size: ~200 行
 updated: 2026-11-20
 ---
 
@@ -77,6 +77,7 @@ updated: 2026-11-20
 | `JobSystem.h/.cpp` | worker pool、`submit`、`parallelFor` | [jobsystem](../30-systems/jobsystem.md) | jobsystem |
 | `TemporaryHashmap.h/.cpp` / `IntrusiveList.h` | 按帧存活的 key→对象表：RingSize 个环 + 固定桶侵入式哈希 + 池；命中老环时必须提升到当前环 | [borrowed-techniques](../80-roadmap/borrowed-techniques.md) 决策 25 | decisions |
 | `ObjectPool.h` | 分块对齐分配 + vacants 栈 + placement new；对象必须显式 `destroy()`，池不管生命周期 | [borrowed-techniques](../80-roadmap/borrowed-techniques.md) 决策 25 | decisions |
+| `EventBus.h/.cpp` / `AppEvents.h` | latched 事件总线（后订阅者收到补发）+ 两个尺寸事件；交换链重建时订阅者各自跟上 | [decisions](../10-architecture/decisions.md) 决策 38 | decisions |
 | `CliCatalog.h/.cpp` | 命令行选项表（分组 / 开关 / 说明）的单一来源；`--help`、`--list-options` 与编辑器「帮助 → 命令行选项」面板都渲染它 | [cli-reference](../50-validation/cli-reference.md) 第 6 节 | cli-reference |
 | `AssetPath.h/.cpp` | 运行时资产根探测与 `asset://` / `shader://` / `config://` 解析；构建期路径优先、失效才按锚点回溯 | [decisions](../10-architecture/decisions.md) 决策 37 | decisions |
 | `ShaderReload.h/.cpp` | 轮询 `.spv` 的 mtime 重建管线（`--hot-reload`）；只重建 VkPipeline 与模块 | [build](../40-build/build.md) §3.5 | build |
