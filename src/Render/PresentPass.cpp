@@ -1,4 +1,4 @@
-﻿#include "PresentPass.h"
+#include "PresentPass.h"
 #include "AssetPaths.h"
 #include <stdexcept>
 

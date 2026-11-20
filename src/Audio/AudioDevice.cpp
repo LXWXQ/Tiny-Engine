@@ -1,4 +1,4 @@
-﻿
+
 #include "Audio/AudioDevice.h"
 
 #include <atomic>

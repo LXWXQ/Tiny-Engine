@@ -1,4 +1,4 @@
-﻿#include "ReflectionPass.h"
+#include "ReflectionPass.h"
 
 #include "Core/DescriptorManager.h"
 #include "Render/GeometrySystem.h"

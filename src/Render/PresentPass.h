@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "IRenderPass.h"
 #include "RHI/Device.h"
 #include "RHI/Pipeline.h"

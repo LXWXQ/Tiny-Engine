@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Scene/Components.h"
 #include <GLFW/glfw3.h>
 

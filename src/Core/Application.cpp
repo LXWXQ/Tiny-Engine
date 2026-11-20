@@ -1,4 +1,4 @@
-﻿#include "Application.h"
+#include "Application.h"
 
 // Win32 文件对话框（编辑器 Open/Save 用）。
 // 放在引擎侧而不是编辑器层：编辑器不应依赖 windows.h。

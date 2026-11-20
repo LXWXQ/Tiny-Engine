@@ -1,0 +1,19 @@
+# 文本文件在仓库里统一存 LF，检出到 Windows 工作区时统一为 CRLF。
+# 之前有些文件是纯 LF、有些是 CRLF、还有 10 个带 BOM，diff 里会周期性出现整文件变化。
+* text=auto eol=crlf
+
+# 二进制：不做行尾转换，也不做文本差异比较
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.tga  binary
+*.dds  binary
+*.glb  binary
+*.bin  binary
+*.tpack binary
+*.spv  binary
+*.pdb  binary
+*.lib  binary
+*.exe  binary
+*.obj  binary

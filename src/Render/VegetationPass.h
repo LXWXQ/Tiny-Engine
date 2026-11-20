@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Core/DescriptorManager.h"
 #include "Core/FrameInFlight.h"

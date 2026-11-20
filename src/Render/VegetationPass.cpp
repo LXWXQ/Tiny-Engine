@@ -1,4 +1,4 @@
-﻿#include "VegetationPass.h"
+#include "VegetationPass.h"
 
 #include "AssetPaths.h"
 #include "RHI/GBuffer.h"
