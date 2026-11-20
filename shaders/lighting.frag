@@ -220,7 +220,9 @@ vec3 CalcDirectionalLight(vec3 N, vec3 V, vec3 albedo, float roughness, float me
 
 vec3 CalcPointLight(PointLight light, vec3 N, vec3 fragPos, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0) {
     vec3 lightPos = light.position.xyz;
-    float lightRadius = 30.0;
+    // 半径取 position.w（GpuPointLight.positionRadius 的 w），0 时回退到 30 ——
+    // 以前这里硬编码 30，聚簇路径按灯自带半径算，两条路径的覆盖范围对不上。
+    float lightRadius = light.position.w > 0.0 ? light.position.w : 30.0;
     vec3 lightColor = light.color.xyz;
     float lightIntensity = light.color.w;
     vec3 L = lightPos - fragPos;

@@ -2,10 +2,10 @@
 id: validation/cli-reference
 title: 命令行参数全表
 type: validation
-scope: main.cpp
+scope: main.cpp、src/Core/CliCatalog.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~200 行
-updated: 2026-11-13
+size: ~170 行
+updated: 2026-11-20
 ---
 
 # 命令行参数全表
@@ -39,6 +39,7 @@ updated: 2026-11-13
 | `--replay-test` | 角色步进纯函数（60/144Hz 逐 tick 哈希一致）与输入录制/回放一致性自检，不建窗口 |
 | `--viewmodel-test` | 手持物投影/偏移矩阵契约自检（6 组，含 +z 朝前约定与 TRS 顺序），不建窗口 |
 | `--sky3d-test` | 3D 天空盒的相机/缩微矩阵自检（不需要 Vulkan / 窗口） |
+| `--character-collision-test` | 角色扫掠盒 / 滑动 / 上台阶契约自检（不需要 Vulkan / 窗口） |
 | `--hidden` | 不创建可见窗口；自检/截图/回归这类无人值守运行**默认开启**。窗口仍有真实客户区尺寸，交换链、渲染与截图不受影响 |
 | `--minimized` | 启动后最小化窗口（先隐藏创建，渲染器就绪后再 `glfwShowWindow` + `glfwIconifyWindow`，避免启动瞬间抢焦点）；最小化会命中 `handleWindowMaintenance()` 的跳过分支、不出帧，只适合看日志。与自检/截图等无人值守运行组合时自动退化为 `--hidden` |
 | `--visible` | 强制显示窗口，覆盖 `--hidden` 的默认行为（交互调试 / RenderDoc 抓帧时用） |
@@ -80,6 +81,8 @@ updated: 2026-11-13
 | `--compute-test` | 启用 compute probe（默认关闭） |
 | `--cross-queue-test` | 启用跨队列双方向探针 |
 | `--subresource-test` | 启用子资源正向探针 |
+| `--sun-demo` | 启用太阳盘与镜头光晕（建议配 `--streaming-world`） |
+| `--vegetation-demo` | 在地形上种草与树，相机贴近地面（建议配 `--streaming-world 3`） |
 
 ## 3. 调试 / 剖析（默认全关）
 
@@ -95,6 +98,16 @@ updated: 2026-11-13
 | `--empty-scene` | 不加载 Sponza / 天空盒，只留相机（调试单物体交互） | 0 |
 | `--terrain-test` | 启动时在相机前方创建一块持久地形，用于端到端渲染/截图回归；常与 `--empty-scene --selftest` 配合 | 0（不传时不生成、不分摊） |
 | `--capture-frame <n>` | RenderDoc 在第 n 帧抓帧（需注入） | 0（不调 `RENDERDOC_GetAPI`） |
+| `--stats-pipelines` | 退出时打印管线数量、建管线耗时与状态去重 | 0（关时只累加整数、不建表） |
+| `--stats-scratch` | 退出时打印每帧暂存区的分配次数 / 字节 / 扩容 / 刷新 | 0 |
+| `--stats-rendergraph` | 退出时打印渲染图准备与录制的每帧耗时 | 0 |
+| `--parallel-prepare` | Pass 准备阶段丢进 JobSystem 并行（实测更慢，见 TM-10） | 0（默认串行） |
+| `--alias-report` | 退出时打印资源别名候选与预估可省显存（只读报告） | 0（关时 endFrame 整段不执行） |
+| `--light-stress <n>` | 铺 n 盏点光源做压力场（配合 `--clustered-lighting` 看聚簇收益） | 0 |
+| `--light-stress-radius <m>` | 压力场铺开半径（米，默认 18，夹到 1~5000）；单灯半径跟着取 `clamp(0.3×半径, 4, 30)` 米，否则铺 40 米的场里每盏灯只有脚下 8 米亮，测不到"每片元命中几盏灯" | 0 |
+| `--clustered-lighting` | 点光源按 16×9×24 簇取灯（默认关闭，见决策 32） | 0 |
+| `--stats-clusters` | 退出时打印簇构建次数 / 使用簇数 / 最大簇 / 丢弃灯数 / 半径 | 0 |
+| `--list-options` | 打印选项表后退出（与编辑器「帮助 → 命令行选项」同源） | 0 |
 
 `--validation-features` 的取值：
 
@@ -135,7 +148,23 @@ updated: 2026-11-13
 ## 5. 加新参数的约定
 
 1. 参数名用正向命名（`--gpu-timing` 而不是 `--no-gpu-timing`），**默认关闭**；
-2. 解析放在 `main.cpp` 的参数循环里，状态放 `diag::Options` 或 `FirstApp` 的 setter；
+2. 解析放在 `main.cpp` 的参数循环里，状态放 `diag::Options` 或 `FirstApp` 的 setter；**同时把这一行加进 `src/Core/CliCatalog.cpp` 的表** —— `--help` / `--list-options` / 编辑器的「帮助 → 命令行选项」面板都渲染同一份表；
 3. 若属调试能力，必须遵守 [zero-overhead](../60-debug-profiling/zero-overhead.md)；
-4. 更新本文件 §1~§3；
+4. 更新本文件对应小节（§1~§3 的表格与 `CliCatalog.cpp` 是两份必须同时改的地方：表面向使用者，本文件补"为什么"与关闭时的成本）；
 5. 若它开启一条新分支，在 [test-matrix](test-matrix.md) 里加一项回归。
+
+## 6. 选项表的单一来源
+
+三处显示的是同一份数据（`src/Core/CliCatalog.cpp` 的 `kCatalog`）：
+
+| 入口 | 用途 |
+|---|---|
+| `TinyEngine.exe --help`（或 `-h`） | 命令行查看，带分组与说明 |
+| `TinyEngine.exe --list-options` | 同上，语义更明确（脚本里可读性更好） |
+| 编辑器「帮助 → 命令行选项」 | 搜索框 + 分组下拉筛选，边跑边查 |
+
+因此"加参数忘写帮助"这件事在结构上不存在；但**反过来会漏**：只加进表、没更新本文件时，
+文档会缺"为什么这么设计"和"关闭时成本"。`Chore` 提交里补上这一段即可。
+
+`CliCatalog` 的自检（`--selftest` 会跑）：选项数不少于 70、每行三个字段非空、开关不重复、
+必含 `--light-stress-radius` 与 `--list-options`。面板的自检另外验搜索的大小写折叠与分组去重。

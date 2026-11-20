@@ -17,6 +17,7 @@
 #include "Core/FrameInfo.h"
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
+#include "Core/CliCatalog.h"
 #include "RHI/ScratchArena.h"
 #include "RHI/RenderGraphAlias.h"
 #include <filesystem>
@@ -2059,6 +2060,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!tiny::aliasreport::selfTest())
 		throw std::runtime_error("AliasReport selfTest failed");
 
+	// CLI 选项表的单一来源：分组非空、开关不重复、必含新增项。
+	if (!tiny::cli::selfTest())
+		throw std::runtime_error("CliCatalog selfTest failed");
+
 	// TM-13：聚簇的球-盒相交、反投影与切片区间都是纯算术，先在这里证伪。
 	if (!LightSources::selfTest())
 		throw std::runtime_error("LightSources selfTest failed");
@@ -2777,7 +2782,8 @@ void FirstApp::render(float dt)
 			const glm::vec3 stressForward(stressView[0][2], stressView[1][2], stressView[2][2]);
 			const glm::vec3 stressCenter = scene->getCameraTransform().getTranslation()
 				+ stressForward * 22.0f + glm::vec3(0.f, 1.5f, 0.f);
-			lightSources.buildStressField(diagnosticsOptions.lightStress, stressCenter, 18.0f);
+			lightSources.buildStressField(diagnosticsOptions.lightStress, stressCenter,
+				diagnosticsOptions.lightStressRadius);
 		}
 
 		const auto& pointLights = lightSources.lights();
@@ -3043,11 +3049,11 @@ void FirstApp::finalizeDiagnostics()
     // TM-13：聚簇构建的统计（使用簇数 / 最大簇 / 因每簇上限丢弃的灯数）。
     if (diagnosticsOptions.statsClusters)
     {
-        std::printf("[Clusters] 构建 %llu 次 | 使用 %u 簇 | 最大簇 %u 盏 | 丢弃 %llu | 灯 %zu 盏\n",
+        std::printf("[Clusters] 构建 %llu 次 | 使用 %u 簇 | 最大簇 %u 盏 | 丢弃 %llu | 灯 %zu 盏（半径 %.0f m）\n",
             static_cast<unsigned long long>(clusteredLighting.buildCount()),
             clusteredLighting.usedClusters(), clusteredLighting.maxClusterSize(),
             static_cast<unsigned long long>(clusteredLighting.dropped()),
-            lightSources.size());
+            lightSources.size(), static_cast<double>(diagnosticsOptions.lightStressRadius));
     }
 
     diag::printValidationSummary();

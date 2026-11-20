@@ -13,6 +13,7 @@
 #include "Editor/panels/AssetBrowserPanel.h"
 #include "Editor/panels/HistoryPanel.h"
 #include "Editor/panels/RenderSettingsPanel.h"
+#include "Editor/panels/CliReferencePanel.h"
 #include "Editor/EditorSceneQuery.h"
 
 #include "Scene/Scene.h"
@@ -93,6 +94,8 @@ void EditorLayer::createDefaultPanels()
     registerPanel<HistoryPanel>();
     // E5-b：渲染设置。浮动工具窗（不参与固定布局），默认可见。
     registerPanel<RenderSettingsPanel>();
+    // 帮助 -> 命令行选项：查阅型浮动窗，默认隐藏（构造里把 visible 置 false）。
+    registerPanel<CliReferencePanel>();
 
 }
 
@@ -859,6 +862,12 @@ void EditorLayer::drawMenuBar()
         }
         ImGui::Separator();
         ImGui::MenuItem("键盘快捷键", "?", &showShortcutSheet);
+        if (CliReferencePanel* cliPanel = static_cast<CliReferencePanel*>(findPanel("Cli")))
+        {
+            // 面板默认隐藏，这里用指针直接翻转 —— 与「视图」菜单翻 visible 是同一件事。
+            if (ImGui::MenuItem("命令行选项", nullptr, cliPanel->visible))
+                cliPanel->visible = !cliPanel->visible;
+        }
         if (ImGui::MenuItem("打开控制台并跳到最近错误", nullptr, false, !state.lastErrorSummary.empty()))
             openConsoleAtLastError();
         if (ImGui::MenuItem("复制诊断信息"))
@@ -2787,6 +2796,10 @@ bool EditorLayer::selfTest()
 
     // ---- 0a) E5-b：渲染设置面板的输入夹取（纯函数） ----
     if (!RenderSettingsPanel::selfTest())
+        return false;
+
+    // ---- 0ab) 命令行选项面板：目录非空 + 搜索过滤大小写折叠 ----
+    if (!CliReferencePanel::selfTest())
         return false;
 
     // ---- 0ad) E6：资产拖放落点 + 贴图库扩展名过滤 ----

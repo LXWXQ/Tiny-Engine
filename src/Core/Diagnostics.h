@@ -67,6 +67,9 @@ namespace diag
         // TM-13：点光源与聚簇光照。lightStress > 0 时铺这么多盏灯（0 = 不加灯），
         // 用来量"512 盏灯下前向还能不能跑满 60 FPS"。
         uint32_t lightStress = 0;
+        // --light-stress-radius：压力场铺开的半径（米）。默认 18 米是"贴脸"密度，
+        // 每簇塞上百盏灯；调到 100~200 米就是"稀疏分布"，聚簇才有意义的那一档。
+        float lightStressRadius = 18.0f;
         bool clusteredLighting = false;
         bool statsClusters = false;
 

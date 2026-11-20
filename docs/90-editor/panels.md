@@ -4,8 +4,8 @@ title: 面板与布局
 type: system
 scope: 现有面板、DockSpace 默认布局、面板职责与快捷键
 read-when: 写新面板、改布局、或面板位置错乱
-size: ~490 行
-updated: 2026-11-16
+size: ~507 行
+updated: 2026-11-20
 ---
 
 # 面板与布局
@@ -220,6 +220,21 @@ ImGuiWindowFlags_NoResize
 - 深度 0 表示「撤销到底」，当前状态单独占一行并显示 `<当前状态>`，redo 行排在后面。
 
 `jumpTo` 会把目标 clamp 到 `undoCount + redoCount`，越界不会崩。
+
+## 命令行选项面板（帮助 → 命令行选项）
+
+`CliReferencePanel`（窗口名 `Cli`）把 `Core/CliCatalog.cpp` 的表直接摊成三列
+（分组 / 开关 / 说明），带搜索框与分组下拉筛选。要点：
+
+* **默认隐藏**：构造里 `visible = false`，从「帮助 → 命令行选项」打开；它是查阅型
+  浮动窗，常驻会白占一块屏幕。
+* **不写自己的文案**：开关与说明全部来自 `tiny::cli::catalog()`，与
+  `TinyEngine.exe --help` / `--list-options` 同源。加参数只改 `CliCatalog.cpp` 一处，
+  面板与命令行自动同步（这也是当初抽表的原因 —— 之前编辑器完全看不到开关列表）。
+* **只读**：面板不解析、不改参数，也不碰 `EditorState`；它只回答"有哪些开关、分别是干什么的"。
+
+自检 `CliReferencePanel::selfTest()` 覆盖目录非空、字段非空、搜索的大小写折叠与
+"关键词比原串长"的越界边界、分组去重是否覆盖每一条。
 
 ## 写一个新面板
 

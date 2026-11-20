@@ -4,8 +4,8 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~194 行
-updated: 2026-11-19
+size: ~195 行
+updated: 2026-11-20
 ---
 
 # 代码 <-> 文档反查表
@@ -75,6 +75,7 @@ updated: 2026-11-19
 | `JobSystem.h/.cpp` | worker pool、`submit`、`parallelFor` | [jobsystem](../30-systems/jobsystem.md) | jobsystem |
 | `TemporaryHashmap.h/.cpp` / `IntrusiveList.h` | 按帧存活的 key→对象表：RingSize 个环 + 固定桶侵入式哈希 + 池；命中老环时必须提升到当前环 | [borrowed-techniques](../80-roadmap/borrowed-techniques.md) 决策 25 | decisions |
 | `ObjectPool.h` | 分块对齐分配 + vacants 栈 + placement new；对象必须显式 `destroy()`，池不管生命周期 | [borrowed-techniques](../80-roadmap/borrowed-techniques.md) 决策 25 | decisions |
+| `CliCatalog.h/.cpp` | 命令行选项表（分组 / 开关 / 说明）的单一来源；`--help`、`--list-options` 与编辑器「帮助 → 命令行选项」面板都渲染它 | [cli-reference](../50-validation/cli-reference.md) 第 6 节 | cli-reference |
 | `ImGuiSystem.h/.cpp` | 后端初始化（docking）、面板、ASCII 约束、交换链重建时与 PresentPass/UiCompositePass 的指针同步 | [imgui](../30-systems/imgui.md)、[viewport](../90-editor/viewport.md) | imgui、viewport |
 | `FrameInfo.h` / `FrameInFlight.h` | 每帧数据总线、`kFramesInFlight` | [synchronization](../10-architecture/synchronization.md) | synchronization |
 | `Material.h` / `MaterialSystem.*` / `MaterialSlot.h` | 材质数据、槽位哨兵 `kInvalidMaterialSlot` | [descriptors](../10-architecture/descriptors.md) | descriptors |
