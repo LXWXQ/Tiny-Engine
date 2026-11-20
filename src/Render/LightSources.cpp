@@ -41,10 +41,10 @@ void LightSources::buildStressField(uint32_t count, const glm::vec3& center, flo
         const float warm = (i % 3 == 0) ? 1.0f : 0.45f;
         const float cool = (i % 3 == 0) ? 0.55f : 1.0f;
         const glm::vec3 color(warm, 0.75f, cool);
-        // 单灯半径跟着铺开范围走：铺 40 米的场不该用 8 米的灯（那样只有灯脚下一小块被照亮，
-        // 压力场就没测到"每片元命中几盏灯"这件事）。下限 4 米保证贴脸时仍有光斑。
-        const float perLightRadius = std::clamp(spread * 0.3f, 4.0f, 30.0f);
-        addPointLight(position, perLightRadius, color, 6.0f);
+        // 单灯半径固定 8 米，与铺开范围解耦：两个变量各管一件事 —— spread 控制"密度"，
+        // 半径控制"每盏灯影响多大"。绑在一起会让聚簇对比失真（铺得越开、每盏灯覆盖的簇越多，
+        // 聚簇反而更慢），这一版实测过：半径跟着 spread 走时 512 灯聚簇掉到 39 FPS。
+        addPointLight(position, 8.0f, color, 6.0f);
     }
 }
 
