@@ -4,7 +4,7 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~263 行
+size: ~264 行
 updated: 2026-11-20
 ---
 
@@ -176,7 +176,8 @@ TM-09（跨队列 EXCLUSIVE 所有权转移）、TM-11（描述符三档）、TM
 
 - **现状**：F1 已完成 GPU 驱动提交（draw call 104 → 2、合并缓冲、Hi-Z，见 [gpu-driven-submission](../10-architecture/gpu-driven-submission.md)），CPU 侧排序批处理已不是瓶颈；剩余价值只在透明与前向通道（Water / Particle / Glass 各自已在内部排序）。
 - **参考**：`renderer/renderer.cpp`（`AbstractRenderable::get_render_info` → `RenderQueue` → flush 的排序 / 批处理 / 提交三段分工）。
-- **落地**：暂不排期。触发条件：前向 Pass 超过 5 个，或单帧透明物体超过 2000。
+- **状态**：已量测，触发条件未到（决策 41）。触发条件：前向 Pass 超过 5 个，或单帧透明物体超过 2000。
+- **实测（RTX 2070，`--selftest 30 --voxel-world 1 --fireflies 32`）**：前向几何 Pass 5 个（Vegetation / Water / Glass / Particle / ViewModel；Geometry 走 G-Buffer 延迟）；单帧透明物体 ≈912（玻璃面 879 + 粒子 32 + 水面 1）；每帧 draw calls 107、descriptor 绑定仅 5 次 —— 能省的 state change 在噪声里。
 - **预估**：2 天，风险低。
 
 ### TM-16 资产路径协议与热重载

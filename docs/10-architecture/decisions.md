@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~576 行
+size: ~602 行
 updated: 2026-11-20
 ---
 
@@ -574,3 +574,29 @@ CPU vs GPU 逐像素差 213 像素，全部落在 HUD 的 FPS 读数区（x 102.
 聚簇本身仍默认关闭（决策 32），这一步只是把「将来翻默认」时最大的那项开销先搬走。
 
 **不引入的**：前缀和 / 游标缓冲（定长槽位已经够了）；把建簇挪回异步 compute（等簇表进渲染图再说）。
+
+## 决策 41：排序批处理的触发条件还没到（TM-15）
+
+**问题**：TM-15 留了一个触发条件（前向 Pass 超过 5 个，或单帧透明物体超过 2000），
+清单里只剩这一项没有结论。按维护方式，触发条件要么量、要么删 —— 不能一直挂着。
+
+**实测（RTX 2070，`--selftest 30 --voxel-world 1 --fireflies 32`）**：
+
+| 指标 | 数值 | 来源 |
+|---|---|---|
+| 每帧 draw calls | 107 | `[SelfTest] telemetry: draw calls 107 \| desc binds 5 \| triangles 336953` |
+| 每帧 descriptor 绑定 | 5 | 同上 |
+| 前向几何 Pass | **5**（Vegetation / Water / Glass / Particle / ViewModel） | 逐个 Pass 的流水线；Geometry 走 G-Buffer 延迟 |
+| 单帧透明物体 | **≈912**（玻璃面 879 + 粒子 32 + 水面 1） | `[Glass] sorted=879 drawcalls=1`、`[Particle] alive=32 drawcalls=1` |
+
+**结论**：两条触发线都没到（5 个不超过 5，912 远低于 2000）。更要紧的是
+每帧只有 5 次 descriptor 绑定、107 次 draw —— 排序批处理能省的 state change
+本来就在噪声里，透明通道（Water / Particle / Glass）各自已经在内部排过序。
+
+**保留什么**：`docs/80-roadmap/borrowed-techniques.md` 的 TM-15 条目改成
+「已量测，触发条件未到」并写清这两个数字与量法；将来物体数或前向 Pass 数上去了，
+照这条自己复测即可。
+
+**不引入的**：通用 `RenderQueue`（现在的提交路径是 GPU 驱动的，见
+[gpu-driven-submission](../10-architecture/gpu-driven-submission.md)，再插一层 CPU 队列
+只会和它打架）。
