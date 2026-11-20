@@ -20,6 +20,12 @@ void LightSources::buildStressField(uint32_t count)
 
 void LightSources::buildStressField(uint32_t count, const glm::vec3& center, float spread)
 {
+    buildStressField(count, center, spread, GroundSampler{});
+}
+
+void LightSources::buildStressField(uint32_t count, const glm::vec3& center, float spread,
+    const GroundSampler& ground)
+{
     lights_.clear();
     lights_.reserve(count);
 
@@ -36,7 +42,11 @@ void LightSources::buildStressField(uint32_t count, const glm::vec3& center, flo
         const float angle = goldenAngle * static_cast<float>(i);
         const float height = 3.5f * std::sin(static_cast<float>(i) * 0.7f);
 
-        const glm::vec3 position = center + glm::vec3(radius * std::cos(angle), height, radius * std::sin(angle));
+        glm::vec3 position = center + glm::vec3(radius * std::cos(angle), height, radius * std::sin(angle));
+        // 有地面采样就贴地：抬 1.2 米，光斑正好落在方块表面上。采不到（比如水面/空洞）就保留飘空。
+        float groundY = 0.f;
+        if (ground && ground(position.x, position.z, groundY))
+            position.y = groundY + 1.2f;
         // 冷暖交替：画家算法不会因为"全是同一个颜色"而看不出叠加是否正确。
         const float warm = (i % 3 == 0) ? 1.0f : 0.45f;
         const float cool = (i % 3 == 0) ? 0.55f : 1.0f;
@@ -44,7 +54,10 @@ void LightSources::buildStressField(uint32_t count, const glm::vec3& center, flo
         // 单灯半径固定 8 米，与铺开范围解耦：两个变量各管一件事 —— spread 控制"密度"，
         // 半径控制"每盏灯影响多大"。绑在一起会让聚簇对比失真（铺得越开、每盏灯覆盖的簇越多，
         // 聚簇反而更慢），这一版实测过：半径跟着 spread 走时 512 灯聚簇掉到 39 FPS。
-        addPointLight(position, 8.0f, color, 6.0f);
+        // 强度 10：默认机位离地面四五十米，强度 6 在 tonemap 之后几乎看不出颜色，
+        // 而"看不出效果"和"没有实现"在截图上是同一件事；再往上（20）红通道直接饱和，
+        // 光斑变成硬边橘色圆盘，反而看不出衰减。半径仍固定 8 米（见上）。
+        addPointLight(position, 12.0f, color, 5.0f);
     }
 }
 

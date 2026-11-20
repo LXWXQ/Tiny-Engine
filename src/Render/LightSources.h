@@ -1,6 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 // TM-13：场景里的点光源列表。
@@ -32,6 +33,11 @@ public:
     // 同上，但以 center 为中心、spread 为半径铺开。相机未必看着原点，
     // 压力场必须铺在相机前方，否则量到的是"一盏灯都没进视锥"。
     void buildStressField(uint32_t count, const glm::vec3& center, float spread);
+
+    // 地面采样：给定世界 xz，回调填出该处地面高度。压力场用它把灯贴在几何体上 ——
+    // 铺在半空的灯离可见片元往往二三十米，单灯半径 8 米根本照不到，看起来就是"灯不亮"。
+    using GroundSampler = std::function<bool(float x, float z, float& outY)>;
+    void buildStressField(uint32_t count, const glm::vec3& center, float spread, const GroundSampler& ground);
 
     size_t size() const { return lights_.size(); }
     bool empty() const { return lights_.empty(); }

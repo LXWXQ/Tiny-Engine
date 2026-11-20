@@ -4,8 +4,8 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~162 行
-updated: 2026-11-19
+size: ~168 行
+updated: 2026-11-20
 ---
 
 # Pass 顺序与原因
@@ -158,5 +158,11 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | 1（`--clustered-lighting`） | Set 0 binding 15~18 的簇参数 / ranges / indices / 灯数组 | 所在簇的灯数 |
 
 主视角用聚簇时，平面反射通道仍走逐灯（`reflectionUbo.clusterParams.x = 0`）：它的 Set 0 是 `ReflectionPass` 自己建的，簇表按主视角算，复用会读到与屏幕分块不匹配的区间。
+
+压力场（`--light-stress`）不是随便摆几盏灯：它必须铺在**可见几何附近**才有意义。
+最初把它铺在相机前方 22 米的半空，结果每个片元到最近一盏灯的中位距离是 66 米，
+而单灯半径只有 8 米 —— 截图和「一盏灯都不加」几乎逐像素相同，看起来像灯光没实现。
+现在三件事一起做：① 按体素地形高度贴地（抬 1.2 米）；② 中心距离取 `max(22, 铺开半径)`；
+③ 单灯半径 12 米、强度 5（强度 20 时红通道直接饱和成硬边橘斑，反而看不出衰减）。
 
 簇表由 `ClusteredLighting` 在 CPU 上每帧构建（16x9x24、每簇上限 256、按灯剪枝 + 计数排序，Release 512 灯约 1.0 ms）。取舍与实测数字见 [decisions](../10-architecture/decisions.md) 决策 32。

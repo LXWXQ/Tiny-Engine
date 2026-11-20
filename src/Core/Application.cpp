@@ -47,6 +47,9 @@
 #include "Scene/FeatureComponents.h"
 #include "Scene/Components.h"
 #include "Scene/SkyCamera.h"
+#include <cmath>
+#include <unordered_map>
+
 #include "Voxel/VoxelChunk.h"
 #include "Render/ComputeProbePass.h"
 #include "Render/CrossQueueProbePass.h"
@@ -2780,10 +2783,47 @@ void FirstApp::render(float dt)
 			// 就是世界前方向量，不需要取负。
 			const glm::mat4 stressView = scene->getCamera().getView();
 			const glm::vec3 stressForward(stressView[0][2], stressView[1][2], stressView[2][2]);
+			// 铺开半径同时决定"铺多远"：灯如果都堆在 22 米处，而画面中心的地面在七十米外，
+			// 半径 8 米的灯一个片元也够不到 —— 实测就是"加了灯画面几乎不变"。
+			const float stressDistance = std::max(22.0f, diagnosticsOptions.lightStressRadius);
 			const glm::vec3 stressCenter = scene->getCameraTransform().getTranslation()
-				+ stressForward * 22.0f + glm::vec3(0.f, 1.5f, 0.f);
+				+ stressForward * stressDistance + glm::vec3(0.f, 1.5f, 0.f);
+			// 贴地采样：压力场默认铺在相机前方半空，但可见片元在地面上，距离常常二三十米，
+			// 单灯半径 8 米照不到 —— 实测就是"加了灯画面几乎不变"。这里按体素地形重算高度
+			// （与 createVoxelWorld 同一个 seed / baseY），把灯压到地表上方 1.2 米。
+			std::unordered_map<uint64_t, voxel::Chunk> groundChunks;
+			const auto sampleGround = [&groundChunks](float x, float z, float& outY) -> bool
+			{
+				const float fx = std::floor(x);
+				const float fz = std::floor(z);
+				const int32_t cx = voxel::Chunk::toChunkCoord(static_cast<int32_t>(fx));
+				const int32_t cz = voxel::Chunk::toChunkCoord(static_cast<int32_t>(fz));
+				const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32)
+					| static_cast<uint64_t>(static_cast<uint32_t>(cz));
+
+				auto it = groundChunks.find(key);
+				if (it == groundChunks.end())
+				{
+					voxel::Chunk chunk;
+					chunk.generate(20251104ull, cx, cz, 0);
+					it = groundChunks.emplace(key, std::move(chunk)).first;
+				}
+
+				const int32_t lx = voxel::Chunk::toLocal(static_cast<int32_t>(fx));
+				const int32_t lz = voxel::Chunk::toLocal(static_cast<int32_t>(fz));
+				for (int32_t y = voxel::Chunk::kSize - 1; y >= 0; --y)
+				{
+					if (voxel::isSolid(it->second.get(lx, y, lz)))
+					{
+						outY = static_cast<float>(y) + 1.0f;
+						return true;
+					}
+				}
+				return false;
+			};
+
 			lightSources.buildStressField(diagnosticsOptions.lightStress, stressCenter,
-				diagnosticsOptions.lightStressRadius);
+				diagnosticsOptions.lightStressRadius, sampleGround);
 		}
 
 		const auto& pointLights = lightSources.lights();

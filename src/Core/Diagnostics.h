@@ -69,7 +69,7 @@ namespace diag
         uint32_t lightStress = 0;
         // --light-stress-radius：压力场铺开的半径（米）。默认 18 米是"贴脸"密度，
         // 每簇塞上百盏灯；调到 100~200 米就是"稀疏分布"，聚簇才有意义的那一档。
-        float lightStressRadius = 18.0f;
+        float lightStressRadius = 60.0f;
         bool clusteredLighting = false;
         bool statsClusters = false;
 
