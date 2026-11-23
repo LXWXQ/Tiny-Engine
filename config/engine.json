@@ -1,22 +1,44 @@
 {
   "camera": {
     "position": [
-      -66.06463623046875,
-      15.922052383422852,
-      -76.19489288330078
+      -182.49807739257813,
+      6.692477703094482,
+      52.62883377075195
     ],
     "rotation": [
-      0.058119628578424454,
-      -7.580934047698975,
+      0.12891140580177307,
+      -42.94640350341797,
       0.0
     ]
   },
   "engineSettings": {
     "bloom": {
-      "enabled": true,
+      "enabled": false,
       "intensity": 0.11999999731779099,
       "knee": 0.5,
-      "threshold": 2.0399999618530273
+      "threshold": 2.200000047683716
+    },
+    "clouds": {
+      "absorption": 0.8999999761581421,
+      "ambient": 0.3499999940395355,
+      "baseHeight": 800.0,
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "coverage": 0.6399999856948853,
+      "density": 0.9300000071525574,
+      "enabled": true,
+      "speed": 40.0,
+      "steps": 48,
+      "thickness": 226.0
+    },
+    "fog": {
+      "density": 0.00044999999227002263,
+      "enabled": true,
+      "start": 80.0
     },
     "lighting": {
       "color": [
@@ -26,25 +48,23 @@
         1.0
       ],
       "direction": [
-        -1.0,
-        -1.0,
-        1.0,
+        -0.5773502588272095,
+        -0.5773502588272095,
+        0.5773502588272095,
         0.0
       ],
       "exposure": 1.0190000534057617,
       "shadows": {
         "distance": 90.0,
         "enabled": true,
-        "strength": 0.65
+        "filterMode": 0,
+        "strength": 0.6499999761581421
       }
     },
     "motionBlur": {
-      "enabled": true,
-      "maxRadius": 0.07199999690055847,
-      "strength": 1.3899999856948853
-    },
-    "planned": {
-      "ssrEnabled": false
+      "enabled": false,
+      "maxRadius": 0.03500000014901161,
+      "strength": 1.0
     },
     "renderScale": 1.0,
     "ssao": {
@@ -52,6 +72,66 @@
       "enabled": true,
       "kernelSize": 16,
       "radius": 0.33000001311302185
+    },
+    "ssr": {
+      "enabled": true,
+      "maxDistance": 200.0
+    },
+    "sun": {
+      "angularRadius": 2.0,
+      "color": [
+        0.8607594966888428,
+        0.6295286417007446,
+        0.16706722974777222,
+        1.0
+      ],
+      "enabled": true,
+      "flareGhosts": 8,
+      "flareIntensity": 4.0,
+      "glow": 0.0,
+      "intensity": 20.0,
+      "occlusion": true
+    },
+    "taa": {
+      "blend": 0.8999999761581421,
+      "enabled": false,
+      "jitterScale": 1.0
+    },
+    "vegetation": {
+      "enabled": false,
+      "grassColor": [
+        0.23999999463558197,
+        0.36000001430511475,
+        0.10000000149011612,
+        1.0
+      ],
+      "grassDensity": 0.800000011920929,
+      "grassDistance": 50.0,
+      "grassHeight": 0.550000011920929,
+      "seed": 1337,
+      "treeColor": [
+        0.11999999731779099,
+        0.23999999463558197,
+        0.07999999821186066,
+        1.0
+      ],
+      "treeDensity": 1.2000000476837158,
+      "treeDistance": 120.0,
+      "treeHeight": 7.0,
+      "trunkColor": [
+        0.2199999988079071,
+        0.14000000059604645,
+        0.07999999821186066,
+        1.0
+      ],
+      "windStrength": 0.6000000238418579
+    },
+    "water": {
+      "enabled": true,
+      "level": 2.0,
+      "planarReflection": true,
+      "waveSpeed": 1.0,
+      "waveStrength": 1.0
     },
     "windowTitle": "Tiny Engine"
   },
