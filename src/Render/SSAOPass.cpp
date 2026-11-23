@@ -65,6 +65,14 @@ void SSAOPass::init()
     // 输出目标交给渲染图创建；D-4 起每个 frame slot 一张，避免跨帧读写冲突。
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
+        if (g_singleFrameTargets && frame > 0)
+        {
+            // 只建槽 0：这几张图只在本帧内被写和读（见 RenderResources.h 的说明）。
+            resources.ssaoRaw[frame] = resources.ssaoRaw[0];
+            resources.ssao[frame] = resources.ssao[0];
+            continue;
+        }
+
         RenderGraph::TextureDesc desc;
         desc.name = "SSAO.Raw.Frame" + std::to_string(frame);
         desc.format = VK_FORMAT_R8_UNORM;
@@ -75,6 +83,7 @@ void SSAOPass::init()
         desc.name = "SSAO.Frame" + std::to_string(frame);
         resources.ssao[frame] = renderGraph.createTexture(desc);
     }
+
 
     // 采样器要自己建：渲染图只管图像，不管采样器
     VkSamplerCreateInfo si{};

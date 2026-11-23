@@ -5,6 +5,23 @@
 #include <vector>
 #include <array>
 #include "Core/FrameInFlight.h"
+// T-04b：把「只在本帧内写、也只在本帧内读」的目标合成一张，不再按 frame slot 各一份。
+//
+// D-4 之所以让这些目标各留两份，是因为两帧同时在飞：第 N+1 帧写的时候，GPU 可能还在
+// 读第 N 帧的同一张图。把它合成一张只在这条约束被解除之后才安全 —— 也就是提交侧多一条
+// 「本帧的图形工作等上一帧图形工作完成」（--serialize-frames，见 Renderer）。
+//
+// 所以这两个开关必须成对使用：只开 --single-frame-targets 会真的产生跨帧读写竞争，
+// 同步验证层会报 SYNC-HAZARD（这正是本次用来证明「两帧确实重叠」的证据）。
+inline bool g_singleFrameTargets = false;
+
+inline void mirrorFrameSlots(std::array<RenderGraph::TextureHandle, kFramesInFlight>& slots)
+{
+    if (!g_singleFrameTargets)
+        return;
+    for (size_t i = 1; i < slots.size(); ++i)
+        slots[i] = slots[0];
+}
 
 // D-2：光照通道的输出格式（线性 HDR 中间目标）。
 // 用 16F 而不是 11-11-10 或 R8：Bloom 要在 tonal 映射之前看到 >1 的高光，

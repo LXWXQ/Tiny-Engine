@@ -53,6 +53,12 @@ void SSRPass::createTextures()
 {
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
+        if (g_singleFrameTargets && frame > 0)
+        {
+            resources.ssrColor[frame] = resources.ssrColor[0];
+            continue;
+        }
+
         RenderGraph::TextureDesc desc;
         desc.name = "SSR.Frame" + std::to_string(frame);
         desc.format = kHdrSceneFormat;

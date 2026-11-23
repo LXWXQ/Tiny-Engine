@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~997 行
+size: ~1000 行
 updated: 2026-11-23
 ---
 
@@ -986,6 +986,8 @@ voxel-world `98.73 / 10.13 / 9.62 / 10.88 / 89.83 / 0.27 / 1220.7 / 1.00`，ligh
 瓶颈在 P3 的状态切换（冗余 49.4%）与 P2 的每帧摊平，不在屏障调用数。跨 Pass 的帧级有序屏障
 （UE RDG 的完整形态）需要提交点先分段，排在 T-07 之后。
 **T-04（2026-11-23，默认关）**：`src/RHI/RenderTargetPool.{h,cpp}`，键为
+
+**T-04b（2026-11-23，默认开）**：把「只在本帧内读写」的目标合成一张（SSAO.Raw / SSAO / HDR.Scene / SSR / TAA.Output / Bloom 四级 / 平面反射 6 张 / 编辑器视口），并让 `submitGraphics` 多等一次上一帧的图形时间线。两件事必须成对：单独合并会被同步验证层抓到 `errors=120`（两帧真的重叠）。实测 lights-512 87.77 → 92.50 FPS（+5.4%）、图 160 → 145、`heap0` 1220.7 → 964.7 MiB、`--resize-test` 424 → 319；`--no-single-frame-targets` 整体回退，`--no-serialize-frames` 只用于复现竞争。官方基线重测为 121.57 / 103.66 / 94.56 FPS。
 `格式 + 精确尺寸 + usage + mip/layer + flags`，`kRetireFrames=2`、`kMaxIdleBytes=256 MiB`；
 `RenderGraph::createOwnedTexture` / `resizeOwnedTexture` 接上，`--rt-pool` 开、缺省关。
 

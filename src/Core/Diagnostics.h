@@ -69,6 +69,14 @@ namespace diag
         bool statsFrame = false;
         // T-04：跨帧 RT 池。默认关 —— 实测只在「尺寸换回旧值」时命中，空闲图要占 250 MiB 以上。
         bool renderTargetPool = false;
+    // T-04b：同帧目标合成一张。默认开：实测更快（lights-512 +5.4%）且少 15 张图；
+    // 它自带「本帧等上一帧」的等待，用 --no-single-frame-targets 整体回退。
+    bool singleFrameTargets = true;
+    bool noSingleFrameTargets = false;
+    // T-04b：本帧图形工作等上一帧图形工作完成 —— 让「同帧目标合成一张」成立的前提。
+    bool serializeFrames = false;
+    // 只用于证明「两帧确实重叠」：故意关掉上面的等待，让跨帧竞争显形（配同步验证层用）。
+    bool noSerializeFrames = false;
     // T-04：跨帧 RT 池。默认关 —— 实测只在
     // --camera <px,py,pz,pitch,yaw>：覆盖 config 里保存的相机位姿。基准场景与截图
     // 金标必须与"上次会话存下的相机"无关，否则同一份代码两次跑出的画面不同。

@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1458 行
+size: ~1479 行
 updated: 2026-11-23
 ---
 
@@ -1457,3 +1457,23 @@ T-04 的验收原文是「稳定态每帧 `vkCreateImage` 为 0、显存不增�
 
 校验：默认场景与 `--resize-test` 均 `errors=0 warnings=0`、stderr 0 字节；池关时
 `images total=424` 与改动前逐位一致（回退可信）。
+
+## T-04b：同帧目标合成一张 + 让 GPU 侧两帧排开（2026-11-23）
+
+T-04 的 `[RTPool] top creators` 全是 `Frame0` / `Frame1` 成对出现。顺着这条线量下去，得到的是两个结论，其中一个和计划里写的不一样。
+
+**第一个结论：`--single-frame-targets` 单独用是错的。** 把 SSAO / HDR / SSR / Bloom / TAA 输出 / 平面反射的图合成一份、不动提交侧，`--validation-features sync` 立刻报 `errors=120` —— 两帧确实在重叠。这条错误本身是有价值的证据：D-4 的双份不是保守，是必需的。
+
+**第二个结论：让两帧排开之后它更快。** `submitGraphics` 多等一次上一帧的 `graphicsTimelineSemaphore` 值，就足以让合并成立，而且帧率上升。
+
+| 配置 | lights-512 FPS | default FPS | 图总数 | heap0 |
+|---|---|---|---|---|
+| 回退 `--no-single-frame-targets` | 87.77 | 116.93 | 160 | 1220.7 MiB |
+| 只加帧间等待 `--serialize-frames` | 91.13 | — | 160 | 1220.7 MiB |
+| 合成 + 等待（默认） | 92.50 | 118.90 | 145 | 964.7 MiB |
+
+绝大多数收益来自"排开两帧"（+3.8%），合并只再加 1.5%；但合并顺手少 15 张全屏级目标、堆少 256 MiB。
+
+官方基线重测（`tools/bench.ps1 -Runs 3 -Frames 600`，默认配置）：`default 121.57` / `voxel-world 103.66` / `lights-512 94.56` FPS，`images/帧 0.24`（145 张），`heap0 964.7 MiB`。`--resize-test` 六次尺寸变化：424 → 319 张（每次 resize 44 → 约 17.5）。
+
+校验：`--validation-features sync` 下默认、`--resize-test`、`--cross-queue-test` 三种跑法均 `errors=0 warnings=0`、stderr 0 字节；`--no-single-frame-targets` 时 160 张、与改动前逐位一致。

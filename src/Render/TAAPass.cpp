@@ -41,6 +41,12 @@ void TAAPass::init()
 
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
+        if (g_singleFrameTargets && frame > 0)
+        {
+            resources.taaOutput[frame] = resources.taaOutput[0];
+            continue;
+        }
+
         RenderGraph::TextureDesc desc;
         desc.name = "TAA.Output.Frame" + std::to_string(frame);
         desc.format = format;

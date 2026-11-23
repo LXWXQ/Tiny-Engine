@@ -36,6 +36,12 @@ void LightingPass::init()
     // 这里顺便承担了"交换链资源导入"的职责，所以 PresentPass 依赖 LightingPass 先 init。
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
+        if (g_singleFrameTargets && frame > 0)
+        {
+            resources.hdrScene[frame] = resources.hdrScene[0];
+            continue;
+        }
+
         RenderGraph::TextureDesc hdrDesc;
         hdrDesc.name = "HDR.Scene.Frame" + std::to_string(frame);
         hdrDesc.format = kHdrSceneFormat;

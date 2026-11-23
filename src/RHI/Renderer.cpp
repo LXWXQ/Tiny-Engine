@@ -265,19 +265,28 @@ void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphi
 
     auto submitGraphics = [&](bool waitForCompute)
     {
-        VkSemaphore waitSemaphores[2] = {
+        VkSemaphore waitSemaphores[3] = {
             imageAvailableSemaphores[currentFrameInFlightIndex],
-            computeTimelineSemaphore
+            computeTimelineSemaphore,
+            graphicsTimelineSemaphore
         };
-        uint64_t waitValues[2] = { 0, signalValue };
-        VkPipelineStageFlags waitStages[2] = {
+        uint64_t waitValues[3] = { 0, signalValue, signalValue - 1 };
+        VkPipelineStageFlags waitStages[3] = {
             // 放宽到 ALL_COMMANDS：交换链图像可能在 COLOR_ATTACHMENT_OUTPUT 之前的
             // 阶段（如 FRAGMENT_SHADER / *_FRAGMENT_TESTS 的布局转换）被访问，
             // 只等 COLOR_ATTACHMENT_OUTPUT 会让同步校验报与 acquire 的 WRITE_AFTER_READ。
             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
         };
-        const uint32_t waitCount = waitForCompute ? 2u : 1u;
+        uint32_t waitCount = waitForCompute ? 2u : 1u;
+        if (serializeGraphicsFrames && signalValue > 1)
+        {
+            // 等上一帧的图形时间线：GPU 不再重叠两帧，「同帧目标只留一张」才有依据。
+            waitSemaphores[waitCount] = graphicsTimelineSemaphore;
+            waitValues[waitCount] = signalValue - 1;
+            waitStages[waitCount] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            ++waitCount;
+        }
 
         VkSemaphore signalSemaphores[2] = {
             renderFinishedSemaphores[currentImageIndex],

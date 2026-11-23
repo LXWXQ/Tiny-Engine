@@ -53,6 +53,13 @@ void BloomPass::init()
         // ---- 金字塔各级：每级都是上一级的一半 ----
         // 各级同时要能当颜色附件（被写）和采样源（被读），所以 usage 两个都要。
         std::vector<RenderGraph::TextureHandle>& levels = resources.bloomLevels[frame];
+        if (g_singleFrameTargets && frame > 0)
+        {
+            levels = resources.bloomLevels[0];
+            resources.bloomResult[frame] = resources.bloomResult[0];
+        }
+        else
+        {
         levels.clear();
         levels.reserve(kLevelCount);
 
@@ -72,7 +79,7 @@ void BloomPass::init()
 
         // PresentPass 采样的就是最细的那一级
         resources.bloomResult[frame] = levels.front();
-
+        }
         const uint32_t base = frame * setCount;
         for (uint32_t i = 0; i < setCount; ++i)
             sets[base + i] = descriptorManager->allocateSet(setLayout);

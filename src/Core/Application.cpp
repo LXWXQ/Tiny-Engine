@@ -120,7 +120,10 @@ tiny::resourcestats::setAllocator(vulkanDevice->getVmaAllocator());
 	const VkExtent2D renderExtent = vulkanSwapchain->getSwapChainExtent();
 	currentRenderExtent = renderExtent;
 	renderer = std::make_unique<Renderer>(*vulkanDevice, *vulkanSwapchain);
-
+	// T-04b：两个开关必须成对——「同帧目标合成一张」只在 GPU 侧不再重叠两帧时成立。
+	g_singleFrameTargets = diagnosticsOptions.singleFrameTargets && !diagnosticsOptions.noSingleFrameTargets;
+	const bool serializeFrames = diagnosticsOptions.serializeFrames || (g_singleFrameTargets && !diagnosticsOptions.noSerializeFrames);
+	renderer->setSerializeGraphicsFrames(serializeFrames);
 	// 最小化必须放在交换链/渲染器创建之后：GLFW 在 iconify 后客户区变成 0x0，
 	// 先最小化会让 G-Buffer 附件按 0x0 创建而失败。
 	if (window != nullptr && diagnosticsOptions.windowMinimized)
@@ -2577,7 +2580,12 @@ desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
 // （1300x861x4B ≈ 4.5MB/张），几秒钟就能把显存吃光。
 // resizeOwnedTexture 是 TD-03 提供的原地重建接口，handle 保持不变。
 if (!renderResources->editorViewport[frame].valid())
+{
+if (g_singleFrameTargets && frame > 0 && renderResources->editorViewport[0].valid())
+renderResources->editorViewport[frame] = renderResources->editorViewport[0];
+else
 renderResources->editorViewport[frame] = renderGraph->createTexture(desc);
+}
 else
 renderGraph->resizeOwnedTexture(renderResources->editorViewport[frame], extent);
 }

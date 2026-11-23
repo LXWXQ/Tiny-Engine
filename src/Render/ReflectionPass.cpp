@@ -105,6 +105,17 @@ void ReflectionPass::createTextures(VkExtent2D extent)
 
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
+        if (g_singleFrameTargets && frame > 0)
+        {
+            // 平面反射的这些图只在本帧内（反射 G-Buffer -> 反射 Pass -> SSR/Glass/Water）读写，
+            // 合成一份就够；其余槽直接引用槽 0 的句柄。
+            for (uint32_t i = 0; i < 4; ++i)
+                gbufferTextures[frame][i] = gbufferTextures[0][i];
+            depthTextures[frame] = depthTextures[0];
+            colorTextures[frame] = colorTextures[0];
+            continue;
+        }
+
         for (uint32_t i = 0; i < 4; ++i)
         {
             RenderGraph::TextureDesc desc{};

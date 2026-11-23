@@ -21,6 +21,13 @@ public:
     VkCommandBuffer beginFrame();
     // TD-02：跨队列依赖方向来自 RenderGraph::getCrossQueueDependencies()。
     // 两个参数同时为 true 表示同一帧出现双向依赖，直接报错。
+    // T-04b：让本帧的图形工作等上一帧的图形工作完成。
+    //
+    // 不这么做时两帧是真正并发的（提交之间只有信号量握手，没有「等上一帧结束」），
+    // 所以「同帧目标只留一张」会跟前一帧正在进行的读撞车。开了它 GPU 侧就不再重叠
+    // 两帧 —— 换来的是渲染目标数量可以减半，代价是要量一下帧时间。
+    void setSerializeGraphicsFrames(bool value) { serializeGraphicsFrames = value; }
+
     void endFrame(bool graphicsWaitsForCompute = false,
                   bool computeWaitsForGraphics = false);
 
@@ -83,4 +90,5 @@ private:
     uint32_t currentImageIndex = 0;
     uint32_t currentFrameInFlightIndex = 0;
     bool swapchainRecreateRequested = false;
+    bool serializeGraphicsFrames = false;
 };
