@@ -4,6 +4,9 @@
 #include "RHI/Breadcrumbs.h"
 #include "RHI/ScratchArena.h"
 
+// T-10：每帧屏障条数 / 管线绑定计数。
+#include "FrameStats.h"
+
 // TM-08：资源别名化的只读报告（只出数字，不改分配）。
 #include "RHI/RenderGraphAlias.h"
 #include <stdexcept>
@@ -117,6 +120,7 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     computeCmd = computeCommandBuffer;
     crossQueueDependencies = {};
     currentFrameSlot = frameSlot;
+    tiny::framestats::beginFrame();
 
     // TM-07：帧首把暂存区轮转到这一帧的槽位（offset 归零、上一轮淘汰的旧块回收）。
     device.getScratch().beginFrame(frameSlot);
@@ -379,9 +383,11 @@ void RenderGraph::endFrame()
         if (!pass.enabled)
         {
             lastFrameSkippedPasses.push_back(pass.name);
+            tiny::framestats::countPass(false);
             continue;
         }
         lastFrameExecutedPasses.push_back(pass.name);
+        tiny::framestats::countPass(true);
         activePasses.push_back(&pass);
     }
 
@@ -577,6 +583,8 @@ void RenderGraph::endFrame()
         if (computeCmd != VK_NULL_HANDLE)
             crumbs->finishSlot(computeCmd, Breadcrumbs::slotFor(currentFrameSlot, true));
     }
+
+    tiny::framestats::endFrame();
 
     for (std::unique_ptr<Pass>& p : passes)
         p.reset();
@@ -877,13 +885,19 @@ void RenderGraph::emitBarrierIfNeeded(const Access& acc, VkCommandBuffer target,
                 state.stage == acc.stage && state.access == acc.access);
 
             if (sameState && isRead)
+            {
+                tiny::framestats::countBarrierSkippedSameState();
                 continue;
+            }
 
             // A source-less, destination-less barrier carries no dependency.
             if (state.layout == acc.layout &&
                 state.stage == VK_PIPELINE_STAGE_2_NONE && state.access == VK_ACCESS_2_NONE &&
                 acc.stage == VK_PIPELINE_STAGE_2_NONE && acc.access == VK_ACCESS_2_NONE)
+            {
+                tiny::framestats::countBarrierSkippedSameState();
                 continue;
+            }
 
             VkImageMemoryBarrier2 b{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
             b.srcStageMask = crossQueue ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : state.stage;
@@ -900,6 +914,7 @@ void RenderGraph::emitBarrierIfNeeded(const Access& acc, VkCommandBuffer target,
             VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
             dep.imageMemoryBarrierCount = 1;
             dep.pImageMemoryBarriers = &b;
+            tiny::framestats::countBarrierCall(1);
             vkCmdPipelineBarrier2(target, &dep);
         }
     }
@@ -915,15 +930,24 @@ void RenderGraph::emitBufferBarrierIfNeeded(const BufferAccess& acc, VkCommandBu
         (e.lastAccessQueue == 1) != currentQueueIsCompute;
     // The timeline semaphore wait is the cross-queue memory dependency.
     if (crossQueue)
+    {
+        tiny::framestats::countBarrierSkippedCrossQueue();
         return;
+    }
 
     const bool isRead = (acc.access & kWriteBits) == 0;
     const bool sameState = (e.stage == acc.stage && e.access == acc.access);
     if (sameState && isRead)
+    {
+        tiny::framestats::countBarrierSkippedSameState();
         return;
+    }
 
     if (!isRead && e.stage == VK_PIPELINE_STAGE_2_NONE && e.access == VK_ACCESS_2_NONE)
+    {
+        tiny::framestats::countBarrierSkippedSameState();
         return;
+    }
 
     const BufferRange range = normalizeBufferRange(e, acc.range);
     VkBufferMemoryBarrier2 b{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2 };
@@ -940,6 +964,7 @@ void RenderGraph::emitBufferBarrierIfNeeded(const BufferAccess& acc, VkCommandBu
     VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
     dep.bufferMemoryBarrierCount = 1;
     dep.pBufferMemoryBarriers = &b;
+    tiny::framestats::countBarrierCall(1);
     vkCmdPipelineBarrier2(target, &dep);
 }
 

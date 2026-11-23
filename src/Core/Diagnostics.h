@@ -63,6 +63,10 @@ namespace diag
 
         // --stats-rendergraph：退出时打印准备 / 录制各自的每帧耗时（TM-10）。
         bool statsRenderGraph = false;
+
+        // --stats-frame：退出时打印每帧屏障条数与管线绑定 / 冗余绑定（T-10）。
+        // 这是 P0 度量基线的一半：屏障条数证明 T-03 能省多少，冗余绑定率是 T-09 的上限。
+        bool statsFrame = false;
         // TM-19：打印本机对本引擎用到的那些格式的能力（颜色/深度/采样/存储/blit/线性过滤），
         // 打印完就退出 —— 改 G-Buffer 格式或加 storage image 之前先跑一次。
         bool printFormats = false;

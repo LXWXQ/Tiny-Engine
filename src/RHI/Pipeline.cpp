@@ -7,6 +7,9 @@
 #include <chrono>
 
 #include "PipelineStats.h"
+
+// T-10：每帧管线绑定 / 冗余绑定计数。
+#include "FrameStats.h"
 #include "Core/AssetPath.h"
 #include "RHI/ShaderReload.h"
 
@@ -216,6 +219,7 @@ void Pipeline::createShaderModule(const std::vector<char>& code, VkShaderModule*
 void Pipeline::bind(VkCommandBuffer commandBuffer) 
 {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    tiny::framestats::countPipelineBind(graphicsPipeline, false);
 }
 
 void Pipeline::defaultPipelineConfigInfo(PipelineConfigInfo& configInfo, uint32_t width, uint32_t height) 
@@ -352,6 +356,7 @@ void ComputePipeline::reloadShaders()
 void ComputePipeline::bind(VkCommandBuffer commandBuffer)
 {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    tiny::framestats::countPipelineBind(pipeline, true);
 }
 
 std::vector<char> ComputePipeline::readFile(const std::string& filepath)

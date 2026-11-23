@@ -17,6 +17,7 @@
 #include "Core/FrameInfo.h"
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
+#include "RHI/FrameStats.h"
 #include "Core/CliCatalog.h"
 #include "Core/AssetPath.h"
 #include "Core/AppEvents.h"
@@ -2184,6 +2185,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!tiny::aliasreport::selfTest())
 		throw std::runtime_error("AliasReport selfTest failed");
 
+	// T-10：帧统计的帧边界与冗余绑定判定（纯计数器，不需要 Device）。
+	if (!tiny::framestats::selfTest())
+		throw std::runtime_error("FrameStats selfTest failed");
+
 	// CLI 选项表的单一来源：分组非空、开关不重复、必含新增项。
 	// 萤火虫：布点确定、范围合法、呼吸不灭（纯算术，先在这里证伪）。
 	if (!Fireflies::selfTest())
@@ -3348,6 +3353,11 @@ void FirstApp::finalizeDiagnostics()
     // TM-10：准备 / 录制各自的每帧耗时。渲染图此刻还活着，统计才有内容。
     if (diagnosticsOptions.statsRenderGraph)
         renderGraph->reportPrepareStats();
+
+    // T-10：每帧屏障条数与管线绑定 / 冗余绑定。这是 P0 度量基线的另一半 ——
+    // 「屏障少 25%」「状态切换少 40%」这两个验收门槛都从这三行数字起算。
+    if (diagnosticsOptions.statsFrame)
+        tiny::framestats::report();
 
     // TM-13：聚簇构建的统计（使用簇数 / 最大簇 / 因每簇上限丢弃的灯数）。
     if (diagnosticsOptions.statsClusters)
