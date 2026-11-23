@@ -92,6 +92,7 @@ const std::vector<UsageLine> kCatalog = {
     { "剖析", "--no-pass-cull", "关掉 Pass 剔除（T-05 的整体回退；关掉后没人读输出的 Pass 也照跑）" },
     { "剖析", "--pass-cull-dry-run", "只打印本帧哪些 Pass 会被剔除，不真的跳过（T-05）" },
         { "剖析", "--rt-pool", "启用跨帧渲染目标池（T-04；默认关，只在尺寸换回旧值时命中）" },
+        { "剖析", "--stats-queue", "退出时打印图形 / 计算队列各自的忙碌窗口与重叠时长（T-07 第一步）" },
         { "剖析", "--no-single-frame-targets", "回到每帧 slot 各一份目标（T-04b 的整体回退开关，默认开的是合成一张）" },
         { "剖析", "--serialize-frames", "本帧图形工作等上一帧完成（T-04b；会让 GPU 不再重叠两帧）" },
     { "剖析", "--light-stress", "铺 N 盏点光源做压力场（配合 --clustered-lighting 看聚簇收益）" },

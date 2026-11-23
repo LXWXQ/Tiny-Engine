@@ -76,6 +76,7 @@ namespace diag
     bool passCullDryRun = false;
     // T-04：跨帧 RT 池。默认关 —— 实测只在「尺寸换回旧值」时命中，空闲图要占 250 MiB 以上。
         bool renderTargetPool = false;
+        bool statsQueue = false;
     // T-04b：同帧目标合成一张。默认开：实测更快（lights-512 +5.4%）且少 15 张图；
     // 它自带「本帧等上一帧」的等待，用 --no-single-frame-targets 整体回退。
     bool singleFrameTargets = true;

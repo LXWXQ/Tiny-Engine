@@ -20,6 +20,7 @@
 #include "RHI/FrameStats.h"
 #include "RHI/StateCache.h"
 #include "RHI/ResourceStats.h"
+#include "RHI/QueueStats.h"
 #include "Core/CliCatalog.h"
 #include "Core/AssetPath.h"
 #include "Core/AppEvents.h"
@@ -126,6 +127,8 @@ tiny::resourcestats::setAllocator(vulkanDevice->getVmaAllocator());
 	const bool serializeFrames = diagnosticsOptions.serializeFrames || (g_singleFrameTargets && !diagnosticsOptions.noSerializeFrames);
 	renderer->setSerializeGraphicsFrames(serializeFrames);
 	tiny::statecache::setEnabled(!diagnosticsOptions.noPipelineCache);
+    // T-07 第一步：没开 --stats-queue 就把时间戳关掉，默认零开销。
+    if (!diagnosticsOptions.statsQueue) tiny::queuestats::shutdown();
 	// 最小化必须放在交换链/渲染器创建之后：GLFW 在 iconify 后客户区变成 0x0，
 	// 先最小化会让 G-Buffer 附件按 0x0 创建而失败。
 	if (window != nullptr && diagnosticsOptions.windowMinimized)
@@ -2225,6 +2228,7 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// T-04 的前置尺子：资源创建计数与显存采样的帧边界（纯计数器，不需要 Device）。
 	if (!tiny::resourcestats::selfTest())
 		throw std::runtime_error("ResourceStats selfTest failed");
+		if (!tiny::queuestats::selfTest()) throw std::runtime_error("QueueStats selfTest failed");
 
 	// CLI 选项表的单一来源：分组非空、开关不重复、必含新增项。
 	// 萤火虫：布点确定、范围合法、呼吸不灭（纯算术，先在这里证伪）。
@@ -3409,6 +3413,7 @@ void FirstApp::finalizeDiagnostics()
 
         // T-04 的判据：稳定态每帧创建 0 次、显存 first/last/peak 贴在一起。
         tiny::resourcestats::report();
+        if (diagnosticsOptions.statsQueue) tiny::queuestats::report();
         renderGraph->reportRenderTargetPool();
 
 		renderGraph->reportPassCulling();

@@ -4,7 +4,7 @@ title: 诊断基础设施实现
 type: debug
 scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~280 行
+size: ~314 行
 updated: 2026-11-23
 ---
 
@@ -290,3 +290,25 @@ build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
 
 - `culled/frame=0.0` 且 `最近一帧: (none)` 是**本引擎的正常结果** —— 特性关掉时 Pass 直接不进图，没有「进了图却没人读输出」的对象。参见决策 49。
 - 一旦某个配置下出现名字，先看它写的那张图被谁读：`read(...)` 声明缺失是最常见的原因（含 `writeColor(..., LOAD_OP_LOAD)` 这种读改写），而不是「真的该剔」。
+### 13.6 [Queue]：两条队列到底有没有重叠（T-07 第一步）
+
+默认关，`--stats-queue` 打开。每条命令缓冲头尾各写一枚 timestamp，下一轮复用到这个 slot 时读回，退出时一行：
+
+```
+[Queue] frames=58 | makespan=8.65 ms | graphics busy=8.36 ms (96.7%) | compute busy=0.25 ms (2.8%) | overlap=0.00 ms (0.0% of compute, max 0.00 ms)
+[Queue] dedicatedCompute=1 sameClockDomain=1 | compute 被图形遮住 0.0%
+```
+
+四个量的定义：
+
+- `makespan`：两条队列从最早开始到最晚结束的跨度（同一帧的两条队列窗口的并集）。
+- `graphics busy` / `compute busy`：各自窗口长度，除以 `makespan` 得到占比。
+- `overlap`：两个窗口的交集长度。`overlap / compute busy` 就是「计算被动藏在图形后面」的比例 —— 这是 T-07 唯一要抬的指标。
+- `max overlap`：单帧最大重叠，用来发现「偶尔重叠」被平均掩盖掉的情况。
+
+两个前提必须一起看：
+
+- `sameClockDomain=0` 时两条队列的时间戳不在同一时间域，`overlap` 一律按 0 处理，只保留各自 busy 时长。
+- 同一帧内只要存在 c2g 依赖（compute 写、graphics 读），图形流整条都要等 compute 完成 —— 因为现在每帧的图形命令只有**一次**提交。实测 512 灯场景 `compute busy=0.25 ms` 而 `overlap=0.00 ms`，正是因为这一点。要抬 `overlap`，必须把图形拆成多个提交点，这正是 T-07 的主体。
+
+关掉时零开销：`Application` 在没有 `--stats-queue` 时直接 `queuestats::shutdown()`，命令缓冲里一枚 timestamp 都不写（默认场景 `--stats-frame` 的三行数字与打开时逐位相同）。

@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~994 行
+size: ~1015 行
 updated: 2026-11-23
 ---
 
@@ -1004,3 +1004,12 @@ voxel-world `98.73 / 10.13 / 9.62 / 10.88 / 89.83 / 0.27 / 1220.7 / 1.00`，ligh
 **T-05（2026-11-23，默认关）**：`cullDeadPasses()` 六条根 + 反向闭包（带读位的访问才算依赖），跑在 `validateWriteCoverage()` 之后。实测默认 / `--pass-cull` / `--pass-cull --no-bloom` / 加截图与 sync 四种配置 `culled/frame` 全为 0，`errors=0`。
 
 **验收偏差**：判据原文「`--no-bloom` 时图内 Pass 数 -7」在开工前已成立（21 → 14），归因是 Pass 按开关不进图，不是剔除。因此把 T-05 的定位改成「兜底工具」并默认关：省不下东西，却会因「读声明缺失」把上游误判成死 Pass（实现中撞到两次：LOAD 附件、导入资源），静默变黑且验证层不报错。
+**T-07 第一步（2026-11-23，`--stats-queue`）**：先补了尺子再动结构。每条命令缓冲头尾各写一枚 timestamp（`src/RHI/QueueStats.{h,cpp}`，两条队列各管自己的一对 query，重置录进命令缓冲 —— 本机没开 `hostQueryReset`），退出时打印 `[Queue]`：
+
+```
+[Queue] frames=58 | makespan=8.65 ms | graphics busy=8.36 ms (96.7%) | compute busy=0.25 ms (2.8%) | overlap=0.00 ms (0.0% of compute, max 0.00 ms)
+```
+
+这条读数（512 灯 + `--clustered-gpu-build`，sync 验证层）：计算队列每帧只忙 0.25 ms，且与图形**零重叠**。原因不是调度器不给机会，而是同帧存在 c2g 依赖（建簇写簇表、光照读簇表），而每帧图形命令只有一次提交 —— 整条图形流都在等 compute。这一条把 T-07 的验收从「compute 与 graphics 有重叠」落到可测的具体数字上：现在的基线是 `overlap=0.00 ms`、`compute busy=0.25 ms`，要抬的就是 `overlap / compute busy`。
+
+默认关且零开销：没有 `--stats-queue` 时 `Application` 直接 `queuestats::shutdown()`，一枚 timestamp 都不写（默认场景 `[FrameStats]` 三行与关闭前后逐位相同）。

@@ -4,7 +4,7 @@ title: 命令行参数全表
 type: validation
 scope: main.cpp、src/Core/CliCatalog.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~179 行
+size: ~190 行
 updated: 2026-11-23
 ---
 

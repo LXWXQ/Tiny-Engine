@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "RHI/StateCache.h"
+#include "RHI/QueueStats.h"
 #include <stdexcept>
 #include <array>
 #include <iostream>
@@ -10,6 +11,7 @@ Renderer::Renderer(Device& device, Swapchain& swapchain)
     createCommandPools();
     createCommandBuffers();
     createSyncObjects();
+    tiny::queuestats::init(vulkanDevice);
 
     std::cout << "[Renderer] D-4/D-5 active: " << kFramesInFlight
               << " frames in flight, graphics + compute timelines, "
@@ -20,6 +22,7 @@ Renderer::Renderer(Device& device, Swapchain& swapchain)
 Renderer::~Renderer()
 {
     vkDeviceWaitIdle(vulkanDevice.getDevice());
+    tiny::queuestats::shutdown();
 
     for (VkSemaphore semaphore : imageAvailableSemaphores)
         if (semaphore != VK_NULL_HANDLE)
@@ -149,6 +152,7 @@ VkCommandBuffer Renderer::beginFrame()
 {
     currentFrameInFlightIndex = static_cast<uint32_t>(frameCounter % kFramesInFlight);
     waitForFrameSlot(currentFrameInFlightIndex);
+    tiny::queuestats::beginFrame(currentFrameInFlightIndex, frameCounter + 1);
 
     VkSemaphore acquireSemaphore = imageAvailableSemaphores[currentFrameInFlightIndex];
     const VkResult acquireResult = vkAcquireNextImageKHR(
@@ -186,7 +190,10 @@ VkCommandBuffer Renderer::beginFrame()
     if (vkBeginCommandBuffer(computeCommandBuffer, &beginInfo) != VK_SUCCESS)
         throw std::runtime_error("failed to begin compute command buffer!");
 
+    tiny::queuestats::writeBegin(computeCommandBuffer, true);
+    tiny::queuestats::writeBegin(graphicsCommandBuffer, false);
     ++frameCounter;   // 当前帧的 1-based 逻辑帧号，也作为两条 timeline 的 value
+
 
     return graphicsCommandBuffer;
 }
@@ -222,7 +229,10 @@ void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphi
     VkCommandBuffer computeCommandBuffer = computeCommandBuffers[currentFrameInFlightIndex];
     const uint64_t signalValue = frameCounter;
 
+    tiny::queuestats::writeEnd(computeCommandBuffer, true);
+    tiny::queuestats::writeEnd(graphicsCommandBuffer, false);
     if (vkEndCommandBuffer(graphicsCommandBuffer) != VK_SUCCESS ||
+
         vkEndCommandBuffer(computeCommandBuffer) != VK_SUCCESS)
         throw std::runtime_error("failed to end command buffers!");
 
