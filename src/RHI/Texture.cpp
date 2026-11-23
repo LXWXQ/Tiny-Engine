@@ -1,4 +1,5 @@
 #include "Texture.h"
+#include "RHI/ResourceStats.h"
 #include "TextureBudget.h"
 #include "Core/AssetPack.h"
 #include "Core/AssetPath.h"
@@ -357,6 +358,7 @@ if (vmaCreateImage(vulkanDevice.getVmaAllocator(), &imageInfo, &imageAllocInfo,
 vmaDestroyBuffer(vulkanDevice.getVmaAllocator(), stagingBuffer, stagingAllocation);
 throw std::runtime_error("Texture: image creation failed");
 }
+tiny::resourcestats::countImage();
 
 VkCommandBufferAllocateInfo allocInfoCmd{};
 allocInfoCmd.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;

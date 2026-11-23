@@ -1,4 +1,5 @@
 #include "RHI/CubemapTexture.h"
+#include "RHI/ResourceStats.h"
 #include <stdexcept>
 #include <iostream>
 
@@ -54,6 +55,7 @@ void CubemapTexture::createImage()
 
     if (vmaCreateImage(device.getVmaAllocator(), &info, &alloc, &image, &allocation, nullptr) != VK_SUCCESS)
         throw std::runtime_error("CubemapTexture: 图像创建失败");
+    tiny::resourcestats::countImage();
 }
 
 void CubemapTexture::createViews()

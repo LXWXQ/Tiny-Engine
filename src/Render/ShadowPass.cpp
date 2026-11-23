@@ -1,4 +1,5 @@
 #include "Render/ShadowPass.h"
+#include "RHI/ResourceStats.h"
 
 #include "Render/VegetationPass.h"
 
@@ -212,6 +213,7 @@ void ShadowPass::createResources()
         if (vmaCreateImage(vulkanDevice.getVmaAllocator(), &imageInfo, &allocInfo,
                            &slot.image, &slot.allocation, nullptr) != VK_SUCCESS)
             throw std::runtime_error("ShadowPass: 阴影图创建失败");
+        tiny::resourcestats::countImage();
 
         VkImageViewCreateInfo arrayInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
         arrayInfo.image = slot.image;

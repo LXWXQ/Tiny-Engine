@@ -1,4 +1,5 @@
 #include "Render/SSAOPass.h"
+#include "RHI/ResourceStats.h"
 #include "RHI/CommandUtils.h"
 #include "RHI/ScratchArena.h"
 #include "AssetPaths.h"
@@ -42,7 +43,6 @@ SSAOPass::~SSAOPass()
 {
     if (pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device.getDevice(), pipelineLayout, nullptr);
     if (localSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device.getDevice(), localSetLayout, nullptr);
-
 
     if (noiseTexture.sampler != VK_NULL_HANDLE) vkDestroySampler(device.getDevice(), noiseTexture.sampler, nullptr);
     if (noiseTexture.view != VK_NULL_HANDLE) vkDestroyImageView(device.getDevice(), noiseTexture.view, nullptr);
@@ -158,7 +158,7 @@ void SSAOPass::createNoiseTexture()
     imageAllocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     vmaCreateImage(device.getVmaAllocator(), &imageInfo, &imageAllocInfo,
                    &noiseTexture.image, &noiseTexture.allocation, nullptr);
-
+    tiny::resourcestats::countImage();
 
     // 用一次性命令缓冲做拷贝 + 布局转换
     VkCommandPool cmdPool = VK_NULL_HANDLE;

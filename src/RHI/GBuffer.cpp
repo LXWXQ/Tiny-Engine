@@ -1,4 +1,5 @@
 #include "GBuffer.h"
+#include "RHI/ResourceStats.h"
 #include <iostream>
 
 GBuffer::GBuffer(Device& device, VkExtent2D extent)
@@ -88,6 +89,7 @@ void GBuffer::createAttachment(VkFormat format, VkImageUsageFlags usage, FrameBu
     if (vmaCreateImage(device.getVmaAllocator(), &imageInfo, &allocInfo,
         &attachment->image, &attachment->allocation, nullptr) != VK_SUCCESS)
         throw std::runtime_error("[致命错误] G-Buffer 附件创建失败！");
+    tiny::resourcestats::countImage();
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

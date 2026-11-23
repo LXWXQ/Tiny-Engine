@@ -1,4 +1,5 @@
 #include "Texture3D.h"
+#include "RHI/ResourceStats.h"
 
 #include <cstring>
 #include <iostream>
@@ -53,6 +54,7 @@ Texture3D::Texture3D(Device& device, const void* pixels,
         vmaDestroyBuffer(vulkanDevice.getVmaAllocator(), stagingBuffer, stagingAllocation);
         throw std::runtime_error("Texture3D: image creation failed");
     }
+    tiny::resourcestats::countImage();
 
     VkCommandBufferAllocateInfo cmdInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
     cmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;

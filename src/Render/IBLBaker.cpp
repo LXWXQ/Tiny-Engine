@@ -9,6 +9,7 @@
 // ============================================================================
 
 #include "Render/IBLBaker.h"
+#include "RHI/ResourceStats.h"
 #include "RHI/CommandUtils.h"
 #include "RHI/Texture.h"
 #include "AssetPaths.h"
@@ -64,6 +65,7 @@ void IBLBaker::createTargets()
     alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (vmaCreateImage(device.getVmaAllocator(), &info, &alloc, &brdfLutImage, &brdfLutAllocation, nullptr) != VK_SUCCESS)
         throw std::runtime_error("IBLBaker: BRDF LUT 图像创建失败");
+    tiny::resourcestats::countImage();
 
     VkImageViewCreateInfo view{};
     view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
