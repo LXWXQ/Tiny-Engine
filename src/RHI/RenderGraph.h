@@ -294,6 +294,15 @@ public:
     // 「录制」（屏障 + vkCmdBeginRendering + 回调）分开。准备阶段只读写 Pass
     // 自己的声明和 textures / buffers 的只读字段，不碰 VkCommandBuffer，可以并行；
     // 录制阶段依赖上一个 Pass 留下的布局，必须串行。默认关闭（--parallel-prepare）。
+    // T-05：Pass 剔除。只裁掉"这一帧没有任何活着的 Pass 读它的输出"的那些，
+    // 顺序、清单、计时序号一概不动；快照与盘外读取（persistent 纹理、host-visible 缓冲）
+    // 一律当作根，不参与裁剪。
+    void setPassCullEnabled(bool enabled) { passCullEnabled = enabled; }
+    void setPassCullDryRun(bool enabled) { passCullDryRun = enabled; }
+    bool isPassCullEnabled() const { return passCullEnabled; }
+    bool isPassCullDryRun() const { return passCullDryRun; }
+    const std::vector<std::string>& getLastFrameCulledPasses() const { return lastFrameCulledPasses; }
+    void reportPassCulling() const;
     void setJobSystem(JobSystem* jobs) { jobSystem = jobs; }
     void setParallelPrepare(bool enabled) { parallelPrepare = enabled; }
     bool isParallelPrepare() const { return parallelPrepare; }
@@ -521,6 +530,9 @@ private:
     // 与屏障推导（同步正确性）是两件不同的事 —— 这个查的是"语义正确性"，
     // 验证层对此一言不发（从 UNDEFINED 布局转出来本身完全合法）。
     void validateWriteCoverage();
+    // 计算本帧哪些 Pass 的输出无人读，填 frameCulled / lastFrameCulledPasses。
+    void cullDeadPasses();
+
 
     // P0-4：GPU 计时（nullptr = 关闭；编译期关闭时该指针恒为 nullptr）。
     GpuTimer* gpuTimer = nullptr;
@@ -542,6 +554,13 @@ private:
     std::vector<TextureEntry> textures;
     std::vector<BufferEntry> buffers;
     std::vector<std::unique_ptr<Pass>> passes;
+    // 与 passes 一一对应：本帧是否被剔除。
+    std::vector<bool> frameCulled;
+    std::vector<std::string> lastFrameCulledPasses;
+    bool passCullEnabled = false;   // T-05：本引擎暂无「输出无人读」的 Pass，默认关；--pass-cull 打开。
+    bool passCullDryRun = false;
+    uint64_t culledPassFrames = 0;
+    uint64_t culledPassesTotal = 0;
     std::vector<VkImageMemoryBarrier2> pendingImageBarriers;
     std::unique_ptr<tiny::RenderTargetPool> texturePool;   // T-04
     CrossQueueDependencies crossQueueDependencies{};

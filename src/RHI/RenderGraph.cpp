@@ -372,6 +372,9 @@ void RenderGraph::endFrame()
     // 而不是让画面先花一帧。
     validateWriteCoverage();
 
+    // T-05: cull passes whose outputs nobody reads, before building activePasses.
+    cullDeadPasses();
+
     // 本帧 Pass 执行 / 跳过清单：setPassEnabled 的语义靠它可断言，
     // 调试面板也能直接显示这一帧到底跑了哪些 Pass。
     lastFrameExecutedPasses.clear();
@@ -384,10 +387,18 @@ void RenderGraph::endFrame()
     // [RenderGraph] pass bookkeeping selfTest、TM-08 的生命周期序号都靠这个顺序。
     std::vector<Pass*> activePasses;
     activePasses.reserve(passes.size());
-    for (std::unique_ptr<Pass>& passPtr : passes)
+    for (size_t index = 0; index < passes.size(); ++index)
     {
-        Pass& pass = *passPtr;
+        Pass& pass = *passes[index];
         if (!pass.enabled)
+        {
+            lastFrameSkippedPasses.push_back(pass.name);
+            tiny::framestats::countPass(false);
+            continue;
+        }
+        // T-05：被剔除的 Pass 与 setEnabled(false) 走同一条记账路径 ——
+        // 区别只在原因（前者是"没人读它的输出"，后者是调用方主动关掉）。
+        if (!passCullDryRun && index < frameCulled.size() && frameCulled[index])
         {
             lastFrameSkippedPasses.push_back(pass.name);
             tiny::framestats::countPass(false);
@@ -656,6 +667,222 @@ void RenderGraph::endFrame()
     computeCmd = VK_NULL_HANDLE;
 }
 
+namespace
+{
+// 子资源范围是否相交（mip 与 layer 两个维度都要相交）。
+bool rangesOverlapTex(const RenderGraph::SubresourceRange& a, const RenderGraph::SubresourceRange& b)
+{
+    const bool mip = a.baseMipLevel < b.baseMipLevel + b.levelCount
+                  && b.baseMipLevel < a.baseMipLevel + a.levelCount;
+    const bool layer = a.baseArrayLayer < b.baseArrayLayer + b.layerCount
+                    && b.baseArrayLayer < a.baseArrayLayer + a.layerCount;
+    return mip && layer;
+}
+
+bool rangesOverlapBuf(const RenderGraph::BufferRange& a, const RenderGraph::BufferRange& b)
+{
+    return a.offset < b.offset + b.size && b.offset < a.offset + a.size;
+}
+}
+
+void RenderGraph::cullDeadPasses()
+{
+    frameCulled.assign(passes.size(), false);
+    lastFrameCulledPasses.clear();
+    if (!passCullEnabled || passes.empty())
+        return;
+
+    const size_t count = passes.size();
+    std::vector<char> needed(count, 0);
+    std::vector<size_t> work;
+
+    const auto markNeeded = [&](size_t index)
+    {
+        if (!needed[index])
+        {
+            needed[index] = 1;
+            work.push_back(index);
+        }
+    };
+
+    // ---- 第一轮：谁是根 ----
+    // 根 = 必须留下的 Pass。四条基础规则：纯声明（没有回调，靠它建立跨队列依赖）、
+    // 没有任何访问声明（可能有图外副作用，看不懂就别动）、最后一个是 present 转换、
+    // 写 persistent 纹理或 host-visible 缓冲；另有两条「图看不见的消费者」规则见下。
+    for (size_t i = 0; i < count; ++i)
+    {
+        const Pass& pass = *passes[i];
+        if (!pass.enabled)
+            continue;
+
+        bool root = pass.callback == nullptr
+                 || (pass.accesses.empty() && pass.bufferAccesses.empty())
+                 || i + 1 == count;
+        // 第五、六条根：图看不见的消费者。
+        // (a) 在图上什么都没写的 Pass，输出一定落在图外（HiZ 建在 SceneGpuBatch 的自持图像里，
+        //     外面的剔除 compute 读它）——有回调就必须跑。
+        // (b) 写的是导入资源（owned=false），它的消费者在图外：交换链、编辑器视口、簇表。
+        if (!root && pass.callback != nullptr)
+        {
+            bool writesInGraph = false;
+            for (const Access& acc : pass.accesses)
+                if (acc.texture.valid() && (acc.access & kWriteBits))
+                    writesInGraph = true;
+            for (const BufferAccess& ba : pass.bufferAccesses)
+                if (ba.buffer.valid() && (ba.access & kWriteBits))
+                    writesInGraph = true;
+            if (!writesInGraph)
+                root = true;
+        }
+        for (size_t k = 0; !root && k < pass.accesses.size(); ++k)
+        {
+            const Access& acc = pass.accesses[k];
+            if (!acc.texture.valid() || acc.texture.id >= textures.size())
+                continue;
+            if (!(acc.access & kWriteBits))
+                continue;
+            if (textures[acc.texture.id].desc.persistent || !textures[acc.texture.id].owned)
+                root = true;
+        }
+        for (size_t k = 0; !root && k < pass.bufferAccesses.size(); ++k)
+        {
+            const BufferAccess& ba = pass.bufferAccesses[k];
+            if (!ba.buffer.valid() || ba.buffer.id >= buffers.size())
+                continue;
+            if (!(ba.access & kWriteBits))
+                continue;
+            if (buffers[ba.buffer.id].desc.hostVisible || !buffers[ba.buffer.id].owned)
+                root = true;
+        }
+        for (size_t k = 0; !root && k < pass.bufferAccesses.size(); ++k)
+        {
+            const BufferAccess& ba = pass.bufferAccesses[k];
+            if (!ba.buffer.valid() || ba.buffer.id >= buffers.size())
+                continue;
+            if ((ba.access & kWriteBits) && buffers[ba.buffer.id].desc.hostVisible)
+                root = true;
+        }
+        if (root)
+            markNeeded(i);
+    }
+
+    // ---- 第二轮：从根往回找生产者 ----
+    // 只对读做闭包：活着的 Pass 读到谁写的，那个写者也活着。
+    while (!work.empty())
+    {
+        const size_t consumerIndex = work.back();
+        work.pop_back();
+        const Pass& consumer = *passes[consumerIndex];
+
+        for (const Access& acc : consumer.accesses)
+        {
+            if (!acc.texture.valid() || acc.texture.id >= textures.size())
+                continue;
+            // 只有"带读位的访问"才算依赖：纯写不构成读；但 LOAD 附件与
+            // read-write storage 的访问位里含读位（writeColor 在 LOAD 时会加
+            // COLOR_ATTACHMENT_READ），漏掉这类读就会把它的生产者误判成死 Pass。
+            const VkAccessFlags2 readBits = acc.access & ~kWriteBits;
+            if (readBits == 0)
+                continue;
+            const SubresourceRange readRange = normalizeTextureRange(textures[acc.texture.id], acc.range);
+            for (size_t j = consumerIndex; j-- > 0;)
+            {
+                const Pass& producer = *passes[j];
+                if (!producer.enabled)
+                    continue;
+                bool produced = false;
+                for (const Access& w : producer.accesses)
+                {
+                    if (!w.texture.valid() || w.texture.id != acc.texture.id || !(w.access & kWriteBits))
+                        continue;
+                    if (rangesOverlapTex(readRange, normalizeTextureRange(textures[w.texture.id], w.range)))
+                    {
+                        produced = true;
+                        break;
+                    }
+                }
+                if (produced)
+                {
+                    markNeeded(j);
+                    break;   // 只有最近的那个写者是有效生产者
+                }
+            }
+        }
+
+        for (const BufferAccess& ba : consumer.bufferAccesses)
+        {
+            if (!ba.buffer.valid() || ba.buffer.id >= buffers.size())
+                continue;
+            const VkAccessFlags2 readBits = ba.access & ~kWriteBits;
+            if (readBits == 0)
+                continue;
+            const BufferRange readRange = normalizeBufferRange(buffers[ba.buffer.id], ba.range);
+            for (size_t j = consumerIndex; j-- > 0;)
+            {
+                const Pass& producer = *passes[j];
+                if (!producer.enabled)
+                    continue;
+                bool produced = false;
+                for (const BufferAccess& w : producer.bufferAccesses)
+                {
+                    if (!w.buffer.valid() || w.buffer.id != ba.buffer.id || !(w.access & kWriteBits))
+                        continue;
+                    if (rangesOverlapBuf(readRange, normalizeBufferRange(buffers[w.buffer.id], w.range)))
+                    {
+                        produced = true;
+                        break;
+                    }
+                }
+                if (produced)
+                {
+                    markNeeded(j);
+                    break;
+                }
+            }
+        }
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        Pass& pass = *passes[i];
+        if (!pass.enabled || needed[i])
+            continue;
+        frameCulled[i] = true;
+        lastFrameCulledPasses.push_back(pass.name);
+    }
+
+    if (!lastFrameCulledPasses.empty())
+    {
+        ++culledPassFrames;
+        culledPassesTotal += lastFrameCulledPasses.size();
+        if (passCullDryRun || std::getenv("TINY_RG_CULL_TRACE") != nullptr)
+        {
+            std::printf("[Cull]%s 本帧 %zu 个 Pass 无人读输出:",
+                passCullDryRun ? " (dry-run, not skipped)" : "", lastFrameCulledPasses.size());
+            for (const std::string& name : lastFrameCulledPasses)
+                std::printf(" %s", name.c_str());
+            std::printf("\n");
+        }
+    }
+}
+
+void RenderGraph::reportPassCulling() const
+{
+    const double perFrame = culledPassFrames == 0
+        ? 0.0
+        : static_cast<double>(culledPassesTotal) / static_cast<double>(culledPassFrames);
+    std::printf("[Cull] enabled=%d dryRun=%d | frames=%llu culled/frame=%.1f | 最近一帧:",
+        passCullEnabled ? 1 : 0, passCullDryRun ? 1 : 0,
+        static_cast<unsigned long long>(culledPassFrames), perFrame);
+    if (lastFrameCulledPasses.empty())
+        std::printf(" (none)\n");
+    else
+    {
+        for (const std::string& name : lastFrameCulledPasses)
+            std::printf(" %s", name.c_str());
+        std::printf("\n");
+    }
+}
 void RenderGraph::validateWriteCoverage()
 {
     // TD-05: coverage is tracked per mip/layer (and per buffer interval), not

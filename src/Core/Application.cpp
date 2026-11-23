@@ -125,7 +125,7 @@ tiny::resourcestats::setAllocator(vulkanDevice->getVmaAllocator());
 	g_singleFrameTargets = diagnosticsOptions.singleFrameTargets && !diagnosticsOptions.noSingleFrameTargets;
 	const bool serializeFrames = diagnosticsOptions.serializeFrames || (g_singleFrameTargets && !diagnosticsOptions.noSerializeFrames);
 	renderer->setSerializeGraphicsFrames(serializeFrames);
-tiny::statecache::setEnabled(!diagnosticsOptions.noPipelineCache);
+	tiny::statecache::setEnabled(!diagnosticsOptions.noPipelineCache);
 	// 最小化必须放在交换链/渲染器创建之后：GLFW 在 iconify 后客户区变成 0x0，
 	// 先最小化会让 G-Buffer 附件按 0x0 创建而失败。
 	if (window != nullptr && diagnosticsOptions.windowMinimized)
@@ -158,6 +158,10 @@ tiny::statecache::setEnabled(!diagnosticsOptions.noPipelineCache);
 	renderGraph = std::make_unique<RenderGraph>(*vulkanDevice);
 // T-04：默认关。--rt-pool 才启用（实测命中率约 25%，空闲图要占 250 MiB 以上）。
 renderGraph->setRenderTargetPoolEnabled(diagnosticsOptions.renderTargetPool);
+
+	// T-05：Pass 剔除。默认开；--no-pass-cull 是整体回退，--pass-cull-dry-run 只报不跳。
+	renderGraph->setPassCullEnabled(diagnosticsOptions.passCull && !diagnosticsOptions.noPassCull);
+	renderGraph->setPassCullDryRun(diagnosticsOptions.passCullDryRun);
 
 	// TM-10：准备阶段并行。先把作业系统注入，再按开关打开 —— 反过来的话第一帧
 	// 会退化成串行（不影响正确性，但统计里会多一个异常值）。
@@ -3407,6 +3411,7 @@ void FirstApp::finalizeDiagnostics()
         tiny::resourcestats::report();
         renderGraph->reportRenderTargetPool();
 
+		renderGraph->reportPassCulling();
         // T-09：管线绑定缓存省掉了多少条 vkCmdBindPipeline。
         tiny::statecache::report();
 

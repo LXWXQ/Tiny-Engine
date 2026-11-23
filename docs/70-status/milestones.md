@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1528 行
+size: ~1518 行
 updated: 2026-11-23
 ---
 
@@ -1508,3 +1508,23 @@ T-04 的 `[RTPool] top creators` 全是 `Frame0` / `Frame1` 成对出现。顺�
 ### 回退与验证
 
 `--no-pipeline-cache` 是整体回退开关（关掉后每次绑定都照发）。五个场景（default / voxel-world / lights-512 / `--resize-test` / `--cross-queue-test`）均 `errors=0 warnings=0`、stderr 0 字节；同批次交替 A/B（lights-512，600 帧 × 3）中位数 93.92 对 91.76 FPS（+2.4%）。
+## T-05：Pass 剔除（默认关，实测没有可剔的对象）（2026-11-23）
+
+`RenderGraph::cullDeadPasses()` 在图内做「输出无人读」的剔除：先定根（纯声明 Pass / 无访问声明 / 最后一个 / 写 persistent 纹理 / 写 host-visible 缓冲 / 图上没写东西 / 写导入资源），再从根反向闭包找最近的重叠写者。
+
+| 配置 | `passes/frame` | `culled/frame` | `[Validation]` |
+|---|---|---|---|
+| 默认 | 21.0 | 0.0 | errors=0 warnings=0 |
+| `--pass-cull` | 21.0 | 0.0 | errors=0 |
+| `--pass-cull --no-bloom` | 14.0 | 0.0 | errors=0 |
+| `--pass-cull --validation-features sync --screenshot --screenshot-frame 35` | 21.0 | 0.0 | errors=0 |
+
+结论：**一条都没剔掉**。本引擎的 Pass 在特性关闭时根本不进图（`BloomPass::addToGraph` 先看 `bloomEnabled`），计划里那条「`--no-bloom` 时图内 Pass 数减 7」在开工前就成立（21 → 14），但不是剔除的功劳。因此默认关，只留 `--pass-cull` 当兜底。
+
+实现过程中被实测撞到三次：
+
+1. **LOAD 附件是读**。`writeColor(..., LOAD_OP_LOAD)` 的访问位含 `COLOR_ATTACHMENT_READ`，按「无写位才算读」判会把它的上游整条判死 —— 第一版把 `Glass` / `Geometry` / `Lighting` / `SSAO` 都剔了。
+2. **导入资源与「图上没写东西」的 Pass 必须是根**。`Present` 写的是 `importTexture(..., VK_IMAGE_LAYOUT_UNDEFINED)` 导入的交换链图（`persistent` 为假，只能靠 `owned=false` 认出来），`HiZBuild` 在图上只声明了读、输出落在 `SceneGpuBatch` 的自持图像里。漏了这两条，Bloom 整链 + `Present` + `HiZBuild` 全被判死。
+3. **开关必须在 `renderGraph` 创建之后设**。一开始写在 `renderer` 初始化旁边，四次运行全部 `0xC0000005`、stderr 0 字节、日志停在 `[Renderer] D-4/D-5 active`。
+
+校验：`tools/DocCheck.ps1` PASS；`tools/Validate.ps1 -Incremental -SkipSetup` ALL PASS（96 项、FAIL 0、stderr 0 字节）。

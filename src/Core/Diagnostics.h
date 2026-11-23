@@ -69,7 +69,12 @@ namespace diag
         bool statsFrame = false;
     // T-09 的整体回退：关掉管线绑定缓存，每次绑定都照发。
     bool noPipelineCache = false;
-        // T-04：跨帧 RT 池。默认关 —— 实测只在「尺寸换回旧值」时命中，空闲图要占 250 MiB 以上。
+    // T-05：Pass 剔除默认关（本引擎暂无「输出无人读」的 Pass）；--pass-cull 打开，
+    // --no-pass-cull 覆盖它，--pass-cull-dry-run 只打印不跳过。
+    bool passCull = false;
+    bool noPassCull = false;
+    bool passCullDryRun = false;
+    // T-04：跨帧 RT 池。默认关 —— 实测只在「尺寸换回旧值」时命中，空闲图要占 250 MiB 以上。
         bool renderTargetPool = false;
     // T-04b：同帧目标合成一张。默认开：实测更快（lights-512 +5.4%）且少 15 张图；
     // 它自带「本帧等上一帧」的等待，用 --no-single-frame-targets 整体回退。

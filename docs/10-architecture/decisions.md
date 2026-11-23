@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~871 行
+size: ~902 行
 updated: 2026-11-23
 ---
 
@@ -869,3 +869,46 @@ resize 的创建量随之从 44 掉到 25 上下，而且省的是常驻显存�
 **收益与代价。** 省掉 10~20 条 `vkCmdBindPipeline`，同批次交替跑（lights-512，600 帧 × 3 次，开关交替各三次）中位数 93.92 对 91.76 FPS，即 +2.4%；跨批次与 `docs/70-status/baseline.md` 的 94.56 比没有意义（批次间漂移约 4%）。这条改动的价值是**把"冗余绑定"这个数从 44.7% 打到 0，并给出一个以后不会再回来的基线**，以及为后续描述符/顶点缓冲的状态缓存留出同一个落点。不顺手的部分：`--stats-frame` 现在多一行 `[StateCache]`，两表的绝对条数必须一致才对，不一致就说明窗口或记账错了；`--no-pipeline-cache` 是整体回退开关，关掉后 `unmanaged` 会等于全部绑定、`saved=0%`。
 
 **不引入的。** 没有做"按管线排序重排绘制"（那是 TM-15 的排序批处理，触发条件还没到）；没有做描述符集缓存（`desc binds/frame` 只有 2，没有可省的量）。
+
+---
+
+## 决策 49：Pass 剔除只认「图内读声明」，默认关（T-05）
+
+### 问题
+
+渲染图按声明顺序线性执行，不做重排，也从不跳过 Pass。于是只要某个特性的 Pass 被加进图、但这一帧没人读它的输出，它仍然会跑满整条管线：attach、清屏、绘制、屏障一个不少。UE 的 RDG 有 `GRDGCullPasses` 做这件事，T-05 的目标是补上同样的能力。
+
+### 做法
+
+`RenderGraph::cullDeadPasses()` 在 `validateWriteCoverage()` 之后、选 `activePasses` 之前跑，两轮：
+
+1. **定根**（必须留下的 Pass）。六条：没有回调的纯声明 Pass（`Clusters.ReadSync` 这类，靠它建立跨队列依赖）；一条访问声明都没有（可能有图外副作用，看不懂就不动）；最后一个 Pass（present 转换）；写 persistent 纹理；写 host-visible 缓冲；以及两条「图看不见的消费者」——**在图上什么都没写**的 Pass（HiZ 建在 `SceneGpuBatch` 的自持图像里，外面的剔除 compute 读它），和**写了导入资源**的 Pass（`owned=false`：交换链、编辑器视口、簇表）。
+2. **反向闭包**。对每个活着的 Pass，把所有「带读位的访问」逐条找最近的重叠写者，标记之，直到不动点。带读位而不是「无写位」，是这里最容易写错的一处：`writeColor(..., LOAD_OP_LOAD)` 的访问位含 `COLOR_ATTACHMENT_READ`，它是读改写；只按「无写位」判读会把它当作纯生产者，于是它的上游被整条判死。
+
+被剔除的 Pass 与 `setEnabled(false)` 走**同一条记账路径**（`lastFrameSkippedPasses` + `countPass(false)`），`--pass-cull-dry-run` 只打印不跳过。
+
+### 结果
+
+| 配置 | `passes/frame` | `culled/frame` | errors |
+|---|---|---|---|
+| 默认 | 21.0 | 0.0 | 0 |
+| `--pass-cull` | 21.0 | 0.0 | 0 |
+| `--pass-cull --no-bloom` | 14.0 | 0.0 | 0 |
+| `--pass-cull --validation-features sync --screenshot` | 21.0 | 0.0 | 0 |
+
+**一条都没剔掉。** 原因是本引擎的 Pass 在特性关闭时**根本不进图**（`BloomPass::addToGraph` 首先看 `frameInfo.settings.bloomEnabled`），而不是「进了图但输出没人读」。计划里那条验收判据「`--no-bloom` 时图内 Pass 数减 7」在开工前就成立（21 → 14），但它归功于 Pass 自己不进图，与剔除无关。
+
+### 为什么默认关
+
+省不下来任何东西，却引入一类静默失败：新写的 Pass 只要通过预建描述符集采样上游、而那条读没有进 `pass.read(...)` 的声明，它的上游就会被判成死 Pass 剔掉，画面变黑而验证层不会报错。这条风险在实现过程中被实测撞到两次（LOAD 附件、导入资源），所以默认关、`--pass-cull` 显式打开，作为「未来某天真的出现死 Pass」时的兜底工具。
+
+### 踩到的三个坑
+
+1. **LOAD 附件是读**：不加这条，`Glass` / `Geometry` / `Lighting` / `SSAO` 全被判死。
+2. **导入资源与「图上没写东西」的 Pass 都必须是根**：不加这条，Bloom 整链、`Present`、`HiZBuild` 被判死（`Present` 写的是 `importTexture(VK_IMAGE_LAYOUT_UNDEFINED)` 导入的交换链图，`persistent` 为假，只能靠 `owned=false` 认出来）。
+3. **开关必须在 `renderGraph` 创建之后设**：一开始写在 `renderer` 初始化旁边（`renderGraph` 还没建），四次运行全部 `0xC0000005`，`stderr` 0 字节、日志停在 `[Renderer] D-4/D-5 active`。
+
+### 不引入的
+
+- 不按「输出被谁读」重排 Pass（T-07 的 FramePlan 才动执行顺序）。
+- 不做跨帧的剔除结果缓存（第一版每帧重算，21 个 Pass 的闭包开销可忽略）。

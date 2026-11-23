@@ -4,7 +4,7 @@ title: 诊断基础设施实现
 type: debug
 scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~283 行
+size: ~280 行
 updated: 2026-11-23
 ---
 
@@ -275,3 +275,18 @@ build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
 - **`bindCalls` 必须等于 `[FrameStats] pipelineBinds/frame`**，`skipped` 必须等于 `redundant`。两表的窗口都在 `RenderGraph::beginFrame` 开，一旦不等就说明记账或窗口错了 —— 这是这条缓存唯一的自检手段。
 - `saved` 就是 P3 里「状态切换次数下降 ≥ 40%」的分母：当前 default 44.7%、lights-512 49.4%。省掉的是驱动调用，不是 GPU 时间 —— 帧时间不因此变化。
 - 缓存按 `VkCommandBuffer` 分别记账（图形 / 计算两条流不共享），`Pipeline` / `ComputePipeline` 析构时整体失效（句柄值可能被复用）。`--no-single-frame-targets` 之类开关不影响它。
+
+### 13.5 [Cull]：Pass 剔除剔掉了谁（T-05）
+
+默认关，`--pass-cull` 打开。退出时一行：
+
+```
+[Cull] enabled=1 dryRun=0 | frames=0 culled/frame=0.0 | 最近一帧: (none)
+```
+
+`frames` 只统计「这一帧至少剔掉一个 Pass」的帧数，`culled/frame` 是在这些帧上的平均；`--pass-cull-dry-run` 时数字照样累计，但 Pass 不会真的被跳过，`[FrameStats] passes/frame` 不变。
+
+读法：
+
+- `culled/frame=0.0` 且 `最近一帧: (none)` 是**本引擎的正常结果** —— 特性关掉时 Pass 直接不进图，没有「进了图却没人读输出」的对象。参见决策 49。
+- 一旦某个配置下出现名字，先看它写的那张图被谁读：`read(...)` 声明缺失是最常见的原因（含 `writeColor(..., LOAD_OP_LOAD)` 这种读改写），而不是「真的该剔」。
