@@ -4,8 +4,8 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~635 行
-updated: 2026-11-20
+size: ~700 行
+updated: 2026-11-23
 ---
 
 # 关键设计决策
@@ -528,7 +528,9 @@ spdlog 已在 `3rdParty` 且配了 include，但**一行都没用**。
 `--selftest 30` 里 `[Transient] selfTest PASS`、`errors=0`、stderr 0 字节；
 `--selftest 60 --gpu-scene` 96.9 FPS、`errors=0`。
 
-## 决策 40：聚簇建簇放在图形流里做，一次 dispatch 取代 CPU 逐灯扫描（TM-13 第二步）
+## 决策 40：聚簇建簇放在图形流里做，一次 dispatch 取代 CPU 逐灯扫描（TM-13 第二步，已修）
+
+> **已修（决策 43）**：簇表登记进渲染图、暂存区改 CONCURRENT 之后，建簇已挪回异步 compute 流。下面「为什么走 addGraphicsPass」与「不引入的」两条只保留当时的理由。
 
 **问题**：TM-13 第一步的建簇在 CPU 上做（按灯剪枝 + 计数排序）。512 盏灯时
 Debug 构建要十几毫秒一帧（早期实测 18.3 ms），Release 也有约 1 ms —— 建簇成了
@@ -633,3 +635,54 @@ CPU vs GPU 逐像素差 213 像素，全部落在 HUD 的 FPS 读数区（x 102.
 **不引入的**：直方图 + 百分位裁剪（现在用均值，极端高光会拉偏一点；要更稳再上直方图）、
 曝光纹理（把曝光写进一张 1x1 纹理让片段自己读，那是要上 GPU 自适应时才需要）、
 自动白平衡。
+
+## 决策 43：把簇表登记进渲染图，建簇挪回异步 compute 流（T-02）
+
+**问题**：决策 40 把建簇挂在图形流里，代价是异步 compute 队列只有探针在用。`crossQueue` 通路本身是通的
+（`--cross-queue-test` 双向都过），但没有真实消费者，于是"多提交能省多少"这件事一直没有可验证的落点。
+当时的理由是簇表走每帧暂存区、没在图里登记，跨队列依赖建立不起来。
+
+**做法**：两块砖，都不用改 `Renderer`（c2g 的提交顺序早就在 `Renderer::endFrame` 里按依赖方向排好了）。
+
+- **暂存区改成 CONCURRENT**：`src/RHI/ScratchArena.cpp` 的 `createSlotBuffer` 在
+  `device.hasDedicatedComputeQueue()` 为真时设 `VK_SHARING_MODE_CONCURRENT` +
+  `{graphicsFamily, computeFamily}`。两个队列族同时拥有，跨队列读不需要 ownership transfer。
+- **簇表登记进图**：`ClusterBuildPass::addToGraph` 用
+  `RenderGraph::BufferDesc{ name="Scratch.ClusterTables", size=clusterTablesExtent(binding), usage=STORAGE|UNIFORM, crossQueue=true }`
+  把暂存区那一整块 `VkBuffer` 包成图内句柄。`desc.size` 取 params / ranges / indices / lights
+  四段里最大的 `offset + size` —— `normalizeBufferRange` 按它夹取，写小了会直接抛
+  `RenderGraph: buffer range exceeds buffer bounds`。
+- **dispatch 挂 compute 流**：`graph.addComputePass("Clusters.Build")` + 两次
+  `writeBuffer(clusterBuffer, COMPUTE_SHADER, SHADER_STORAGE_WRITE, {offset,size})`；紧随一个
+  **只声明不执行**的 `graph.addGraphicsPass("Clusters.ReadSync")` + 两次
+  `readBuffer(clusterBuffer, FRAGMENT_SHADER, SHADER_STORAGE_READ, ...)`。
+  原来手写的两条 `VkBufferMemoryBarrier2` 全部删除。
+
+**为什么用零附件零回调的 Pass 表达消费关系**：`CrossQueueProbePass` 的
+`TD02.GraphicsHostReadBarrier` 早就证明这种 Pass 合法，图会照常为它推导 c2g 依赖并接管屏障。
+它比"让 lighting.frag 自己撞上依赖"更明确：谁读、读哪一段、在哪个 stage，全写在一处，
+`lighting.frag` 本身不需要改一行。
+
+**为什么 handle 必须自己记住**：`beginFrame` 只清 `passes`，不清 `textures` / `buffers`。
+每帧盲调 `importBuffer` 会让条目无限增长（`importBuffer` 不查重、不更新已有条目）。
+`ClusterBuildPass` 因此保存 `RenderGraph::BufferHandle clusterBuffer` 与 `VkBuffer clusterBufferVk`，
+只在底层 buffer 变化（暂存区扩容换 buffer）时重新登记。
+
+**为什么不用 `createOwnedBuffer`**：簇表的物理内存来自暂存区（一次 `reserve` 后四段必须在同一 buffer），
+图的 allocator 不参与；再建一份只会让"四块必须同 buffer"的兜底更难维持。
+
+**验证**：压力场景（`--voxel-world 1 --light-stress 512 --clustered-lighting --clustered-gpu-build --stats-frame`，
+60 帧）打出 `barriers/frame=61.2 calls 61.2 entries | skipped: sameState=35.8 crossQueue=2.0`。
+`crossQueue=2.0` 就是 ranges / indices 两段改由 timeline 信号接管后跳过的两条缓冲屏障，
+说明通路真的被走通了，不是"声明了但没人走"。同一条命令加 `--validation-features sync` 得
+`errors=0 warnings=0`、stderr 0 字节。
+
+**收益与代价**：收益不在 FPS，而在"异步 compute 有了第一个真实消费者"——T-03（屏障批处理）、
+T-07（FramePlan 多提交点）之后要量的一切，现在有落点了。120 帧 A/B（`--screenshot-frame 90`）：
+旧代码 GPU 建簇 58.61 / CPU 45.80 FPS，新代码 56.23 / 43.63 FPS —— 两侧一起降，
+比例仍是 GPU 快约 29%，说明 T-02 没吃掉决策 40 的收益，但绝对 FPS 不能跨构建横比。
+代价是暂存区所有 slot buffer 都变成 CONCURRENT：驱动可能因此选更保守的内存放置，本机测不出差异；
+真要退回 EXCLUSIVE，就得实现 TM-09 判掉的那套 release/acquire。
+
+**不引入的**：异步 compute 的预算与优先级调度（UE 的 `AsyncComputeBudget` 对应物，等有第二个真实
+compute 消费者再谈）；把建簇之后的光照也拆进异步流（那会把 c2g 变成双向依赖，图会直接抛异常）。

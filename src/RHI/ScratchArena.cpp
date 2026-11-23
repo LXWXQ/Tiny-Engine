@@ -66,6 +66,22 @@ void ScratchArena::createSlotBuffer(uint32_t index, VkDeviceSize capacity)
                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                        VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
+    // T-02：这张大块要跨队列用 —— 聚簇构建的 dispatch 录进异步 compute 流，
+    // 片元着色器在图形流上读同一块内存。CONCURRENT 是 TM-09 那条死路的替代：
+    // 两个队列族同时拥有，不需要 ownership transfer，也就不需要额外的提交点。
+    // 非独立 compute 队列的机器上只填一个族都不需要，保持 EXCLUSIVE 即可。
+    const QueueFamilyIndices scratchFamilies = device.findPhysicalQueueFamilies();
+    uint32_t scratchSharedFamilies[2] = {
+        scratchFamilies.graphicsFamily.value(),
+        scratchFamilies.computeFamily.value()
+    };
+    if (device.hasDedicatedComputeQueue())
+    {
+        bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        bufferInfo.queueFamilyIndexCount = 2;
+        bufferInfo.pQueueFamilyIndices = scratchSharedFamilies;
+    }
+
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
     // SEQENTIAL_WRITE = 只在 CPU 侧顺序写、GPU 侧读；MAPPED = 建好就一直是映射状态，

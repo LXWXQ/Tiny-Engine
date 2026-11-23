@@ -4,8 +4,8 @@ title: 规划层索引
 type: roadmap
 scope: 空
 read-when: 准备开新主功能之前
-size: ~25 行
-updated: 2026-11-19
+size: ~27 行
+updated: 2026-11-23
 ---
 
 # 80-roadmap 后续规划
@@ -16,6 +16,7 @@ updated: 2026-11-19
 | [source-migration-plan](source-migration-plan.md) | Source 迁移改造（M1）的 A/B/C/D 各项状态、未完成项与不做的理由 |
 | [terrain-plan](terrain-plan.md) | 程序化地形：现状审计、取舍、分阶段验收；MVP 1~5 与阶段 6 当前范围已实现；外部 PNG 覆盖接口已开，阶段 7 异步生成、chunk 剔除、LOD、4 槽异步 GPU mesh 与 4 个 Set2 地形材质集已落地 |
 | [borrowed-techniques](borrowed-techniques.md) | 可借鉴技术清单（TM-01~TM-19）：现状证据、参考实现、可量化的验收判据与建议顺序 |
+| [ue-borrowing-plan](ue-borrowing-plan.md) | UE 5.8.4 借鉴改造总纲：L0~L6 分层、15 类机制清单、P0~P8 阶段、验收协议与第一批工单 T-01~T-10 |
 
 **规划与状态的边界**：
 

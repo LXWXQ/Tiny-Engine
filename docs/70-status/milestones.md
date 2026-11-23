@@ -4,8 +4,8 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1300 行
-updated: 2026-11-13
+size: ~1345 行
+updated: 2026-11-23
 ---
 
 # 里程碑与实测基线
@@ -1316,3 +1316,41 @@ const float foam = clamp((shore * 0.90 + crest * 0.25) * foamPattern, 0.0, 1.0);
 
 
 **边界**：植被仍是纯程序化低模，没有 LOD/外部资产/异步分帧，约 9ms 单帧峰值；草不投影、树影覆盖仍受 CSM 分辨率与场景投射物数量限制；PCSS 的软阴影观感需在有明确遮挡物时继续确认。
+## T-10 / T-02：帧级计数器与建簇回到异步 compute（2026-11-23）
+
+按 [UE 借鉴改造总纲](../80-roadmap/ue-borrowing-plan.md) §7 落地前两单。
+
+**T-10 帧级计数器**：新增 `src/RHI/FrameStats.{h,cpp}`（`namespace tiny::framestats`，含 `selfTest`），
+在 `RenderGraph::beginFrame/endFrame`、`emitBarrierIfNeeded`、`emitBufferBarrierIfNeeded`、
+`Pipeline::bind` / `ComputePipeline::bind` 上挂钩，`--stats-frame` 退出时打三行。
+- 基线场景（60 帧，`--clustered-lighting --clustered-gpu-build --validation-features sync`）：
+  `passes/frame=21.0`、`barriers/frame=45.2 calls 45.2 entries | skipped: sameState=18.8 crossQueue=0.0`、
+  `pipelineBinds/frame=22.5 redundant=10.5 (46.7%)`、87.59 FPS、`errors=0 warnings=0`、stderr 0 字节。
+- 512 灯压力场景（追加 `--voxel-world 1 --light-stress 512`）：`passes/frame=27.0`、
+  `barriers/frame=61.2`、`sameState=35.8`、`crossQueue=2.0`、`pipelineBinds/frame=39.5`、
+  `redundant=19.5 (49.4%)`、38.67 FPS（开 sync 验证层，不可与不验比横比）。
+- 两个数字的用途：`barriers/frame` 是 T-03（屏障批处理）要压 25% 的起点；
+  `redundant=46.7%~49.4%` 是 T-09（状态缓存）能吃掉的上限。注意 `entries == calls`，
+  因为图像屏障按 **mip × layer 逐子资源**各发一条命令，批处理的空间就在这里。
+
+**T-02 建簇回到异步 compute**：`ScratchArena::createSlotBuffer` 在 `hasDedicatedComputeQueue()` 时
+改 `VK_SHARING_MODE_CONCURRENT` + `{graphics,compute}`；`ClusterBuildPass` 用 `importBuffer`
+把簇表登记成图内句柄（`crossQueue=true`、`desc.size` 取四段最大 `offset+size`），
+dispatch 改 `addComputePass("Clusters.Build")`，后跟只声明不执行的 `Clusters.ReadSync`
+表达 `FRAGMENT_SHADER` 读；手写两条 `VkBufferMemoryBarrier2` 删除。理由与边界见
+[决策 43](../10-architecture/decisions.md)。
+- 通路证据：压力场景 `skipped: crossQueue=2.0` —— ranges / indices 两条缓冲屏障被 timeline 信号接管后跳过；
+  `--validation-features sync` 下 `errors=0 warnings=0`、stderr 0 字节。
+- 收益未被吃掉：120 帧 A/B（`--voxel-world 1 --light-stress 512 --clustered-lighting --screenshot-frame 90`）
+  旧代码 GPU 建簇 58.61 / CPU 45.80 FPS，新代码 56.23 / 43.63 FPS，比例仍是 GPU 快约 29%。
+  **绝对 FPS 不可跨构建横比**（两次构建之间同一台机的 CPU 侧也一起降了约 5%）。
+
+**顺带修掉的既有缺陷**：`src/RHI/ScreenshotCapture.cpp` 转入 `TRANSFER_SRC_OPTIMAL` 的
+`dstAccessMask` 误写成 `TRANSFER_WRITE`，任何 `--screenshot` + `--validation-features sync` 的运行
+（与聚簇无关，默认场景同样命中）都会报一条 `SYNC-HAZARD-READ-AFTER-WRITE`。改为 `TRANSFER_READ` 后
+150 帧 + 截图 + sync 得 `errors=0 warnings=0`。细节见 [pitfalls 第 39 条](../60-debug-profiling/pitfalls.md)。
+
+**图像一致性说明**：这个场景逐次运行本身就不同（动画相位随帧耗时变化），同二进制两次运行的平均像素差
+（每 2 像素采样）已达 0.0087，而 T-02 前后是 0.0090 —— 落在噪声内。`tools/Baseline.ps1` 的
+`-MaxMeanDiff 2.0` 远未触及。也就是说：**在本场景里"截图逐像素一致"不能当回归判据**，
+`--validation-features sync` 的 0 errors 才是。

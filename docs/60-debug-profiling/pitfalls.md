@@ -4,8 +4,8 @@ title: 已踩过的坑
 type: debug
 scope: 空（跨代码库）
 read-when: 改任何代码之前；或遇到"看起来不可能"的怪异现象时
-size: ~585 行
-updated: 2026-11-11
+size: ~600 行
+updated: 2026-11-23
 ---
 
 # 已踩过的坑
@@ -564,3 +564,11 @@ vec2 sampleSphericalMap(vec3 v) {
 - **不要这样修**：把 `ssao.bias` 提到 0.15 也能让花瓣消失，但这是用更大的深度容差掩盖量化误差，接触阴影会被一起抹掉；`radius` 调小只能让花瓣变小，不能消除。
 - **修法**：`src/RHI/GBuffer.h` 的 `GBufferFormat::Position` 改为 `VK_FORMAT_R32G32B32A32_SFLOAT`，并加 `static_assert` 锁住；`docs/20-pipeline/gbuffer.md` §1.1 记录原因。G-Buffer 采样器是 `NEAREST`，32F 不需要线性过滤支持；代价是每像素多 8 字节。
 - **通用教训**：世界空间 G-buffer 的精度要按**最远世界坐标**估 ULP，不能按原点附近的直觉选格式；half 适合方向、颜色、归一化量，不适合绝对位置。屏幕空间 AO 的 `bias` 与位置量化误差必须放在同一量级比较，否则“算法正确”也会产生结构性伪影。
+
+## 39. 截图屏障把"读"声明成"写"，同步验证报 READ-AFTER-WRITE
+
+- **现象**：任何带 `--screenshot` 且加 `--validation-features sync` 的运行都得到 `errors=1`，报文是 `SYNC-HAZARD-READ-AFTER-WRITE ... usage: SYNC_COPY_TRANSFER_READ, prior_usage: SYNC_IMAGE_LAYOUT_TRANSITION`；不带截图时 `errors=0`，与场景内容无关（默认场景、`--clustered-gpu-build` 压力场景都命中）。
+- **原因**：`src/RHI/ScreenshotCapture.cpp` 的 `recordCopy` 在把交换链图像转进 `TRANSFER_SRC_OPTIMAL` 的那条屏障里，`toTransfer.dstAccessMask` 写的是 `VK_ACCESS_2_TRANSFER_WRITE_BIT`；紧跟着的 `vkCmdCopyImageToBuffer` 是**读**这张图。dst 访问被声明成写，验证层就认为这次转换之后并没有为目标访问建立可见性，于是下一条命令构成 hazard。
+- **判据**：`errors=1` 只在 `--screenshot` 时出现，且换任何场景都一样；把 `dstAccessMask` 临时改成 `TRANSFER_READ_BIT` 后归零 —— 两条同时成立就是它，不用怀疑 G-Buffer 或聚簇。
+- **修法**：`toTransfer.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;`（源侧 `srcAccessMask` 仍是 `TRANSFER_WRITE` / 颜色写入那一档）。修后 150 帧 + 截图 + `sync`：`errors=0 warnings=0`、stderr 0 字节。
+- **通用教训**：`dstAccessMask` 描述的是**接下来这一次访问要做什么**，不是"这个 stage 一般做什么"。`TRANSFER_SRC_OPTIMAL` 上的图像被 copy 出去时是 READ；写成 WRITE 不会报 API 错，只会在同步验证里以 hazard 的形式出现。这个缺陷是在 T-02 收尾跑验证层时顺带发现的，与聚簇无关，属于既有问题。

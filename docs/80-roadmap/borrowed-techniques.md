@@ -4,8 +4,8 @@ title: 可借鉴技术清单（TM 系列）
 type: roadmap
 scope: 空（跨代码库；候选改造点覆盖 src/RHI、src/Render、src/Core）
 read-when: 决定下一项引擎基础改造做什么之前；或评估某个外部实现值不值得引入
-size: ~264 行
-updated: 2026-11-20
+size: ~270 行
+updated: 2026-11-23
 ---
 
 # 可借鉴技术清单（TM 系列）
@@ -108,9 +108,10 @@ TM-09（跨队列 EXCLUSIVE 所有权转移）、TM-11（描述符三档）、TM
 
 - **状态**：已评估，本结构下不做。release / acquire 的全套通路实现过并跑通了探针，但清不掉验证层错误，根因是单提交结构表达不了双向转移 —— 证据与报文见[决策 28](../10-architecture/decisions.md)。
 - **现状**：[weak-points](../10-architecture/weak-points.md) 第 1 条与 [known-limits](../70-status/known-limits.md) 第 33 行：跨队列资源走 `CONCURRENT` sharing，未实现 ownership transfer；RenderGraph 用 `VK_SHARING_MODE_CONCURRENT` 加 timeline semaphore 串依赖。
+- **补充（决策 43 之后）**：这条从"只有探针在走"变成"生产链路在走" —— 暂存区的 slot buffer 统一改成 CONCURRENT，聚簇表经 `importBuffer` 登记进图，建簇 dispatch 挂异步 compute 流、`Clusters.ReadSync` 只声明读。`--stats-frame` 在 512 灯压力场景打出 `skipped: crossQueue=2.0`，即两条缓冲屏障改由 timeline 信号接管；`sync` 验证 0 errors。**结论不变**（仍然不做 release/acquire），但"当前没有单向的跨队列消费者"这个理由已经过期。
 - **参考**：`vulkan/command_buffer.hpp:428-439`（`release_/acquire_buffer_barrier`、`release_/acquire_image_barrier`）；`renderer/render_graph.hpp` 的 `RenderPassExternalLockInterface`（`external_acquire_semaphore` / `mark_access_in_queue` / `acquire_internal` / `release_internal` / `inline_queue_invalidate` / `inline_queue_flush`），`uses_semaphore()`（`:223-233`）判断这次访问是否真跨物理队列。
 - **做法（已回退，代码不保留）**：`crossQueue` 资源按 EXCLUSIVE 建（`queueFamilyIndexCount = 1`），逐 subresource 记 `ownerQueue` / `releasedFrom`，跨队列访问时发 release 加 acquire，帧末把仍持有的资源 release 回另一条队列。
-- **结论**：不实现。一次所有权转移只能沿提交方向发生（release 必须落在源队列已提交的命令流里，而提交顺序由数据依赖方向决定，见 `src/RHI/Renderer.cpp:317-328`）；`--cross-queue-test` 的探针同一帧里两个方向都要，必然有一半逆序。单向跨队列在原理上可行，但当前没有单向的跨队列消费者，按 §2 的闸门（必须有可量化验收）不满足条件。
+- **结论**：不实现。一次所有权转移只能沿提交方向发生（release 必须落在源队列已提交的命令流里，而提交顺序由数据依赖方向决定，见 `src/RHI/Renderer.cpp:317-328`）；`--cross-queue-test` 的探针同一帧里两个方向都要，必然有一半逆序。单向跨队列在原理上可行，且决策 43 已经落了一个真实消费者（建簇：compute 写、graphics 读），但用 CONCURRENT 就够了，不需要所有权转移 —— 当前判"不做"的依据从"没有消费者"改成"CONCURRENT 已覆盖，EXCLUSIVE 无收益"。
 - **验收（已满足的部分）**：CONCURRENT 路径 `--selftest 30 --cross-queue-test --validation-features sync` 得到 errors=0 warnings=0、stderr 0 字节、`[TD02] graphics->compute verified: frame 1 checksum 4096` 与 `[TD02] compute->graphics verified: frame 2 checksum 2218407808` 两向都通过、61.4 FPS。
 - **预估**：3~4 天，风险高；现已确认不只是难，而是与单提交结构冲突 —— 真要做得先把渲染图改成每队列多提交，那属于架构级改动。
 
@@ -149,7 +150,8 @@ TM-09（跨队列 EXCLUSIVE 所有权转移）、TM-11（描述符三档）、TM
 - **状态**：已完成（第一步 CPU 建簇 + 第二步 GPU 建簇都落地；默认关闭，理由见结论）
 - **现状（当初的判断需要补一句）**：`LightingSystem.cpp` 确实没有 cluster 结构，但更要紧的是**引擎此前没有点光源** —— `ubo.numLights` 恒为 0，`lighting.frag` 的逐灯循环是死代码。所以这一步先补灯，再谈聚簇。
 - **已完成**：`LightSources`（灯数组 + `--light-stress` 压力场）、`ClusteredLighting`（16x9x24、每簇 256 上限、按灯剪枝 + 计数排序、`selfTest` 验反投影 / 球盒相交 / 切片区间 / 确定性）、Set 0 新增 binding 15~18、`lighting.frag` 的双路径与 `ComputeClusterIndex`、`--clustered-lighting` / `--stats-clusters` 开关。
-- **第二步：GPU 建簇（决策 40）**：`shaders/cluster_build.comp` 每个线程算一个簇，命中写进定长槽位（`3456 x 256 x 4B`，3.4 MiB/帧槽），dispatch 挂图形流（簇表没进渲染图，异步 compute 建立不起跨队列依赖）。实测 512 灯 `--voxel-world 1`：CPU 建簇 51.77 FPS → GPU 建簇 65.37 FPS（+26%）；两种模式 `sync` 验证均 0 errors；8 灯同机位截图 CPU vs GPU 只差 HUD 的 213 个像素。
+- **第二步：GPU 建簇（决策 40）**：`shaders/cluster_build.comp` 每个线程算一个簇，命中写进定长槽位（`3456 x 256 x 4B`，3.4 MiB/帧槽）。实测 512 灯 `--voxel-world 1`：CPU 建簇 51.77 FPS → GPU 建簇 65.37 FPS（+26%）；两种模式 `sync` 验证均 0 errors；8 灯同机位截图 CPU vs GPU 只差 HUD 的 213 个像素。
+- **第二步的后续（决策 43 / T-02）**：当初 dispatch 只能挂图形流，因为簇表没进渲染图、异步 compute 建立不起跨队列依赖。现在簇表经 `importBuffer` 登记（`Scratch.ClusterTables`、`crossQueue=true`），暂存区 slot buffer 改成 CONCURRENT，dispatch 挂到 `addComputePass("Clusters.Build")`，后面跟一个只声明不执行的 `Clusters.ReadSync`。512 灯压力场景 `--stats-frame` 得 `passes/frame=27.0`、`barriers/frame=61.2 | skipped: sameState=35.8 crossQueue=2.0`、`errors=0`；120 帧 A/B 里 GPU 建簇仍比 CPU 快约 29%（56.23 vs 43.63 FPS），收益没被吃掉。
 - **结论（本机 RTX 2070，Debug）**：8 灯 —— 逐灯 65.8 / 71.0 FPS，聚簇 61.4 / 58.6 FPS；512 灯 —— 逐灯 69.4 / 64.5 FPS、聚簇（CPU 建簇）28.3 / 28.8 FPS（最挤的簇 202 盏）、聚簇（GPU 建簇）65.37 FPS。建簇不再是瓶颈，剩下的成本是「灯太密时每片元要遍历 200 盏」。默认关闭，等「总数上千、每簇几盏」的场景再翻。
 - **验收到什么程度**：簇表用暴力全扫描交叉验证（3456 个簇里 9 个因切片边界少算 1 盏）、两种模式 `--validation-features sync` 均 0 errors、8 灯与 512 灯均不崩。**没有做到**「与旧路径逐像素一致」—— 逐灯路径本来就一盏都不亮（衰减 1/(d²+1) 在这些位置上视觉不可见），没有可比对的基准。这条留在决策 32 里说明。
 - **何时重新评估**：场景里出现「几百上千盏灯、每盏只影响小块区域」时；或要把阴影 / 雾 / 贴花也挂到同一份簇表上时。

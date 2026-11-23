@@ -131,7 +131,10 @@ void ScreenshotCapture::recordCopy(VkCommandBuffer cmd, VkImage image, VkExtent2
     toTransfer.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     toTransfer.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
     toTransfer.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-    toTransfer.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    // 下一句 vkCmdCopyImageToBuffer 是**读**这张图：dst 访问位必须写 READ。
+    // 写成 TRANSFER_WRITE 会让同步验证报 SYNC-HAZARD-READ-AFTER-WRITE
+    // （usage: SYNC_COPY_TRANSFER_READ, prior_usage: SYNC_IMAGE_LAYOUT_TRANSITION）。
+    toTransfer.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
     toTransfer.oldLayout = oldLayout;
     toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
