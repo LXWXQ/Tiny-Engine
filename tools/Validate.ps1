@@ -230,7 +230,7 @@ $tests = @(
     @{ Name = "selftest-no-bloom-no-ssao"; Args = @("--selftest", "$Frames", "--no-bloom", "--no-ssao");
        MustContain = @("[TD06] Bloom disabled: skipping Bright + Down + Up passes", "[TD07] ComputeProbe disabled: no probe dispatches or CPU readback", "[SelfTest]") },
     @{ Name = "td02-cross-queue"; Args = @("--selftest", "$([Math]::Max($Frames, 20))", "--cross-queue-test");
-       MustContain = @("[TD02] compute->graphics verified", "[TD02] graphics->compute verified", "[TD07] ComputeProbe disabled: no probe dispatches or CPU readback") },
+       MustContain = @("[TD02] compute->graphics verified", "[TD02] graphics->compute verified", "[T01] external buffer drift detection verified", "[T01] external buffer verified:", "[TD07] ComputeProbe disabled: no probe dispatches or CPU readback") },
     @{ Name = "td07-compute-probe"; Args = @("--selftest", "$([Math]::Max($Frames, 20))", "--compute-test");
        MustContain = @("[D5] async compute probe verified", "[SelfTest]") },
     @{ Name = "td03-window-resize"; Args = @("--selftest", "$([Math]::Max($Frames, 60))", "--resize-test");

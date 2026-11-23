@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1376 行
+size: ~1402 行
 updated: 2026-11-23
 ---
 
@@ -1374,3 +1374,28 @@ dispatch 改 `addComputePass("Clusters.Build")`，后跟只声明不执行的 `C
 `--validation-features sync` 两场景 `errors=0`、stderr 0 字节；150 帧 + `--screenshot build\bench\t03-check.png`
 （1920x1080）`errors=0 warnings=0`。帧级有序屏障（跨 Pass 搬运）留到 T-07 之后，理由见
 [决策 44](../10-architecture/decisions.md)。
+## T-01：外部资源的状态声明与漂移校验（2026-11-23）
+
+| 项 | 值 |
+|---|---|
+| 新增 API | `RenderGraph::declareExternalTexture` / `declareExternalBuffer`、`struct ExternalState{layout, stage, access}` |
+| 状态字段 | `TextureEntry` / `BufferEntry` 各加 `externalDeclared`、`externalUsed`、`externalEnd`、`lastExternalEnd`、`hasLastExternalEnd` |
+| 三条不变量 | 每资源每帧一次 / 声明早于第一次使用 / 本帧 `entry == 上一帧 exit` |
+| 交回时机 | `endFrame` 尾部（所有 Pass 之后），走 graphics 命令流 |
+| 负向验收 | 故意用 `(VERTEX_SHADER, SHADER_READ)` 当入口 → 抛「状态漂移」，打印 `[T01] external buffer drift detection verified` |
+| 正向验收 | compute `vkCmdFillBuffer` 填 64 字 → 图形流 `vkCmdCopyBuffer` 拷进 host-visible 回读缓冲 → CPU 逐字比对，打印 `[T01] external buffer verified: ... 64 words` |
+| 40 帧 cross-queue + sync | `errors=0 warnings=0`、stderr 0 字节、EXIT 0；`barriers/frame=43.0 calls 50.4 entries`、`crossQueue=1.0` |
+| 默认场景 150 帧 + 截图 + sync | `passes/frame=21.0`、`38.0 calls / 45.1 entries`、`sameState=18.9`、`22.5 binds / 46.7% redundant` —— 与 T-03 之后逐位一致 |
+| lights-512 60 帧 + sync | `passes/frame=27.0`、`47.0 calls / 61.2 entries`、`sameState=35.8`、`crossQueue=2.0`、`[Clusters] 建簇=GPU`、`errors=0` |
+| lights-512 600 帧 × 3 次 | 91.34 FPS / 波动 1.61% / 10.95 ms / 27 passes / 47 barriers |
+
+结论：图外资源从「只有句柄」变成「有入口状态、有交回状态、有漂移检查」。三个既有场景的计数
+一格没动，因为声明只在有人调用时才生效；`--cross-queue-test` 里它同时充当 CONCURRENT 创建、
+跨队列 timeline 依赖、host 可见回读三条链路的活体证明。
+
+顺带修掉两个问题（都已写进 [pitfalls](../60-debug-profiling/pitfalls.md)）：第 40 条「动态渲染
+期间录 `vkCmdCopyBuffer`」（`VUID-vkCmdCopyBuffer-renderpass`，20 条错误 → 0）、第 41 条「用
+`frameNumber - kFramesInFlight` 反推写入者，指到不存在的第 0 帧」（回读全 0）。前者是这次改动
+引入的，后者是探针的边界假设错了 —— 两条都不是同步错误，`errors` 与 stderr 都不会指向真正的位置。
+
+校验：`tools/DocCheck.ps1` PASS；默认场景与 lights-512 均 `errors=0 warnings=0`、stderr 0 字节。

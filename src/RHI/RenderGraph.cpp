@@ -140,6 +140,9 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     {
         e.firstWritePass = -1;
         e.lastUsePass = -1;
+        // T-01：外部声明是"每帧一次"的，上一帧的标记不能漏到这一帧。
+        e.externalDeclared = false;
+        e.externalUsed = false;
     }
 
     for (BufferEntry& b : buffers)
@@ -148,6 +151,11 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
         b.stage = VK_PIPELINE_STAGE_2_NONE;
         b.access = VK_ACCESS_2_NONE;
         b.lastAccessQueue = -1;
+    }
+    for (BufferEntry& b : buffers)
+    {
+        b.externalDeclared = false;
+        b.externalUsed = false;
     }
 }
 
@@ -478,6 +486,7 @@ void RenderGraph::endFrame()
         for (const Access& acc : prepared.accesses)
         {
             TextureEntry& te = textures[acc.texture.id];
+            te.externalUsed = true;
             // TM-08：第一次被打上「写」的那一个 Pass 就是生命周期起点。
             if ((acc.access & kWriteBits) != 0 && te.firstWritePass < 0)
                 te.firstWritePass = passIndex;
@@ -499,6 +508,7 @@ void RenderGraph::endFrame()
         for (const BufferAccess& acc : prepared.bufferAccesses)
         {
             BufferEntry& be = buffers[acc.buffer.id];
+            be.externalUsed = true;
             be.stage = acc.stage;
             be.access = acc.access;
             be.lastAccessQueue = pass.isCompute ? 1 : 0;
@@ -540,6 +550,58 @@ void RenderGraph::endFrame()
             resources.push_back(std::move(r));
         }
         tiny::aliasreport::recordFrame(std::move(resources));
+    }
+
+    // T-01：把外部资源交回声明过的 end 状态。
+    // 这一段必须在本帧所有 Pass 之后、且在图把 cmd 置空之前 —— 交回的屏障记录在
+    // graphics 命令流上（外部持有者通常也在 graphics 侧消费）。
+    {
+        bool anyReleased = false;
+        for (uint32_t i = 0; i < textures.size(); ++i)
+        {
+            TextureEntry& e = textures[i];
+            if (!e.externalDeclared)
+                continue;
+            Access acc;
+            acc.texture = TextureHandle{ i };
+            acc.layout = e.externalEnd.layout;
+            acc.stage = e.externalEnd.stage;
+            acc.access = e.externalEnd.access;
+            emitBarrierIfNeeded(acc, cmd, false);
+            // 屏障只是把状态发出去；记录的状态由下面的赋值决定（emitBarrierIfNeeded
+            // 不改状态，它只读状态推屏障）。
+            for (TextureEntry::SubresourceState& state : e.subresources)
+            {
+                state.layout = e.externalEnd.layout;
+                state.stage = e.externalEnd.stage;
+                state.access = e.externalEnd.access;
+                state.lastAccessQueue = 0;
+            }
+            e.lastExternalEnd = e.externalEnd;
+            e.hasLastExternalEnd = true;
+            e.externalDeclared = false;
+            anyReleased = true;
+        }
+        for (uint32_t i = 0; i < buffers.size(); ++i)
+        {
+            BufferEntry& e = buffers[i];
+            if (!e.externalDeclared)
+                continue;
+            BufferAccess acc;
+            acc.buffer = BufferHandle{ i };
+            acc.stage = e.externalEnd.stage;
+            acc.access = e.externalEnd.access;
+            emitBufferBarrierIfNeeded(acc, cmd, false);
+            e.stage = e.externalEnd.stage;
+            e.access = e.externalEnd.access;
+            e.lastAccessQueue = 0;
+            e.lastExternalEnd = e.externalEnd;
+            e.hasLastExternalEnd = true;
+            e.externalDeclared = false;
+            anyReleased = true;
+        }
+        if (anyReleased && cmd != VK_NULL_HANDLE)
+            flushImageBarriers(cmd);
     }
 
     reportUnmatchedPassOverrides();
@@ -1252,6 +1314,91 @@ void RenderGraph::invalidateBuffer(BufferHandle h) const
         vmaInvalidateAllocation(device.getVmaAllocator(), e.allocation, 0, VK_WHOLE_SIZE);
 }
 
+namespace
+{
+    const char* layoutName(VkImageLayout layout)
+    {
+        switch (layout)
+        {
+        case VK_IMAGE_LAYOUT_UNDEFINED: return "UNDEFINED";
+        case VK_IMAGE_LAYOUT_GENERAL: return "GENERAL";
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return "COLOR_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return "DEPTH_STENCIL_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: return "DEPTH_STENCIL_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return "SHADER_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return "TRANSFER_SRC_OPTIMAL";
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return "TRANSFER_DST_OPTIMAL";
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: return "PRESENT_SRC_KHR";
+        default: return "OTHER";
+        }
+    }
+}
+
+void RenderGraph::declareExternalTexture(TextureHandle handle, const ExternalState& start, const ExternalState& end)
+{
+    if (handle.id >= textures.size())
+        throw std::runtime_error("RenderGraph: declareExternalTexture 收到了越界句柄");
+
+    TextureEntry& e = textures[handle.id];
+    if (e.owned)
+        throw std::runtime_error("RenderGraph: \"" + e.desc.name +
+            "\" 由图自己创建（createTexture），不需要外部状态声明");
+    if (e.externalUsed)
+        throw std::runtime_error("RenderGraph: \"" + e.desc.name +
+            "\" 的状态声明晚于本帧的第一次使用 —— 必须在注册 Pass 之前声明");
+    if (e.externalDeclared)
+        throw std::runtime_error("RenderGraph: \"" + e.desc.name + "\" 本帧已经声明过外部状态");
+
+    // 跨帧漂移：上一帧交回的状态必须等于这一帧声明的入口状态。
+    // 这是外部资源唯一的一致性检查 —— 少了它，"某条路径忘了转回去"只会在
+    // 几十帧之后以一条 syncval 报文或一张花屏的形式出现。
+    if (e.hasLastExternalEnd && e.lastExternalEnd != start)
+    {
+        throw std::runtime_error("RenderGraph: 外部纹理 \"" + e.desc.name + "\" 状态漂移：上一帧交回 " +
+            layoutName(e.lastExternalEnd.layout) + "，本帧声明入口 " + layoutName(start.layout));
+    }
+
+    // 入口状态就是这一段推导的起点：把它写进每个子资源，帧首不需要额外屏障。
+    for (TextureEntry::SubresourceState& state : e.subresources)
+    {
+        state.layout = start.layout;
+        state.stage = start.stage;
+        state.access = start.access;
+        state.lastAccessQueue = -1;
+    }
+
+    e.externalDeclared = true;
+    e.externalEnd = end;
+}
+
+void RenderGraph::declareExternalBuffer(BufferHandle handle, const ExternalState& start, const ExternalState& end)
+{
+    if (handle.id >= buffers.size())
+        throw std::runtime_error("RenderGraph: declareExternalBuffer 收到了越界句柄");
+
+    BufferEntry& e = buffers[handle.id];
+    if (e.owned)
+        throw std::runtime_error("RenderGraph: \"" + e.desc.name +
+            "\" 由图自己创建（createBuffer），不需要外部状态声明");
+    if (e.externalUsed)
+        throw std::runtime_error("RenderGraph: \"" + e.desc.name +
+            "\" 的状态声明晚于本帧的第一次使用 —— 必须在注册 Pass 之前声明");
+    if (e.externalDeclared)
+        throw std::runtime_error("RenderGraph: \"" + e.desc.name + "\" 本帧已经声明过外部状态");
+
+    if (e.hasLastExternalEnd && e.lastExternalEnd != start)
+    {
+        throw std::runtime_error("RenderGraph: 外部 buffer \"" + e.desc.name + "\" 状态漂移："
+            "上一帧交回的 (stage, access) 与本帧声明的入口不一致");
+    }
+
+    e.stage = start.stage;
+    e.access = start.access;
+    e.lastAccessQueue = -1;
+
+    e.externalDeclared = true;
+    e.externalEnd = end;
+}
 void RenderGraph::presentTransition(TextureHandle handle)
 {
     if (!handle.valid()) return;

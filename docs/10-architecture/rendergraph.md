@@ -4,7 +4,7 @@ title: 渲染图：屏障推导与语义校验
 type: architecture
 scope: src/RHI/RenderGraph.h, src/RHI/RenderGraph.cpp, src/Render/IRenderPass.h
 read-when: 修改任何 Pass 的资源声明、新增资源、调整 Pass 顺序、调试 layout/hazard 报错
-size: ~284 行
+size: ~318 行
 updated: 2026-11-23
 ---
 
@@ -239,6 +239,39 @@ for (const BufferAccess& acc : prepared.bufferAccesses) emitBufferBarrierIfNeede
 
 ---
 
+### 6.4 外部资源的状态声明（T-01）
+
+图外资源（交换链图像、`ShadowPass` 自己管的阴影图、暂存区里的簇表、截图回读缓冲）以前只能
+`import*`：图知道句柄，不知道它进来时处于什么状态。T-01 补上一组声明：
+
+```cpp
+graph.declareExternalBuffer(clusterTables, entry, exit);
+graph.declareExternalTexture(shadowMap, entry, exit);
+```
+
+`ExternalState{ layout, stage, access }`，buffer 只看 `stage` / `access`。声明把资源状态设成
+`entry` 并记下 `exit`；`endFrame` 尾部把它推到 `exit`（走 graphics 命令流），同时这个 `exit`
+成为下一帧的期望入口。
+
+三条不变量，违反即抛异常：
+
+| 不变量 | 报文 |
+|---|---|
+| 每资源每帧最多声明一次 | `本帧已经声明过外部状态` |
+| 声明必须早于本帧第一次使用 | `状态声明晚于本帧的第一次使用` |
+| 本帧 `entry` 等于上一帧的 `exit` | `状态漂移：上一帧交回的 (stage, access) 与本帧声明的入口不一致` |
+
+为什么要存在图里而不是调用方手里：只有图见过「上一帧交回的是什么」，第三条才检得出来；
+漏记不变量不会有现象，直到某帧开始间歇性闪。
+
+两条实操注意：
+
+- 交回发生在所有 Pass 之后，所以它**不参与** [3.4 的攒批](#34-屏障按桶合并t-03) —— 直接
+  `emitBarrierIfNeeded` 再 `flushImageBarriers`。
+- 在图外资源上录 transfer 命令（`vkCmdCopyBuffer` / `vkCmdFillBuffer`）必须放进**零附件 Pass**，
+  动态渲染期间它是非法的（见 [pitfalls 第 40 条](../60-debug-profiling/pitfalls.md)）。
+
+---
 ## 7. 声明合法性校验
 
 在录制前检查：

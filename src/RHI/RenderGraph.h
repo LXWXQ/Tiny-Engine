@@ -386,6 +386,37 @@ public:
     // 渲染图不应该知道「哪张图要被 present」，所以由应用显式声明。
     void presentTransition(TextureHandle handle);
 
+    // ---- T-01：外部资源的状态声明 ----
+    // 有些资源由图外的代码创建并持有（暂存区的簇表、阴影图、截图缓冲、外部池子
+    // 分配的 RT）。图能看见它们的 VkImage / VkBuffer，但不知道两件事：
+    //   1) 这一帧开始前，外部世界把它留在了什么状态 —— 于是第一次访问时推导不出
+    //      正确的 srcStage / srcAccess（只能假定 UNDEFINED + NONE）；
+    //   2) 帧尾要交回什么状态 —— 于是外部代码只能自己手写屏障。
+    //
+    // declareExternalTexture / declareExternalBuffer 就是补这两个未知：
+    //   start = 外面交给图时的状态（图据此给第一次访问推导屏障，帧首不额外发屏障）；
+    //   end   = 图交回外面时的状态（帧尾补一条屏障，然后记住它）。
+    //
+    // 三条不变量（违反即抛异常，这是它比"手写屏障"值钱的地方）：
+    //   - 每个资源每帧最多声明一次；
+    //   - 声明必须早于本帧对该资源的第一次使用（endFrame 之前）；
+    //   - 本帧的 start 必须等于上一帧交回的 end，否则报"状态漂移"并指出两边。
+    struct ExternalState
+    {
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;   // buffer 忽略此字段
+        VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_NONE;
+        VkAccessFlags2 access = VK_ACCESS_2_NONE;
+
+        bool operator==(const ExternalState& other) const
+        {
+            return layout == other.layout && stage == other.stage && access == other.access;
+        }
+        bool operator!=(const ExternalState& other) const { return !(*this == other); }
+    };
+
+    void declareExternalTexture(TextureHandle handle, const ExternalState& start, const ExternalState& end);
+    void declareExternalBuffer(BufferHandle handle, const ExternalState& start, const ExternalState& end);
+
 private:
     PassSwitchboard passSwitchboard;
     std::vector<std::string> lastFrameExecutedPasses;
@@ -411,6 +442,13 @@ private:
         int32_t firstWritePass = -1;
         int32_t lastUsePass = -1;
 
+        // T-01：外部持有的资源在这一帧的状态声明（见 declareExternalTexture）。
+        bool externalDeclared = false;
+        bool externalUsed = false;
+        ExternalState externalEnd;
+        ExternalState lastExternalEnd;
+        bool hasLastExternalEnd = false;
+
         // 每个 mip/layer 独立记录上一次访问后的状态。
         struct SubresourceState
         {
@@ -433,6 +471,13 @@ private:
         VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_NONE;
         VkAccessFlags2 access = VK_ACCESS_2_NONE;
         int lastAccessQueue = -1;
+
+        // T-01：外部持有的资源在这一帧的状态声明（见 declareExternalBuffer）。
+        bool externalDeclared = false;
+        bool externalUsed = false;
+        ExternalState externalEnd;
+        ExternalState lastExternalEnd;
+        bool hasLastExternalEnd = false;
     };
 
     void createOwnedTexture(TextureEntry& entry);

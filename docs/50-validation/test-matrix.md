@@ -4,7 +4,7 @@ title: 回归测试矩阵
 type: validation
 scope: tools/Validate.ps1
 read-when: 加/改回归项，或某项失败需要知道它在测什么
-size: ~220 行
+size: ~151 行
 updated: 2026-11-13
 ---
 
@@ -35,7 +35,7 @@ updated: 2026-11-13
 | 4 | `selftest-no-bloom` | `--no-bloom` | `[TD06] Bloom disabled: skipping Bright + Down + Up passes` | Bloom 关闭分支真跳过 |
 | 5 | `selftest-no-ssao` | `--no-ssao` | `[TD07] ...` | SSAO 关闭分支 |
 | 6 | `selftest-no-bloom-no-ssao` | 两者 | 同上两者 | 组合分支 |
-| 7 | `td02-cross-queue` | `--cross-queue-test` | `[TD02] compute->graphics verified`、`[TD02] graphics->compute verified` | 跨队列双方向 |
+| 7 | `td02-cross-queue` | `--cross-queue-test` | `[TD02] compute->graphics verified`、`[TD02] graphics->compute verified`、`[T01] external buffer drift detection verified`、`[T01] external buffer verified:` | 跨队列双方向 + 图外资源状态漂移与搬运（T-01） |
 | 8 | `td07-compute-probe` | `--compute-test` | `[D5] async compute probe verified` | GPU 写 + CPU 读回 |
 | 9 | `td03-window-resize` | `--resize-test` | `[TD03] Swapchain recreated`、`[TD03] Render targets resized` | 缩放/最小化/恢复 |
 | 10 | `td03-render-scale` | `--render-scale 0.5` | `[TD03] Render targets resized` | 动态分辨率 |

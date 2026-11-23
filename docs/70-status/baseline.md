@@ -4,7 +4,7 @@ title: 三场景性能基线
 type: status
 scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp
 read-when: 改渲染图 / 屏障 / 管线绑定之前要一份可对比的数字，或怀疑性能回退时
-size: ~80 行
+size: ~79 行
 updated: 2026-11-23
 ---
 
@@ -31,6 +31,9 @@ FPS 波动超 `-MaxVariancePct` 只是**警告**，加 `-Strict` 才升级成失
 | `voxel-world` | `--voxel-world 1` | 106 draw calls / 336889 三角形，几何与提交压力 |
 | `lights-512` | `--voxel-world 1 --light-stress 512 --clustered-lighting --clustered-gpu-build` | 512 盏点光 + GPU 建簇，光照压力 |
 
+T-01（外部资源的状态声明）之后复跑 lights-512（600 帧 × 3 次）：**91.34 FPS / 波动 1.61% / 10.95 ms /
+27 passes / 47 barriers**；默认场景与压力场景的屏障、绑定、冗余计数与 T-03 之后逐位一致 ——
+声明只在有调用者时才生效，没有调用者的场景一分钱不花。
 与 [ue-borrowing-plan](../80-roadmap/ue-borrowing-plan.md) P0-1 的口径偏差：计划里写的 `cube-field`
 （1 万立方体）在引擎里没有生成器，这一轮用 `--voxel-world 1` 当几何压力场景；`editor-default`
 用 `--selftest` 的 `default` 代替（编辑器面板不在 selftest 路径上）。两处偏差要以这份表和脚本里的场景表为准。

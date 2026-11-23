@@ -20,10 +20,57 @@ CrossQueueProbePass::~CrossQueueProbePass()
         vkDestroyPipelineLayout(device.getDevice(), computePipelineLayout, nullptr);
     if (setLayout != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device.getDevice(), setLayout, nullptr);
+    // T-01：外部 buffer 的生命周期归本探针 —— 图只借用，不销毁。
+    if (externalBufferVk != VK_NULL_HANDLE)
+    {
+        vmaDestroyBuffer(device.getVmaAllocator(), externalBufferVk, externalAllocation);
+        externalBufferVk = VK_NULL_HANDLE;
+        externalAllocation = VK_NULL_HANDLE;
+    }
 }
 
 void CrossQueueProbePass::init()
 {
+    // T-01：图外持有的 buffer。CONCURRENT sharing 与 createOwnedBuffer 的跨队列
+    // 分支同样处理 —— 图这边只校验 crossQueue 标记，真正的 sharing mode 由
+    // 分配者负责。
+    {
+        VkBufferCreateInfo extInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        extInfo.size = sizeof(uint32_t) * kExternalValueCount;
+        extInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        const QueueFamilyIndices extFamilies = device.findPhysicalQueueFamilies();
+        uint32_t extSharedFamilies[2] = {
+            extFamilies.graphicsFamily.value(),
+            extFamilies.computeFamily.value()
+        };
+        if (device.hasDedicatedComputeQueue())
+        {
+            extInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            extInfo.queueFamilyIndexCount = 2;
+            extInfo.pQueueFamilyIndices = extSharedFamilies;
+        }
+        VmaAllocationCreateInfo extAlloc{};
+        extAlloc.usage = VMA_MEMORY_USAGE_AUTO;
+        VmaAllocationInfo extAllocInfo{};
+        if (vmaCreateBuffer(device.getVmaAllocator(), &extInfo, &extAlloc,
+                            &externalBufferVk, &externalAllocation, &extAllocInfo) != VK_SUCCESS)
+        {
+            throw std::runtime_error("CrossQueueProbePass: 外部 buffer 创建失败");
+        }
+    }
+
+    for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+    {
+        RenderGraph::BufferDesc readbackDesc;
+        readbackDesc.name = "TD01.ExternalReadback.Frame" + std::to_string(frame);
+        readbackDesc.size = sizeof(uint32_t) * kExternalValueCount;
+        readbackDesc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        readbackDesc.hostVisible = true;
+        externalReadback[frame] = renderGraph.createBuffer(readbackDesc);
+    }
+
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
         RenderGraph::BufferDesc inputDesc;
@@ -219,14 +266,97 @@ void CrossQueueProbePass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         verifyResult(computeResults[frame], kGraphicsToComputeMagic, false, reportedGraphicsToCompute);
     if (computeToGraphicsFrame)
     {
+        // ---- T-01：外部 buffer 的入口 / 出口状态声明 ----
+        if (!externalImported)
+        {
+            RenderGraph::BufferDesc desc;
+            desc.name = "TD01.External.Buffer";
+            desc.size = sizeof(uint32_t) * kExternalValueCount;
+            desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            desc.crossQueue = true;
+            externalBuffer = graph.importBuffer(desc, externalBufferVk);
+            externalImported = true;
+        }
+
+        // 上一帧图把它交回成"copy 的源"（见下面的 externalExit），所以本帧入口
+        // 就声明这个状态 —— 与帧尾的出口完全一致，这是漂移检查的前提。
+        RenderGraph::ExternalState externalEntry;
+        externalEntry.stage = VK_PIPELINE_STAGE_2_COPY_BIT;
+        externalEntry.access = VK_ACCESS_2_TRANSFER_READ_BIT;
+        const RenderGraph::ExternalState externalExit = externalEntry;
+
+        // 负向验收：故意声明一个和上一帧交回状态不同的入口，必须被检出。
+        // 只跑一次；抛异常发生在写入任何状态之前，所以不会污染这一帧。
+        if (!externalDriftTested && externalDeclareCount > 0)
+        {
+            bool caught = false;
+            try
+            {
+                RenderGraph::ExternalState wrong = externalEntry;
+                wrong.stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                wrong.access = VK_ACCESS_2_SHADER_READ_BIT;
+                graph.declareExternalBuffer(externalBuffer, wrong, externalExit);
+            }
+            catch (const std::runtime_error& err)
+            {
+                caught = std::string(err.what()).find("状态漂移") != std::string::npos;
+            }
+            if (!caught)
+                throw std::runtime_error("CrossQueueProbePass: 外部 buffer 的状态漂移没有被检出");
+            externalDriftTested = true;
+            std::cout << "[T01] external buffer drift detection verified\n";
+        }
+
+        graph.declareExternalBuffer(externalBuffer, externalEntry, externalExit);
+        ++externalDeclareCount;
+
+        // 正向验收：上一轮 GPU 写进回读 buffer 的内容必须是填充图案。
+        {
+            const uint64_t copiedOnFrame = externalCopyFrames[frame];
+            if (copiedOnFrame != 0 && copiedOnFrame + kFramesInFlight <= frameInfo.frameNumber)
+            {
+                externalCopyFrames[frame] = 0;
+                auto* words = static_cast<uint32_t*>(graph.getBufferMapped(externalReadback[frame]));
+                if (words == nullptr)
+                    throw std::runtime_error("CrossQueueProbePass: 外部 buffer 的回读缓冲没有映射");
+                graph.invalidateBuffer(externalReadback[frame]);
+                for (uint32_t i = 0; i < kExternalValueCount; ++i)
+                {
+                    if (words[i] != kExternalPattern)
+                    {
+                        throw std::runtime_error("CrossQueueProbePass: 外部 buffer 跨队列搬运的内容不对"
+                            "（第 " + std::to_string(i) + " 个字）");
+                    }
+                }
+                ++externalVerifiedFrames;
+                if (!reportedExternalAccess)
+                {
+                    reportedExternalAccess = true;
+                    std::cout << "[T01] external buffer verified: entry (COPY, TRANSFER_READ) -> "
+                                 "fill (CLEAR, TRANSFER_WRITE) -> copy (COPY, TRANSFER_READ), "
+                              << kExternalValueCount << " words\n";
+                }
+            }
+        }
+
         auto& fill = graph.addComputePass("TD02.ComputeFillSSBO");
         fill.writeBuffer(inputBuffers[frame]);
         // The compute descriptor set statically references binding 2 (the
         // storage image), so transition/declare it here as well. Otherwise
         // validation sees the descriptor at layout UNDEFINED on frame 1.
         fill.writeStorage(storageImages[frame]);
+        // T-01：外部 buffer 的第一次使用 —— 从上一帧交回的 (COPY, TRANSFER_READ)
+        // 转到 fill 需要的 (CLEAR, TRANSFER_WRITE)。这条屏障完全由声明推导出来。
+        fill.writeBuffer(externalBuffer,
+            VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         fill.execute([this, frame, frameNumber = static_cast<uint32_t>(frameInfo.frameNumber)](VkCommandBuffer cmd)
         {
+            // T-01：内容搬运用 transfer 命令，不依赖任何描述符 —— 探针要证明的是
+            // 状态声明与跨队列顺序，不是着色器绑定。
+            vkCmdFillBuffer(cmd, externalBufferVk, 0,
+                static_cast<VkDeviceSize>(sizeof(uint32_t)) * kExternalValueCount, kExternalPattern);
             computePipeline->bind(cmd);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
                 0, 1, &computeSets[frame], 0, nullptr);
@@ -240,6 +370,7 @@ void CrossQueueProbePass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
         consume.writeBuffer(graphicsResults[frame],
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
         consume.writeStorage(storageImages[frame],
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         consume.writeColor(colorTargets[frame], VK_ATTACHMENT_LOAD_OP_DONT_CARE);
@@ -251,10 +382,28 @@ void CrossQueueProbePass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
             ProbePush push{ 0u, frameNumber, kValueCount, 0u };
             vkCmdPushConstants(cmd, graphicsPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
             vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        });
+
+        // T-01：搬运本身必须放在「没有渲染附件」的 Pass 里 —— 动态渲染期间
+        // vkCmdCopyBuffer 是非法的（VUID-vkCmdCopyBuffer-renderpass）。
+        auto& copyExternal = graph.addGraphicsPass("TD02.GraphicsCopyExternal");
+        copyExternal.readBuffer(externalBuffer, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        copyExternal.writeBuffer(externalReadback[frame], VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        copyExternal.execute([this, frame, frameNumber = static_cast<uint32_t>(frameInfo.frameNumber)](VkCommandBuffer cmd)
+        {
+            VkBufferCopy region{};
+            region.srcOffset = 0;
+            region.dstOffset = 0;
+            region.size = static_cast<VkDeviceSize>(sizeof(uint32_t)) * kExternalValueCount;
+            vkCmdCopyBuffer(cmd, externalBufferVk, renderGraph.getBuffer(externalReadback[frame]), 1, &region);
+            externalCopyFrames[frame] = frameNumber;
         });
 
         auto& hostBarrier = graph.addGraphicsPass("TD02.GraphicsHostReadBarrier");
         hostBarrier.readBuffer(graphicsResults[frame],
+            VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+        hostBarrier.readBuffer(externalReadback[frame],
             VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
         return;
     }

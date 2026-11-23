@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~942 行
+size: ~970 行
 updated: 2026-11-23
 ---
 
@@ -812,7 +812,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 | # | 任务 | 落点 | 验收 | 人日 |
 |---|---|---|---|---|
 | T-10（已落地） | 基准脚本 + barrier/state 两个计数器 | `tools/bench.ps1`、`src/RHI/FrameStats.*`、`src/RHI/RenderGraph.cpp` | 三场景跑出 `baseline.md`；计数器逐位可复现 | 1 |
-| T-01 | `ExternalResourceRegistry`：帧首 acquire / 帧尾 release | `src/RHI/RenderGraph.{h,cpp}` | 探针 Pass 写入的 scratch buffer 能被 compute 队列正确读取（跨队列探针扩展） | 3 |
+| T-01（已落地） | `ExternalResourceRegistry`：帧首 acquire / 帧尾 release | `src/RHI/RenderGraph.{h,cpp}` | 图外 buffer 的状态漂移被检出 + compute 写入的内容经图形流搬运后逐字正确 | 3 |
 | T-02（已落地） | `ClusterBuildPass` 改回 `addComputePass` | `src/Render/ClusterBuildPass.*`、`src/RHI/ScratchArena.cpp` | 512 灯 FPS ≥ 65.37；聚簇 dispatch 在 compute 队列（breadcrumbs 验证） | 1 |
 | T-03（已落地） | 图像屏障在 Pass 内按六元组分桶合并（新增 `src/RHI/RenderGraphBarrier.cpp`） | `src/RHI/RenderGraph.{h,cpp}`、`src/RHI/RenderGraphBarrier.cpp` | 调用 45.2→38.0 / 61.2→47.0；`entries` 不变；A/B FPS +0.1% | 2 |
 | T-04 | 跨帧 RT 池 | 新增 `src/RHI/RenderTargetPool.{h,cpp}` | 每帧 `vkCreateImage` 次数为 0（稳定态）；显存不增长 | 2 |
@@ -867,6 +867,33 @@ desc binds、三角形数；显存占用与 submitted/visible 组数仍靠 `--st
 误写成 `TRANSFER_WRITE`，导致任何 `--screenshot` + `sync` 运行报一条 READ-AFTER-WRITE。
 已改为 `TRANSFER_READ`，见 [pitfalls 第 39 条](../60-debug-profiling/pitfalls.md)。
 
+
+**T-01 外部资源的状态声明（`declareExternalTexture` / `declareExternalBuffer`）**
+
+落点：`src/RHI/RenderGraph.{h,cpp}`（`struct ExternalState{layout, stage, access}`、两个声明函数、
+条目上的 `externalDeclared` / `externalUsed` / `externalEnd` / `lastExternalEnd` / `hasLastExternalEnd`、
+`endFrame` 尾部的交回段）、`src/Render/CrossQueueProbePass.{h,cpp}`（图外 buffer + 回读缓冲 + 双向验收）。
+
+三条不变量：每资源每帧最多声明一次、声明早于第一次使用、本帧入口等于上一帧出口。第三条违反时抛
+「状态漂移」。交回屏障在 `endFrame` 尾部发在 graphics 流上（外部持有者就在这一侧消费），不参与
+T-03 的攒批。
+
+验收（`--selftest 40 --cross-queue-test --validation-features sync`）：`errors=0 warnings=0`、
+stderr 0 字节、EXIT 0；负向 `[T01] external buffer drift detection verified`、正向
+`[T01] external buffer verified: entry (COPY, TRANSFER_READ) -> fill (CLEAR, TRANSFER_WRITE) ->
+copy (COPY, TRANSFER_READ), 64 words`。
+
+**验收偏差**：计划里写的是「探针 Pass 写入的 scratch buffer 能被 compute 队列正确读取」。实际改成
+探针**自建的图外 buffer**（VMA 创建、`hasDedicatedComputeQueue()` 时 CONCURRENT）。理由是暂存区是
+`ScratchArena` 管理的整块 buffer，探针往里写会污染同一个 arena 的其它使用者（阴影矩阵、聚簇表都在
+里面），而自建 buffer 能同时验三件事：CONCURRENT 创建、跨队列 timeline 依赖、host 可见回读。
+代价是「暂存区整块 buffer 能否作为图外资源被声明」这条路径没有直接覆盖 —— 聚簇表那条（T-02 的
+`Scratch.ClusterTables`）走的是 `importBuffer` + `writeBuffer` 声明，不经过 T-01 的 `declareExternalBuffer`。
+
+**顺带修掉的两个问题**（细节见 [pitfalls](../60-debug-profiling/pitfalls.md) 第 40、41 条）：
+动态渲染期间录 `vkCmdCopyBuffer` 会被验证层判 `VUID-vkCmdCopyBuffer-renderpass`（20 条错误 → 0，
+搬进零附件 Pass）；用 `frameNumber - kFramesInFlight` 反推写入者会指到不存在的第 0 帧（回读全 0，
+改成每槽位记录排队帧号）。
 ---
 
 ## 8. 明确不抄清单

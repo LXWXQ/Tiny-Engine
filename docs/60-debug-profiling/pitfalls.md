@@ -4,7 +4,7 @@ title: 已踩过的坑
 type: debug
 scope: 空（跨代码库）
 read-when: 改任何代码之前；或遇到"看起来不可能"的怪异现象时
-size: ~600 行
+size: ~590 行
 updated: 2026-11-23
 ---
 
@@ -572,3 +572,18 @@ vec2 sampleSphericalMap(vec3 v) {
 - **判据**：`errors=1` 只在 `--screenshot` 时出现，且换任何场景都一样；把 `dstAccessMask` 临时改成 `TRANSFER_READ_BIT` 后归零 —— 两条同时成立就是它，不用怀疑 G-Buffer 或聚簇。
 - **修法**：`toTransfer.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;`（源侧 `srcAccessMask` 仍是 `TRANSFER_WRITE` / 颜色写入那一档）。修后 150 帧 + 截图 + `sync`：`errors=0 warnings=0`、stderr 0 字节。
 - **通用教训**：`dstAccessMask` 描述的是**接下来这一次访问要做什么**，不是"这个 stage 一般做什么"。`TRANSFER_SRC_OPTIMAL` 上的图像被 copy 出去时是 READ；写成 WRITE 不会报 API 错，只会在同步验证里以 hazard 的形式出现。这个缺陷是在 T-02 收尾跑验证层时顺带发现的，与聚簇无关，属于既有问题。
+## 40. 动态渲染期间不能录 `vkCmdCopyBuffer`
+
+- **现象**：`--selftest 40 --cross-queue-test --validation-features sync` 得到 `errors=20 warnings=0`、EXIT 0、stderr 0 字节；`--validation-jsonl` 里每条都是 `VUID-vkCmdCopyBuffer-renderpass ... It is invalid to issue this call inside an active VkRenderPass`。
+- **原因**：那条 `vkCmdCopyBuffer` 被录进了 `TD02.GraphicsConsumeSSBO` —— 一个带颜色附件的图形 Pass。渲染图在带附件时会先 `vkCmdBeginRendering`、回调结束后才 `vkCmdEndRendering`，于是 copy 落在渲染区内部。Vulkan 规定 copy 命令不能在渲染区内发出（动态渲染同样受这条约束）。
+- **判据**：`errors` 只在某个特定 Pass 存在时出现，且 JSONL 里全是同一条 `VUID-vkCmdCopyBuffer-renderpass`；把搬运拆到另一个 Pass 后归零。
+- **修法**：搬进零附件 Pass（`graph.addGraphicsPass("TD02.GraphicsCopyExternal")` + 只 `readBuffer` / `writeBuffer`，没有颜色/深度附件）——渲染图对零附件 Pass 不会开 `vkCmdBeginRendering`。改后 `errors=0 warnings=0`、stderr 0 字节。
+- **通用教训**：往回调里加命令前先看这个 Pass 有没有附件。「带附件的 Pass 里只能录绘制」这条比看起来更容易违反，因为渲染图把 `vkCmdBeginRendering` 藏在回调外面，看回调代码是看不出来的。
+
+## 41. 帧号从 1 起，别用 `frameNumber - kFramesInFlight` 反推「谁写的」
+
+- **现象**：刚接上的回读校验在第一次检查时失败，报「外部 buffer 跨队列搬运的内容不对（第 0 个字）」；读回来整块是 0，但 GPU 侧明明填过。
+- **原因**：校验条件写成 `frameInfo.frameNumber - kFramesInFlight`，用它推「`kFramesInFlight` 帧前那个写入者」。帧号从 **1** 开始，第一次检查时 `frameNumber == kFramesInFlight`，反推出来是第 0 帧 —— 而第 0 帧不存在；探针又是隔帧跑（偶数帧才是 compute→graphics 方向），第一次真正的 copy 发生在第 2 帧。于是检查的是一个从没被写过的槽位。
+- **判据**：回读全 0 且失败点永远在第 0 个字；在同一处打印槽位与「上次排队的帧号」就能看到两者不匹配。
+- **修法**：不反推，**记录**。每个槽位存 `externalCopyFrames[frame] = frameNumber`，校验时只认「记录过、且 `记录值 + kFramesInFlight <= 当前帧`」，验完清零（一格只验一次）。改后 `[T01] external buffer verified` 正常打印。
+- **通用教训**：帧号、槽位号、pass 序号之间不要做算术反推 —— 只要编号起点或周期不是 1:1，反推就会在边界上指到不存在的帧。有写入者时当场记录，读的时候查记录。

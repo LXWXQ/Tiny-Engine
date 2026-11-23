@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~737 行
+size: ~786 行
 updated: 2026-11-23
 ---
 
@@ -735,3 +735,51 @@ G-Buffer 的 Position / Normal / Albedo / Pbr / Depth 一起从 `COLOR_ATTACHMEN
 
 **不引入的**：帧级有序屏障记录（等 T-07）；把缓冲屏障也做成攒后发（每次只有一段，收益为零）；
 异步屏障队列 / `vkCmdPipelineBarrier` 的 secondary 命令缓冲版本（本机没有第二个真实消费者）。
+## 决策 45：图外资源要显式声明「进来的状态」和「交回去的状态」（T-01）
+
+**问题。** `importTexture` / `importBuffer` 只把 `VkImage` / `VkBuffer` 包成句柄，图知道它叫什么、
+多大、是不是跨队列，但不知道它**进来时**处于什么 stage/access。于是第一处使用它的 Pass 被当成
+「从 NONE 开始」：屏障照发，不过发的是从 `VK_PIPELINE_STAGE_2_NONE` 出发的屏障 —— 真正的前一个
+使用者（上一帧的命令、别的提交点、或者图外自己录的那一段）没有被这次屏障覆盖。截图缓冲、
+`ShadowPass` 自己管的阴影图、暂存区里的聚簇表都站在这条缝上；区别只是它们此前都没接进图。
+
+**做法。** 加一组最小 API：`declareExternalTexture(handle, start, end)` /
+`declareExternalBuffer(handle, start, end)`，入口出口都是 `ExternalState{ layout, stage, access }`
+（buffer 忽略 `layout`）。声明做三件事：把资源状态设成 `start`、记下 `end`、`endFrame` 尾部自动
+把资源推到 `end` 并记为下一帧的期望入口。
+
+三条不变量，违反直接抛 `std::runtime_error`：
+
+- 每资源每帧最多声明一次（`externalDeclared`）；
+- 声明必须早于本帧第一次使用（`externalUsed` 在状态回写时置位）；
+- 本帧 `start` 必须等于上一帧交回的 `end`，否则报「状态漂移」，用 `layoutName` 把两边 layout 打出来。
+
+**为什么「上一帧交回了什么」必须存在图里。** 只有图自己见过这个值，漂移才检得出来。让调用方
+自己记入口状态，等于把不变量下放给每个调用点 —— 而漏记的那一刻不会有任何现象，直到某帧画面
+开始间歇性闪。
+
+**为什么交回屏障发在 graphics 流上。** 外部持有者就在 graphics 侧消费（交换链图像、截图回读、
+阴影图采样）。图里没有「外部资源归哪个队列」的信息，选 graphics 是当前唯一的保守解；
+真要跨队列交回，得先给 `ExternalState` 加队列字段，那是 T-07 拿到提交点信息之后的事。
+
+**验收：负向 + 正向。** `--cross-queue-test` 的探针现在自建一块图外 buffer（VMA 创建，
+`STORAGE|TRANSFER_SRC|TRANSFER_DST`，`hasDedicatedComputeQueue()` 时 CONCURRENT 两族共享）：
+
+- 负向：等「声明 + 交回」跑满一轮，故意拿 `(VERTEX_SHADER, SHADER_READ)` 当入口再声明一次，
+  必须抛「状态漂移」；没抛就由探针自己 `throw`。通过时打印 `[T01] external buffer drift detection verified`。
+- 正向：compute 流 `vkCmdFillBuffer` 填 64 个 `0xA5A5A5A5`，图形流 `vkCmdCopyBuffer` 拷进图自己
+  持有的 host-visible 回读缓冲，隔 `kFramesInFlight` 帧 CPU 逐字比对。通过时打印
+  `[T01] external buffer verified: ... 64 words`。
+- 结果：`--selftest 40 --cross-queue-test --validation-features sync` → `errors=0 warnings=0`、
+  stderr 0 字节、EXIT 0；默认场景 150 帧 + 截图 + sync 仍是 `38.0 calls / 45.1 entries /
+  sameState=18.9`，与 T-03 之后逐位一致 —— 没有调用者声明时它一分钱不花。
+
+**代价与边界。**
+- 只有声明过的外部资源受保护；没声明的导入资源仍然是「从 NONE 开始」。
+- 漂移检查按 `(layout, stage, access)` 全等比较。入口写成更宽的 stage（例如 `ALL_COMMANDS`）
+  会被判成漂移，而它可能是合法的保守写法。第一版故意严格：放宽等于放弃检查。
+- 交回屏障不参与 T-03 的攒批（`endFrame` 里直接 `emitBarrierIfNeeded` 再 `flushImageBarriers`），
+  因为它发生在所有 Pass 之后，不属于任何 Pass。
+
+**不引入的**：外部资源的自动发现（扫 VMA 台账）；跨队列交回（等 T-07）；`ExternalState` 里带
+队列族（同上）；把 `declareExternal*` 包成 RAII 持有者（图的 API 是「声明」不是「持有」）。
