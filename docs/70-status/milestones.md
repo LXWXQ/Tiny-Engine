@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1345 行
+size: ~1376 行
 updated: 2026-11-23
 ---
 
@@ -1354,3 +1354,23 @@ dispatch 改 `addComputePass("Clusters.Build")`，后跟只声明不执行的 `C
 （每 2 像素采样）已达 0.0087，而 T-02 前后是 0.0090 —— 落在噪声内。`tools/Baseline.ps1` 的
 `-MaxMeanDiff 2.0` 远未触及。也就是说：**在本场景里"截图逐像素一致"不能当回归判据**，
 `--validation-features sync` 的 0 errors 才是。
+## T-03：图像屏障只在 Pass 内按桶合并（2026-11-23）
+
+`emitBarrierIfNeeded` 从"逐子资源各发一次"改成"追加进 `pendingImageBarriers`，由
+`flushImageBarriers` 在 Pass 命令之前按 `(srcStage,dstStage,srcAccess,dstAccess,oldLayout,newLayout)`
+分桶发射"。第一版按子资源合并，实测零收益（`calls 45.2 → 45.2`）：探针显示 21 个 Pass 的每次访问都只有
+1 个 mip / 1 个 layer，桶里永远一个成员。
+
+| 场景 | 屏障调用/帧（前 → 后） | entries | sameState | FPS（同批次 A/B） |
+|---|---|---|---|---|
+| default | 45.2 → 38.0（-16%） | 45.2 不变 | 18.9 | not measured |
+| voxel-world | 61.2 → 47.0（-23%） | 61.2 不变 | 34 | not measured |
+| lights-512 | 61.2 → 47.0（-23%） | 61.2 不变 | 36 | 89.62 → 89.71（+0.1%） |
+
+**结论：省下的屏障调用没有换成帧时间。** 47 次 / 帧不是这个场景的瓶颈，瓶颈在 P3 的状态切换
+（`redundant=19.5 / 49.4%`）与 P2 的每帧摊平。这一单的结构性价值是屏障发射独立成
+`src/RHI/RenderGraphBarrier.cpp`、以及"屏障可以先攒后发"的通路存在（T-07 的 3 提交点需要它）。
+
+`--validation-features sync` 两场景 `errors=0`、stderr 0 字节；150 帧 + `--screenshot build\bench\t03-check.png`
+（1920x1080）`errors=0 warnings=0`。帧级有序屏障（跨 Pass 搬运）留到 T-07 之后，理由见
+[决策 44](../10-architecture/decisions.md)。

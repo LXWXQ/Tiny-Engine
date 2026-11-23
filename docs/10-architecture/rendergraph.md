@@ -4,8 +4,8 @@ title: 渲染图：屏障推导与语义校验
 type: architecture
 scope: src/RHI/RenderGraph.h, src/RHI/RenderGraph.cpp, src/Render/IRenderPass.h
 read-when: 修改任何 Pass 的资源声明、新增资源、调整 Pass 顺序、调试 layout/hazard 报错
-size: ~400 行
-updated: 2026-11-02
+size: ~284 行
+updated: 2026-11-23
 ---
 
 # 渲染图：屏障推导与语义校验
@@ -134,6 +134,30 @@ struct BufferEntry { BufferRange 已写区间; VkPipelineStageFlags2 stage; VkAc
 > 在这之前 syncval 的噪声会淹没新引入的问题，等于没有这个工具。
 
 ---
+
+### 3.4 屏障按桶合并（T-03）
+
+一个 Pass 的屏障不再逐条发射，而是先攒后发：
+
+```cpp
+for (const Access& acc : prepared.accesses) emitBarrierIfNeeded(acc, passCmd, pass.isCompute);  // 只入队
+flushImageBarriers(passCmd);                                                                    // 按桶合并发射
+for (const BufferAccess& acc : prepared.bufferAccesses) emitBufferBarrierIfNeeded(acc, passCmd, pass.isCompute);
+```
+
+桶键是 `(srcStage, dstStage, srcAccess, dstAccess, oldLayout, newLayout)` 六个字段全相同。
+同一 Pass 内的屏障全部落在 Pass 命令之前，所以桶与桶之间的发射顺序不影响正确性。
+
+两个数字必须分开看：
+
+| 数字 | 含义 | 批处理前后 |
+|---|---|---|
+| `entries` | 追加了多少条 `VkImageMemoryBarrier2` | **必须完全一致**（正确性） |
+| `calls` | 调了几次 `vkCmdPipelineBarrier2` | 变少才是收益 |
+
+实测（600 帧，Debug，RTX 2070）：`calls` 45.2 → 38.0（default）、61.2 → 47.0（lights-512），
+同批次 A/B 的 FPS 89.62 → 89.71 —— **省下的调用没有换成帧时间**，这个场景里屏障调用不是瓶颈。
+细节与为什么不合并到帧级见[决策 44](decisions.md)。
 
 ## 4. 子资源跟踪（TD-05）
 

@@ -91,6 +91,7 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     computeCmd = computeCommandBuffer;
     crossQueueDependencies = {};
     currentFrameSlot = frameSlot;
+    pendingImageBarriers.clear();
     tiny::framestats::beginFrame();
 
     // TM-07：帧首把暂存区轮转到这一帧的槽位（offset 归零、上一轮淘汰的旧块回收）。
@@ -441,6 +442,7 @@ void RenderGraph::endFrame()
             // 这一段必须串行：屏障取决于上一个 Pass 留下的布局。
             for (const Access& acc : prepared.accesses)
                 emitBarrierIfNeeded(acc, passCmd, pass.isCompute);
+            flushImageBarriers(passCmd);
             for (const BufferAccess& acc : prepared.bufferAccesses)
                 emitBufferBarrierIfNeeded(acc, passCmd, pass.isCompute);
 

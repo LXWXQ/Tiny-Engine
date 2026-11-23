@@ -1,17 +1,46 @@
-// 屏障发射（T-03 的落点：按 (srcStage,dstStage,layout) 分组合并）。
+// 屏障发射（T-03：按 (srcStage,dstStage,srcAccess,dstAccess,oldLayout,newLayout) 分组合并）。
 //
-// 从 RenderGraph.cpp 拆出来的理由：这里马上要加批处理，而声明的合法性校验、资源登记、
+// 从 RenderGraph.cpp 拆出来的理由：这里要加批处理，而声明的合法性校验、资源登记、
 // 提交循环都还在 RenderGraph.cpp 里 —— 混在一起时改一处屏障要在一千五百行里找上下文。
-// 拆的时候只搬函数，不改一行行为：--stats-frame 的三个数字必须逐位不变。
+//
+// 批处理为什么要跨资源：单个 Pass 里的每张图通常只有 1 个 mip、1 个 layer，
+// 逐子资源合并的收益是零（实测 21 个 Pass 里只有 IBL 的 6 级 mip 链能合）。
+// 真正重复的是「同一个 Pass 里多张图做同一类转换」—— G-Buffer 五张图一起
+// COLOR_ATTACHMENT -> SHADER_READ，Bloom 的上采样每级两次转换。
+// 所以这里改成：emitBarrierIfNeeded 只把屏障追加进待发队列，由 flushImageBarriers
+// 在 Pass 的命令之前一次性按桶发出去。
+//
+// 两个数字的口径差别（--stats-frame 的两列）：
+//   entries = 追加了多少条 barrier —— 正确性的度量，批处理前后必须完全一致；
+//   calls   = 真正调了几次 vkCmdPipelineBarrier2 —— 批处理收益的度量。
 
 #include "RHI/RenderGraph.h"
 #include "RenderGraphInternal.h"
 #include "FrameStats.h"
 
+#include <vector>
+
 using namespace rgdetail;
+
+namespace
+{
+    // 同一个桶 = 这六个字段全相同。srcStageMask 里已经含了跨队列的
+    // ALL_COMMANDS 替换，所以跨队列与同队列的屏障自然落进不同桶。
+    inline bool sameBarrierKey(const VkImageMemoryBarrier2& a, const VkImageMemoryBarrier2& b)
+    {
+        return a.srcStageMask == b.srcStageMask &&
+            a.dstStageMask == b.dstStageMask &&
+            a.srcAccessMask == b.srcAccessMask &&
+            a.dstAccessMask == b.dstAccessMask &&
+            a.oldLayout == b.oldLayout &&
+            a.newLayout == b.newLayout;
+    }
+}
 
 void RenderGraph::emitBarrierIfNeeded(const Access& acc, VkCommandBuffer target, bool currentQueueIsCompute)
 {
+    (void)target;   // 屏障不再就地发射，由 flushImageBarriers 统一发。
+
     if (!acc.texture.valid() || acc.texture.id >= textures.size())
         return;
 
@@ -19,9 +48,6 @@ void RenderGraph::emitBarrierIfNeeded(const Access& acc, VkCommandBuffer target,
     const bool isRead = (acc.access & kWriteBits) == 0;
     const SubresourceRange range = normalizeTextureRange(e, acc.range);
 
-    // Emit one barrier per touched subresource. For 1-mip/1-layer resources this
-    // is exactly the old behavior; for mip chains it guarantees mip1 is not
-    // transitioned when a pass only declared mip0.
     for (uint32_t layer = range.baseArrayLayer; layer < range.baseArrayLayer + range.layerCount; ++layer)
     {
         for (uint32_t mip = range.baseMipLevel; mip < range.baseMipLevel + range.levelCount; ++mip)
@@ -59,13 +85,50 @@ void RenderGraph::emitBarrierIfNeeded(const Access& acc, VkCommandBuffer target,
             b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b.image = e.image;
             b.subresourceRange = { aspectOf(e.isDepth), mip, 1, layer, 1 };
-
-            VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &b;
-            tiny::framestats::countBarrierCall(1);
-            vkCmdPipelineBarrier2(target, &dep);
+            pendingImageBarriers.push_back(b);
         }
+    }
+}
+
+void RenderGraph::flushImageBarriers(VkCommandBuffer target)
+{
+    if (pendingImageBarriers.empty())
+        return;
+
+    // 每次取队尾那条当桶的样板，把同键的邻居挑出来，凑够一批就发一次。
+    // 桶内成员的顺序无所谓（同一批屏障互不重叠），所以用「与队尾交换」的
+    // 删除方式，避免在热路径上做 N 次 erase。
+    std::vector<VkImageMemoryBarrier2> batch;
+    batch.reserve(pendingImageBarriers.size());
+
+    while (!pendingImageBarriers.empty())
+    {
+        const VkImageMemoryBarrier2 proto = pendingImageBarriers.back();
+        batch.clear();
+
+        size_t i = 0;
+        while (i < pendingImageBarriers.size())
+        {
+            if (sameBarrierKey(pendingImageBarriers[i], proto))
+            {
+                batch.push_back(pendingImageBarriers[i]);
+                pendingImageBarriers[i] = pendingImageBarriers.back();
+                pendingImageBarriers.pop_back();
+            }
+            else
+            {
+                ++i;
+            }
+        }
+
+        if (batch.empty())
+            continue;
+
+        VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+        dep.imageMemoryBarrierCount = static_cast<uint32_t>(batch.size());
+        dep.pImageMemoryBarriers = batch.data();
+        tiny::framestats::countBarrierCall(static_cast<uint32_t>(batch.size()));
+        vkCmdPipelineBarrier2(target, &dep);
     }
 }
 

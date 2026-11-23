@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~931 行
+size: ~942 行
 updated: 2026-11-23
 ---
 
@@ -814,7 +814,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 | T-10（已落地） | 基准脚本 + barrier/state 两个计数器 | `tools/bench.ps1`、`src/RHI/FrameStats.*`、`src/RHI/RenderGraph.cpp` | 三场景跑出 `baseline.md`；计数器逐位可复现 | 1 |
 | T-01 | `ExternalResourceRegistry`：帧首 acquire / 帧尾 release | `src/RHI/RenderGraph.{h,cpp}` | 探针 Pass 写入的 scratch buffer 能被 compute 队列正确读取（跨队列探针扩展） | 3 |
 | T-02（已落地） | `ClusterBuildPass` 改回 `addComputePass` | `src/Render/ClusterBuildPass.*`、`src/RHI/ScratchArena.cpp` | 512 灯 FPS ≥ 65.37；聚簇 dispatch 在 compute 队列（breadcrumbs 验证） | 1 |
-| T-03 | 屏障批处理：按 `(srcStage,dstStage)` 分组 | `src/RHI/RenderGraph.cpp` | barrier 条数 -25%，三场景截图逐像素一致 | 2 |
+| T-03（已落地） | 图像屏障在 Pass 内按六元组分桶合并（新增 `src/RHI/RenderGraphBarrier.cpp`） | `src/RHI/RenderGraph.{h,cpp}`、`src/RHI/RenderGraphBarrier.cpp` | 调用 45.2→38.0 / 61.2→47.0；`entries` 不变；A/B FPS +0.1% | 2 |
 | T-04 | 跨帧 RT 池 | 新增 `src/RHI/RenderTargetPool.{h,cpp}` | 每帧 `vkCreateImage` 次数为 0（稳定态）；显存不增长 | 2 |
 | T-05 | Pass 剔除 + dry-run 校验 | `src/RHI/RenderGraph.cpp` | `--no-bloom` 时图内 Pass 数 -7；被误删生产者时抛异常 | 2 |
 | T-06 | Blackboard（`std::any` + `type_index`） | 新增 `src/RHI/Blackboard.h` | SSAO 输出与 Hi-Z 金字塔改走黑板，`FrameInfo` 字段减少 ≥ 4 | 1 |
@@ -929,3 +929,14 @@ desc binds、三角形数；显存占用与 submitted/visible 组数仍靠 `--st
   并在本节追加一行偏差记录（计划 vs 实际、砍了什么范围、为什么）。
 - 若某项被判定不做，把它移进 §8，并补「不抄的理由」与「替代方案」——这是防止
   半年后重新论证同一件事的唯一办法。
+**T-03**：`emitBarrierIfNeeded` 改成先追加进 `pendingImageBarriers`、由 `flushImageBarriers` 在 Pass 命令
+之前按 `(srcStage,dstStage,srcAccess,dstAccess,oldLayout,newLayout)` 分桶发射；缓冲屏障仍就地一条
+（每次访问只有一段）。实测：`calls` 45.2 → 38.0（default）、61.2 → 47.0（voxel-world / lights-512），
+`entries` 完全不变，`--validation-features sync` 两场景 `errors=0`。
+
+**验收偏差（重要）**：计划写的「barrier 条数 -25%」没达到（-16% / -23%）。第一版按子资源合并是零收益——
+探针显示每个 Pass 的每次访问都只有 1 mip / 1 layer，桶里永远一个成员；只有把合并跨到"同一 Pass 里的多张图"
+才拿到两位数降幅。而同批次 A/B（`-Scenario lights-512 -Runs 3 -Frames 600`）显示 89.62 → 89.71 FPS，
+**省下的调用没有换成帧时间**。因此这条工单的定位改成"结构就绪、性能待 T-07 兑现"：
+瓶颈在 P3 的状态切换（冗余 49.4%）与 P2 的每帧摊平，不在屏障调用数。跨 Pass 的帧级有序屏障
+（UE RDG 的完整形态）需要提交点先分段，排在 T-07 之后。

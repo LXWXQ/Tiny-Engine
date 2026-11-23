@@ -441,6 +441,8 @@ private:
     BufferRange normalizeBufferRange(const BufferEntry& entry, const BufferRange& range) const;
     void emitBarrierIfNeeded(const Access& acc, VkCommandBuffer target, bool currentQueueIsCompute);
     void emitBufferBarrierIfNeeded(const BufferAccess& acc, VkCommandBuffer target, bool currentQueueIsCompute);
+    // T-03：图像屏障先进队列，由 flushImageBarriers 在 Pass 命令之前按桶合并发射。
+    void flushImageBarriers(VkCommandBuffer target);
 
     // TM-10：一个 Pass 的准备工作结果。全部是纯数据 —— 指针指向自己的 vector，
     // 所以对象必须放在堆上（preparedPasses 存 unique_ptr）：vector 一旦搬家，
@@ -490,5 +492,6 @@ private:
     std::vector<TextureEntry> textures;
     std::vector<BufferEntry> buffers;
     std::vector<std::unique_ptr<Pass>> passes;
+    std::vector<VkImageMemoryBarrier2> pendingImageBarriers;
     CrossQueueDependencies crossQueueDependencies{};
 };

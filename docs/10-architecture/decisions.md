@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~700 行
+size: ~737 行
 updated: 2026-11-23
 ---
 
@@ -686,3 +686,52 @@ T-07（FramePlan 多提交点）之后要量的一切，现在有落点了。120
 
 **不引入的**：异步 compute 的预算与优先级调度（UE 的 `AsyncComputeBudget` 对应物，等有第二个真实
 compute 消费者再谈）；把建簇之后的光照也拆进异步流（那会把 c2g 变成双向依赖，图会直接抛异常）。
+## 决策 44：图像屏障只在 Pass 内按桶合并，帧级有序屏障留给 T-07
+
+**问题。** `--stats-frame` 量出来的第一批数字里，`barriers/frame=45.2 calls 45.2 entries` —— 两个数
+相等，说明每追加一条屏障就调一次 `vkCmdPipelineBarrier2`。根源是 `emitBarrierIfNeeded` 对
+`range.baseMipLevel × range.baseArrayLayer` 双层循环，逐子资源各发一次。
+
+**试过的第一版（无收益）。** 把循环拆成两遍：先逐子资源判定发/跳过并把桶键算好，再按
+`(srcStage, dstStage, srcAccess, dstAccess, oldLayout, newLayout)` 分桶，每桶一次
+`vkCmdPipelineBarrier2`。实测 `calls 45.2 → 45.2`，一点没降。用临时探针（`TINY_RG_TRACE`，
+跑 `--selftest 2` 抓两帧）才看清原因：默认场景 21 个 Pass 的每一次资源访问都是
+`subres=1 buckets=1` —— 每张图只有 1 个 mip、1 个 layer，桶里永远只有一个成员。
+整帧唯一能合的是启动期 `IBL.Irradiance` 与 `IBL.Prefiltered` 的 6 级 mip 链（`subres=6 emitted=6`）。
+
+**真正的重复在哪。** 不在同一张图的多个子资源，而在**同一个 Pass 里多张图的同一类转换**：
+G-Buffer 的 Position / Normal / Albedo / Pbr / Depth 一起从 `COLOR_ATTACHMENT_WRITE` 转到
+`SHADER_READ`，Bloom 上采样每级两次转换。这些都各自是一条 `VkImageMemoryBarrier2`，但键完全相同。
+
+**做法（第二版）。** `emitBarrierIfNeeded` 不再就地发射，只把
+`VkImageMemoryBarrier2` 追加进 `RenderGraph::pendingImageBarriers`；录制循环在
+`for (const Access& acc : prepared.accesses) emitBarrierIfNeeded(...)` 之后调
+`flushImageBarriers(passCmd)`，由它挑出队尾那条当桶样板、把同键成员收进 `batch`
+（用「与队尾交换 + `pop_back`」剔除，不做 N 次 `erase`），每桶一次
+`vkCmdPipelineBarrier2`。缓冲屏障仍是就地发一条（每次访问只有一段）—— `emitBufferBarrierIfNeeded`
+没改。
+
+**结果。** `entries` 不变（正确性判据），`calls` 从 45.2 / 61.2 降到 38.0 / 47.0
+（-16% / -23%）；`--validation-features sync` 两场景 `errors=0`。同批次 A/B 跑
+`tools/bench.ps1 -Scenario lights-512 -Runs 3 -Frames 600`：合并前 89.62 FPS、合并后 89.71 FPS。
+
+**结论要写清：-23% 的屏障调用没有换成 FPS。** 这个场景里 47 次 / 帧的屏障调用不是瓶颈，
+瓶颈在别处（P3 的状态切换、P2 的每帧摊平）。所以这一单的价值不是性能，而是两件结构性的事：
+屏障发射独立成一个翻译单元（`src/RHI/RenderGraphBarrier.cpp`），以及「屏障可以先攒后发」
+这条通路存在了 —— T-07 把提交点从 1 个图形 + 1 个计算变成 3 个之后，真正需要的是在提交点
+之间搬运屏障，而不是在单个 Pass 内省调用。
+
+**为什么只合到 Pass 边界为止。** 跨 Pass 合并要求能证明「中间没有任何 Pass 碰这张图」，
+而那需要帧级的有序屏障记录（UE RDG 那套：先编译出整帧的 barrier 列表、再按提交点分段插入）。
+那件事的前提是提交点本身已经分段，所以排在 T-07 之后，不在这里抢跑。
+
+**代价与边界。**
+- `entries` 与 `calls` 从「恒等」变成两个不同的数，`baseline.md` 的列名相应改成「屏障调用/帧」，
+  并在列含义里写明哪个是正确性度量、哪个是收益度量。
+- 桶内成员的顺序不保证与原声明顺序一致（同一批屏障互不重叠，顺序不影响正确性）；但
+  `prepared.accesses` 的状态回写仍严格按声明顺序，未改动。
+- `pendingImageBarriers` 每 Pass 被 `flushImageBarriers` 清空，`beginFrame` 再清一次兜底 ——
+  攒着不清会让下一帧的 Pass 莫名带上上一帧的屏障。
+
+**不引入的**：帧级有序屏障记录（等 T-07）；把缓冲屏障也做成攒后发（每次只有一段，收益为零）；
+异步屏障队列 / `vkCmdPipelineBarrier` 的 secondary 命令缓冲版本（本机没有第二个真实消费者）。
