@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~970 行
+size: ~987 行
 updated: 2026-11-23
 ---
 
@@ -504,7 +504,7 @@ P3 与 P4 可以并行：P3 改的是「怎么发绘制命令」，P4 改的是�
 | # | 内容 | 落点 |
 |---|---|---|
 | P0-1（已落地） | 固化 3 个基准场景：`default`（固定开销）、`voxel-world`（`--voxel-world 1`，几何压力）、`lights-512`（512 灯 + GPU 建簇，光照压力） | `tools/bench.ps1` 场景表 |
-| P0-2 | 采集既有指标：CPU 帧时间、各 Pass GPU 时间（已有 `GpuTimer`）、draw calls、descriptor binds、submitted/visible 组数、显存占用（`TextureBudget`） | `src/RHI/PipelineStats.*` 扩展 |
+| P0-2（已落地，本轮补的四项） | 帧时间分布（中位 / p95 / 最长）、资源创建计数（`images/frame` 与启动峰值）、显存实际占用（`vmaGetHeapBudgets`）、剔除汇总（`visibleRatio`）。各 Pass GPU 时间仍走既有的 `--gpu-timing` CSV | `src/RHI/FrameStats.*`、`src/RHI/ResourceStats.*`、`src/Render/SceneGpuBatch.cpp` |
 | P0-3 | 新增两个本轮才需要的计数器：**barrier 条数**（每次 `emitBarrierIfNeeded` 计数）、**状态切换次数**（每次 `vkCmdBindPipeline` + `vkCmdBindDescriptorSets` 计数） | `src/RHI/RenderGraph.*`、`src/RHI/Renderer.*` |
 | P0-4（已落地） | 输出 `build/bench/<timestamp>/baseline.md`（场景汇总 + 逐次运行明细两表），路径写入 `build/bench/latest.txt` | `tools/bench.ps1` |
 
@@ -894,6 +894,24 @@ copy (COPY, TRANSFER_READ), 64 words`。
 动态渲染期间录 `vkCmdCopyBuffer` 会被验证层判 `VUID-vkCmdCopyBuffer-renderpass`（20 条错误 → 0，
 搬进零附件 Pass）；用 `frameNumber - kFramesInFlight` 反推写入者会指到不存在的第 0 帧（回读全 0，
 改成每槽位记录排队帧号）。
+**度量批（T-10 的后续，2026-11-23）**：`--stats-frame` 从三行扩到七行，补的正是 T-04 / P2 / P3 各自缺的判据。
+
+| 新增读数 | 决定的判据 | 实现 |
+|---|---|---|
+| `[FrameTime] median/p95/max` | P3「最长帧 ≤ 中位帧 3 倍」 | `FrameStats::recordFrameTime` + 0.25 ms 桶直方图 + `percentile()` |
+| `[Resources] images/frame total peakFrame` | T-04「稳定态每帧 `vkCreateImage` 为 0」 | `ResourceStats`，挂在 `createOwnedTexture` / `createOwnedBuffer` / `createSlotBuffer` 之后 |
+| `[Memory] heapN used/allocs first/last/peak` | T-04「显存不增长」 | `vmaGetMemoryProperties` + `vmaGetHeapBudgets`，10 Hz 采样，退出前补一次 |
+| `[SceneGpu] cull summary visibleRatio` | P2「visible/submitted ≤ 0.6」 | `SceneGpuBatch::readStats` 累计 + `logCullSummary()` 归一化 |
+
+实测（600 帧 × 3 次）：default `115.91 FPS / 8.63 ms / 中位 7.88 / p95 9.12 / 最长 88.02 ms / images 0.27 / heap0 1220.7 MiB / visible 0.61`，
+voxel-world `98.73 / 10.13 / 9.62 / 10.88 / 89.83 / 0.27 / 1220.7 / 1.00`，lights-512 `89.57 / 11.16 / 10.62 / 11.88 / 100.43 / 0.27 / 1220.7 / 1.00`。
+`images/frame` 是全程平均：160 张图在启动期创建，摊到 600 帧就是 0.27，稳态每帧是 0 —— T-04 要压的是启动峰值，不是这个均值。
+
+**顺带发现的基线缺陷**：`default` 场景此前的基线是「1 draw call / 8192 三角形」，因为相机来自
+`config/engine.json`（本机存的是 `(-66.06, 15.92, -76.19)`，站在 Sponza 外 100 米看向天空），
+103 个几何组全部落在视锥外。修法是给引擎加 `--camera <px,py,pz,pitch,yaw>`，`bench.ps1` 三个场景都钉住
+`Scene::init` 的 Sponza 默认机位。钉住之后 `default` 变成 104 draw calls / 270459 三角形 / `visibleRatio 0.61`，
+115.91 FPS 不能和旧版的 164.80 直接比。这条属于「先有尺子」的一部分：没有固定机位，截图金标与剔除读数都不可复现。
 ---
 
 ## 8. 明确不抄清单

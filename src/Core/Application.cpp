@@ -18,6 +18,7 @@
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
 #include "RHI/FrameStats.h"
+#include "RHI/ResourceStats.h"
 #include "Core/CliCatalog.h"
 #include "Core/AssetPath.h"
 #include "Core/AppEvents.h"
@@ -103,6 +104,9 @@ FirstApp::FirstApp(const diag::Options& options)
 
 	initWindow(loadedSettings.windowTitle);
 	vulkanDevice = std::make_unique<Device>(window, diagnosticsOptions);
+
+// T-04 的前置尺子：显存采样需要 VMA 分配器，且必须在 device 销毁之前用完。
+tiny::resourcestats::setAllocator(vulkanDevice->getVmaAllocator());
 
 	// TM-16：热重载要知道设备句柄才能在重建前 vkDeviceWaitIdle；
 	// 开关在这里定下来，之后每帧只看 diagnosticsOptions.hotReload 决定要不要 poll。
@@ -208,6 +212,17 @@ scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager,
 			<< loadedCamera.position.x << ", " << loadedCamera.position.y << ", " << loadedCamera.position.z << ")\n";
 	}
 
+// --camera：基准场景与截图金标要一个与"上次会话存下的相机"无关的固定视角。
+if (diagnosticsOptions.hasCameraOverride)
+{
+scene->getCameraTransform().setTranslation(glm::vec3(diagnosticsOptions.cameraPosition[0],
+diagnosticsOptions.cameraPosition[1], diagnosticsOptions.cameraPosition[2]));
+scene->getCameraTransform().setEuler(glm::vec3(diagnosticsOptions.cameraPitch,
+diagnosticsOptions.cameraYaw, 0.0f));
+std::cout << "[Config] 相机位姿由 --camera 覆盖 ("
+<< diagnosticsOptions.cameraPosition[0] << ", " << diagnosticsOptions.cameraPosition[1] << ", "
+<< diagnosticsOptions.cameraPosition[2] << ")\n";
+}
 	// --terrain-test: persistent end-to-end terrain for render/screenshot runs.
 	// Placement mirrors the editor rule: centre in front of the camera, flattened
 	// to Y=0 so TerrainConfig::baseHeight remains the visible ground elevation.
@@ -1943,6 +1958,9 @@ update(frameTime);
 auto updateEnd = std::chrono::high_resolution_clock::now();
 render(frameTime);
 auto renderEnd = std::chrono::high_resolution_clock::now();
+
+// 帧时间进直方图：平均 FPS 看不出「卡一下」，median / p95 / max 才看得出。
+tiny::framestats::recordFrameTime(static_cast<double>(frameTime) * 1000.0);
 updateMsAccum += std::chrono::duration<double, std::milli>(updateEnd - updateStart).count();
 renderMsAccum += std::chrono::duration<double, std::milli>(renderEnd - updateEnd).count();
 ++profiledFrames;
@@ -2189,6 +2207,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!tiny::framestats::selfTest())
 		throw std::runtime_error("FrameStats selfTest failed");
 
+	// T-04 的前置尺子：资源创建计数与显存采样的帧边界（纯计数器，不需要 Device）。
+	if (!tiny::resourcestats::selfTest())
+		throw std::runtime_error("ResourceStats selfTest failed");
+
 	// CLI 选项表的单一来源：分组非空、开关不重复、必含新增项。
 	// 萤火虫：布点确定、范围合法、呼吸不灭（纯算术，先在这里证伪）。
 	if (!Fireflies::selfTest())
@@ -2357,9 +2379,14 @@ int FirstApp::runHeadlessSelfTest(int frames)
 			ImGui_ImplGlfw_Sleep(10);
 			continue;
 		}
+		const auto frameStart = std::chrono::high_resolution_clock::now();
 		update(dt);
 		render(dt);
 		TINY_PROFILE_FRAME_MARK();
+		const auto frameStop = std::chrono::high_resolution_clock::now();
+		// 自检循环走的是这条独立路径，交互循环里的那次 recordFrameTime 不会执行。
+		tiny::framestats::recordFrameTime(
+			std::chrono::duration<double, std::milli>(frameStop - frameStart).count());
 	}
 
 	const auto benchmarkEnd = std::chrono::high_resolution_clock::now();
@@ -3358,6 +3385,13 @@ void FirstApp::finalizeDiagnostics()
     // 「屏障少 25%」「状态切换少 40%」这两个验收门槛都从这三行数字起算。
     if (diagnosticsOptions.statsFrame)
         tiny::framestats::report();
+
+        // T-04 的判据：稳定态每帧创建 0 次、显存 first/last/peak 贴在一起。
+        tiny::resourcestats::report();
+
+        // P2 的入场读数：组级剔除现在能到多少（实例级剔除之后要对比这一行）。
+        if (geometryPassPtr != nullptr && geometryPassPtr->getSceneGpuBatch() != nullptr)
+            geometryPassPtr->getSceneGpuBatch()->logCullSummary();
 
     // TM-13：聚簇构建的统计（使用簇数 / 最大簇 / 因每簇上限丢弃的灯数）。
     if (diagnosticsOptions.statsClusters)

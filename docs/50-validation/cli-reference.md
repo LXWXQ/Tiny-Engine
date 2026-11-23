@@ -96,12 +96,13 @@ updated: 2026-11-23
 | `--screenshot-frame <n>` | 指定帧号（隐含 `--screenshot`） | 同上 |
 | `--screenshot-viewport` | 截图拍编辑器离屏视口（纯 3D，不含 UI）；需配合 `--editor` | 0 |
 | `--empty-scene` | 不加载 Sponza / 天空盒，只留相机（调试单物体交互） | 0 |
+| `--camera <px,py,pz,pitch,yaw>` | 覆盖 `config/engine.json` 里保存的相机位姿。基准场景与截图金标必须用固定机位：不加这个开关时相机来自"上次谁动过"，同一份代码两次跑出的画面与剔除读数都不同 | 0 |
 | `--terrain-test` | 启动时在相机前方创建一块持久地形，用于端到端渲染/截图回归；常与 `--empty-scene --selftest` 配合 | 0（不传时不生成、不分摊） |
 | `--capture-frame <n>` | RenderDoc 在第 n 帧抓帧（需注入） | 0（不调 `RENDERDOC_GetAPI`） |
 | `--stats-pipelines` | 退出时打印管线数量、建管线耗时与状态去重 | 0（关时只累加整数、不建表） |
 | `--stats-scratch` | 退出时打印每帧暂存区的分配次数 / 字节 / 扩容 / 刷新 | 0 |
 | `--stats-rendergraph` | 退出时打印渲染图准备与录制的每帧耗时 | 0 |
-| `--stats-frame` | 退出时打印每帧屏障条数（按子资源计）/ 跳过的屏障（同状态与跨队列各一类）/ 管线绑定次数与冗余绑定占比。冗余绑定率就是状态缓存（T-09）能吃掉的上限，见决策 43 | 0（关时只累加整数） |
+| `--stats-frame` | 退出时打印四段：每帧屏障条数（按子资源计）/ 跳过的屏障（同状态与跨队列各一类）/ 管线绑定次数与冗余绑定占比、`[FrameTime]` 中位 / p95 / 最长帧、`[Resources]` 每帧资源创建数与启动峰值、`[Memory]` 堆用量、`[SceneGpu]` 剔除汇总（visibleRatio）。冗余绑定率就是状态缓存（T-09）能吃掉的上限，见决策 43 | 0（关时只累加整数） |
 | `--parallel-prepare` | Pass 准备阶段丢进 JobSystem 并行（实测更慢，见 TM-10） | 0（默认串行） |
 | `--alias-report` | 退出时打印资源别名候选与预估可省显存（只读报告） | 0（关时 endFrame 整段不执行） |
 | `--light-stress <n>` | 铺 n 盏点光源做压力场（配合 `--clustered-lighting` 看聚簇收益） | 0 |

@@ -18,6 +18,10 @@ param(
 #   * [SelfTest] performance / telemetry  -> FPS, draw calls, desc binds, tris
 #   * [FrameStats]                        -> passes, barriers, binds, redundancy
 #   * [Validation]                        -> errors / warnings
+# #   * [FrameTime]  -> median / p95 / max frame time in ms (hitch detector)
+#   * [Resources]  -> images created per frame (steady state must be 0)
+#   * [Memory]     -> heap0 used MiB, last sample
+#   * [SceneGpu]   -> cull summary visibleRatio
 # and writes build/bench/<timestamp>/baseline.md.
 #
 #   tools/bench.ps1                 # all scenarios, 3 runs each
@@ -82,7 +86,11 @@ function Invoke-Run([string]$dir, [string]$name, [int]$index, [string[]]$extra) 
     $stdout = Join-Path $dir ("{0}.run{1}.stdout.log" -f $name, $index)
     $stderr = Join-Path $dir ("{0}.run{1}.stderr.log" -f $name, $index)
 
-    $engineArgs = @("--selftest", "$Frames", "--stats-frame") + $extra
+    # Fixed establishing shot (Scene::init's Sponza default). Without it the camera
+    # comes from config/engine.json, i.e. from whoever last moved it - the same code
+    # would then produce different screenshots and different cull ratios.
+    $engineArgs = @("--selftest", "$Frames", "--stats-frame") +
+        @("--camera", "-4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765") + $extra
     $argLine = ($engineArgs | ForEach-Object { Quote-NativeArg $_ }) -join " "
     $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $repoRoot `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru -NoNewWindow
@@ -106,6 +114,12 @@ function Invoke-Run([string]$dir, [string]$name, [int]$index, [string[]]$extra) 
         redundant = Get-Metric $out 'redundant=[\d.]+ \(([\d.]+)%\)' 1
         errors   = Get-Metric $out '\[Validation\] errors=(\d+)' 1
         warnings = Get-Metric $out '\[Validation\] errors=\d+ warnings=(\d+)' 1
+        medMs    = Get-Metric $out '\[FrameTime\] frames=\d+ \| median=([\d.]+)ms' 1
+        p95Ms    = Get-Metric $out 'median=[\d.]+ms p95=([\d.]+)ms' 1
+        maxMs    = Get-Metric $out 'p95=[\d.]+ms max=([\d.]+)ms' 1
+        images   = Get-Metric $out '\[Resources\] frames=\d+ \| images/frame=([\d.]+)' 1
+        heapMb   = Get-Metric $out '\[Memory\] heap0 used first=[\d.]+ last=([\d.]+) peak=' 1
+        visible  = Get-Metric $out 'cull summary \| frames=\d+ visibleRatio=([\d.]+)' 1
     }
     if ($null -eq $row.fps) { throw "no [SelfTest] performance line in $stdout (scenario $name run $index)" }
     return [pscustomobject]$row
@@ -160,6 +174,12 @@ foreach ($name in $scenarios.Keys) {
         errors    = $first.errors
         warnings  = $first.warnings
         stderr    = $first.stderr
+        medMs     = $first.medMs
+        p95Ms     = $first.p95Ms
+        maxMs     = $first.maxMs
+        images    = $first.images
+        heapMb    = $first.heapMb
+        visible   = $first.visible
     }
     if ($spread -gt $MaxVariancePct) {
         $warnings += ("{0}: FPS spread {1}% > {2}% ({3}..{4}) - machine noise first, re-run before suspecting code" -f $name, [math]::Round($spread, 2), $MaxVariancePct, $fps[0], $fps[-1])
@@ -174,12 +194,13 @@ $md = New-Object System.Collections.ArrayList
 [void]$md.Add("- config: $Config")
 [void]$md.Add("- engine: $exe")
 [void]$md.Add("")
-[void]$md.Add("| scenario | FPS (median) | spread % | frame ms | passes/frame | barriers/frame | sameState | crossQueue | binds/frame | redundant % | draw calls | desc binds | triangles |")
-[void]$md.Add("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+[void]$md.Add("| scenario | FPS (median) | spread % | frame ms | passes/frame | barriers/frame | sameState | crossQueue | binds/frame | redundant % | draw calls | desc binds | triangles | median ms | p95 ms | max ms | images/frame | heap0 MiB | visible ratio |")
+[void]$md.Add("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 foreach ($s in $summary) {
-    [void]$md.Add(("| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} |" -f `
+    [void]$md.Add(("| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} | {14} | {15} | {16} | {17} | {18} |" -f `
         $s.scenario, $s.fpsMedian, $s.spreadPct, $s.frameMs, $s.passes, $s.barriers, $s.sameState, $s.crossQ, `
-        $s.binds, $s.redundant, $s.draws, $s.descBinds, $s.tris))
+        $s.binds, $s.redundant, $s.draws, $s.descBinds, $s.tris, `
+        $s.medMs, $s.p95Ms, $s.maxMs, $s.images, $s.heapMb, $s.visible))
 }
 [void]$md.Add("")
 [void]$md.Add("| scenario | run | FPS | s | exit | stderr | errors | warnings |")
@@ -206,9 +227,9 @@ $mdPath = Join-Path $OutDir "baseline.md"
 Set-Content -LiteralPath (Join-Path $buildRoot "bench\latest.txt") -Value $mdPath -Encoding ASCII
 
 Write-Host ""
-Write-Host ("{0,-13} {1,10} {2,9} {3,8} {4,7} {5,8}" -f "scenario", "FPS", "spread%", "frame ms", "passes", "barriers")
+Write-Host ("{0,-13} {1,10} {2,9} {3,8} {4,7} {5,8} {6,9} {7,8}" -f "scenario", "FPS", "spread%", "frame ms", "passes", "barriers", "p95 ms", "max ms")
 foreach ($s in $summary) {
-    Write-Host ("{0,-13} {1,10} {2,9} {3,8} {4,7} {5,8}" -f $s.scenario, $s.fpsMedian, $s.spreadPct, $s.frameMs, $s.passes, $s.barriers)
+    Write-Host ("{0,-13} {1,10} {2,9} {3,8} {4,7} {5,8} {6,9} {7,8}" -f $s.scenario, $s.fpsMedian, $s.spreadPct, $s.frameMs, $s.passes, $s.barriers, $s.p95Ms, $s.maxMs)
 }
 Write-Host ("[bench] baseline -> {0}" -f $mdPath)
 

@@ -1,4 +1,5 @@
 #include "GpuProfiler.h"
+#include "RHI/ResourceStats.h"
 #include "RHI/RenderGraph.h"
 #include "RenderGraphInternal.h"
 #include "RHI/CommandUtils.h"
@@ -20,7 +21,6 @@
 #include "Core/JobSystem.h"
 
 using namespace rgdetail;
-
 
 // ============================================================================
 // RenderGraph
@@ -93,6 +93,7 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     currentFrameSlot = frameSlot;
     pendingImageBarriers.clear();
     tiny::framestats::beginFrame();
+    tiny::resourcestats::beginFrame();
 
     // TM-07：帧首把暂存区轮转到这一帧的槽位（offset 归零、上一轮淘汰的旧块回收）。
     device.getScratch().beginFrame(frameSlot);
@@ -106,7 +107,6 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
         if (computeCmd != VK_NULL_HANDLE)
             crumbs->beginSlot(computeCmd, Breadcrumbs::slotFor(frameSlot, true), frameNumber);
     }
-
 
     // P0-4：GPU 计时。关闭时 gpuTimer 为 nullptr，一个分支都不进。
 #ifdef TINY_ENABLE_GPU_TIMING
@@ -620,6 +620,7 @@ void RenderGraph::endFrame()
     }
 
     tiny::framestats::endFrame();
+    tiny::resourcestats::endFrame();
 
     for (std::unique_ptr<Pass>& p : passes)
         p.reset();
@@ -896,7 +897,6 @@ void RenderGraph::validateWriteCoverage()
     }
 }
 
-
 void PassSwitchboard::set(const std::string& pattern, bool enabled)
 {
     if (pattern.empty())
@@ -1142,6 +1142,7 @@ void RenderGraph::createOwnedBuffer(BufferEntry& e)
     if (vmaCreateBuffer(device.getVmaAllocator(), &info, &alloc,
         &e.buffer, &e.allocation, &allocInfo) != VK_SUCCESS)
         throw std::runtime_error("RenderGraph: buffer 创建失败: " + e.desc.name);
+    tiny::resourcestats::countBuffer();
 
     if (e.desc.hostVisible)
         e.mapped = allocInfo.pMappedData;
@@ -1180,6 +1181,7 @@ void RenderGraph::createOwnedTexture(TextureEntry& e)
 
     if (vmaCreateImage(device.getVmaAllocator(), &info, &alloc, &e.image, &e.allocation, nullptr) != VK_SUCCESS)
         throw std::runtime_error("RenderGraph: 图像创建失败: " + e.desc.name);
+    tiny::resourcestats::countImage();
 
     VkImageViewCreateInfo view{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
     view.image = e.image;

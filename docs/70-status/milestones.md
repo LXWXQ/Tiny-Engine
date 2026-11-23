@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1402 行
+size: ~1434 行
 updated: 2026-11-23
 ---
 
@@ -1399,3 +1399,37 @@ dispatch 改 `addComputePass("Clusters.Build")`，后跟只声明不执行的 `C
 引入的，后者是探针的边界假设错了 —— 两条都不是同步错误，`errors` 与 stderr 都不会指向真正的位置。
 
 校验：`tools/DocCheck.ps1` PASS；默认场景与 lights-512 均 `errors=0 warnings=0`、stderr 0 字节。
+
+## 度量批：帧时间 / 创建计数 / 显存 / 剔除汇总（2026-11-23）
+
+`--stats-frame` 从三行扩到七行。判定依据是：T-04 的验收（稳定态每帧 `vkCreateImage` 为 0、显存不增长）
+此前根本无法测量；P3 的「最长帧 ≤ 中位帧 3 倍」指标不存在；P2 的 `visible/submitted ≤ 0.6` 只有
+每 60 帧一次的行内打印、没有进基线。先补尺子再动工，与 T-03 之前补屏障条数同理。
+
+| 读数 | 实现 | 决定哪条判据 |
+|---|---|---|
+| `[FrameTime] frames=N \| median=.. p95=.. max=..` | `FrameStats::recordFrameTime` + 0.25 ms 桶直方图（0~250 ms + 溢出桶）+ `percentile()` | P3 首帧 hitch |
+| `[Resources] frames=N \| images/frame=.. total=.. peakFrame=.. \| buffers/frame=..` | `ResourceStats`，挂在 `RenderGraph::createOwnedTexture/createOwnedBuffer` 与 `ScratchArena::createSlotBuffer` 之后 | T-04 每帧创建数为 0 |
+| `[Memory] heapN used first/last/peak MiB \| allocs ..` | `vmaGetMemoryProperties` + `vmaGetHeapBudgets`，10 Hz 采样 + 退出前补一次 | T-04 显存不增长 |
+| `[SceneGpu] cull summary \| frames=.. visibleRatio=.. \| groups/frame=.. visible=.. culled=.. \| instances/frame=.. submitted/frame=.. \| hizCulled/frame=.. screenCulled/frame=..` | `SceneGpuBatch::CullTotals` + `logCullSummary()`，只在 `visible+culled > 0` 的帧算样本 | P2 `visible/submitted ≤ 0.6` |
+
+实测（600 帧 × 3 次，Debug，RTX 2070）：
+
+| 场景 | FPS 中位 | 中位 ms | p95 ms | 最长 ms | images/帧 | heap0 MiB | visibleRatio |
+|---|---|---|---|---|---|---|---|
+| default | 115.91 | 7.88 | 9.12 | 88.02 | 0.27 | 1220.7 | 0.61 |
+| voxel-world | 98.73 | 9.62 | 10.88 | 89.83 | 0.27 | 1220.7 | 1.00 |
+| lights-512 | 89.57 | 10.62 | 11.88 | 100.43 | 0.27 | 1220.7 | 1.00 |
+
+顺带发现并修掉的基线缺陷：`default` 场景此前是「1 draw call / 8192 三角形」，原因是相机来自
+`config/engine.json`（`(-66.06, 15.92, -76.19)`，站在 Sponza 外 100 米看向天空），103 个几何组全在视锥外。
+新增 `--camera <px,py,pz,pitch,yaw>` 覆盖机位，`bench.ps1` 三个场景钉住 `Scene::init` 的 Sponza 默认机位；
+钉住后 `default` 是 104 draw calls / 270459 三角形 / `visibleRatio 0.61`，115.91 FPS 与旧版 164.80 不可比。
+
+实现上踩过的两个坑（都已修）：`ResourceStats::beginFrame` 一开始清零本帧计数，导致 `total=0`
+——G-Buffer、图自持目标、暂存区都在第一帧 `beginFrame` 之前创建，清掉就再也算不进来；现在清零放在
+`endFrame` 累加之后。`ResourceStats::selfTest` 里测「无分配器时空操作」后忘了还原分配器与堆采样，
+而 selfTest 在启动链里跑，于是整轮显存采样全死、`[Memory]` 一行都不打。
+
+校验：`tools/DocCheck.ps1` PASS；三场景 `errors=0 warnings=0`、stderr 0 字节；`[Memory]` 的
+`first` 与 `last` 相等（1220.7 → 1220.7 MiB），稳态不增长。

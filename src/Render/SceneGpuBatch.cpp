@@ -1,4 +1,6 @@
 #include "Render/SceneGpuBatch.h"
+#include "RHI/ResourceStats.h"
+#include <iomanip>
 
 #include "AssetPaths.h"
 #include "Core/MaterialSlot.h"
@@ -1130,6 +1132,46 @@ void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
     stats.occlusionCulled = words[7];
     stats.screenTests = words[8];
     stats.screenCulled = words[9];
+
+    // 累计剔除量：只在 GPU 真跑过剔除的那些帧里累加（words[1]+words[2] > 0）。
+    // 回读值滞后两帧，前两帧可能是 0，那不算样本。
+    if (stats.visibleGroups + stats.culledGroups > 0u)
+    {
+        ++cullTotals.frames;
+        cullTotals.submitted += stats.submitted;
+        cullTotals.visibleGroups += stats.visibleGroups;
+        cullTotals.culledGroups += stats.culledGroups;
+        cullTotals.visibleInstances += stats.visibleInstances;
+        cullTotals.occlusionCulled += stats.occlusionCulled;
+        cullTotals.screenCulled += stats.screenCulled;
+    }
+}
+
+void SceneGpuBatch::logCullSummary() const
+{
+    if (cullTotals.frames == 0)
+    {
+        std::cout << "[SceneGpu] cull summary | 没有采集到样本（GPU 剔除未运行）\n";
+        return;
+    }
+
+    const double frames = static_cast<double>(cullTotals.frames);
+    const double groupsTotal = static_cast<double>(cullTotals.visibleGroups + cullTotals.culledGroups);
+    const double visibleRatio = groupsTotal > 0.0
+        ? static_cast<double>(cullTotals.visibleGroups) / groupsTotal
+        : 0.0;
+
+    // visibleRatio 是 P2 的对照读数：组的粒度现在大概 0.8 上下，实例级剔除的目标是 0.6。
+    std::cout << "[SceneGpu] cull summary | frames=" << cullTotals.frames
+              << " visibleRatio=" << std::fixed << std::setprecision(2) << visibleRatio
+              << " | groups/frame=" << std::setprecision(1) << (groupsTotal / frames)
+              << " visible=" << (static_cast<double>(cullTotals.visibleGroups) / frames)
+              << " culled=" << (static_cast<double>(cullTotals.culledGroups) / frames)
+              << " | instances/frame=" << (static_cast<double>(cullTotals.visibleInstances) / frames)
+              << " submitted/frame=" << (static_cast<double>(cullTotals.submitted) / frames)
+              << " | hizCulled/frame=" << (static_cast<double>(cullTotals.occlusionCulled) / frames)
+              << " screenCulled/frame=" << (static_cast<double>(cullTotals.screenCulled) / frames)
+              << "\n";
 }
 
 void SceneGpuBatch::ensureHiZ(VkExtent2D extent)
@@ -1175,6 +1217,7 @@ void SceneGpuBatch::ensureHiZ(VkExtent2D extent)
         if (vmaCreateImage(vulkanDevice.getVmaAllocator(), &imageInfo, &allocInfo, &slot.image,
                            &slot.allocation, nullptr) != VK_SUCCESS)
             throw std::runtime_error("SceneGpuBatch: Hi-Z image creation failed");
+        tiny::resourcestats::countImage();
         slot.extent = extent;
         slot.mipLevels = levels;
 

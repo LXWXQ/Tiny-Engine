@@ -4,7 +4,7 @@ title: 诊断基础设施实现
 type: debug
 scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~217 行
+size: ~245 行
 updated: 2026-11-19
 ---
 
@@ -215,3 +215,32 @@ build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
 ### 12.3 与其它统计开关的关系
 
 `--stats-pipelines`（第 10 节）看的是管线构建，`--stats-scratch`（第 7 节）看的是暂存区分配，`--alias-report`（第 11 节）看的是资源生命周期；本节看的是每帧渲染图的 CPU 开销。四个开关互不影响，可以同时打开。
+
+## 13. 帧级度量四件套（T-10 的后续）
+
+`--stats-frame` 现在退出时打四段，彼此独立：
+
+```
+[FrameStats] frames=600 | passes/frame=21.0 skipped=0.0
+[FrameStats] barriers/frame=38.0 calls 45.2 entries | skipped: sameState=18.8 crossQueue=0.0
+[FrameStats] pipelineBinds/frame=23.5 redundant=10.5 (44.7%)
+[FrameTime] frames=600 | median=7.88ms p95=9.12ms max=88.02ms
+[Resources] frames=600 | images/frame=0.27 total=160 peakFrame=160 | buffers/frame=0.03 total=16 peakFrame=16
+[Memory] heap0 used first=1220.7 last=1220.7 peak=1220.7 MiB | allocs first=185 last=185 peak=185
+[SceneGpu] cull summary | frames=598 visibleRatio=0.61 | groups/frame=103.0 visible=63.0 culled=40.0 | instances/frame=63.0 submitted/frame=103.0 | hizCulled/frame=0.0 screenCulled/frame=0.0
+```
+
+- **`[FrameTime]`**：`FrameStats::recordFrameTime(double ms)` 把每帧耗时落进 0.25 ms 一格的直方图（0~250 ms，另有一个溢出桶），`percentile()` 按桶累积。中位 / p95 是稳态抖动，`max` 基本等于启动帧（建管线 + 上传），所以它衡量首帧 hitch。注意交互循环和 `--selftest` 循环是两条路径，两处都要记一次，否则 selftest 跑完一行都不打。
+- **`[Resources]`**：`ResourceStats` 在 `RenderGraph::createOwnedTexture/createOwnedBuffer` 与 `ScratchArena::createSlotBuffer` 之后计数。**帧首不清零**：G-Buffer、渲染图自持目标、暂存区都在第一帧 `beginFrame` 之前建好，清掉就再也算不进来。清零放在 `endFrame` 累加之后，于是"第 1 帧"自然带上启动期的创建量，`peakFrame` 就是启动那一下的创建量——T-04 要压的正是它。
+- **`[Memory]`**：`vmaGetMemoryProperties` + `vmaGetHeapBudgets`，10 Hz 采样，`report()` 之前再补一次。不补的话 60 帧的短跑只在第 1 帧采到一次，那还在加载期，`first` 与 `last` 差太远会被误读成"在增长"。
+- **`[SceneGpu] cull summary`**：`SceneGpuBatch::readStats` 累计、`logCullSummary()` 归一化成每帧值。只在 `visible + culled > 0` 的帧算样本（回读滞后两帧，前两帧是 0）。`visibleRatio` 是 P2 `visible/submitted ≤ 0.6` 的直接读数。
+
+### 13.1 相机必须能钉住
+
+`--camera <px,py,pz,pitch,yaw>` 覆盖 `config/engine.json` 里的机位，`bench.ps1` 三个场景都带 `Scene::init` 的 Sponza 默认机位。
+不加这个开关时，基线相机会跟着"上次谁动过"变：本机 config 里存的是 `(-66.06, 15.92, -76.19)`，站在场景外 100 米看向天空，
+`default` 场景于是只有 1 draw call / 8192 三角形、`visibleRatio = 0.00`。同一份代码两次跑出的截图不同，剔除读数也没有意义。
+
+### 13.2 与其它开关的关系
+
+`--stats-frame` 关掉时这些计数器仍然累加（整数加法，无分配），只是不打印；它们和 `--gpu-timing`（第 2 节）、`--stats-pipelines`（第 10 节）、`--stats-rendergraph`（第 12 节）可以同时开。

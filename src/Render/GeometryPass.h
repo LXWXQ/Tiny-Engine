@@ -31,6 +31,9 @@ public:
     // C1：平面反射复用同一套几何提交路径。
     GeometrySystem* getGeometrySystem() const { return geometrySystem.get(); }
 
+    // T-04 / P2 的读数入口：剔除统计在 SceneGpuBatch 里，退出摘要需要它。
+    SceneGpuBatch* getSceneGpuBatch() const { return sceneGpuBatch.get(); }
+
 private:
     Device& vulkanDevice;
     std::array<GBuffer*, kFramesInFlight> gBuffers{};

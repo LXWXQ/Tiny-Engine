@@ -1,4 +1,5 @@
 #include "RHI/ScratchArena.h"
+#include "RHI/ResourceStats.h"
 
 #include "RHI/Device.h"
 #include "RHI/VmaNaming.h"
@@ -97,6 +98,7 @@ void ScratchArena::createSlotBuffer(uint32_t index, VkDeviceSize capacity)
     {
         throw std::runtime_error("ScratchArena: 每帧暂存区创建失败");
     }
+    tiny::resourcestats::countBuffer();
 
     slot.mapped = info.pMappedData;
     slot.capacity = capacity;

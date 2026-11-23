@@ -2,9 +2,9 @@
 id: status/baseline
 title: 三场景性能基线
 type: status
-scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp
+scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/ResourceStats.h, src/RHI/ResourceStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp, src/Render/SceneGpuBatch.cpp
 read-when: 改渲染图 / 屏障 / 管线绑定之前要一份可对比的数字，或怀疑性能回退时
-size: ~79 行
+size: ~88 行
 updated: 2026-11-23
 ---
 
@@ -23,39 +23,47 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\bench.ps1
 判定分两层：exit 码、stderr 字节数、`[Validation] errors/warnings` 是**硬失败**；
 FPS 波动超 `-MaxVariancePct` 只是**警告**，加 `-Strict` 才升级成失败——因为波动先反映机器忙，不先反映代码坏了（见下节实测）。
 
+## 相机是固定的
+
+每个场景都带 `--camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`（`Scene::init` 里 Sponza 的默认机位）。
+不这么做的话相机来自 `config/engine.json`，也就是"最后谁动过就听谁的"：同一份代码两次跑出的截图不同，
+剔除读数也不同。加上 `--camera` 之前，本机 config 里存的是 `(-66.06, 15.92, -76.19)`——站在 Sponza 外面 100 米看向天空，
+于是 `default` 场景实测只有 1 draw call / 8192 三角形，`visibleRatio = 0.00`，那种基线测不到任何几何。
+
 ## 三个场景
 
 | 场景 | 附加开关 | 压的是什么 |
 |---|---|---|
-| `default` | 无 | 1 draw call / 8192 三角形，测固定开销 |
+| `default` | 固定机位 | 104 draw calls / 270459 三角形，Sponza 庭院内视角，测几何 + 后处理 |
 | `voxel-world` | `--voxel-world 1` | 106 draw calls / 336889 三角形，几何与提交压力 |
 | `lights-512` | `--voxel-world 1 --light-stress 512 --clustered-lighting --clustered-gpu-build` | 512 盏点光 + GPU 建簇，光照压力 |
 
-T-01（外部资源的状态声明）之后复跑 lights-512（600 帧 × 3 次）：**91.34 FPS / 波动 1.61% / 10.95 ms /
-27 passes / 47 barriers**；默认场景与压力场景的屏障、绑定、冗余计数与 T-03 之后逐位一致 ——
-声明只在有调用者时才生效，没有调用者的场景一分钱不花。
 与 [ue-borrowing-plan](../80-roadmap/ue-borrowing-plan.md) P0-1 的口径偏差：计划里写的 `cube-field`
 （1 万立方体）在引擎里没有生成器，这一轮用 `--voxel-world 1` 当几何压力场景；`editor-default`
 用 `--selftest` 的 `default` 代替（编辑器面板不在 selftest 路径上）。两处偏差要以这份表和脚本里的场景表为准。
 
-## 基线（2026-11-23，Debug，RTX 2070，600 帧 × 3 次）
+## 基线（2026-11-23 13:48，Debug，RTX 2070，600 帧 × 3 次）
 
-| 场景 | FPS（中位） | 波动 % | 帧 ms | passes/帧 | 屏障调用/帧 | sameState | crossQueue | 绑定/帧 | 冗余 % | draw calls | desc binds | 三角形 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| default | 164.80 | 1.93 | 6.07 | 21 | 38 | 19 | 0 | 22.5 | 46.7 | 1 | 2 | 8192 |
-| voxel-world | 97.94 | 3.17 | 10.21 | 25 | 47 | 34 | 0 | 38.5 | 50.6 | 106 | 4 | 336889 |
-| lights-512 | 89.71 | 0.09 | 11.15 | 27 | 47 | 36 | 2 | 39.5 | 49.4 | 106 | 4 | 336889 |
+| 场景 | FPS（中位） | 波动 % | 帧 ms | passes/帧 | 屏障调用/帧 | sameState | crossQueue | 绑定/帧 | 冗余 % | draw calls | desc binds | 三角形 | 中位 ms | p95 ms | 最长 ms | images/帧 | heap0 MiB | visible |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| default | 115.91 | 2.30 | 8.63 | 21 | 38 | 19 | 0 | 23.5 | 44.7 | 104 | 2 | 270459 | 7.88 | 9.12 | 88.02 | 0.27 | 1220.7 | 0.61 |
+| voxel-world | 98.73 | 1.55 | 10.13 | 25 | 47 | 34 | 0 | 38.5 | 50.6 | 106 | 4 | 336889 | 9.62 | 10.88 | 89.83 | 0.27 | 1220.7 | 1.00 |
+| lights-512 | 89.57 | 1.83 | 11.16 | 27 | 47 | 36 | 2 | 39.5 | 49.4 | 106 | 4 | 336889 | 10.62 | 11.88 | 100.43 | 0.27 | 1220.7 | 1.00 |
+
+`default` 的 115.91 FPS 不能和本文件旧版的 164.80 比：旧版相机在场景外，只有天空盒（1 draw call）。
+其余两行的几何口径没变，可以直接对比旧值（97.94 / 89.71）。
 
 列的含义：
 
-- `屏障/帧`：`vkCmdPipelineBarrier2` 的调用次数。T-03 之前它恒等于 `entries`（每个 mip × layer 各发一条）；T-03 之后同一个 Pass 内同键的屏障合进一次调用，于是 `calls < entries`（38 / 47 对 45.2 / 61.2）。
+- `屏障调用/帧`：`vkCmdPipelineBarrier2` 的调用次数。T-03 之前它恒等于 `entries`（每个 mip × layer 各发一条）；T-03 之后同一个 Pass 内同键的屏障合进一次调用，于是 `calls < entries`（38 / 47 对 45.2 / 61.2）。
 - `entries`：追加的屏障条数（`--stats-frame` 的第二列），是正确性度量——批处理前后不变。
 - `sameState`：状态本来就相同、且是读访问，因此跳过的次数（不发屏障是对的）。
 - `crossQueue`：跨队列资源交给 timeline 信号后跳过的次数。`lights-512` 的 2 是簇表 ranges / indices 两段，也是 T-02 通路是否走通的判据。
 - `绑定/帧` 与 `冗余 %`：管线绑定次数，以及"与上一次绑的是同一条管线"的占比。冗余占比是 T-09 状态缓存能消掉的上限，不是它的目标值。
-
-表中的数字是 T-03（屏障按桶合并）落地后重测的：600 帧 × 3 次，-Runs 3 -Frames 600，Debug + RTX 2070。
-T-03 之前的同口径数字（屏障调用 45 / 61 / 61）留在 `build/bench/p0-baseline/baseline.md` 里，用于对照。
+- `中位 / p95 / 最长 ms`：`[FrameTime]` 的桶直方图（0.25 ms 一格，0~250 ms，溢出桶单列）。最长帧出现在启动那几帧（建管线、上传纹理），所以它衡量的是首帧 hitch，不是稳态抖动。
+- `images/帧`：`[Resources]` 的资源创建计数。这是**全程平均**：160 张图在启动期创建，摊到 600 帧就是 0.27；稳态每帧是 0。T-04（跨帧 RT 池）要压的是启动期那一下的峰值，不是这个平均值。
+- `heap0 MiB`：`[Memory]` 的堆用量最后一次采样（`vmaGetHeapBudgets`，10 Hz）。本机 heap0 是 1220.7 MiB 的设备本地堆，`first` 与 `last` 相等说明稳态不增长。
+- `visible`：`[SceneGpu] cull summary` 的 `visibleRatio`（可见组 / 提交组）。P2 的目标是 `visible/submitted ≤ 0.6`；`default` 的 0.61 已经贴着这条线，因为它只有一个房间的视角。
 
 ## 波动与判据
 
@@ -66,6 +74,7 @@ T-03 之前的同口径数字（屏障调用 45 / 61 / 61）留在 `build/bench/
 | 120 帧（0.9~1.6 s） | 13.65% | 2.90% | 6.53% |
 | 600 帧（3.7~6.8 s），批次 A | 0.91% | 1.21% | 1.88% |
 | 600 帧，批次 B | 2.78% | 1.18% | 6.42% |
+| 600 帧，本表批次 | 2.30% | 1.55% | 1.83% |
 
 同一场景的**跨批次**中位数也差约 4%（default 166.85 vs 160.82 FPS）。所以：
 

@@ -67,6 +67,12 @@ namespace diag
         // --stats-frame：退出时打印每帧屏障条数与管线绑定 / 冗余绑定（T-10）。
         // 这是 P0 度量基线的一半：屏障条数证明 T-03 能省多少，冗余绑定率是 T-09 的上限。
         bool statsFrame = false;
+    // --camera <px,py,pz,pitch,yaw>：覆盖 config 里保存的相机位姿。基准场景与截图
+    // 金标必须与"上次会话存下的相机"无关，否则同一份代码两次跑出的画面不同。
+    bool hasCameraOverride = false;
+    float cameraPosition[3] = {0.0f, 0.0f, 0.0f};
+    float cameraPitch = 0.0f;
+    float cameraYaw = 0.0f;
         // TM-19：打印本机对本引擎用到的那些格式的能力（颜色/深度/采样/存储/blit/线性过滤），
         // 打印完就退出 —— 改 G-Buffer 格式或加 storage image 之前先跑一次。
         bool printFormats = false;

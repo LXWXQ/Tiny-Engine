@@ -37,6 +37,10 @@ namespace tiny::framestats
     // 混在一起会把「图形与计算交替绑定」误判成冗余。
     void countPipelineBind(VkPipeline pipeline, bool compute);
 
+    // 每帧一次，传主循环量到的帧时间（毫秒）。0.25 ms 一格、0..250 ms 共 1000 格，
+    // 溢出落进最后一格并存最大值 —— 平均 FPS 看不出卡顿，最长帧与 p95 才看得出来。
+    void recordFrameTime(double milliseconds);
+
     void setEnabled(bool value);
     bool enabled();
 

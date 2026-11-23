@@ -71,6 +71,19 @@ public:
         uint32_t materialSlot = 0;
     };
 
+    // 剔除累计量：每帧 readStats 之后累加，退出时由 logCullSummary 打一行。
+    // P2 要把剔除粒度从「组」换成「实例」，这一行就是改造前的对照读数。
+    struct CullTotals
+    {
+        uint64_t frames = 0;
+        uint64_t submitted = 0;
+        uint64_t visibleGroups = 0;
+        uint64_t culledGroups = 0;
+        uint64_t visibleInstances = 0;
+        uint64_t occlusionCulled = 0;
+        uint64_t screenCulled = 0;
+    };
+
     struct Stats
     {
         uint32_t submitted = 0;
@@ -135,6 +148,9 @@ public:
     // 登记某个帧槽位的 G-Buffer 位置视图。须在 init()/resize() 里调用：
     // Hi-Z 的构建描述符只在这时写，录制期间不再更新（否则会让在录的命令缓冲失效）。
     void setHiZSource(uint32_t frameInFlightIndex, VkImageView positionView, VkExtent2D extent);
+
+    // 退出时打一行累计剔除统计（--stats-frame 调用）。回读值滞后两帧，这里只做观测。
+    void logCullSummary() const;
 
     bool isHiZReady() const { return hizReady; }
 
@@ -289,6 +305,7 @@ private:
     bool warnedNoMergedData = false;
 
     Stats stats;
+    CullTotals cullTotals;
 
     std::vector<ExternalInstance> externalInstances;
     uint32_t debugExternalCount = 0;

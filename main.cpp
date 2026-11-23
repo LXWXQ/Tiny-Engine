@@ -446,6 +446,19 @@ bool audioSpatialTest = false;
             try { diagOptions.lightStress = static_cast<uint32_t>(std::max(0, std::stoi(argv[++i]))); }
             catch (...) { /* keep default */ }
         }
+        else if (arg == "--camera" && i + 1 < argc)
+        {
+            float px = 0.0f, py = 0.0f, pz = 0.0f, pitch = 0.0f, yaw = 0.0f;
+            if (std::sscanf(argv[++i], "%f,%f,%f,%f,%f", &px, &py, &pz, &pitch, &yaw) == 5)
+            {
+                diagOptions.hasCameraOverride = true;
+                diagOptions.cameraPosition[0] = px;
+                diagOptions.cameraPosition[1] = py;
+                diagOptions.cameraPosition[2] = pz;
+                diagOptions.cameraPitch = pitch;
+                diagOptions.cameraYaw = yaw;
+            }
+        }
         else if (arg == "--empty-scene") diagOptions.emptyScene = true;
         else if (arg == "--runtime-mode") diagOptions.runtimeMode = true;
         else if (arg == "--terrain-test") diagOptions.terrainTest = true;
