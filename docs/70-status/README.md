@@ -4,8 +4,8 @@ title: 当前状态索引
 type: status
 scope: 空
 read-when: 想知道"项目做到哪了""下一步该做什么"
-size: ~45 行
-updated: 2026-11-02
+size: ~47 行
+updated: 2026-11-23
 ---
 
 # 70-status 当前状态
@@ -17,6 +17,7 @@ updated: 2026-11-02
 | [backlog](backlog.md) | 下一项做什么？完成判据是什么？ |
 | [tech-debt](tech-debt.md) | 现在欠着什么？什么时候必须还？ |
 | [known-limits](known-limits.md) | 哪些事现在做不到？ |
+| [baseline](baseline.md) | 三个基准场景现在跑多少？波动多大？ |
 
 **这三篇是"事实"，不是"计划"**。计划在 [80-roadmap](../80-roadmap/roadmap.md)。
 

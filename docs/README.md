@@ -4,7 +4,7 @@ title: 文档系统总纲
 type: meta
 scope: docs/
 read-when: 第一次接触本项目、或要新增/移动/删除文档
-size: ~249 行
+size: ~251 行
 updated: 2026-11-23
 ---
 # 文档系统总纲
@@ -113,6 +113,7 @@ README.md                        根：是什么 / 怎么跑 / 特性 / 索引 /
     │   ├── milestones-archive.md 历史里程碑归档（D-8～D-24）
     │   ├── backlog.md          后续任务台账
     │   ├── tech-debt.md         当前技术债
+    │   ├── baseline.md          三场景性能基线（bench.ps1 实测）
     │   └── known-limits.md      已知边界
     ├── 80-roadmap/
     │   ├── README.md
@@ -153,7 +154,7 @@ title: 渲染图
 type: architecture
 scope: src/RHI/RenderGraph.{h,cpp}
 read-when: 修改 Pass 声明、屏障、子资源校验时
-size: ~249 行
+size: ~251 行
 updated: 2026-11-23
 ---
 ```
@@ -231,6 +232,7 @@ updated: 2026-11-23
 | status | [backlog](70-status/backlog.md) | 下一项做什么 |
 | status | [tech-debt](70-status/tech-debt.md) | 决定下一步 |
 | status | [known-limits](70-status/known-limits.md) | 判断需求可行性 |
+| status | [baseline](70-status/baseline.md) | 要一份可对比的性能数字 |
 | roadmap | [roadmap](80-roadmap/roadmap.md) | 开新主功能前 |
 | roadmap | [terrain-plan](80-roadmap/terrain-plan.md) | 做地形 F2 / D-18 |
 | roadmap | [borrowed-techniques](80-roadmap/borrowed-techniques.md) | 决定下一项基础改造 |
