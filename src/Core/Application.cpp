@@ -151,6 +151,8 @@ tiny::resourcestats::setAllocator(vulkanDevice->getVmaAllocator());
 
 	// D-1(b)：渲染图必须在各 Pass 之前创建 —— Pass 的 init() 会往里注册资源
 	renderGraph = std::make_unique<RenderGraph>(*vulkanDevice);
+// T-04：默认关。--rt-pool 才启用（实测命中率约 25%，空闲图要占 250 MiB 以上）。
+renderGraph->setRenderTargetPoolEnabled(diagnosticsOptions.renderTargetPool);
 
 	// TM-10：准备阶段并行。先把作业系统注入，再按开关打开 —— 反过来的话第一帧
 	// 会退化成串行（不影响正确性，但统计里会多一个异常值）。
@@ -3388,6 +3390,7 @@ void FirstApp::finalizeDiagnostics()
 
         // T-04 的判据：稳定态每帧创建 0 次、显存 first/last/peak 贴在一起。
         tiny::resourcestats::report();
+		renderGraph->reportRenderTargetPool();
 
         // P2 的入场读数：组级剔除现在能到多少（实例级剔除之后要对比这一行）。
         if (geometryPassPtr != nullptr && geometryPassPtr->getSceneGpuBatch() != nullptr)

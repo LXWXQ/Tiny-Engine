@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1434 行
+size: ~1458 行
 updated: 2026-11-23
 ---
 
@@ -1433,3 +1433,27 @@ dispatch 改 `addComputePass("Clusters.Build")`，后跟只声明不执行的 `C
 
 校验：`tools/DocCheck.ps1` PASS；三场景 `errors=0 warnings=0`、stderr 0 字节；`[Memory]` 的
 `first` 与 `last` 相等（1220.7 → 1220.7 MiB），稳态不增长。
+## T-04：跨帧 RT 池（默认关）+ 一次尺寸变化到底建多少图（2026-11-23）
+
+T-04 的验收原文是「稳定态每帧 `vkCreateImage` 为 0、显存不增长」。先量：默认场景 600 帧
+`images/frame=0.27 total=160 peakFrame=160` —— 稳态每帧 0 张，判据的一半在开工前就成立。
+
+`--resize-test`（60 帧、6 次尺寸变化）暴露真正的成本：`total=424`，即一次尺寸变化约
+44 张图，全落在 `vkDeviceWaitIdle` 之后那一帧。
+
+| 配置 | images 总计 | heap0 末值 | hits/misses | 命中率 |
+|---|---|---|---|---|
+| 池关（`--rt-pool` 缺省） | 424 | 1220.7 MiB | — | — |
+| 池开（256 MiB 预算） | 367 | 1476.7 MiB | 57 / 173 | 24.8% |
+| 池开（512 MiB 预算） | 360 | 1476.7 MiB | 64 / 166 | 27.8% |
+
+结论三条：池确实能省 13~15% 的创建量；但它要常驻 250 MiB 以上的空闲图，帧时间没有可辨
+收益（p95/max 本来就在 39~70 / 85~106 ms 之间漂）；命中只发生在「尺寸切回旧值」，
+窗口拖动那串中间尺寸几乎全不命中 —— 所以默认关，留 `--rt-pool` 作开关。
+
+`top creators` 指出下一步：`SSAO.Raw.Frame0/Frame1`、`SSAO.Frame0/Frame1`、
+`TAA.History0/History1` 各 6 次，44 张里约一半是 `kFramesInFlight=2` 的复制。
+写在本帧读在本帧的目标不必双份，去掉这一层复制省的是常驻显存，比池更划算（见决策 46）。
+
+校验：默认场景与 `--resize-test` 均 `errors=0 warnings=0`、stderr 0 字节；池关时
+`images total=424` 与改动前逐位一致（回退可信）。

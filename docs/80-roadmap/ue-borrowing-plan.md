@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~987 行
+size: ~997 行
 updated: 2026-11-23
 ---
 
@@ -815,7 +815,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 | T-01（已落地） | `ExternalResourceRegistry`：帧首 acquire / 帧尾 release | `src/RHI/RenderGraph.{h,cpp}` | 图外 buffer 的状态漂移被检出 + compute 写入的内容经图形流搬运后逐字正确 | 3 |
 | T-02（已落地） | `ClusterBuildPass` 改回 `addComputePass` | `src/Render/ClusterBuildPass.*`、`src/RHI/ScratchArena.cpp` | 512 灯 FPS ≥ 65.37；聚簇 dispatch 在 compute 队列（breadcrumbs 验证） | 1 |
 | T-03（已落地） | 图像屏障在 Pass 内按六元组分桶合并（新增 `src/RHI/RenderGraphBarrier.cpp`） | `src/RHI/RenderGraph.{h,cpp}`、`src/RHI/RenderGraphBarrier.cpp` | 调用 45.2→38.0 / 61.2→47.0；`entries` 不变；A/B FPS +0.1% | 2 |
-| T-04 | 跨帧 RT 池 | 新增 `src/RHI/RenderTargetPool.{h,cpp}` | 每帧 `vkCreateImage` 次数为 0（稳定态）；显存不增长 | 2 |
+| T-04 | 跨帧 RT 池 | 新增 `src/RHI/RenderTargetPool.{h,cpp}`，`--rt-pool` 才开 | **已落地（默认关）**：稳态本来就是 0 创建；一次 resize 约 44 张，池只省 13~15% 且要 256 MiB 空闲图 → 判据改成「一次 resize 创建量 44 → ≤25」 | 2 |
 | T-05 | Pass 剔除 + dry-run 校验 | `src/RHI/RenderGraph.cpp` | `--no-bloom` 时图内 Pass 数 -7；被误删生产者时抛异常 | 2 |
 | T-06 | Blackboard（`std::any` + `type_index`） | 新增 `src/RHI/Blackboard.h` | SSAO 输出与 Hi-Z 金字塔改走黑板，`FrameInfo` 字段减少 ≥ 4 | 1 |
 | T-07 | `FramePlan` + 三提交点 `G0 -> C0 -> G1` | `src/RHI/Renderer.{h,cpp}:214` | compute 与 graphics 有重叠（timeline 时间线可见）；`--no-async-split` 截图一致 | 3 |
@@ -985,3 +985,14 @@ voxel-world `98.73 / 10.13 / 9.62 / 10.88 / 89.83 / 0.27 / 1220.7 / 1.00`，ligh
 **省下的调用没有换成帧时间**。因此这条工单的定位改成"结构就绪、性能待 T-07 兑现"：
 瓶颈在 P3 的状态切换（冗余 49.4%）与 P2 的每帧摊平，不在屏障调用数。跨 Pass 的帧级有序屏障
 （UE RDG 的完整形态）需要提交点先分段，排在 T-07 之后。
+**T-04（2026-11-23，默认关）**：`src/RHI/RenderTargetPool.{h,cpp}`，键为
+`格式 + 精确尺寸 + usage + mip/layer + flags`，`kRetireFrames=2`、`kMaxIdleBytes=256 MiB`；
+`RenderGraph::createOwnedTexture` / `resizeOwnedTexture` 接上，`--rt-pool` 开、缺省关。
+
+- 实测（60 帧 + `--resize-test` 六次尺寸变化）：池关 `images total=424`；池开 256 MiB
+  `367`（命中率 24.8%）、512 MiB `360`（27.8%）；`heap0` 末值 1220.7 → 1476.7 MiB。
+- **验收偏差**：原判据「稳定态每帧 `vkCreateImage` 为 0」在开工前就成立（默认场景
+  `images/frame=0.27`、稳态 0），所以改成「一次尺寸变化的创建量」。池对这一条只给
+  13~15%，代价 256 MiB，帧时间无可辨收益 → 默认关，判据改成 **44 → ≤25 张/次 resize**。
+- 下一步的落点已经量出来：`[RTPool] top creators` 全是 `Frame0/Frame1` 成对的名字，
+  说明 44 张里约一半是 `kFramesInFlight=2` 的复制；写在本帧读在本帧的目标不该双份。

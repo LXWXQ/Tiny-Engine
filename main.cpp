@@ -405,6 +405,7 @@ bool audioSpatialTest = false;
         else if (arg == "--parallel-prepare") diagOptions.parallelPrepare = true;
         else if (arg == "--stats-rendergraph") diagOptions.statsRenderGraph = true;
         else if (arg == "--stats-frame") diagOptions.statsFrame = true;
+        else if (arg == "--rt-pool") diagOptions.renderTargetPool = true;
         else if (arg == "--clustered-lighting") diagOptions.clusteredLighting = true;
         else if (arg == "--stats-clusters") diagOptions.statsClusters = true;
         else if (arg == "--clustered-gpu-build") diagOptions.clusteredGpuBuild = true;

@@ -4,7 +4,7 @@ title: 诊断基础设施实现
 type: debug
 scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~245 行
+size: ~265 行
 updated: 2026-11-19
 ---
 
@@ -244,3 +244,22 @@ build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
 ### 13.2 与其它开关的关系
 
 `--stats-frame` 关掉时这些计数器仍然累加（整数加法，无分配），只是不打印；它们和 `--gpu-timing`（第 2 节）、`--stats-pipelines`（第 10 节）、`--stats-rendergraph`（第 12 节）可以同时开。
+
+### 13.3 `[RTPool]`：池的命中账本（T-04）
+
+只在 `--stats-frame` 且开了 `--rt-pool` 时才有意义，但**池关时也会打**：`enabled=0`
+那行是回退证据 —— `created` 等于这一轮所有 `acquire`，一条命中都没有。
+
+```
+[RTPool] enabled=0 | hits=0 misses=0 created=230 destroyed=192 evicted=0 | hitRate=0.0% | idle=0 images 0.0 MiB
+[RTPool] enabled=1 | hits=57 misses=173 created=173 destroyed=80 evicted=80 | hitRate=24.8% | idle=55 images 126.4 MiB
+[RTPool] top creators:
+  SSAO.Raw.Frame0              6
+  SSAO.Raw.Frame1              6
+  TAA.History0                 6
+```
+
+读法：`created` 是真正 `vmaCreateImage` 的次数；`hits` 是省下来的；`evicted > 0` 说明
+预算不够，池在超预算淘汰 —— 被淘汰的往往正是后面要复用的那张。`top creators` 按名字
+统计，是「谁在 resize 里重建得最多」的直接答案：`Frame0/Frame1` 成对出现，说明一半
+创建量来自 `kFramesInFlight=2` 的复制，见决策 46。

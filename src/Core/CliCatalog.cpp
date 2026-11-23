@@ -87,6 +87,7 @@ const std::vector<UsageLine> kCatalog = {
 { "剖析", "--parallel-prepare", "Pass 的准备阶段（访问去重 + 校验 + 组装附件描述）交给作业系统并行（TM-10）" },
 { "剖析", "--stats-rendergraph", "退出时打印 Pass 准备 / 录制各自的每帧耗时（TM-10）" },
 { "剖析", "--stats-frame", "退出时打印屏障 / 绑定 / 帧时间分布 / 资源创建 / 显存 / 剔除汇总（T-10）" },
+        { "剖析", "--rt-pool", "启用跨帧渲染目标池（T-04；默认关，只在尺寸换回旧值时命中）" },
     { "剖析", "--light-stress", "铺 N 盏点光源做压力场（配合 --clustered-lighting 看聚簇收益）" },
     { "剖析", "--clustered-lighting", "片元按所在簇取灯表，而不是遍历全部点光源（TM-13）" },
     { "剖析", "--stats-clusters", "退出时打印聚簇构建统计：使用簇数 / 最大簇 / 丢弃数（TM-13）" },

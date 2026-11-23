@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~786 行
+size: ~827 行
 updated: 2026-11-23
 ---
 
@@ -783,3 +783,45 @@ G-Buffer 的 Position / Normal / Albedo / Pbr / Depth 一起从 `COLOR_ATTACHMEN
 
 **不引入的**：外部资源的自动发现（扫 VMA 台账）；跨队列交回（等 T-07）；`ExternalState` 里带
 队列族（同上）；把 `declareExternal*` 包成 RAII 持有者（图的 API 是「声明」不是「持有」）。
+## 决策 46：RT 池默认关，先砍「每帧复制」再谈缓存（T-04）
+
+**问题。** T-04 的验收原文是「稳定态每帧 `vkCreateImage` 为 0、显存不增长」，暗示稳态在
+反复重建渲染目标。先量再动手：默认场景 600 帧的 `[Resources]` 是 `images/frame=0.27
+total=160 peakFrame=160` —— 160 张图全在启动期建好，稳态每帧 0 张。判据的一半在 T-04
+开工之前就已经成立。
+
+真正的重建发生在尺寸变化：`--resize-test`（60 帧、6 次尺寸变化）得 `total=424`，
+即一次尺寸变化约 44 张图，全部落在 `vkDeviceWaitIdle` 之后那一帧。
+
+**做法。** 写跨帧 RT 池 `src/RHI/RenderTargetPool.*`：键是 `格式 + 精确尺寸 + usage +
+mip/layer + createFlags`，释放时记帧号、过 `kRetireFrames=2` 帧才可复用，空闲超
+`kMaxIdleBytes=256 MiB` 按最久未用淘汰。`RenderGraph::createOwnedTexture` 改成从池里
+拿，`resizeOwnedTexture` 改成交回池。整体回退开关 `--rt-pool`，**默认关**。
+
+**结果（同机同构建，60 帧，相机固定）**
+
+| 配置 | images 总计 | heap0 末值 | 命中率 | 未命中 |
+|---|---|---|---|---|
+| 池关（回退） | 424 | 1220.7 MiB | — | — |
+| 池开（256 MiB） | 367 | 1476.7 MiB | 24.8%（57/230） | 173 |
+| 池开（512 MiB） | 360 | 1476.7 MiB | 27.8%（64/230） | 166 |
+
+池能把一次回切的创建量砍掉一半左右，但代价是 256 MiB 常驻空闲图，帧时间没有可辨收益
+（p95 与 max 在几次运行间本来就在 39~70 ms / 85~106 ms 之间漂）。
+
+**为什么默认关。** 命中率只有 24.8%：6 次尺寸变化里只有「切回 1920x1080」那两次能命中，
+窗口拖动产生的一串中间尺寸几乎全是未命中。用户付 256 MiB 换 13~15% 的创建量下降，
+这笔账不划算。池留着是因为它的真正价值在两个还没落地的场景：T-05 的瞬时目标（同尺寸
+反复借还）与 T-07 的多提交点（同一帧内的中间目标）。
+
+**下一步该动的地方（本次量出来的）。** 池的 top creators 全是成对的名字：
+`SSAO.Raw.Frame0 / SSAO.Raw.Frame1` 各 6 次、`SSAO.Frame0 / .Frame1` 各 6 次、
+`TAA.History0 / History1` 各 6 次、`Reflection.Position.0 / .1`……也就是 44 张里
+大约一半是「同一张图按 kFramesInFlight=2 复制两份」。写在本帧、读在本帧的目标（SSAO、
+Bloom 各级、SSR、Reflection 的中间图）没有理由跨帧复制 —— 只有 TAA 历史、上一帧深度
+这类「下一帧还要读」的才必须双份。把前者的复制去掉，每帧驻留的图会接近减半，
+resize 的创建量随之从 44 掉到 25 上下，而且省的是常驻显存，不是缓存。
+
+**不引入的**：按 `VkImage` 之外再缓存内存绑定（VMA 已经做了）；跨进程/跨设备的池序列化；
+按字节 budget 做 LRU 的复杂策略（这次只做了「超预算淘汰最久未用」）；把池做成全局单例
+（图与 Device 同寿命，多 Device 时会串味）。

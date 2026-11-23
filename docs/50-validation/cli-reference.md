@@ -4,7 +4,7 @@ title: 命令行参数全表
 type: validation
 scope: main.cpp、src/Core/CliCatalog.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~182 行
+size: ~183 行
 updated: 2026-11-23
 ---
 
@@ -103,6 +103,7 @@ updated: 2026-11-23
 | `--stats-scratch` | 退出时打印每帧暂存区的分配次数 / 字节 / 扩容 / 刷新 | 0 |
 | `--stats-rendergraph` | 退出时打印渲染图准备与录制的每帧耗时 | 0 |
 | `--stats-frame` | 退出时打印四段：每帧屏障条数（按子资源计）/ 跳过的屏障（同状态与跨队列各一类）/ 管线绑定次数与冗余绑定占比、`[FrameTime]` 中位 / p95 / 最长帧、`[Resources]` 每帧资源创建数与启动峰值、`[Memory]` 堆用量、`[SceneGpu]` 剔除汇总（visibleRatio）。冗余绑定率就是状态缓存（T-09）能吃掉的上限，见决策 43 | 0（关时只累加整数） |
+| `--rt-pool` | 启用跨帧渲染目标池（T-04）。默认关：实测命中率约 25%、空闲图要占 250 MiB 以上，帧时间无可辨收益，见决策 46 | 0 |
 | `--parallel-prepare` | Pass 准备阶段丢进 JobSystem 并行（实测更慢，见 TM-10） | 0（默认串行） |
 | `--alias-report` | 退出时打印资源别名候选与预估可省显存（只读报告） | 0（关时 endFrame 整段不执行） |
 | `--light-stress <n>` | 铺 n 盏点光源做压力场（配合 `--clustered-lighting` 看聚簇收益） | 0 |

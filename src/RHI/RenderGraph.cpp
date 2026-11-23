@@ -1,5 +1,6 @@
 #include "GpuProfiler.h"
 #include "RHI/ResourceStats.h"
+#include "RHI/RenderTargetPool.h"
 #include "RHI/RenderGraph.h"
 #include "RenderGraphInternal.h"
 #include "RHI/CommandUtils.h"
@@ -21,12 +22,34 @@
 #include "Core/JobSystem.h"
 
 using namespace rgdetail;
+namespace
+{
+    // T-04：TextureDesc -> 池的键。mip/layer 为 0 在这里归一成 1，与 VkImageCreateInfo 一致。
+    tiny::RenderTargetPool::Desc poolDescFromTexture(const RenderGraph::TextureDesc& desc, bool isDepth)
+    {
+        tiny::RenderTargetPool::Desc out{};
+        out.format = desc.format;
+        out.extent = desc.extent;
+        out.usage = desc.usage;
+        out.flags = desc.flags;
+        out.mipLevels = desc.mipLevels == 0 ? 1 : desc.mipLevels;
+        out.arrayLayers = desc.arrayLayers == 0 ? 1 : desc.arrayLayers;
+        out.crossQueue = desc.crossQueue;
+        out.isDepth = isDepth;
+        return out;
+    }
+}
 
 // ============================================================================
 // RenderGraph
 // ============================================================================
 
-RenderGraph::RenderGraph(Device& device) : device(device) {}
+RenderGraph::RenderGraph(Device& device) : device(device)
+{
+    // T-04：跨帧 RT 池。它持有 Device 的引用，生命周期必须短于 Device ——
+    // Application 在销毁 Device 之前先 renderGraph.reset()，这里靠的是同一条约定。
+    texturePool = std::make_unique<tiny::RenderTargetPool>(device);
+}
 
 RenderGraph::~RenderGraph()
 {
@@ -94,6 +117,7 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     pendingImageBarriers.clear();
     tiny::framestats::beginFrame();
     tiny::resourcestats::beginFrame();
+    if (texturePool) texturePool->beginFrame(frameNumber);
 
     // TM-07：帧首把暂存区轮转到这一帧的槽位（offset 归零、上一轮淘汰的旧块回收）。
     device.getScratch().beginFrame(frameSlot);
@@ -1150,54 +1174,14 @@ void RenderGraph::createOwnedBuffer(BufferEntry& e)
 
 void RenderGraph::createOwnedTexture(TextureEntry& e)
 {
-    VkImageCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    info.imageType = VK_IMAGE_TYPE_2D;
-    info.format = e.desc.format;
-    info.extent = { e.desc.extent.width, e.desc.extent.height, 1 };
-    info.mipLevels = e.desc.mipLevels;
-    info.arrayLayers = e.desc.arrayLayers;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
-    info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = e.desc.usage;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    const QueueFamilyIndices queueFamilies = device.findPhysicalQueueFamilies();
-    uint32_t sharedFamilies[2] = {
-        queueFamilies.graphicsFamily.value(),
-        queueFamilies.computeFamily.value()
-    };
-    if (e.desc.crossQueue && device.hasDedicatedComputeQueue())
-    {
-        info.sharingMode = VK_SHARING_MODE_CONCURRENT;
-        info.queueFamilyIndexCount = 2;
-        info.pQueueFamilyIndices = sharedFamilies;
-    }
-    info.flags = e.desc.flags;
-
-    VmaAllocationCreateInfo alloc{};
-    alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-
-    if (vmaCreateImage(device.getVmaAllocator(), &info, &alloc, &e.image, &e.allocation, nullptr) != VK_SUCCESS)
-        throw std::runtime_error("RenderGraph: 图像创建失败: " + e.desc.name);
-    tiny::resourcestats::countImage();
-
-    VkImageViewCreateInfo view{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-    view.image = e.image;
-    if (e.desc.arrayLayers == 6 && (e.desc.flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT))
-        view.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-    else if (e.desc.arrayLayers > 1)
-        view.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    else
-        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view.format = e.desc.format;
-    view.subresourceRange = { aspectOf(e.isDepth), 0, e.desc.mipLevels, 0, e.desc.arrayLayers };
-
-    if (vkCreateImageView(device.getDevice(), &view, nullptr, &e.view) != VK_SUCCESS)
-        throw std::runtime_error("RenderGraph: 图像视图创建失败: " + e.desc.name);
+    // T-04：图像与视图都从池里拿。键里带精确尺寸，所以尺寸变了就是另一个键；
+    // 尺寸换回旧值时命中，省掉 vkCreateImage + 分配 + vkCreateImageView 三件事。
+    const tiny::RenderTargetPool::Desc poolDesc = poolDescFromTexture(e.desc, e.isDepth);
+    const tiny::RenderTargetPool::Image image = texturePool->acquire(poolDesc, e.desc.name);
+    e.image = image.image;
+    e.allocation = image.allocation;
+    e.view = image.view;
 }
-
 void RenderGraph::resizeOwnedTexture(TextureHandle handle, VkExtent2D extent)
 {
     if (!handle.valid() || handle.id >= textures.size())
@@ -1211,16 +1195,23 @@ void RenderGraph::resizeOwnedTexture(TextureHandle handle, VkExtent2D extent)
     if (extent.width == 0 || extent.height == 0)
         throw std::runtime_error("RenderGraph: resizeOwnedTexture got zero extent");
 
-    if (e.view != VK_NULL_HANDLE)
+    // T-04：换下来的图交回池，不直接销毁 —— 尺寸来回切换时它们还能被复用。
+    // 池内部按帧号退休（kRetireFrames），所以这里不必等 GPU。
+    if (e.image != VK_NULL_HANDLE && texturePool)
     {
-        vkDestroyImageView(device.getDevice(), e.view, nullptr);
+        texturePool->release(poolDescFromTexture(e.desc, e.isDepth),
+            tiny::RenderTargetPool::Image{ e.image, e.allocation, e.view });
+        e.image = VK_NULL_HANDLE;
+        e.allocation = VK_NULL_HANDLE;
         e.view = VK_NULL_HANDLE;
     }
-    if (e.image != VK_NULL_HANDLE)
+    else if (e.image != VK_NULL_HANDLE)
     {
+        if (e.view != VK_NULL_HANDLE) vkDestroyImageView(device.getDevice(), e.view, nullptr);
         vmaDestroyImage(device.getVmaAllocator(), e.image, e.allocation);
         e.image = VK_NULL_HANDLE;
         e.allocation = VK_NULL_HANDLE;
+        e.view = VK_NULL_HANDLE;
     }
 
     e.desc.extent = extent;
@@ -1547,4 +1538,15 @@ RenderGraph::Pass& RenderGraph::Pass::writeDepth(TextureHandle t, VkAttachmentLo
                                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                                depthAccess, range });
     return *this;
+}
+// T-04：--no-rt-pool 的整体回退开关。关掉之后每次 acquire 都新建、每次 release 都销毁，
+// 行为与池化之前一致，用来做 A/B 与出问题时的退路。
+void RenderGraph::setRenderTargetPoolEnabled(bool enabled)
+{
+    if (texturePool) texturePool->setEnabled(enabled);
+}
+
+void RenderGraph::reportRenderTargetPool() const
+{
+    if (texturePool) texturePool->report();
 }

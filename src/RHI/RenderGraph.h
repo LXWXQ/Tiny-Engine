@@ -4,6 +4,7 @@
 #include "GpuTimer.h"   // P0-4：每 pass GPU 计时
 
 class GpuProfiler;   // P1-1：Tracy GPU zone（前置声明，避免头文件污染）
+namespace tiny { class RenderTargetPool; }   // T-04：跨帧 RT 池（前置声明，头文件不拖 vma）
 class JobSystem;     // TM-10：Pass 准备阶段并行（前置声明，别把线程池的头拖进来）
 #include <vulkan/vulkan.h>
 #include <string>
@@ -386,6 +387,10 @@ public:
     // 渲染图不应该知道「哪张图要被 present」，所以由应用显式声明。
     void presentTransition(TextureHandle handle);
 
+    // T-04：跨帧 RT 池。关掉时每张图都是新建 + 直接销毁（--no-rt-pool）。
+    void setRenderTargetPoolEnabled(bool enabled);
+    void reportRenderTargetPool() const;
+
     // ---- T-01：外部资源的状态声明 ----
     // 有些资源由图外的代码创建并持有（暂存区的簇表、阴影图、截图缓冲、外部池子
     // 分配的 RT）。图能看见它们的 VkImage / VkBuffer，但不知道两件事：
@@ -538,5 +543,6 @@ private:
     std::vector<BufferEntry> buffers;
     std::vector<std::unique_ptr<Pass>> passes;
     std::vector<VkImageMemoryBarrier2> pendingImageBarriers;
+    std::unique_ptr<tiny::RenderTargetPool> texturePool;   // T-04
     CrossQueueDependencies crossQueueDependencies{};
 };

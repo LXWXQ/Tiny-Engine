@@ -67,6 +67,9 @@ namespace diag
         // --stats-frame：退出时打印每帧屏障条数与管线绑定 / 冗余绑定（T-10）。
         // 这是 P0 度量基线的一半：屏障条数证明 T-03 能省多少，冗余绑定率是 T-09 的上限。
         bool statsFrame = false;
+        // T-04：跨帧 RT 池。默认关 —— 实测只在「尺寸换回旧值」时命中，空闲图要占 250 MiB 以上。
+        bool renderTargetPool = false;
+    // T-04：跨帧 RT 池。默认关 —— 实测只在
     // --camera <px,py,pz,pitch,yaw>：覆盖 config 里保存的相机位姿。基准场景与截图
     // 金标必须与"上次会话存下的相机"无关，否则同一份代码两次跑出的画面不同。
     bool hasCameraOverride = false;
