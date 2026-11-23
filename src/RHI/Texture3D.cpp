@@ -1,4 +1,5 @@
 #include "Texture3D.h"
+#include "StateCache.h"
 #include "RHI/ResourceStats.h"
 
 #include <cstring>
@@ -66,6 +67,7 @@ Texture3D::Texture3D(Device& device, const void* pixels,
     VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(commandBuffer, &begin);
+    tiny::statecache::trackCommandBuffer(commandBuffer);
 
     VkImageMemoryBarrier toTransfer{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;

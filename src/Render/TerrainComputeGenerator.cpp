@@ -1,4 +1,5 @@
 #include "Render/TerrainComputeGenerator.h"
+#include "RHI/StateCache.h"
 #include "AssetPaths.h"
 
 #include <algorithm>
@@ -208,6 +209,8 @@ bool TerrainComputeGenerator::recordAndSubmit(Slot& slot,
         errorMessage = "failed to begin GPU terrain command buffer";
         return false;
     }
+
+    tiny::statecache::trackCommandBuffer(slot.commandBuffer);
 
     PushConstants push{};
     push.resolutionX = config.resolutionX;

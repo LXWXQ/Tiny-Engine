@@ -9,6 +9,7 @@
 
 // T-10：每帧屏障条数 / 管线绑定计数。
 #include "FrameStats.h"
+#include "StateCache.h"
 
 // TM-08：资源别名化的只读报告（只出数字，不改分配）。
 #include "RHI/RenderGraphAlias.h"
@@ -116,6 +117,8 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     currentFrameSlot = frameSlot;
     pendingImageBarriers.clear();
     tiny::framestats::beginFrame();
+    // T-09：绑定缓存的窗口与帧统计对齐（都在这里开一帧），两张表才能互相校验。
+    tiny::statecache::beginFrame(graphicsCommandBuffer, computeCommandBuffer);
     tiny::resourcestats::beginFrame();
     if (texturePool) texturePool->beginFrame(frameNumber);
 

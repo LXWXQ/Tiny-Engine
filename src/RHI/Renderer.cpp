@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include "RHI/StateCache.h"
 #include <stdexcept>
 #include <array>
 #include <iostream>
@@ -186,6 +187,7 @@ VkCommandBuffer Renderer::beginFrame()
         throw std::runtime_error("failed to begin compute command buffer!");
 
     ++frameCounter;   // 当前帧的 1-based 逻辑帧号，也作为两条 timeline 的 value
+
     return graphicsCommandBuffer;
 }
 

@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~846 行
+size: ~871 行
 updated: 2026-11-23
 ---
 
@@ -844,3 +844,28 @@ resize 的创建量随之从 44 掉到 25 上下，而且省的是常驻显存�
 **为什么合到这些、不合别的。** G-Buffer 不合：Hi-Z 用上一帧的深度重建，需要前一份内容。TAA 历史不合：它本身就是两帧 ping-pong。聚簇表不合：它是暂存区的整块 buffer，走 `importBuffer`。
 
 **代价。** GPU 侧不再重叠两帧，单帧 GPU 时间变长时会直接顶到帧时间上；`--no-single-frame-targets` 是整体回退开关，`--no-serialize-frames` 只用于复现"两帧重叠"这个事实（会故意制造竞争）。另外 `images/帧` 这个数的口径变了（160 → 145），跨版本比较要注意。
+## 决策 48：管线绑定缓存按命令缓冲记账，冗余绑定归零但不指望它涨帧率（T-09）
+
+**问题。** `--stats-frame` 长期显示 `pipelineBinds/frame=23.5 redundant=10.5 (44.7%)`：每帧近一半的 `vkCmdBindPipeline` 是把已经绑着的管线再绑一次。最集中的一处是 `src/Render/GeometrySystem.cpp` 的「地形合批（1314）→ GPU 场景合批（1355）→ 体素合批（1379）」三段，同一个 `geometryPipeline` 连绑三次。
+
+**做法。** 新增 `src/RHI/StateCache.h/.cpp`（`tiny::statecache`）：按 `VkCommandBuffer` 分别记「当前绑着哪个图形管线、哪个计算管线」，同一个就不再发指令。`Pipeline::bind` / `ComputePipeline::bind` 是唯一的两个绑定入口（全仓只有这两处 `vkCmdBindPipeline`），所以改这两个函数就够了。
+
+**为什么必须按命令缓冲记账。** 管线绑定是命令缓冲的状态，不是全局状态。图形与计算是两条命令缓冲，各自记各自的；否则「计算流刚绑过 X，所以图形流不用绑 X」会导致图形流根本没绑上。缓存在 `RenderGraph::beginFrame` 里清空——和 `framestats::beginFrame` 同一行，两张表因此可以互相校验。
+
+**为什么还要 `invalidateAll()`。** `VkPipeline` 销毁后句柄值可能被驱动复用，缓存里"已绑 X"就指向了一个已经不存在的对象。所以 `Pipeline` / `ComputePipeline` 的析构里各调一次，宁可在重建后多绑一次。热重载走的正是这条路径。
+
+**哪些命令缓冲可以记账。** 缓存只对**显式登记过**的命令缓冲生效（`statecache::trackCommandBuffer`）：引擎的两条主缓冲由 `beginFrame` 自动登记，地形构建（`src/Render/TerrainComputeGenerator.cpp`、`src/Render/TerrainGpuMeshBuilder.cpp`）、纹理上传（`src/RHI/Texture.cpp`、`src/RHI/Texture3D.cpp`）在 `vkBeginCommandBuffer` 之后各登记一次。没登记的缓冲一律照发 —— 它们可能刚被 reset 过，缓存里的记录不可信。这条规则是踩出来的：第一版对全部缓冲记账，`tools/Validate.ps1` 里 35 个地形/流式用例直接 `exit code -1073741819 (0xC0000005)`，因为地形构建缓冲每帧 reset 后句柄不变，缓存以为"管线还绑着"，整段派发一条管线都没绑。
+
+**两个数字必须对得上。** 第一版把 `beginFrame` 放在 `Renderer::beginFrame`，两张表的窗口错开，`bindCalls` 比 `pipelineBinds` 每次多 1.5（启动期的 IBL / 纹理上传发生在第一帧之前，只进了 `g_total` 没进任何一帧）。改成同一处开窗、并在第一帧把 `g_total` 清零之后两表逐位相同：
+
+| 场景 | 绑定/帧 | 真正发出 | 省掉 | 比例 |
+|---|---|---|---|---|
+| default（60 帧） | 23.5 | 13.0 | 10.5 | 44.7% |
+| `--resize-test` | 23.3 | 13.0 | 10.3 | 44.3% |
+| `--cross-queue-test` | 25.5 | 15.0 | 10.5 | 41.2% |
+| lights-512 | 39.5 | 20.0 | 19.5 | 49.4% |
+| lights-512 + `--no-pipeline-cache` | 39.5 | 39.5 | 0 | 0% |
+
+**收益与代价。** 省掉 10~20 条 `vkCmdBindPipeline`，同批次交替跑（lights-512，600 帧 × 3 次，开关交替各三次）中位数 93.92 对 91.76 FPS，即 +2.4%；跨批次与 `docs/70-status/baseline.md` 的 94.56 比没有意义（批次间漂移约 4%）。这条改动的价值是**把"冗余绑定"这个数从 44.7% 打到 0，并给出一个以后不会再回来的基线**，以及为后续描述符/顶点缓冲的状态缓存留出同一个落点。不顺手的部分：`--stats-frame` 现在多一行 `[StateCache]`，两表的绝对条数必须一致才对，不一致就说明窗口或记账错了；`--no-pipeline-cache` 是整体回退开关，关掉后 `unmanaged` 会等于全部绑定、`saved=0%`。
+
+**不引入的。** 没有做"按管线排序重排绘制"（那是 TM-15 的排序批处理，触发条件还没到）；没有做描述符集缓存（`desc binds/frame` 只有 2，没有可省的量）。

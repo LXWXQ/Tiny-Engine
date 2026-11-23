@@ -1,4 +1,5 @@
 #include "Texture.h"
+#include "StateCache.h"
 #include "RHI/ResourceStats.h"
 #include "TextureBudget.h"
 #include "Core/AssetPack.h"
@@ -372,6 +373,7 @@ VkCommandBufferBeginInfo beginInfo{};
 beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 vkBeginCommandBuffer(commandBuffer, &beginInfo);
+    tiny::statecache::trackCommandBuffer(commandBuffer);
 
 auto transitionMip = [&](uint32_t mipLevel, uint32_t levelCount,
 VkImageLayout oldLayout, VkImageLayout newLayout,

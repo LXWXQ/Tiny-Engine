@@ -405,6 +405,7 @@ bool audioSpatialTest = false;
         else if (arg == "--parallel-prepare") diagOptions.parallelPrepare = true;
         else if (arg == "--stats-rendergraph") diagOptions.statsRenderGraph = true;
         else if (arg == "--stats-frame") diagOptions.statsFrame = true;
+        else if (arg == "--no-pipeline-cache") diagOptions.noPipelineCache = true;
         else if (arg == "--rt-pool") diagOptions.renderTargetPool = true;
                 else if (arg == "--single-frame-targets") diagOptions.singleFrameTargets = true;
         else if (arg == "--no-single-frame-targets") diagOptions.noSingleFrameTargets = true;

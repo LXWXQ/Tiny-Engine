@@ -102,8 +102,9 @@ updated: 2026-11-23
 | `--stats-pipelines` | 退出时打印管线数量、建管线耗时与状态去重 | 0（关时只累加整数、不建表） |
 | `--stats-scratch` | 退出时打印每帧暂存区的分配次数 / 字节 / 扩容 / 刷新 | 0 |
 | `--stats-rendergraph` | 退出时打印渲染图准备与录制的每帧耗时 | 0 |
-| `--stats-frame` | 退出时打印四段：每帧屏障条数（按子资源计）/ 跳过的屏障（同状态与跨队列各一类）/ 管线绑定次数与冗余绑定占比、`[FrameTime]` 中位 / p95 / 最长帧、`[Resources]` 每帧资源创建数与启动峰值、`[Memory]` 堆用量、`[SceneGpu]` 剔除汇总（visibleRatio）。冗余绑定率就是状态缓存（T-09）能吃掉的上限，见决策 43 | 0（关时只累加整数） |
+| `--stats-frame` | 退出时打印五段：每帧屏障条数（按子资源计）/ 跳过的屏障（同状态与跨队列各一类）/ 管线绑定次数与冗余绑定占比、`[FrameTime]` 中位 / p95 / 最长帧、`[Resources]` 每帧资源创建数与启动峰值、`[Memory]` 堆用量、`[SceneGpu]` 剔除汇总（visibleRatio）、`[StateCache]` 绑定缓存省掉多少条 `vkCmdBindPipeline` 以及其中落在未登记缓冲上的条数（T-09，当前 default 44.7%、`unmanaged=0`） | 0（关时只累加整数） |
 | `--rt-pool` | 启用跨帧渲染目标池（T-04）。默认关：实测命中率约 25%、空闲图要占 250 MiB 以上，帧时间无可辨收益，见决策 46 | 0 |
+| `--no-pipeline-cache` | 关掉管线绑定缓存（T-09 的整体回退）。关掉后每次 `vkCmdBindPipeline` 都照发，`[StateCache]` 显示 `unmanaged == bindCalls`、`saved=0%` | 0 |
 | `--no-single-frame-targets` | 回到每帧 slot 各一份目标（T-04b 整体回退）。默认是「同帧目标合成一张 + 本帧等上一帧」，回退后图从 145 张回到 160 张、`heap0` 从 964.7 MiB 回到 1220.7 MiB | 0 |
 | `--serialize-frames` | 本帧图形工作等上一帧完成（T-04b）。默认随合成一张自动启用；单独打开可量「排开两帧」本身带来的 +3.8% | 0 |
 | `--no-serialize-frames` | 只用于诊断：故意让两帧重叠，复现「同帧目标合成一张会竞争」这个事实（配 `--validation-features sync` 会报 `errors`） | 0 |

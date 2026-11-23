@@ -18,6 +18,7 @@
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
 #include "RHI/FrameStats.h"
+#include "RHI/StateCache.h"
 #include "RHI/ResourceStats.h"
 #include "Core/CliCatalog.h"
 #include "Core/AssetPath.h"
@@ -124,6 +125,7 @@ tiny::resourcestats::setAllocator(vulkanDevice->getVmaAllocator());
 	g_singleFrameTargets = diagnosticsOptions.singleFrameTargets && !diagnosticsOptions.noSingleFrameTargets;
 	const bool serializeFrames = diagnosticsOptions.serializeFrames || (g_singleFrameTargets && !diagnosticsOptions.noSerializeFrames);
 	renderer->setSerializeGraphicsFrames(serializeFrames);
+tiny::statecache::setEnabled(!diagnosticsOptions.noPipelineCache);
 	// 最小化必须放在交换链/渲染器创建之后：GLFW 在 iconify 后客户区变成 0x0，
 	// 先最小化会让 G-Buffer 附件按 0x0 创建而失败。
 	if (window != nullptr && diagnosticsOptions.windowMinimized)
@@ -2212,6 +2214,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!tiny::framestats::selfTest())
 		throw std::runtime_error("FrameStats selfTest failed");
 
+	// T-09：管线绑定缓存的记账与失效判定（纯账本，不碰 Vulkan）。
+	if (!tiny::statecache::selfTest())
+		throw std::runtime_error("StateCache selfTest failed");
+
 	// T-04 的前置尺子：资源创建计数与显存采样的帧边界（纯计数器，不需要 Device）。
 	if (!tiny::resourcestats::selfTest())
 		throw std::runtime_error("ResourceStats selfTest failed");
@@ -3394,16 +3400,20 @@ void FirstApp::finalizeDiagnostics()
     // T-10：每帧屏障条数与管线绑定 / 冗余绑定。这是 P0 度量基线的另一半 ——
     // 「屏障少 25%」「状态切换少 40%」这两个验收门槛都从这三行数字起算。
     if (diagnosticsOptions.statsFrame)
+    {
         tiny::framestats::report();
 
         // T-04 的判据：稳定态每帧创建 0 次、显存 first/last/peak 贴在一起。
         tiny::resourcestats::report();
-		renderGraph->reportRenderTargetPool();
+        renderGraph->reportRenderTargetPool();
+
+        // T-09：管线绑定缓存省掉了多少条 vkCmdBindPipeline。
+        tiny::statecache::report();
 
         // P2 的入场读数：组级剔除现在能到多少（实例级剔除之后要对比这一行）。
         if (geometryPassPtr != nullptr && geometryPassPtr->getSceneGpuBatch() != nullptr)
             geometryPassPtr->getSceneGpuBatch()->logCullSummary();
-
+    }
     // TM-13：聚簇构建的统计（使用簇数 / 最大簇 / 因每簇上限丢弃的灯数）。
     if (diagnosticsOptions.statsClusters)
     {

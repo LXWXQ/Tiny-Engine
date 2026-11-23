@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1479 行
+size: ~1528 行
 updated: 2026-11-23
 ---
 
@@ -1477,3 +1477,34 @@ T-04 的 `[RTPool] top creators` 全是 `Frame0` / `Frame1` 成对出现。顺�
 官方基线重测（`tools/bench.ps1 -Runs 3 -Frames 600`，默认配置）：`default 121.57` / `voxel-world 103.66` / `lights-512 94.56` FPS，`images/帧 0.24`（145 张），`heap0 964.7 MiB`。`--resize-test` 六次尺寸变化：424 → 319 张（每次 resize 44 → 约 17.5）。
 
 校验：`--validation-features sync` 下默认、`--resize-test`、`--cross-queue-test` 三种跑法均 `errors=0 warnings=0`、stderr 0 字节；`--no-single-frame-targets` 时 160 张、与改动前逐位一致。
+
+## T-09：管线绑定缓存，冗余绑定 44.7% → 0（2026-11-23）
+
+`[FrameStats]` 的 `pipelineBinds/frame=23.5 redundant=10.5 (44.7%)` 从 T-10 起就一直挂着。这条线查下去发现冗余集中在几何 Pass 的一个函数里：
+
+`src/Render/GeometrySystem.cpp:1314`（地形合批）→ `:1355`（GPU 场景合批）→ `:1379`（体素合批）三次都调 `geometryPipeline->bind(commandBuffer)`，中间只换了描述符集与顶点缓冲 —— 这些都不影响管线绑定，所以后两次是纯浪费。
+
+做法：新增 `src/RHI/StateCache.h/.cpp`，按 `VkCommandBuffer` 记「当前绑着哪个管线」，`Pipeline::bind` / `ComputePipeline::bind` 是唯一两个入口（全仓只有这两处 `vkCmdBindPipeline`）。
+
+| 场景 | 绑定/帧 | 真正发出 | 省掉 | 比例 |
+|---|---|---|---|---|
+| default（60 帧） | 23.5 | 13.0 | 10.5 | 44.7% |
+| `--resize-test` | 23.3 | 13.0 | 10.3 | 44.3% |
+| `--cross-queue-test` | 25.5 | 15.0 | 10.5 | 41.2% |
+| lights-512 | 39.5 | 20.0 | 19.5 | 49.4% |
+
+**帧时间没有可辨变化。** lights-512 600 帧 × 3 次两批：95.01（spread 1.09%）与 96.30（spread 2.39%），基线 94.56 —— 差值落在波动内，不宣称涨帧率。省掉的是 10~20 条驱动调用，本来就不是瓶颈。
+
+**过程中修掉的一个记账错误。** 第一版把 `statecache::beginFrame` 放在 `Renderer::beginFrame`，`[StateCache] bindCalls` 比 `[FrameStats] pipelineBinds` 每帧多 1.5 —— 启动期的 IBL / 纹理上传发生在第一帧之前，只进了总数不进任何一帧。改成与 `framestats::beginFrame` 同一行开窗、并在第一帧清零总数之后，两表逐位相同。这条等式现在是缓存的唯一自检手段。
+
+校验：default / `--resize-test` / `--cross-queue-test` / lights-512 / 150 帧 + 截图 五种跑法均 `errors=0 warnings=0`、stderr 0 字节。
+
+### 第一次回归为什么崩（已修）
+
+第一版缓存对**所有** `VkCommandBuffer` 记账。地形构建（`src/Render/TerrainComputeGenerator.cpp`、`src/Render/TerrainGpuMeshBuilder.cpp`）、纹理上传（`src/RHI/Texture.cpp`、`src/RHI/Texture3D.cpp`）用的是自己的一次性命令缓冲：每帧 `vkResetCommandBuffer` 重录，句柄不变。缓存因此以为"管线还绑着"，整段派发一条管线都没绑，`tools/Validate.ps1` 里 35 个地形/流式用例直接 `exit code -1073741819 (0xC0000005)`（`terrain-render`、`f2-streaming-world`、`f2-streaming-fly`、`f2b-terrain-batch`、`f2b-terrain-batch-off`、`f2c-origin-rebase`、`f2c-origin-off`、`f2d-streaming-radius`）。
+
+修法是"只对登记过的缓冲记账"：`statecache::trackCommandBuffer(cb)` 在 `vkBeginCommandBuffer` 之后调用，引擎两条主缓冲由 `beginFrame` 自动登记，上面四处一次性缓冲各补一行；没登记的缓冲一律照发，并计入 `unmanaged`。修完 `unmanaged=0`、五个场景两表逐位相同、地形与流式用例全部恢复。
+
+### 回退与验证
+
+`--no-pipeline-cache` 是整体回退开关（关掉后每次绑定都照发）。五个场景（default / voxel-world / lights-512 / `--resize-test` / `--cross-queue-test`）均 `errors=0 warnings=0`、stderr 0 字节；同批次交替 A/B（lights-512，600 帧 × 3）中位数 93.92 对 91.76 FPS（+2.4%）。

@@ -10,6 +10,7 @@
 
 // T-10：每帧管线绑定 / 冗余绑定计数。
 #include "FrameStats.h"
+#include "StateCache.h"
 #include "Core/AssetPath.h"
 #include "RHI/ShaderReload.h"
 
@@ -24,6 +25,8 @@ Pipeline::Pipeline(Device& device, const std::string& vertFilepath, const std::s
 
 Pipeline::~Pipeline() 
 {
+    // 句柄销毁后它的值可能被复用，缓存里记的"已绑定"不再可信。
+    tiny::statecache::invalidateAll();
     tiny::hotreload::unregisterGraphics(this);
     if (vertShaderModule != VK_NULL_HANDLE)
         vkDestroyShaderModule(device.getDevice(), vertShaderModule, nullptr);
@@ -218,8 +221,8 @@ void Pipeline::createShaderModule(const std::vector<char>& code, VkShaderModule*
 
 void Pipeline::bind(VkCommandBuffer commandBuffer) 
 {
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-    tiny::framestats::countPipelineBind(graphicsPipeline, false);
+    // T-09：同一帧里重复绑定同一个管线是纯浪费，交给缓存判断（统计仍走 framestats）。
+    tiny::statecache::bindGraphics(commandBuffer, graphicsPipeline);
 }
 
 void Pipeline::defaultPipelineConfigInfo(PipelineConfigInfo& configInfo, uint32_t width, uint32_t height) 
@@ -315,6 +318,7 @@ ComputePipeline::ComputePipeline(Device& device, const std::string& compFilepath
 
 ComputePipeline::~ComputePipeline()
 {
+    tiny::statecache::invalidateAll();
     tiny::hotreload::unregisterCompute(this);
     if (pipeline != VK_NULL_HANDLE)
         vkDestroyPipeline(device.getDevice(), pipeline, nullptr);
@@ -355,8 +359,8 @@ void ComputePipeline::reloadShaders()
 
 void ComputePipeline::bind(VkCommandBuffer commandBuffer)
 {
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-    tiny::framestats::countPipelineBind(pipeline, true);
+    // T-09：计算流同样按命令缓冲分别记账。
+    tiny::statecache::bindCompute(commandBuffer, pipeline);
 }
 
 std::vector<char> ComputePipeline::readFile(const std::string& filepath)

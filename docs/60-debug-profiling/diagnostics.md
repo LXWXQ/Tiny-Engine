@@ -4,8 +4,8 @@ title: 诊断基础设施实现
 type: debug
 scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~265 行
-updated: 2026-11-19
+size: ~283 行
+updated: 2026-11-23
 ---
 
 # 诊断基础设施实现
@@ -263,3 +263,15 @@ build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
 预算不够，池在超预算淘汰 —— 被淘汰的往往正是后面要复用的那张。`top creators` 按名字
 统计，是「谁在 resize 里重建得最多」的直接答案：`Frame0/Frame1` 成对出现，说明一半
 创建量来自 `kFramesInFlight=2` 的复制，见决策 46。
+### 13.4 `[StateCache]`：绑定缓存的账本（T-09）
+
+```
+[StateCache] frames=60 | bindCalls/frame=23.5 issued=13.0 unmanaged=0.0 skipped=10.5 | saved=44.7%
+```
+
+- `bindCalls` 是调用方请求绑定几次（图形 + 计算），`issued` 是真正发出去的 `vkCmdBindPipeline`，`skipped` 是因为"这条命令缓冲已经绑着同一个管线"而省掉的。
+- `unmanaged` 是落在**没登记过**的命令缓冲上的绑定：这类缓冲可能刚被 reset，缓存不敢跳过，所以每次都发。正常配置下它应当是 0 —— 若不是 0，说明有新的一次性命令缓冲没有调 `statecache::trackCommandBuffer`。
+- 不变量：`issued + skipped == bindCalls`。`--no-pipeline-cache` 是整体回退开关，关掉后 `unmanaged == bindCalls`、`saved=0%`。
+- **`bindCalls` 必须等于 `[FrameStats] pipelineBinds/frame`**，`skipped` 必须等于 `redundant`。两表的窗口都在 `RenderGraph::beginFrame` 开，一旦不等就说明记账或窗口错了 —— 这是这条缓存唯一的自检手段。
+- `saved` 就是 P3 里「状态切换次数下降 ≥ 40%」的分母：当前 default 44.7%、lights-512 49.4%。省掉的是驱动调用，不是 GPU 时间 —— 帧时间不因此变化。
+- 缓存按 `VkCommandBuffer` 分别记账（图形 / 计算两条流不共享），`Pipeline` / `ComputePipeline` 析构时整体失效（句柄值可能被复用）。`--no-single-frame-targets` 之类开关不影响它。

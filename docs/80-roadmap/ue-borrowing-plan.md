@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1000 行
+size: ~1004 行
 updated: 2026-11-23
 ---
 
@@ -820,7 +820,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 | T-06 | Blackboard（`std::any` + `type_index`） | 新增 `src/RHI/Blackboard.h` | SSAO 输出与 Hi-Z 金字塔改走黑板，`FrameInfo` 字段减少 ≥ 4 | 1 |
 | T-07 | `FramePlan` + 三提交点 `G0 -> C0 -> G1` | `src/RHI/Renderer.{h,cpp}:214` | compute 与 graphics 有重叠（timeline 时间线可见）；`--no-async-split` 截图一致 | 3 |
 | T-08 | `primitiveBuffer` + `instanceBuffer` 骨架（先只读） | 新增 `src/Render/GpuScene.{h,cpp}` | 一万实例的世界矩阵来自持久 buffer；剔除结果与旧路径一致 | 3 |
-| T-09 | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
+| T-09（已落地） | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
 
 T-01~T-07 总计 14 人日，完成后 P1 结束；T-08 开始 P2；T-09 开始 P3。
 ### 已落地的工单（2026-11-23）
@@ -998,3 +998,5 @@ voxel-world `98.73 / 10.13 / 9.62 / 10.88 / 89.83 / 0.27 / 1220.7 / 1.00`，ligh
   13~15%，代价 256 MiB，帧时间无可辨收益 → 默认关，判据改成 **44 → ≤25 张/次 resize**。
 - 下一步的落点已经量出来：`[RTPool] top creators` 全是 `Frame0/Frame1` 成对的名字，
   说明 44 张里约一半是 `kFramesInFlight=2` 的复制；写在本帧读在本帧的目标不该双份。
+
+**T-09（2026-11-23，已落地一半）**：计划里的 T-09 是「`MeshDrawCommand` + `StateCache`」两件事，这次只做了 `StateCache`（另一半是 T-08 的绘制命令列表，未开工）。落点是 `src/RHI/StateCache.{h,cpp}`：按 `VkCommandBuffer` 记当前管线，`Pipeline::bind` / `ComputePipeline::bind` 是唯一两个入口。实测 default 23.5 → 13.0 条/帧（省 44.7%）、lights-512 39.5 → 20.0（省 49.4%），`[StateCache]` 与 `[FrameStats]` 两表逐位相同。**验收偏差**：计划写「状态切换次数下降 ≥ 40%」已达（44.7% / 49.4%）；帧时间同批次交替 A/B（lights-512，600 帧 × 3，开关交替）中位数 93.92 对 91.76 FPS（+2.4%），幅度小但方向一致 —— 省的是 10~20 条驱动调用，本来不是瓶颈。第一次跑 `tools/Validate.ps1` 时 35 个地形/流式用例崩在 `0xC0000005`，原因是缓存对「每帧 reset、句柄不变」的一次性命令缓冲也记了账；改成只对 `trackCommandBuffer` 登记过的缓冲生效后全绿，`unmanaged` 归 0。回退开关是 `--no-pipeline-cache`。`MeshDrawCommand` 那半仍然有效，它要解决的是"每帧重建命令"而不是"重复绑定"。

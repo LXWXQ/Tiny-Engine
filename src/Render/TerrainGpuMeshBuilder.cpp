@@ -1,4 +1,5 @@
 #include "Render/TerrainGpuMeshBuilder.h"
+#include "RHI/StateCache.h"
 
 #include "Terrain/TerrainMeshBuilder.h"
 #include "AssetPaths.h"
@@ -700,6 +701,8 @@ bool TerrainGpuMeshBuilder::recordAndSubmit(
         return false;
     }
 
+    tiny::statecache::trackCommandBuffer(slot.commandBuffer);
+
     VkMemoryBarrier hostBarrier{};
     hostBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
@@ -826,6 +829,8 @@ bool TerrainGpuMeshBuilder::readbackBuffers(
         destroyBuffer(staging, stagingAllocation);
         return false;
     }
+
+    tiny::statecache::trackCommandBuffer(readbackCommandBuffer);
 
     VkBufferCopy vertexCopy{};
     vertexCopy.srcOffset = 0;
