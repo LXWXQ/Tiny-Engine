@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1036 行
+size: ~1068 行
 updated: 2026-11-24
 ---
 
@@ -1034,3 +1034,35 @@ if (!ImGui::CollapsingHeader("Config", ImGuiTreeNodeFlags_DefaultOpen))
 - 不做跨帧黑板：生命周期一帧就是它的定义，跨帧状态有明确所有者（Pass 自己的成员）。
 - 不做字符串键或反射注册：类型即键已经够用，字符串键会把拼写错误推到运行期。
 - 不把 `Scene` / `EngineSettings` 搬进黑板：它们有明确的生命周期与所有者，进黑板只会变成第二个全局变量池。
+## 决策 52：先给实例与图元一个跨帧编号，再谈实例级剔除（T-08 只读骨架）
+
+**问题。** P2 要「visible/submitted ≤ 0.6」和「每帧摊平 CPU 时间 −70%」，但今天一万个立方体的世界矩阵每帧都在 CPU 侧重新拼成一个 `instanceScratch`（`--cube-field 10000` 实测 `flattenUs/frame` 在 18~60 ms），GPU 侧拿到的实例编号随帧漂移 —— 上一帧的编号在这一帧可能指向另一个物体，所以任何"按实例记忆上次结果"的东西（Hi-Z、LOD 选择、页标记）都无从谈起。
+
+**做法（只读骨架，不改任何渲染路径）。** 新增 `src/Render/GpuScene.{h,cpp}`：
+
+- `Primitive` 64 字节（`boundsMin/boundsMax` 两个 `vec4` + `draw = firstIndex/indexCount/vertexOffset/materialSlot`），`Instance` 144 字节（`transform`、`normal` 两个 `mat4` + `ids = primitiveIndex/instanceInPrimitive/flags/保留`）。
+- `ensurePrimitive(uint64_t key, ...)` / `ensureInstance(uint64_t key, ...)`：键相同就 `memcmp` 比对，内容没变不产生脏区间；键不存在则分配新编号。图元键是 `(模型指针 >> 4) ^ (子网格 << 48) ^ 0x51ED2701`，实例键是图元键再混一个黄金比例常数乘以组内序号。
+- `flush(cmd)`：把本帧脏区间 `memcpy` 进一块一次性 host-visible 暂存缓冲，再用 `vkCmdCopyBuffer` 搬到持久缓冲。不用 `vkCmdUpdateBuffer` 是因为它有 64 KB 上限，一万实例一次 1.4 MB。
+- 缓冲容量从 256 KB 起按 2 倍扩，`usage | TRANSFER_DST`，`VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE`。
+
+接线只有三处：`SceneGpuBatch::buildInstances` 在把 `buckets` 拼进 `instanceScratch` 之后镜像一份进 `GpuScene`；`SceneGpuBatch::prepare` 开头 `beginFrame()`、`cullPipeline->bind` 之前 `flush(cmd)` + `endFrame()`；`Application` 在 `renderPipeline.initAll()` **之后**把开关落到 `SceneGpuBatch` 上。
+
+**为什么开关要放在 `initAll()` 之后。** `SceneGpuBatch` 是在 `GeometryPass::init()` 里 `std::make_unique` 出来的，而 `initAll()` 之前所有 Pass 的成员都还是空的。第一次把 `setEnabled` 写在 `geometryPassPtr = geoPass.get();` 之后，`getSceneGpuBatch()` 返回 `nullptr`，启动期直接 `0xC0000005`，日志停在 `[Tiny] 材质就绪`，stderr 0 字节 —— 和 T-06 那次一样，崩溃点只能靠"日志最后一行在哪"来夹。
+
+**结果（60 帧、`--cube-field 10000`、Debug）。**
+
+| 读数 | 关（`--no-gpu-scene-persist`） | 开（默认） |
+|---|---|---|
+| primitives / instances | 0 / 0 | 104 / 10103 |
+| dirtyFrames | 0.0% | 1 帧（首帧建结构） |
+| upload | 0.0 KB/frame，0 次 | 35.6 KB/frame（摊到 40 帧），1 次 |
+| resizes | 0 | 2（0.5 → 2.2 MiB） |
+| 渲染结果 | 一致 | 一致（`errors=0 warnings=0`） |
+
+默认场景（Sponza）是 `primitives=103 / instances=103`、`dirtyFrames=1/120`、`upload=0.2 KB/frame` —— 静态场景的结构只上传一次，稳态上传量接近 0。
+
+**代价与边界。** 骨架阶段没有任何消费者：`primitiveBuffer/instanceBuffer` 建了但没被任何着色器绑定，剔除仍走原来的 `GroupRecord` 路径。这批缓冲占 2.2 MiB 显存（cube-field）/ 0.5 MiB（Sponza），换来的是"编号跨帧稳定"这个不变量 —— 下一步 P2 的实例级剔除可以直接在这个编号上记账。
+
+**踩坑。** `GpuScene.h` 第一次只在头里写了 `class Device;`，用 `VkCommandBuffer`/`VkBuffer`/`VmaAllocation` 却忘了 `#include <vulkan/vulkan.h>` 与 `<vk_mem_alloc.h>`，报 `error C2061: 语法错误: 标识符"VkCommandBuffer"` 加一串 C3646/C2059/C2238 —— 头文件日志里第一个错误常常不是根因，要从最靠前的那条往下读。
+
+**不引入的。** 不做实例池压缩（`instances` 只增不减，编号不复用）、不做 GPU 侧分配、不做跨帧持久化到磁盘。这些都要等 P2 的实例级剔除落地、确认"编号稳定"真的能换成剔除率之后再说。

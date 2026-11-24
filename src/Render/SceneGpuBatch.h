@@ -15,6 +15,7 @@
 #include "Scene/Model.h"
 #include "RHI/Device.h"
 #include "RHI/Pipeline.h"
+#include "Render/GpuScene.h"
 
 class Model;
 struct FrameInfo;
@@ -169,6 +170,9 @@ cubeFieldBuilt = 0;
     void logCullSummary() const;
 
     bool isHiZReady() const { return hizReady; }
+    // T-08：持久场景（先只读骨架）。消费者尚未接入，只用于验证编号稳定与脏区间上传量。
+    tiny::GpuScene& getGpuScene() { return gpuScene; }
+    const tiny::GpuScene& getGpuScene() const { return gpuScene; }
 
 private:
     struct GpuBuffer
@@ -321,6 +325,7 @@ private:
     bool mergedActive = false;
     bool warnedNoMergedData = false;
 
+    tiny::GpuScene gpuScene;   // T-08：持久原语/实例缓冲
     Stats stats;
     CullTotals cullTotals;
 

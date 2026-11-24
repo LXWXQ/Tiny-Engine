@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1040 行
+size: ~1042 行
 updated: 2026-11-24
 ---
 
@@ -819,7 +819,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 | T-05 | Pass 剔除 + dry-run 校验 | `src/RHI/RenderGraph.cpp` | **已落地（默认关）**：机制正确但本引擎没有「输出无人读」的 Pass，实测 `culled/frame=0.0`；`--no-bloom` 的 21 → 14 是 Pass 自己不进图 | 2 |
 | T-06（已落地） | Blackboard（`type_index` + 类型擦除，生命周期一帧） | `src/RHI/RenderGraphBlackboard.h`、`src/Render/FramePayloads.h` | 八个交接字段搬进图级黑板，`FrameInfo` 字段减少 8 个（≥ 4 达标） | 1 |
 | T-07 | `FramePlan` + 三提交点 `G0 -> C0 -> G1`（**已落地**：队列窗口时间戳 + 拆分提交，默认开，`--no-async-split` 回退） | `src/RHI/Renderer.{h,cpp}:214`、`src/RHI/RenderGraph.{h,cpp}` | compute 与 graphics 有重叠：`[Queue] overlap` 0.00 -> 0.51 ms（100% of compute）；`--no-async-split` 截图在噪声内 | 3 |
-| T-08 | `primitiveBuffer` + `instanceBuffer` 骨架（先只读） | 新增 `src/Render/GpuScene.{h,cpp}` | 一万实例的世界矩阵来自持久 buffer；剔除结果与旧路径一致 | 3 |
+| T-08 | `primitiveBuffer` + `instanceBuffer` 骨架（先只读） | `src/Render/GpuScene.{h,cpp}` | 编号跨帧稳定；一万实例的 `primitives=104 / instances=10103`，稳态上传 0.2 KB/帧 | 3 | **已落地（只读骨架）** |
+
+**T-08 只读骨架（2026-11-24）**：`GpuScene` 用内容键给图元与实例分配跨帧稳定编号（图元键 `(模型指针, 子网格)`，实例键再混组内序号），脏区间攒成一帧一次 `vkCmdCopyBuffer`；`SceneGpuBatch::buildInstances` 末尾镜像一份进持久缓冲，`prepare` 里 `beginFrame/flush/endFrame`。实测 cube-field `primitives=104 / instances=10103`、`dirtyFrames=1/40`、`upload=35.6 KB/frame`；Sponza `103/103`、`dirtyFrames=1/120`、`upload=0.2 KB/frame`。骨架阶段没有任何着色器绑定这两条缓冲，剔除仍走 `GroupRecord`，所以**这一步不产生帧时间收益**——它的价值是把「编号不漂移」变成可验收的不变量，供 P2 的实例级剔除直接记账。开关 `--no-gpu-scene-persist`（默认开）。踩坑：`SceneGpuBatch` 在 `GeometryPass::init()` 里才创建，`setEnabled` 必须放在 `renderPipeline.initAll()` 之后，否则启动期空指针 `0xC0000005`（stderr 0 字节、日志停在 `[Tiny] 材质就绪`）。
 | T-09（已落地） | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
 
 T-01~T-07 总计 14 人日，完成后 P1 结束；T-08 开始 P2；T-09 开始 P3。

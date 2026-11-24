@@ -18,6 +18,7 @@
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
 #include "RHI/FrameStats.h"
+#include "Render/GpuScene.h"
 #include "RHI/RenderGraphBlackboard.h"
 #include "Render/FramePayloads.h"
 #include "RHI/StateCache.h"
@@ -128,6 +129,8 @@ tiny::resourcestats::setAllocator(vulkanDevice->getVmaAllocator());
 	g_singleFrameTargets = diagnosticsOptions.singleFrameTargets && !diagnosticsOptions.noSingleFrameTargets;
 	const bool serializeFrames = diagnosticsOptions.serializeFrames || (g_singleFrameTargets && !diagnosticsOptions.noSerializeFrames);
 	renderer->setSerializeGraphicsFrames(serializeFrames);
+// T-08：持久场景默认开；--no-gpu-scene-persist 时整条缓冲不建。
+// 开关落在 SceneGpuBatch 上要等 Pass 建好之后，见下方 geometryPass 初始化处。
 	tiny::statecache::setEnabled(!diagnosticsOptions.noPipelineCache);
     // T-07 第一步：没开 --stats-queue 就把时间戳关掉，默认零开销。
     if (!diagnosticsOptions.statsQueue) tiny::queuestats::shutdown();
@@ -1009,6 +1012,10 @@ renderPipeline.addPass(std::move(viewModelPass));
 	renderPipeline.addPass(std::move(computeProbePass));
 
 	renderPipeline.initAll();
+	// T-08：持久场景骨架默认开，`--no-gpu-scene-persist` 时整个缓冲不建（回退开关）。
+	// 必须放在 initAll 之后：SceneGpuBatch 是在 GeometryPass::init 里创建的。
+	if (geometryPassPtr != nullptr && geometryPassPtr->getSceneGpuBatch() != nullptr)
+	geometryPassPtr->getSceneGpuBatch()->getGpuScene().setEnabled(!diagnosticsOptions.noGpuScenePersist);
 
 	// TM-17：交换链/渲染目标尺寸变化改成事件通知。必须在 initAll 之后订阅：
 	// Pass 的 resize 会重建附件与导入视图，早于 init 调等于拿半初始化的对象干活。
@@ -2235,6 +2242,12 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	// T-10：帧统计的帧边界与冗余绑定判定（纯计数器，不需要 Device）。
 	if (!tiny::framestats::selfTest())
 		throw std::runtime_error("FrameStats selfTest failed");
+{
+// T-08：持久场景的稳定编号自检（同 key 同编号）。
+tiny::GpuScene probeScene(*vulkanDevice);
+if (!probeScene.selfTest())
+throw std::runtime_error("GpuScene selfTest failed");
+}
 
 	// T-09：管线绑定缓存的记账与失效判定（纯账本，不碰 Vulkan）。
 	if (!tiny::statecache::selfTest())
@@ -3437,6 +3450,8 @@ void FirstApp::finalizeDiagnostics()
     if (diagnosticsOptions.statsFrame)
     {
         tiny::framestats::report();
+if (geometryPassPtr != nullptr)
+geometryPassPtr->getSceneGpuBatch()->getGpuScene().report();
 
         // T-04 的判据：稳定态每帧创建 0 次、显存 first/last/peak 贴在一起。
         tiny::resourcestats::report();

@@ -70,7 +70,7 @@ bool isArenaBackedVoxel(entt::registry& registry, entt::entity entity)
 } // namespace
 
 SceneGpuBatch::SceneGpuBatch(Device& device)
-    : vulkanDevice(device)
+    : vulkanDevice(device), gpuScene(device)
 {
     // 每组建模剔除 + 一条 multidraw：不再需要 vkCmdDrawIndexedIndirectCount 的计数缓冲，
     // 所以门槛降到 multiDrawIndirect。没有它就只能逐组 drawCount=1 循环（仍然只有一条命令/组）。
@@ -1179,6 +1179,36 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         sorted.push_back(group);
     }
     modelGroups.swap(sorted);
+    // T-08：把同一批数据镜像进持久场景缓冲（稳定编号 + 脏区间上传）。
+    // 这里只是骨架：剔除仍然读每帧上传的 instances/groups，本段不改变任何渲染结果。
+    for (uint32_t groupIndexValue = 0; groupIndexValue < static_cast<uint32_t>(modelGroups.size()); ++groupIndexValue)
+    {
+        const ModelGroup& group = modelGroups[groupIndexValue];
+        const SubMesh& subMesh = group.model->getSubMeshes()[group.subMeshIndex];
+        tiny::GpuScene::Primitive primitive{};
+        primitive.boundsMin = glm::vec4(group.boundsMin, group.hasBounds ? 1.0f : 0.0f);
+        primitive.boundsMax = glm::vec4(group.boundsMax, 0.0f);
+        primitive.draw = glm::uvec4(group.merged ? group.mergedFirstIndex : subMesh.firstIndex,
+                                    subMesh.indexCount,
+                                    group.merged ? static_cast<uint32_t>(group.mergedBaseVertex) : 0u,
+                                    group.materialSlot);
+        const uint64_t primitiveKey =
+            (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(group.model)) >> 4u) ^
+            (static_cast<uint64_t>(group.subMeshIndex) << 48u) ^ 0x51ED2701ull;
+        const uint32_t primitiveIndex = gpuScene.ensurePrimitive(primitiveKey, primitive);
+
+        const uint32_t count = group.instanceCount;
+        for (uint32_t instance = 0; instance < count; ++instance)
+        {
+            const InstanceRecord& source = instanceScratch[group.firstInstance + instance];
+            tiny::GpuScene::Instance record{};
+            record.transform = source.model;
+            record.normal = source.normal;
+            record.ids = glm::uvec4(primitiveIndex, instance, source.flags.x, source.flags.y);
+            const uint64_t instanceKey = primitiveKey ^ (static_cast<uint64_t>(instance + 1u) * 0x9E3779B97F4A7C15ull);
+            gpuScene.ensureInstance(instanceKey, record);
+        }
+    }
     buckets.clear();
 }
 
@@ -1545,6 +1575,8 @@ void SceneGpuBatch::buildHiZ(VkCommandBuffer commandBuffer, const FrameInfo& fra
 
 void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 {
+    // T-08：持久场景按帧清脏范围（必须在 buildInstances 之前）。
+    gpuScene.beginFrame();
     // 每 60 帧打一次剔除统计（回读值滞后两帧，只用于观测）。
     if (frameInfo.frameNumber % 60u == 0u && stats.visibleGroups + stats.culledGroups > 0u)
     {
@@ -1677,6 +1709,9 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     std::memset(res.stats.mapped, 0, static_cast<size_t>(res.stats.size));
     vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation, 0, VK_WHOLE_SIZE);
 
+    // T-08：把本帧脏区间搬进持久缓冲。骨架阶段没有任何消费者，只统计上传量。
+    gpuScene.flush(commandBuffer);
+    gpuScene.endFrame();
     cullPipeline->bind(commandBuffer);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
                             0, 1, &res.computeSet, 0, nullptr);

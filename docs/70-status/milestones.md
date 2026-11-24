@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1602 行
+size: ~1622 行
 updated: 2026-11-24
 ---
 
@@ -1600,3 +1600,23 @@ T-04 的 `[RTPool] top creators` 全是 `Frame0` / `Frame1` 成对出现。顺�
 `stderr 0` 字节、日志停在自检开始）。回退后分四步重做，根因是 `ImGuiSystem::renderConfigPanel` 里
 `callbacks` 的四行声明被插到了 `if (!ImGui::CollapsingHeader(...))` 与它那句 `return;` **之间** ——
 等于把 `return` 挪到了声明之后，Save/Reload 随后读到未初始化的指针。
+## T-08：实例与图元的跨帧编号（只读骨架，2026-11-24）
+
+P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%」，但 GPU 侧的实例编号原来每帧随结构重建而漂移，任何"按实例记忆"的优化都没有立足点。这一步只补地基，不改渲染路径。
+
+| 读数 | `--no-gpu-scene-persist` | 默认开 |
+|---|---|---|
+| `--cube-field 10000`：primitives / instances | 0 / 0 | 104 / 10103 |
+| `--cube-field 10000`：dirtyFrames | 0.0% | 1 帧（首帧建结构） |
+| `--cube-field 10000`：upload | 0.0 KB/frame，0 次 | 35.6 KB/frame（摊到 40 帧），1 次 |
+| `--cube-field 10000`：resizes | 0 | 2（0.5 → 2.2 MiB） |
+| 默认场景（Sponza）：primitives / instances | — | 103 / 103，`dirtyFrames=1/120`，`upload=0.2 KB/frame` |
+| 渲染结果 | 一致 | 一致（`errors=0 warnings=0`，`--validation-features sync`） |
+
+三条结论：
+
+1. **静态场景的结构只上传一次**。Sponza 120 帧里 `dirtyFrames` 只占 1 帧、`upload` 摊薄到 0.2 KB/frame —— 持久缓冲的稳态成本接近零，这与 T-04 那次"池化只在尺寸换回旧值时命中"是同一种形态：真正的收益要看后续消费者。
+2. **键必须来自内容和来源，不能来自本帧顺序**。图元键取 `(模型指针, 子网格)`，实例键再混组内序号；同一物体在下一帧拿回同一个编号，才谈得上"记住上次结果"。
+3. **开关的位置比开关的值更容易出错**。`SceneGpuBatch` 在 `GeometryPass::init()` 里才被创建，把 `setEnabled` 写在 `initAll()` 之前就是空指针解引用（`0xC0000005`、stderr 0 字节、日志停在 `[Tiny] 材质就绪`）。判据：凡是往"Pass 内部成员"上落开关，先确认那个成员是哪一步构造出来的。
+
+校验：四场景（default 120 帧 + sync、cube-field 40 帧 + sync、`--cross-queue-test`、`--no-gpu-scene-persist`）全部 `EXIT=0`、`errors=0 warnings=0`、stderr 0 字节；`--cross-queue-test` 的两条 `[TD02]` 与两条 `[T01]` 断言照旧通过。
