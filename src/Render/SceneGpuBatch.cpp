@@ -930,6 +930,8 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
     uint64_t entityNormalMicros = 0;
     uint64_t externalNormalMicros = 0;
     uint64_t externalAabbMicros = 0;
+    uint64_t externalRecordMicros = 0;
+    uint64_t externalPushMicros = 0;
     for (entt::entity entity : entities)
     {
         const MeshComponent& mesh = view.get<MeshComponent>(entity);
@@ -1168,6 +1170,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             localMax = boundsList[external.subMeshIndex].max;
         }
 
+        const auto extRecordStart = std::chrono::steady_clock::now();
         InstanceRecord record{};
         record.model = external.transform;
         const auto extNormalStart = std::chrono::steady_clock::now();
@@ -1180,7 +1183,10 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         record.boundsMin = glm::vec4(localMin, 1.0f);
         record.boundsMax = glm::vec4(localMax, 0.0f);
         record.draw = glm::uvec4(0u);
+        externalRecordMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extRecordStart).count());
+        const auto extPushStart = std::chrono::steady_clock::now();
         buckets[groupIndexValue].push_back(record);
+        externalPushMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extPushStart).count());
 
         const auto extAabbStart = std::chrono::steady_clock::now();
         ModelGroup& group = modelGroups[groupIndexValue];
@@ -1209,6 +1215,8 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
 
     cullTotals.externalNormalMicros += externalNormalMicros;
     cullTotals.externalAabbMicros += externalAabbMicros;
+    cullTotals.externalRecordMicros += externalRecordMicros;
+    cullTotals.externalPushMicros += externalPushMicros;
     cullTotals.externalMicros += lap();
     std::vector<uint32_t> order(modelGroups.size());
     for (uint32_t i = 0; i < static_cast<uint32_t>(order.size()); ++i)
@@ -1237,6 +1245,8 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
     }
     modelGroups.swap(sorted);
     cullTotals.assembleMicros += lap();
+    if (gpuScene.isEnabled())
+    {
     // T-08：把同一批数据镜像进持久场景缓冲（稳定编号 + 脏区间上传）。
     // 这里只是骨架：剔除仍然读每帧上传的 instances/groups，本段不改变任何渲染结果。
     for (uint32_t groupIndexValue = 0; groupIndexValue < static_cast<uint32_t>(modelGroups.size()); ++groupIndexValue)
@@ -1266,6 +1276,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             const uint64_t instanceKey = primitiveKey ^ (static_cast<uint64_t>(instance + 1u) * 0x9E3779B97F4A7C15ull);
             gpuScene.ensureInstance(instanceKey, record);
         }
+    }
     }
     cullTotals.mirrorMicros += lap();
     ++cullTotals.structureSamples;
@@ -1368,6 +1379,8 @@ void SceneGpuBatch::logCullSummary() const
                   << " normal=" << (static_cast<double>(cullTotals.entityNormalMicros) / samples / 1000.0) << " ms"
                   << " | extNormal=" << (static_cast<double>(cullTotals.externalNormalMicros) / samples / 1000.0) << " ms"
                   << " extAabb=" << (static_cast<double>(cullTotals.externalAabbMicros) / samples / 1000.0) << " ms"
+                  << " extRecord=" << (static_cast<double>(cullTotals.externalRecordMicros) / samples / 1000.0) << " ms"
+                  << " extPush=" << (static_cast<double>(cullTotals.externalPushMicros) / samples / 1000.0) << " ms"
                   << " aabbInEntity=" << (static_cast<double>(cullTotals.entityAabbMicros) / samples / 1000.0)
                   << " ms (" << (total > 0.0 ? 100.0 * static_cast<double>(cullTotals.entityAabbMicros) / total : 0.0) << "%)"
                   << "\n";

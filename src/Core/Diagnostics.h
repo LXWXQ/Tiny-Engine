@@ -77,7 +77,9 @@ namespace diag
     // T-04：跨帧 RT 池。默认关 —— 实测只在「尺寸换回旧值」时命中，空闲图要占 250 MiB 以上。
         bool renderTargetPool = false;
         bool statsQueue = false;
-    // T-08：持久 GPU 场景（先只读骨架）。默认开；关掉时实例/原语缓冲整个不建。
+    // T-08：持久 GPU 场景（先只读骨架）。默认关 —— 镜像是每次重建的 10~20% 成本且暂无消费者；
+    // 打开用 --gpu-scene-persist（旧开关 --no-gpu-scene-persist 保留为显式回退）。
+    bool gpuScenePersist = false;
     bool noGpuScenePersist = false;
         bool noAsyncSplit = false;
 // P2 的入场尺子：n 个立方体排成立方格点，走外部实例注入路径。

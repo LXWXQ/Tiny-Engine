@@ -4,7 +4,7 @@ title: 诊断基础设施实现
 type: debug
 scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~361 行
+size: ~375 行
 updated: 2026-11-24
 ---
 
@@ -359,3 +359,17 @@ build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
 - **`mirror` 是骨架的纯开销**：10k 实例 5.6 ms、30k 17.0 ms，和实例数线性。T-08 的镜像现在没有消费者，等 P2 让持久缓冲变成权威数据，这笔钱才会转成"构建成本"而不是"额外成本"。
 
 复现：`TinyEngine.exe --selftest 30 --stats-frame --cube-field 10000 --camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`。
+### 13.8 `extRecord` / `extPush`：外部实例循环的细分（P2 第二步）
+
+`[SceneGpu] flatten breakdown` 在 `extNormal` / `extAabb` 之后又加了两段：
+
+- `extRecord`：`InstanceRecord record{}` 到 `record.draw = glm::uvec4(0u);`，即一条实例记录的完整构造（含法线矩阵的四次乘加）。
+- `extPush`：`buckets[groupIndexValue].push_back(record);`，含 `std::vector` 可能触发的扩容拷贝。
+
+3 万实例（Debug）：
+
+| external | extPush | extRecord | extAabb | extNormal | 其余 |
+| --- | --- | --- | --- | --- | --- |
+| 43.9 ms | 4.9 | 0.6 | 0.2 | 0.3 | ≈38 ms |
+
+读法：四个细分项加起来只占 `external` 的 14%。差额不是测量误差，而是「每实例 1.27 µs」里的固定开销 —— 组查表（`std::map` 树walk）、`buckets[i]` 取下标、循环迭代、以及 Debug 构建下每迭代 4 次 `steady_clock` 采样。**要压这一段必须改结构，不是再拆计时。**

@@ -412,6 +412,7 @@ bool audioSpatialTest = false;
         else if (arg == "--rt-pool") diagOptions.renderTargetPool = true;
         else if (arg == "--stats-queue") diagOptions.statsQueue = true;
 else if (arg == "--no-gpu-scene-persist") diagOptions.noGpuScenePersist = true;
+        else if (arg == "--gpu-scene-persist") diagOptions.gpuScenePersist = true;
         else if (arg == "--no-async-split") diagOptions.noAsyncSplit = true;
 else if (arg == "--cube-field")
 {

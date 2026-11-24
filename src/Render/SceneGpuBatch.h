@@ -102,6 +102,8 @@ public:
         uint64_t entityNormalMicros = 0;
         uint64_t externalNormalMicros = 0;
         uint64_t externalAabbMicros = 0;
+        uint64_t externalRecordMicros = 0;
+        uint64_t externalPushMicros = 0;
     };
 
     struct Stats

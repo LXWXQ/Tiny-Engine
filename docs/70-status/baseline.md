@@ -4,7 +4,7 @@ title: 三场景性能基线
 type: status
 scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/ResourceStats.h, src/RHI/ResourceStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp, src/Render/SceneGpuBatch.cpp
 read-when: 改渲染图 / 屏障 / 管线绑定之前要一份可对比的数字，或怀疑性能回退时
-size: ~159 行
+size: ~170 行
 updated: 2026-11-24
 ---
 
@@ -157,3 +157,14 @@ worldHalf   = abs(basis[0]) * localHalf.x + abs(basis[1]) * localHalf.y + abs(ba
 **帧率没有变化**（cube-field 10000，120 帧 × 3 轮：改前中位 88.75 FPS，改后 88.20 FPS，在噪声内）。原因是摊平只在**结构重建的那一帧**发生，稳态帧不跑这段：省下来的是首帧/结构变化帧的 hitch，不是每帧的固定成本。`[FrameTime] max` 因此从 90 ms 量级降到 76.5 ms。
 
 剩下的大头（改后）：`merged`（`ensureMergedMesh`，9~13 ms，模型集合变化才跑）、`external`（逐实例 1.3 µs，30000 时 40 ms）、`mirror`（T-08 骨架，与实例数线性）。
+## 摊平的真正成本（P2 第二步，2026-11-24）
+
+`[SceneGpu] flatten breakdown` 的七段之外，又细分了外部实例循环里的 `extRecord` / `extPush`。3 万实例（`--cube-field 30000`，Debug，30 帧）：
+
+| total | merged | external | extPush | extRecord | extAabb | mirror |
+| --- | --- | --- | --- | --- | --- | --- |
+| 57.60 ms | 9.2 | 43.9 | 4.9 | 0.6 | 0.2 | 0.00 |
+
+`external` 段里只有约 6 ms 被细分计时认领，剩下约 38 ms（每实例 1.27 µs）在循环体其余部分：`std::map` 组查表、`std::vector<std::vector>` 的 `push_back` 扩容拷贝、Debug 构建下每次迭代 4 次 `steady_clock` 采样。
+
+同日把 T-08 持久镜像改成 opt-in（`--gpu-scene-persist`，默认关）：`mirror` 三档全部归零，`[GpuScene]` 在默认配置下打 `primitives=0 instances=0`。这一列从此是「打开镜像时的额外成本」，不是常驻成本。

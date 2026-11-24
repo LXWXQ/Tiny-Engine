@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1634 行
+size: ~1642 行
 updated: 2026-11-24
 ---
 
@@ -1632,3 +1632,11 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - `subMeshBoundsFor()` 首次索引扫描（默认场景 16.6 ms）从第一帧挪到加载期，启动打 `[SceneGpu] prewarm | models=2`。
 - 两者都只影响**结构重建帧**，所以帧率不动；`[FrameTime] max` 从 90 ms 量级降到 76.5 ms。
 - 验证：default / 10000 / 30000 三组 `--validation-features sync` 均 `errors=0 warnings=0`、EXIT=0、stderr 0 字节；A/B 用 `git stash` 反构建三次取中位。
+## P2 第二步：镜像改 opt-in，摊平成本分摊到循环体（2026-11-24）
+
+- `diag::Options::gpuScenePersist`（默认 `false`）+ `--gpu-scene-persist`；`--no-gpu-scene-persist` 保留为显式回退。
+- 镜像整段包进 `if (gpuScene.isEnabled())`；`structureSamples` 挪到判断之外（否则关掉后 `flatten breakdown` 一行不打）。
+- 外部循环新增 `extRecord` / `extPush` 两段计时。
+- 读数：`mirror` 三档归零；30k `total 59.79 → 57.60 ms`、`external 40.9 → 43.9`（运行间 ±3 ms）；`extPush 4.9`、`extRecord 0.6`、`extAabb 0.2`，其余约 38 ms 在循环体。
+- 结论：P2 的 −70% 不能靠 AABB 上 GPU，要靠「持久缓冲变权威 + 直写映射内存 + 去掉组查表」。
+- 校验：三档 `--validation-features sync` 全部 `EXIT=0`、`errors=0 warnings=0`、stderr 0 字节。

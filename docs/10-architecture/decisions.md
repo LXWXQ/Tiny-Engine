@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1102 行
+size: ~1142 行
 updated: 2026-11-24
 ---
 
@@ -1100,3 +1100,43 @@ if (!ImGui::CollapsingHeader("Config", ImGuiTreeNodeFlags_DefaultOpen))
 ### 不引入的
 
 - 没在这步做实例级剔除：剔除的输入（每实例世界 AABB）现在仍在 CPU 算，只是便宜了。上 GPU 是下一步的事。
+## 决策 54：持久镜像默认关，摊平的真实成本是「看不见的那 80%」（P2 第二步）
+
+### 问题
+
+决策 53 之后 `extAabb` 只剩 0.2 ms（3 万实例），逐实例 AABB 已不是成本。但那 40~44 ms 的 `external` 段里，细分计时只认领了约 6 ms（`extPush` 4.9、`extRecord` 0.6、`extAabb` 0.2、`extNormal` 0.3），剩下约 38 ms 落在「循环体其余部分」——按 3 万实例算每实例 1.27 µs。
+
+同时 T-08 的持久镜像（决策 52）没有任何消费者，却每次结构重建都按实例数线性收费：10k 1.6 ms、30k 4.7 ms（且这还只是 `unordered_map` 查表，真正上传另算）。
+
+### 做法
+
+- `GpuScene` 改成 opt-in：`--gpu-scene-persist` 打开（`diag::Options::gpuScenePersist` 默认 `false`），`--no-gpu-scene-persist` 保留为显式回退；`Application` 里合成 `gpuScenePersist && !noGpuScenePersist`。
+- 镜像整段包在 `if (gpuScene.isEnabled())` 里，关闭时连 `unordered_map` 查表都不做（`mirror` 段实测归零）。
+- 外部循环再加两个细分计时：`extRecord`（`InstanceRecord` 构造）、`extPush`（`buckets[group].push_back`），与 `extNormal`/`extAabb` 一起进 `[SceneGpu] flatten breakdown`。
+
+### 结果
+
+| 场景 | total（ms/rebuild） | mirror | external | extPush | 未计入 |
+| --- | --- | --- | --- | --- | --- |
+| default | 11.56 | 0.00 | 0.0 | 0.0 | 0.0 |
+| cube-field 10k | 26.46 | 0.00 | 13.7 | 1.1 | ≈12.6 |
+| cube-field 30k | 57.60 | 0.00 | 43.9 | 4.9 | ≈38.2 |
+
+`mirror` 三档全部归零；`total` 的下降幅度被 `external` 段自身的运行间波动（±3 ms）盖住 —— 这说明镜像本来就只占 8~10%，不是摊平的大头。
+
+### 为什么不再往「AABB 上 GPU」走
+
+AABB 已经只占 0.2 ms/3 万实例（决策 53 的中心/半长算法把 8 次 `mat4*vec4` 换成 3 次 `abs` 缩放）。剩下的 1.27 µs/实例是循环脚手架、`std::map` 组查表、`std::vector<std::vector>` 的 `push_back` 扩容拷贝、以及 Debug 构建下 4 次 `steady_clock` 采样的开销总和。把 AABB 搬上 GPU 一点也不会动这些。
+
+P2 的 −70% 只能靠改结构拿到：持久缓冲变成权威数据、逐实例直写映射内存（不再经 `std::vector` 中转）、组查表换成开放寻址或直接下标。
+
+### 代价与边界
+
+- `mirror` 关掉后 `[GpuScene]` 一行会打 `primitives=0 instances=0`，这是预期（骨架未启用），不是回归。
+- `structureSamples` 的累加被挪到镜像判断**之外**，否则关掉镜像后 `[SceneGpu] flatten breakdown` 一行都不打（本次踩到，日志里只剩 `cull summary`）。
+- 本决策的读数全部来自 Debug 构建；Release 下每实例成本会显著低于 1.27 µs，但相对结构不变。
+
+### 不引入的
+
+- 没做实例级剔除：`shaders/scene_cull.comp` 现在是组级（`GroupRecord` 5 word/组 + `stats[3]`），实例级要改成 remap + 逐实例两段式，属于下一步。
+- 没给镜像加消费者：消费它的应该是实例级剔除与视锥/遮挡查询，等那条链路通了再打开。
