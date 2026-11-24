@@ -3289,7 +3289,9 @@ frameInfo.editorSelection = editorLayer->getState().selection.primary();
 
 		// D-1(b)：所有 Pass 把自己的工作声明进渲染图，
 		// 屏障、布局转换、vkCmdBeginRendering 全部由渲染图负责。
-	renderGraph->beginFrame(commandBuffer, renderer->getComputeCommandBuffer(), 		renderer->getCurrentFrameInFlightIndex(), renderer->getFrameNumber());
+// T-07：把第二段图形命令缓冲交给图；--no-async-split 时置空，退回单次提交。
+renderGraph->setSecondaryGraphicsCommandBuffer(diagnosticsOptions.noAsyncSplit ? VK_NULL_HANDLE : renderer->getSecondaryGraphicsCommandBuffer());
+renderGraph->beginFrame(commandBuffer, renderer->getComputeCommandBuffer(), renderer->getCurrentFrameInFlightIndex(), renderer->getFrameNumber());
 		renderPipeline.registerAll(*renderGraph, frameInfo);
 		// 渲染完成 -> 把这张交换链图像转入 PRESENT_SRC_KHR 供 present
 		renderGraph->presentTransition(renderResources->swapchainImages[frameInfo.swapchainImageIndex]);
@@ -3322,7 +3324,7 @@ frameInfo.editorSelection = editorLayer->getState().selection.primary();
 		const auto& crossQueue = renderGraph->getCrossQueueDependencies();
 		// P1-1：收集本帧的 Tracy GPU zone（必须在命令缓冲结束前）。
 		gpuProfiler.collect(commandBuffer);
-		renderer->endFrame(crossQueue.computeToGraphics, crossQueue.graphicsToCompute);
+renderer->endFrame(crossQueue.computeToGraphics, crossQueue.graphicsToCompute, renderGraph->usedSecondaryGraphics());
 
 		// TM-16：热重载检查放在 endFrame 之后 —— 命令缓冲已提交，录制期结束；
 		// poll 内部发现有变化才会 vkDeviceWaitIdle（没变化只是几十次 stat）。

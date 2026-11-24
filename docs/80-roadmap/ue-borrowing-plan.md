@@ -4,8 +4,8 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1015 行
-updated: 2026-11-23
+size: ~1017 行
+updated: 2026-11-24
 ---
 
 # UE 借鉴改造总纲
@@ -818,7 +818,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 | T-04 | 跨帧 RT 池 | 新增 `src/RHI/RenderTargetPool.{h,cpp}`，`--rt-pool` 才开 | **已落地（默认关）**：稳态本来就是 0 创建；一次 resize 约 44 张，池只省 13~15% 且要 256 MiB 空闲图 → 判据改成「一次 resize 创建量 44 → ≤25」 | 2 |
 | T-05 | Pass 剔除 + dry-run 校验 | `src/RHI/RenderGraph.cpp` | **已落地（默认关）**：机制正确但本引擎没有「输出无人读」的 Pass，实测 `culled/frame=0.0`；`--no-bloom` 的 21 → 14 是 Pass 自己不进图 | 2 |
 | T-06 | Blackboard（`std::any` + `type_index`） | 新增 `src/RHI/Blackboard.h` | SSAO 输出与 Hi-Z 金字塔改走黑板，`FrameInfo` 字段减少 ≥ 4 | 1 |
-| T-07 | `FramePlan` + 三提交点 `G0 -> C0 -> G1` | `src/RHI/Renderer.{h,cpp}:214` | compute 与 graphics 有重叠（timeline 时间线可见）；`--no-async-split` 截图一致 | 3 |
+| T-07 | `FramePlan` + 三提交点 `G0 -> C0 -> G1`（**已落地**：队列窗口时间戳 + 拆分提交，默认开，`--no-async-split` 回退） | `src/RHI/Renderer.{h,cpp}:214`、`src/RHI/RenderGraph.{h,cpp}` | compute 与 graphics 有重叠：`[Queue] overlap` 0.00 -> 0.51 ms（100% of compute）；`--no-async-split` 截图在噪声内 | 3 |
 | T-08 | `primitiveBuffer` + `instanceBuffer` 骨架（先只读） | 新增 `src/Render/GpuScene.{h,cpp}` | 一万实例的世界矩阵来自持久 buffer；剔除结果与旧路径一致 | 3 |
 | T-09（已落地） | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
 
@@ -1013,3 +1013,5 @@ voxel-world `98.73 / 10.13 / 9.62 / 10.88 / 89.83 / 0.27 / 1220.7 / 1.00`，ligh
 这条读数（512 灯 + `--clustered-gpu-build`，sync 验证层）：计算队列每帧只忙 0.25 ms，且与图形**零重叠**。原因不是调度器不给机会，而是同帧存在 c2g 依赖（建簇写簇表、光照读簇表），而每帧图形命令只有一次提交 —— 整条图形流都在等 compute。这一条把 T-07 的验收从「compute 与 graphics 有重叠」落到可测的具体数字上：现在的基线是 `overlap=0.00 ms`、`compute busy=0.25 ms`，要抬的就是 `overlap / compute busy`。
 
 默认关且零开销：没有 `--stats-queue` 时 `Application` 直接 `queuestats::shutdown()`，一枚 timestamp 都不写（默认场景 `[FrameStats]` 三行与关闭前后逐位相同）。
+
+**T-07 第二步（2026-11-24，已落地）**：图形拆成 `G0 -> C0 -> G1` 两段命令缓冲、三次提交。拆分点由图自己算（第一个「带读位且与 compute 写范围重叠」的 graphics Pass），三条保守规则：拆点为第 0 个 Pass 时不拆、`--no-async-split` 整体退回单次提交、没有 compute 写时提交路径与改造前完全一致。实测 512 灯 + sync：`makespan 10.06 -> 9.03 ms`、`overlap 0.00 -> 0.51 ms`（等于 compute 全部忙碌时间，100% 被遮住）；无验证层 600 帧 × 3 轮交替 `102.00` 对 `100.94` FPS（+1.05%）；默认场景 `passes/frame=16.0` 不变、截图差异在噪声内。**验收偏差**：本单收益上限本来就只有 compute 占比（2.5%），+1.05% 已是这个上限的一半。

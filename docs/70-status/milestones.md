@@ -4,8 +4,8 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1518 行
-updated: 2026-11-23
+size: ~1557 行
+updated: 2026-11-24
 ---
 
 # 里程碑与实测基线
@@ -1528,3 +1528,30 @@ T-04 的 `[RTPool] top creators` 全是 `Frame0` / `Frame1` 成对出现。顺�
 3. **开关必须在 `renderGraph` 创建之后设**。一开始写在 `renderer` 初始化旁边，四次运行全部 `0xC0000005`、stderr 0 字节、日志停在 `[Renderer] D-4/D-5 active`。
 
 校验：`tools/DocCheck.ps1` PASS；`tools/Validate.ps1 -Incremental -SkipSetup` ALL PASS（96 项、FAIL 0、stderr 0 字节）。
+## T-07：队列窗口时间戳 + 图形拆成两段提交（2026-11-24）
+
+### 第一步：先给队列装尺子（`--stats-queue`，提交 `f9397bd`）
+
+每条命令缓冲头尾各写一枚 timestamp，两条队列各管自己的一对 query。第一次量 512 灯场景（`--clustered-gpu-build`，sync 验证层）：
+
+| 指标 | 值 |
+|---|---|
+| makespan | 8.65 ms |
+| graphics busy | 8.36 ms (96.7%) |
+| compute busy | 0.25 ms (2.8%) |
+| overlap | 0.00 ms (0.0% of compute) |
+
+计算队列每帧只忙 0.25 ms，而且与图形零重叠：同帧 c2g 依赖 + 每帧只提交一次图形命令，整条图形流都在等 compute。
+
+### 第二步：图形拆成 `G0 -> C0 -> G1`（本次）
+
+| 配置 | makespan | graphics busy | compute busy | overlap |
+|---|---|---|---|---|
+| `--no-async-split` | 10.06 ms | 9.73 ms (96.8%) | 0.27 ms (2.7%) | 0.00 ms (0%) |
+| 默认（拆分） | 9.03 ms | 9.03 ms (100.0%) | 0.51 ms (5.7%) | 0.51 ms (100%) |
+
+无验证层、600 帧 × 3 轮交替：开 101.79 / 100.95 / 103.25，关 100.55 / 101.43 / 100.83 → 均值 **102.00 对 100.94（+1.05%）**。
+
+三条保守规则：拆点是第 0 个 graphics Pass 时不拆；`--no-async-split` 整体退回单次提交；没有 compute 写时提交路径与改造前逐位一致（默认场景 `passes/frame=16.0`、截图差异落在噪声内：`mean=0.0262` 对同二进制噪声地板 `mean=0.0173`）。
+
+校验：默认场景 150 帧 + sync + 截图 `errors=0`；`--cross-queue-test` 的 `[TD02]` 两向与 `[T01]` 两条断言全绿、`overlap=0.10 ms (41.8%)`（g2c 帧不拆，符合设计）。

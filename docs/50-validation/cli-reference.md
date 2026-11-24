@@ -4,8 +4,8 @@ title: 命令行参数全表
 type: validation
 scope: main.cpp、src/Core/CliCatalog.cpp
 read-when: 加/改命令行参数、写自动化脚本、或不确定某个 flag 的行为
-size: ~190 行
-updated: 2026-11-23
+size: ~191 行
+updated: 2026-11-24
 ---
 
 # 命令行参数全表
@@ -103,6 +103,8 @@ updated: 2026-11-23
 | `--stats-scratch` | 退出时打印每帧暂存区的分配次数 / 字节 / 扩容 / 刷新 | 0 |
 | `--stats-rendergraph` | 退出时打印渲染图准备与录制的每帧耗时 | 0 |
 | `--stats-frame` | 退出时打印五段：每帧屏障条数（按子资源计）/ 跳过的屏障（同状态与跨队列各一类）/ 管线绑定次数与冗余绑定占比、`[FrameTime]` 中位 / p95 / 最长帧、`[Resources]` 每帧资源创建数与启动峰值、`[Memory]` 堆用量、`[SceneGpu]` 剔除汇总（visibleRatio）、`[StateCache]` 绑定缓存省掉多少条 `vkCmdBindPipeline` 以及其中落在未登记缓冲上的条数（T-09，当前 default 44.7%、`unmanaged=0`） | 0（关时只累加整数） |
+| `--stats-queue` | 退出时打印图形 / 计算两条队列各自的忙碌窗口、重叠时长，以及「compute 被图形遮住」的比例（T-07）。每条命令缓冲头尾各写一枚 timestamp，两条队列各管自己的一对 query（本机没开 `hostQueryReset`，重置录进命令缓冲）；不带这个开关时 `queuestats::shutdown()`，一枚都不写 | 0 |
+| `--no-async-split` | 退回单次图形提交：不做 `G0 -> C0 -> G1` 拆分（T-07 整体回退开关）。关掉后 `[Queue] overlap` 回到 0.00 ms，512 灯 600 帧实测约 -1% | 0 |
 | `--rt-pool` | 启用跨帧渲染目标池（T-04）。默认关：实测命中率约 25%、空闲图要占 250 MiB 以上，帧时间无可辨收益，见决策 46 | 0 |
 | `--pass-cull` | 打开 Pass 剔除（T-05）。默认关：实测本引擎没有「输出无人读」的 Pass，能力留着当兜底 | 0 |
 | `--no-pass-cull` | 覆盖 `--pass-cull`，回到不剔除 | 0 |

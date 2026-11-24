@@ -411,6 +411,7 @@ bool audioSpatialTest = false;
         else if (arg == "--pass-cull-dry-run") diagOptions.passCullDryRun = true;
         else if (arg == "--rt-pool") diagOptions.renderTargetPool = true;
         else if (arg == "--stats-queue") diagOptions.statsQueue = true;
+        else if (arg == "--no-async-split") diagOptions.noAsyncSplit = true;
                 else if (arg == "--single-frame-targets") diagOptions.singleFrameTargets = true;
         else if (arg == "--no-single-frame-targets") diagOptions.noSingleFrameTargets = true;
                 else if (arg == "--serialize-frames") diagOptions.serializeFrames = true;

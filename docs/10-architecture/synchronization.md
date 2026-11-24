@@ -4,8 +4,8 @@ title: 同步模型：多帧、双队列、present
 type: architecture
 scope: src/RHI/Renderer.cpp, src/RHI/Swapchain.cpp, src/Core/FrameInfo.h, src/Core/FrameInFlight.h
 read-when: 修改帧循环、队列提交、交换链或 resize 逻辑
-size: ~250 行
-updated: 2026-10-30
+size: ~144 行
+updated: 2026-11-24
 ---
 
 # 同步模型
@@ -75,6 +75,20 @@ compute  command buffer + compute  timeline
 
 资源侧走 `VK_SHARING_MODE_CONCURRENT`（`crossQueue=true`），未实现 EXCLUSIVE
 ownership transfer。
+
+### 4.2 图形拆成两段提交（T-07）
+
+有 c2g 依赖时，图形命令被拆进两个命令缓冲，按 `G0 -> C0 -> G1` 三次提交：
+
+| 提交 | 内容 | 等待 | 签 |
+|---|---|---|---|
+| `G0` | 拆分点之前的全部图形 Pass | `imageAvailable[slot]`；`serializeGraphicsFrames` 时再等 `graphicsTimeline = v-1` | 无 |
+| `C0` | compute 命令缓冲（簇表建表等） | 无（依赖方向是 compute -> graphics） | `computeTimeline = v` |
+| `G1` | 拆分点及其后的图形 Pass | c2g 时等 `computeTimeline = v` | `renderFinished` + `graphicsTimeline = v` |
+
+拆分点由图自己算：第一个「带读位且与某个 compute 写范围重叠」的 graphics Pass。找不到（本帧没有 compute 写）就走原来的单次图形提交，路径逐位不变。`graphicsTimelineSemaphore` 只在 `G1` 签，所以「已完成帧」的语义仍是每帧一个值。
+
+回退开关是 `--no-async-split`：`setSecondaryGraphicsCommandBuffer(VK_NULL_HANDLE)`，整套退回单次提交。
 
 ## 5. 交换链
 

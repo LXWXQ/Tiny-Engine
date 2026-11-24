@@ -72,6 +72,10 @@ void Renderer::createCommandBuffers()
     if (vkAllocateCommandBuffers(vulkanDevice.getDevice(), &allocInfo, commandBuffers.data()) != VK_SUCCESS)
         throw std::runtime_error("failed to allocate per-frame graphics command buffers!");
 
+    allocInfo.commandPool = commandPool;
+    if (vkAllocateCommandBuffers(vulkanDevice.getDevice(), &allocInfo, secondaryCommandBuffers.data()) != VK_SUCCESS)
+        throw std::runtime_error("failed to allocate secondary graphics command buffers!");
+
     allocInfo.commandPool = computeCommandPool;
     if (vkAllocateCommandBuffers(vulkanDevice.getDevice(), &allocInfo, computeCommandBuffers.data()) != VK_SUCCESS)
         throw std::runtime_error("failed to allocate per-frame compute command buffers!");
@@ -187,6 +191,12 @@ VkCommandBuffer Renderer::beginFrame()
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     if (vkBeginCommandBuffer(graphicsCommandBuffer, &beginInfo) != VK_SUCCESS)
         throw std::runtime_error("failed to begin graphics command buffer!");
+    VkCommandBuffer secondaryCommandBuffer = secondaryCommandBuffers[currentFrameInFlightIndex];
+    if (vkResetCommandBuffer(secondaryCommandBuffer, 0) != VK_SUCCESS)
+        throw std::runtime_error("failed to reset secondary graphics command buffer!");
+    if (vkBeginCommandBuffer(secondaryCommandBuffer, &beginInfo) != VK_SUCCESS)
+        throw std::runtime_error("failed to begin secondary graphics command buffer!");
+
     if (vkBeginCommandBuffer(computeCommandBuffer, &beginInfo) != VK_SUCCESS)
         throw std::runtime_error("failed to begin compute command buffer!");
 
@@ -220,8 +230,9 @@ void Renderer::onSwapchainRecreated()
     swapchainRecreateRequested = false;
 }
 
-void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphics)
+void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphics, bool secondaryGraphics)
 {
+    frameSecondaryActive = secondaryGraphics;
     if (graphicsWaitsForCompute && computeWaitsForGraphics)
         throw std::runtime_error("Renderer: 同一帧不能同时要求 graphics 等 compute 和 compute 等 graphics");
 
@@ -230,7 +241,10 @@ void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphi
     const uint64_t signalValue = frameCounter;
 
     tiny::queuestats::writeEnd(computeCommandBuffer, true);
-    tiny::queuestats::writeEnd(graphicsCommandBuffer, false);
+    tiny::queuestats::writeEnd(frameSecondaryActive ? secondaryCommandBuffers[currentFrameInFlightIndex] : graphicsCommandBuffer, false);
+    if (vkEndCommandBuffer(secondaryCommandBuffers[currentFrameInFlightIndex]) != VK_SUCCESS)
+        throw std::runtime_error("failed to end secondary graphics command buffer!");
+
     if (vkEndCommandBuffer(graphicsCommandBuffer) != VK_SUCCESS ||
 
         vkEndCommandBuffer(computeCommandBuffer) != VK_SUCCESS)
@@ -335,6 +349,74 @@ void Renderer::endFrame(bool graphicsWaitsForCompute, bool computeWaitsForGraphi
         lastSubmittedGraphicsFrame = signalValue;
     };
 
+    if (frameSecondaryActive)
+    {
+        // ---- T-07：G0 -> C0 -> G1 ----
+        // G0 只等交换链图像（若要求帧间串行再等上一帧图形），不签 timeline。
+        {
+            VkSemaphore g0Waits[2] = { imageAvailableSemaphores[currentFrameInFlightIndex], graphicsTimelineSemaphore };
+            uint64_t g0Values[2] = { 0, signalValue - 1 };
+            VkPipelineStageFlags g0Stages[2] = { VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT };
+            uint32_t g0WaitCount = 1;
+            if (serializeGraphicsFrames && signalValue > 1)
+                g0WaitCount = 2;
+
+            VkTimelineSemaphoreSubmitInfo g0Timeline{};
+            g0Timeline.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+            g0Timeline.waitSemaphoreValueCount = g0WaitCount;
+            g0Timeline.pWaitSemaphoreValues = g0Values;
+            g0Timeline.signalSemaphoreValueCount = 0;
+
+            VkSubmitInfo g0{};
+            g0.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            g0.pNext = &g0Timeline;
+            g0.waitSemaphoreCount = g0WaitCount;
+            g0.pWaitSemaphores = g0Waits;
+            g0.pWaitDstStageMask = g0Stages;
+            g0.commandBufferCount = 1;
+            g0.pCommandBuffers = &graphicsCommandBuffer;
+            if (vkQueueSubmit(vulkanDevice.getGraphicsQueue(), 1, &g0, VK_NULL_HANDLE) != VK_SUCCESS)
+                throw std::runtime_error("failed to submit graphics command buffer (G0)!");
+        }
+
+        // C0：建簇等计算工作，不必等 G0 —— 依赖方向是 compute -> graphics。
+        submitCompute(false);
+
+        // G1：等 compute 的 timeline（c2g），签 renderFinished 与 graphics timeline。
+        {
+            VkSemaphore g1Waits[1] = { computeTimelineSemaphore };
+            uint64_t g1Values[1] = { signalValue };
+            VkPipelineStageFlags g1Stages[1] = { VK_PIPELINE_STAGE_ALL_COMMANDS_BIT };
+            const uint32_t g1WaitCount = graphicsWaitsForCompute ? 1u : 0u;
+
+            VkSemaphore g1Signals[2] = { renderFinishedSemaphores[currentImageIndex], graphicsTimelineSemaphore };
+            uint64_t g1SignalValues[2] = { 0, signalValue };
+
+            VkTimelineSemaphoreSubmitInfo g1Timeline{};
+            g1Timeline.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+            g1Timeline.waitSemaphoreValueCount = g1WaitCount;
+            g1Timeline.pWaitSemaphoreValues = g1Values;
+            g1Timeline.signalSemaphoreValueCount = 2;
+            g1Timeline.pSignalSemaphoreValues = g1SignalValues;
+
+            VkSubmitInfo g1{};
+            g1.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            g1.pNext = &g1Timeline;
+            g1.waitSemaphoreCount = g1WaitCount;
+            g1.pWaitSemaphores = g1Waits;
+            g1.pWaitDstStageMask = g1Stages;
+            g1.commandBufferCount = 1;
+            g1.pCommandBuffers = &secondaryCommandBuffers[currentFrameInFlightIndex];
+            g1.signalSemaphoreCount = 2;
+            g1.pSignalSemaphores = g1Signals;
+            if (vkQueueSubmit(vulkanDevice.getGraphicsQueue(), 1, &g1, VK_NULL_HANDLE) != VK_SUCCESS)
+                throw std::runtime_error("failed to submit graphics command buffer (G1)!");
+
+            graphicsSubmissionValues[currentFrameInFlightIndex] = signalValue;
+            lastSubmittedGraphicsFrame = signalValue;
+        }
+    }
+    else
     if (computeWaitsForGraphics)
     {
         // graphics 先写，compute 后读/写：graphics submit 先入队，compute 等它的 timeline。

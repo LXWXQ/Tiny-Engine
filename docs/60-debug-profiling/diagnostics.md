@@ -4,8 +4,8 @@ title: 诊断基础设施实现
 type: debug
 scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~314 行
-updated: 2026-11-23
+size: ~329 行
+updated: 2026-11-24
 ---
 
 # 诊断基础设施实现
@@ -312,3 +312,18 @@ build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
 - 同一帧内只要存在 c2g 依赖（compute 写、graphics 读），图形流整条都要等 compute 完成 —— 因为现在每帧的图形命令只有**一次**提交。实测 512 灯场景 `compute busy=0.25 ms` 而 `overlap=0.00 ms`，正是因为这一点。要抬 `overlap`，必须把图形拆成多个提交点，这正是 T-07 的主体。
 
 关掉时零开销：`Application` 在没有 `--stats-queue` 时直接 `queuestats::shutdown()`，命令缓冲里一枚 timestamp 都不写（默认场景 `--stats-frame` 的三行数字与打开时逐位相同）。
+
+### 13.6.1 拆分提交前后（T-07）
+
+512 灯场景、60 帧、`--validation-features sync`，同一构建加 `--no-async-split` 对照：
+
+```
+[Queue] frames=58 | makespan=10.06 ms | graphics busy=9.73 ms (96.8%) | compute busy=0.27 ms (2.7%) | overlap=0.00 ms (0.0% of compute, max 0.00 ms)
+[Queue] dedicatedCompute=1 sameClockDomain=1 | compute 被图形遮住 0.0%
+[Queue] frames=58 | makespan=9.03 ms | graphics busy=9.03 ms (100.0%) | compute busy=0.51 ms (5.7%) | overlap=0.51 ms (100.0% of compute, max 3.52 ms)
+[Queue] dedicatedCompute=1 sameClockDomain=1 | compute 被图形遮住 100.0%
+```
+
+第一段是单次提交：compute 的 0.27 ms 完全串行躺在关键路径上，`overlap=0.00`。第二段是拆分后：`overlap` 等于 compute 的全部忙碌时间（100%），`makespan` 少 1.03 ms。
+
+读法：`overlap / compute busy` 是队列窗口层面的上限，不要直接换算成帧率收益 —— 600 帧 × 3 轮交替实测只 +1.05%，因为 compute 本来就只占帧时间的 2.5%。

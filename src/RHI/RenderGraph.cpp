@@ -357,6 +357,13 @@ void RenderGraph::reportPrepareStats() const
         parallelPrepare ? "开" : "关",
         lastFrameExecutedPasses.size());
 }
+namespace
+{
+    // 定义在文件后半段（与剔除共用），endFrame 需要先用。
+    bool rangesOverlapTex(const RenderGraph::SubresourceRange& a, const RenderGraph::SubresourceRange& b);
+    bool rangesOverlapBuf(const RenderGraph::BufferRange& a, const RenderGraph::BufferRange& b);
+}
+
 void RenderGraph::endFrame()
 {
     if (cmd == VK_NULL_HANDLE)
@@ -409,6 +416,103 @@ void RenderGraph::endFrame()
         activePasses.push_back(&pass);
     }
 
+    // ---- T-07：算图形提交的拆分点 ----
+    // 只有在确实存在 c2g 依赖、且第二段图形命令缓冲存在时才拆：拆点就是
+    // 「第一个读 compute 写过的资源的 graphics Pass」。它之前的图形工作能在
+    // GPU 上跟 compute 并发，之后的要等 compute。
+    graphicsSplitIndex = 0xFFFFFFFFu;
+    secondaryGraphicsUsed = false;
+    if (secondaryGraphicsCmd != VK_NULL_HANDLE)
+    {
+        struct ComputeWrite
+        {
+            bool isBuffer = false;
+            uint32_t id = 0;
+            SubresourceRange texRange{};
+            BufferRange bufRange{};
+        };
+
+        std::vector<ComputeWrite> computeWrites;
+        for (Pass* pass : activePasses)
+        {
+            if (!pass->isCompute)
+                continue;
+            for (const Access& acc : pass->accesses)
+            {
+                if ((acc.access & kWriteBits) == 0)
+                    continue;
+                ComputeWrite w;
+                w.id = acc.texture.id;
+                w.texRange = acc.range;
+                computeWrites.push_back(w);
+            }
+            for (const BufferAccess& acc : pass->bufferAccesses)
+            {
+                if ((acc.access & kWriteBits) == 0)
+                    continue;
+                ComputeWrite w;
+                w.isBuffer = true;
+                w.id = acc.buffer.id;
+                w.bufRange = acc.range;
+                computeWrites.push_back(w);
+            }
+        }
+
+        if (!computeWrites.empty())
+        {
+            for (size_t i = 0; i < activePasses.size(); ++i)
+            {
+                Pass* pass = activePasses[i];
+                if (pass->isCompute)
+                    continue;
+
+                bool readsCompute = false;
+                for (const Access& acc : pass->accesses)
+                {
+                    if ((acc.access & ~kWriteBits) == 0)
+                        continue;
+                    for (const ComputeWrite& w : computeWrites)
+                    {
+                        if (w.isBuffer || w.id != acc.texture.id)
+                            continue;
+                        if (rangesOverlapTex(acc.range, normalizeTextureRange(textures[acc.texture.id], w.texRange)))
+                        {
+                            readsCompute = true;
+                            break;
+                        }
+                    }
+                    if (readsCompute)
+                        break;
+                }
+                for (const BufferAccess& acc : pass->bufferAccesses)
+                {
+                    if ((acc.access & ~kWriteBits) == 0)
+                        continue;
+                    for (const ComputeWrite& w : computeWrites)
+                    {
+                        if (!w.isBuffer || w.id != acc.buffer.id)
+                            continue;
+                        if (rangesOverlapBuf(acc.range, normalizeBufferRange(buffers[acc.buffer.id], w.bufRange)))
+                        {
+                            readsCompute = true;
+                            break;
+                        }
+                    }
+                    if (readsCompute)
+                        break;
+                }
+
+                if (readsCompute)
+                {
+                    // 第一个图形 Pass 就要等 compute 时拆了也没得重叠，直接不拆。
+                    if (i > 0)
+                        graphicsSplitIndex = static_cast<uint32_t>(i);
+                    break;
+                }
+            }
+        }
+    }
+
     while (preparedPasses.size() < activePasses.size())
         preparedPasses.push_back(std::make_unique<PreparedPass>());
 
@@ -417,7 +521,10 @@ void RenderGraph::endFrame()
     {
         PreparedPass& prepared = *preparedPasses[i];
         prepared.pass = activePasses[i];
-        prepared.cmd = prepared.pass->isCompute ? computeCmd : cmd;
+        const bool useSecondary = !prepared.pass->isCompute && graphicsSplitIndex != 0xFFFFFFFFu &&
+                                 i >= graphicsSplitIndex && secondaryGraphicsCmd != VK_NULL_HANDLE;
+        prepared.cmd = prepared.pass->isCompute ? computeCmd : (useSecondary ? secondaryGraphicsCmd : cmd);
+        secondaryGraphicsUsed = secondaryGraphicsUsed || useSecondary;
         prepared.passIndex = static_cast<int32_t>(i);
         prepared.timedPassIndex = 0;
         prepared.raster = false;

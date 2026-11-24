@@ -4,8 +4,8 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~902 行
-updated: 2026-11-23
+size: ~960 行
+updated: 2026-11-24
 ---
 
 # 关键设计决策
@@ -912,3 +912,49 @@ resize 的创建量随之从 44 掉到 25 上下，而且省的是常驻显存�
 
 - 不按「输出被谁读」重排 Pass（T-07 的 FramePlan 才动执行顺序）。
 - 不做跨帧的剔除结果缓存（第一版每帧重算，21 个 Pass 的闭包开销可忽略）。
+## 决策 50：图形拆成两段提交，让建簇计算藏进 G0（T-07）
+
+### 问题
+
+`--stats-queue` 装上之后第一次量 512 灯场景（`--clustered-gpu-build`，sync 验证层）：`makespan=8.65 ms`、`graphics busy=8.36 ms`、`compute busy=0.25 ms`、**`overlap=0.00 ms`**。计算队列每帧只忙 0.25 ms，而且一点都不重叠。
+
+原因不是调度器：同帧存在 c2g 依赖（建簇写簇表、光照读簇表），而每帧的图形命令只有**一次**提交 —— 整条图形流都在等 compute 跑完，0.25 ms 纯串行躺在关键路径上。
+
+### 做法
+
+把图形命令拆成两个命令缓冲，按 `G0 -> C0 -> G1` 三次提交：
+
+- **G0**：第一个「读 compute 写过的资源」的 graphics Pass 之前的所有图形工作。等交换链图像（若开 `serializeGraphicsFrames` 再等上一帧图形），**不签** timeline。
+- **C0**：compute 命令缓冲。不等 G0（依赖方向是 compute -> graphics），签 `computeTimelineSemaphore`。
+- **G1**：其余图形工作。等 compute 的 timeline（c2g 时），签 `renderFinished` 与 `graphicsTimelineSemaphore`。
+
+拆分点由图自己算（`RenderGraph::endFrame` 里）：先收集本帧所有 compute 写（纹理与缓冲，按 id + 子资源/字节范围），再顺序扫 graphics Pass，第一个「带读位且范围重叠」的就是拆点。三条保守规则：
+
+- 拆点是第 0 个 graphics Pass 时不拆 —— 前面没有可重叠的工作，拆了只是多一次提交。
+- `--no-async-split` 时 `setSecondaryGraphicsCommandBuffer(VK_NULL_HANDLE)`，整套退回单次提交。
+- 默认场景没有 compute 写，`secondaryGraphicsUsed=false`，提交路径与改造前完全一致。
+
+### 结果
+
+512 灯场景、60 帧、sync 验证层（同一台机、同一构建）：
+
+| 配置 | makespan | graphics busy | compute busy | overlap |
+|---|---|---|---|---|
+| `--no-async-split` | 10.06 ms | 9.73 ms (96.8%) | 0.27 ms (2.7%) | 0.00 ms (0%) |
+| 默认（拆分） | 9.03 ms | 9.03 ms (100.0%) | 0.51 ms (5.7%) | 0.51 ms (100%) |
+
+不叠验证层、600 帧 × 3 轮交替（`--selftest 600`，512 灯）：开 101.79 / 100.95 / 103.25，关 100.55 / 101.43 / 100.83 → 均值 **102.00 对 100.94（+1.05%）**。收益不大，但和「compute 只占帧时间的 2.5%、现在被完全遮住」对得上账。
+
+默认场景（没有 compute 工作）的 `[FrameStats]` 与截图都逐位/在噪声内不变：`passes/frame=16.0`、`errors=0`；`on` 与 `off` 的截图差异 `mean=0.0262`，而同一二进制两次运行的噪声地板是 `mean=0.0173`。
+
+### 代价与边界
+
+- 每帧多一次 `vkQueueSubmit`（有拆点时三次，否则仍是三次：G0/C0/G1 合并回两次？不 —— 无拆点时走老路径，仍是两次）。
+- G1 不签 timeline 之前，`getCompletedGraphicsFrame()` 的语义不变（仍是每帧一个值），因为只有 G1 签 `graphicsTimelineSemaphore`。
+- g2c 方向（compute 读图形输出）本帧不拆：拆分前提是「图形前半段不依赖 compute」，g2c 时前半段的选择不成立。当前只有 `--cross-queue-test` 探针会走 g2c。
+- 拆分只解决「同一帧内 compute 被图形遮挡」；跨帧重叠仍受 T-04b 的 `serializeGraphicsFrames` 约束（那是为了让同帧目标只留一张）。
+
+### 不引入的
+
+- 不做任意多段提交（FramePlan 的完整形态）。两段已经能覆盖「一个生产者 + 一个消费者」的真实场景；更多段要先把 Pass 依赖图与资源生命周期一起搬进图，那是 P1 之后的活。
+- 不引入 `VK_KHR_synchronization2` 之外的队列优先级 / `vkQueueSubmit2` 权重调整 —— 本机两族队列，收益无法验证。

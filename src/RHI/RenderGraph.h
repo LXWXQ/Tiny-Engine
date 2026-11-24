@@ -373,6 +373,12 @@ public:
     };
     const CrossQueueDependencies& getCrossQueueDependencies() const { return crossQueueDependencies; }
 
+    // T-07：把本帧的图形工作拆成两段提交。secondary 为空时不拆（--no-async-split）。
+    // 拆分点由 endFrame 自己算：第一个读 compute 写过的资源的 graphics Pass。
+    void setSecondaryGraphicsCommandBuffer(VkCommandBuffer commandBuffer) { secondaryGraphicsCmd = commandBuffer; }
+    bool usedSecondaryGraphics() const { return secondaryGraphicsUsed; }
+    uint32_t getGraphicsSplitIndex() const { return graphicsSplitIndex; }
+
     // 供 ImGui 面板 / 配置开关某个 Pass。语义见 PassSwitchboard：
     // 跨帧保存，注册时重放；同一帧内已注册的 Pass 立即生效。
     // 名字以星号结尾时按前缀匹配（Bloom.Up*）。
@@ -554,6 +560,11 @@ private:
     std::vector<TextureEntry> textures;
     std::vector<BufferEntry> buffers;
     std::vector<std::unique_ptr<Pass>> passes;
+
+    // T-07：第二段图形命令缓冲与拆分点。
+    VkCommandBuffer secondaryGraphicsCmd = VK_NULL_HANDLE;
+    bool secondaryGraphicsUsed = false;
+    uint32_t graphicsSplitIndex = 0xFFFFFFFFu;
     // 与 passes 一一对应：本帧是否被剔除。
     std::vector<bool> frameCulled;
     std::vector<std::string> lastFrameCulledPasses;

@@ -29,7 +29,8 @@ public:
     void setSerializeGraphicsFrames(bool value) { serializeGraphicsFrames = value; }
 
     void endFrame(bool graphicsWaitsForCompute = false,
-                  bool computeWaitsForGraphics = false);
+                  bool computeWaitsForGraphics = false,
+                  bool secondaryGraphics = false);
 
     // D-4：两个索引必须分开。
     //   frameInFlightIndex -> 本帧独占的 CPU/GPU 资源槽位（UBO、瞬时图等）
@@ -53,6 +54,8 @@ public:
     VkCommandPool getCommandPool() const { return commandPool; }
     VkCommandPool getComputeCommandPool() const { return computeCommandPool; }
     VkCommandBuffer getComputeCommandBuffer() const { return computeCommandBuffers[currentFrameInFlightIndex]; }
+    // T-07：第二段图形命令缓冲（G0 -> C0 -> G1 里的 G1）。
+    VkCommandBuffer getSecondaryGraphicsCommandBuffer() const { return secondaryCommandBuffers[currentFrameInFlightIndex]; }
 
 private:
     void createCommandPools();
@@ -68,6 +71,8 @@ private:
     VkCommandPool computeCommandPool = VK_NULL_HANDLE;
     std::array<VkCommandBuffer, kFramesInFlight> commandBuffers{};
     std::array<VkCommandBuffer, kFramesInFlight> computeCommandBuffers{};
+    std::array<VkCommandBuffer, kFramesInFlight> secondaryCommandBuffers{};
+    bool frameSecondaryActive = false;
 
     // WSI 的二值 semaphore。
     // imageAvailable 每帧槽位一枚：它总会被同一槽位的下一次 submit 等待，
