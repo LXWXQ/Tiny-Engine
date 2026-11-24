@@ -85,6 +85,7 @@ public:
         uint64_t occlusionCulled = 0;
         uint64_t screenCulled = 0;
 		uint64_t flattenMicros = 0; // 结构摊平累计微秒（P2 的「CPU 摊平时间」判据）
+        uint64_t mergedBuildSamples = 0;   // 真正重建合并网格的样本数（首帧那类一次性成本）
         // P2 度量：摊平分段耗时（微秒，只在重建结构的帧累加）。
         uint64_t structureSamples = 0;
         uint64_t collectMicros = 0;
@@ -190,6 +191,10 @@ cubeFieldBuilt = 0;
 
     bool isHiZReady() const { return hizReady; }
     // T-08：持久场景（先只读骨架）。消费者尚未接入，只用于验证编号稳定与脏区间上传量。
+    // P2 度量：每 N 帧把结构标记为失效一次，用来取"稳态重建"样本。
+    uint32_t forceRebuildEvery = 0;   // P2 度量：强制重建周期（0 = 关）
+    uint32_t forceRebuildTick = 0;
+    void setForceRebuildEvery(uint32_t frames) { forceRebuildEvery = frames; }
     tiny::GpuScene& getGpuScene() { return gpuScene; }
     const tiny::GpuScene& getGpuScene() const { return gpuScene; }
     // P2：把 subMeshBoundsFor 的首次索引扫描挪到加载期，避免第一帧摊平被一次性成本虚高。
@@ -346,6 +351,7 @@ private:
     bool mergedActive = false;
     bool warnedNoMergedData = false;
 
+    bool mergedRebuiltThisCall = false;
     tiny::GpuScene gpuScene;   // T-08：持久原语/实例缓冲
     Stats stats;
     CullTotals cullTotals;

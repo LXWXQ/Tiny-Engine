@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1049 行
+size: ~1051 行
 updated: 2026-11-24
 ---
 
@@ -831,6 +831,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 
 **P2 第三步（2026-11-24）**：把尺子换成 Release 再判。实测 Release 摊平：30k `14.67 ms`（`external 9.0`、`merged 4.5`）、10k `7.83`、default `4.55`（`merged` 占 98.7%），FPS `100.45 / 119.26 / 198.53`；Debug 的逐实例成本被放大 4 倍（1.27 µs → 0.30 µs）。按本轮结论，**「持久缓冲变权威 + 逐实例直写映射内存」这一刀不做了**：试做「预分配 `instanceScratch` + 逐条写入」在 Debug 30k 上是负收益（`assemble 1.2 → 3.2 ms`、`total 57.60 → 58.78`），因为 `vector::insert` 对 POD 走 `memmove`、且稳态下 `buckets` 容量保留本来就不扩容，已回退。**P2 的下一个大头是 `merged`（合并网格，三档恒为 4.5 ms）**，要动它得改合并策略（按材质合并 / 持久化合并网格），判据统一改成「Release 构建 + 稳态重建帧」。
 
+
+**P2 第四步（2026-11-24）**：先补「稳态」这把尺子再继续。新增 `--rebuild-structure <n>`（每 n 帧强制重建一次）与 `mergedBuild=` 计数后，Release 稳态（40 帧、每 10 帧重建）为：default `0.11 ms/次重建`、10k `3.80`、30k `10.08`，`merged=0.0`、`mergedBuild=0`。上一次「`merged` 占 98.7%」是首重建样本的假象 —— 合并网格按签名复用，只建一次（192496 顶点 / 786801 索引）。**结论：摊平只在结构签名变化时发生；P2 的 −70% 必须按「每次重建」计，且「合并网格持久化」不需要做。真要再压只有按需增量重建（只重建变化的组），那是 P2 之后的独立一单。**
 T-01~T-07 总计 14 人日，完成后 P1 结束；T-08 开始 P2；T-09 开始 P3。
 ### 已落地的工单（2026-11-23）
 

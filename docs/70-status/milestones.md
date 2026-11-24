@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1650 行
+size: ~1658 行
 updated: 2026-11-24
 ---
 
@@ -1648,3 +1648,11 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 试做「预分配 `instanceScratch` + 逐条写入」：`assemble 1.2 → 3.2 ms`、`total 57.60 → 58.78`（Debug 30k），**负收益**，已 `git checkout --` 回退。原因是 `vector::insert` 对 POD 走 `memmove`，比逐条赋值快，且稳态下 `buckets` 容量保留、本来就不扩容。
 - 结论：P2 的大头是 `merged`（合并网格），逐实例那条线在 Release 下已不是瓶颈；后续 P2 判据一律看 Release + 稳态重建帧。
 - 校验：三档 `--validation-features sync` 全部 `EXIT=0`、`errors=0 warnings=0`、stderr 0 字节（回退后复测同前）。
+
+## P2 第四步：稳态样本——摊平几乎为零，合并网格是首帧假象（2026-11-24）
+
+- 新增 `--rebuild-structure <n>`（默认 0 关）与 `CullTotals::mergedBuildSamples`，`flatten breakdown` 末尾多打 `mergedBuild=`。
+- Release 稳态（40 帧，每 10 帧强制重建）：default `total 0.11 ms`、10k `3.80`、30k `10.08`；`merged=0.0`、`mergedBuild=0`。
+- 一次性成本对照：default 首重建 4.55、10k 7.83、30k 14.67 —— 差额是合并网格构建（192496 顶点 / 786801 索引的上传）+ `buckets` 首次扩容 + 预热前的包围盒扫描。
+- 结论：摊平只在结构签名变化时发生；P2 的 −70% 要按「每次重建」计，不能按帧数平均。「合并网格持久化」不需要做（已按签名复用），真要再压只能做按需增量重建。
+- 校验：`--rebuild-structure` 三档 `EXIT=0`、`errors=0 warnings=0`（Debug/release 各自跑过）。

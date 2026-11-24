@@ -84,6 +84,8 @@ namespace diag
         bool noAsyncSplit = false;
 // P2 的入场尺子：n 个立方体排成立方格点，走外部实例注入路径。
 uint32_t cubeField = 0;
+    // P2 度量：每 N 帧强制重建一次结构，用来取"稳态重建"样本（0 = 关）。
+    uint32_t rebuildStructure = 0;
     // T-04b：同帧目标合成一张。默认开：实测更快（lights-512 +5.4%）且少 15 张图；
     // 它自带「本帧等上一帧」的等待，用 --no-single-frame-targets 整体回退。
     bool singleFrameTargets = true;

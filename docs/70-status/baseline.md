@@ -4,7 +4,7 @@ title: 三场景性能基线
 type: status
 scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/ResourceStats.h, src/RHI/ResourceStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp, src/Render/SceneGpuBatch.cpp
 read-when: 改渲染图 / 屏障 / 管线绑定之前要一份可对比的数字，或怀疑性能回退时
-size: ~186 行
+size: ~200 行
 updated: 2026-11-24
 ---
 
@@ -184,3 +184,17 @@ worldHalf   = abs(basis[0]) * localHalf.x + abs(basis[1]) * localHalf.y + abs(ba
 `default` 场景 98.7% 的摊平在 `merged` —— 合并网格的固定开销，与实例数无关。三档的 `merged` 都是 4.5 ms，正是这条线的证据。
 
 P2 的验收口径因此定为：**Release 构建 + 稳态重建帧**（首帧含 `buckets` 扩容，不是稳态）。
+
+## 稳态摊平（P2 第四步，2026-11-24）
+
+`--rebuild-structure 10` 强制每 10 帧重建一次结构，Release，40 帧，取稳态样本（`mergedBuild=0` 表示这批样本没有重建合并网格）：
+
+| 场景 | samples | total | merged | external | extPush |
+| --- | --- | --- | --- | --- | --- |
+| default | 4 | 0.11 ms | 0.0 | 0.0 | 0.0 |
+| cube-field 10k | 4 | 3.80 | 0.0 | 3.5 | 1.3 |
+| cube-field 30k | 4 | 10.08 | 0.0 | 9.4 | 3.2 |
+
+对照首重建（同一 Release 构建、不带 `--rebuild-structure`）：default 4.55、10k 7.83、30k 14.67。差额就是一次性成本（合并网格构建 4.5 ms、`buckets` 首次扩容、`subMeshBoundsFor` 预热前的扫描）。
+
+**读法**：摊平只在结构签名变化时发生（实体增删、`WorldTransformComponent::sourceRevision` 变化、材质换绑）。静态场景的稳态摊平是 0.11 ms/次重建，几乎可忽略；P2 的 −70% 只能按「每次重建」计，不能按帧数平均。合并网格已按签名复用（`mergedBuild=0`），不再是大头。

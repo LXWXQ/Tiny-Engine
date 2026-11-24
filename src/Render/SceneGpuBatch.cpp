@@ -607,8 +607,9 @@ bool SceneGpuBatch::ensureMergedMesh(const std::vector<const Model*>& models)
             signature *= 1099511628211ull;
         }
     }
+    mergedRebuiltThisCall = false;
     if (mergedMesh.valid && mergedMesh.signature == signature)
-        return true;
+        return true;   // 签名命中：不重建
 
     size_t totalVertices = 0;
     size_t totalIndices = 0;
@@ -658,6 +659,7 @@ bool SceneGpuBatch::ensureMergedMesh(const std::vector<const Model*>& models)
     uploadDeviceLocal(mergedMesh.indices, indices.data(), sizeof(uint32_t) * indices.size());
     mergedMesh.signature = signature;
     mergedMesh.valid = true;
+    mergedRebuiltThisCall = true;
 
     std::cout << "[SceneGpu] merged buffers built | vertices=" << vertices.size()
               << " indices=" << indices.size()
@@ -918,6 +920,11 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
     cullTotals.collectMicros += lap();
     mergedActive = frameInfo.settings.gpuMergedBuffers && ensureMergedMesh(batchModels);
     cullTotals.mergedMicros += lap();
+    if (mergedRebuiltThisCall)
+    {
+        // 合并网格只建一次：把它算进 total 但单独计数，稳态平均不含这一次。
+        ++cullTotals.mergedBuildSamples;
+    }
 
     // 2) 每个实体按（模型, 子网格）归组：同一子网格被多个实体复用时实例连续排列，
     //    一条命令 instanceCount = N 就画完（实例化），而不是每实例一条命令。
@@ -1381,6 +1388,7 @@ void SceneGpuBatch::logCullSummary() const
                   << " extAabb=" << (static_cast<double>(cullTotals.externalAabbMicros) / samples / 1000.0) << " ms"
                   << " extRecord=" << (static_cast<double>(cullTotals.externalRecordMicros) / samples / 1000.0) << " ms"
                   << " extPush=" << (static_cast<double>(cullTotals.externalPushMicros) / samples / 1000.0) << " ms"
+                  << " mergedBuild=" << cullTotals.mergedBuildSamples
                   << " aabbInEntity=" << (static_cast<double>(cullTotals.entityAabbMicros) / samples / 1000.0)
                   << " ms (" << (total > 0.0 ? 100.0 * static_cast<double>(cullTotals.entityAabbMicros) / total : 0.0) << "%)"
                   << "\n";
@@ -1733,6 +1741,13 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     readStats(frame);
 
     // 稳定帧快速路径：结构签名没变就不重新摊平实例，也不重算每组的并集 AABB。
+    // P2 度量：按需强制重建，用来取摊平的稳态样本（首帧那次含 buckets 扩容与合并网格构建）。
+    if (forceRebuildEvery > 0u)
+    {
+        if (forceRebuildTick == 0u)
+            structureBuilt = false;
+        forceRebuildTick = (forceRebuildTick + 1u) % forceRebuildEvery;
+    }
     const auto structureStart = std::chrono::steady_clock::now();
     const uint64_t signature = computeStructureSignature(frameInfo);
     const bool structureChanged = !structureBuilt || signature != structureSignature;

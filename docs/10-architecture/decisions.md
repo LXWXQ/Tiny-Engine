@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1183 行
+size: ~1221 行
 updated: 2026-11-24
 ---
 
@@ -1181,3 +1181,41 @@ P2 的 −70% 只能靠改结构拿到：持久缓冲变成权威数据、逐实
 
 - 不做「逐实例直写映射内存」：实测更慢。
 - 不按 Debug 数字继续调优：后续 P2 的数字一律同时给 Debug 与 Release，判据看 Release。
+
+## 决策 56：稳态摊平几乎为零，「合并网格是大头」是首帧假象（P2 第四步）
+
+### 问题
+
+决策 55 据 Release 首重建样本得到两个结论：default 场景 98.7% 的摊平花在 `merged`、`merged` 恒为 4.5 ms。这两个结论都不成立 —— 那 4.5 ms 是**合并网格唯一一次构建**（192496 顶点 / 786801 索引，两次设备本地上传），不是每次重建都付。
+
+同时前几轮的 `flatten breakdown` 只有一个样本（`samples=1`）且必然是首重建，把一切一次性成本都算进了「每帧摊平」。
+
+### 做法
+
+- 新增 `--rebuild-structure <n>`（`diag::Options::rebuildStructure`，默认 0 关）：每 n 帧把 `structureBuilt` 置假，强制走一次 `buildInstances`，用来取**稳态**样本。
+- `SceneGpuBatch` 新增 `mergedRebuiltThisCall` 与 `CullTotals::mergedBuildSamples`；`ensureMergedMesh` 在真正重建成功时置标记，汇总行多打 `mergedBuild=<次数>`。这样「建了一次」和「每帧都建」在日志里能区分。
+
+### 结果（Release，40 帧，`--rebuild-structure 10`）
+
+| 场景 | samples | total（稳态） | merged | external | extPush | mergedBuild |
+| --- | --- | --- | --- | --- | --- | --- |
+| default | 4 | **0.11 ms** | 0.0 | 0.0 | 0.0 | 0 |
+| cube-field 10k | 4 | 3.80 | 0.0 | 3.5 | 1.3 | 0 |
+| cube-field 30k | 4 | 10.08 | 0.0 | 9.4 | 3.2 | 0 |
+
+`merged` 稳态为 0：签名（FNV-1a 覆盖实体 id、`WorldTransformComponent::sourceRevision`、材质槽与指针、`geometryId`、包围盒）命中即返回，4 个样本里 `mergedBuild=0`（那次构建发生在预热阶段，不计入稳态）。
+
+### 为什么
+
+- 「每帧摊平」这个指标本身要带重建频率才有意义。静态场景（cube-field）结构签名不变，摊平**根本不发生**；只有实体增删、变换版本变化、材质换绑时才会重建。
+- 所以 P2 的 −70% 不能按「帧数」摊，只能按「每次重建」算：现在 30k 实例一次重建 10.08 ms（Release），default 一次 0.11 ms。
+- 首帧那 4.5~9.6 ms 的合并网格构建属于加载期成本，压低它的办法是预热（和 `prewarmModelBounds` 同型），不是每帧优化。
+
+### 代价与边界
+
+- `--rebuild-structure` 是度量开关，会真实地每 n 帧重建一次，帧时间与 `structureRebuilds` 都会涨，不要和基线数字混用。
+- `mergedBuildSamples` 只证明「这一批样本里没有重建」，不证明「永远不重建」；材质或模型集合变化时仍会重建。
+
+### 不引入的
+
+- 不做「合并网格持久化」：它已经按签名复用，跨帧不会重建。真正要做的是**按需增量重建**（只重建变化的组），那是 P2 之后的独立一单。

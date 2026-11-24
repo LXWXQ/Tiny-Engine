@@ -97,6 +97,7 @@ const std::vector<UsageLine> kCatalog = {
         { "剖析", "--stats-queue", "退出时打印图形 / 计算队列各自的忙碌窗口与重叠时长（T-07 第一步）" },
         { "剖析", "--no-async-split", "退回单次图形提交：不做 G0 -> C0 -> G1 拆分（T-07 整体回退开关）" },
 { "剖析", "--cube-field <n>", "铺 n 个立方体排成立方格点，走外部实例注入路径（P2 的入场尺子）" },
+                    { "剖析", "--rebuild-structure <n>", "每 n 帧强制重建一次实例结构，用来取摊平的稳态样本（0 = 关）" },
         { "剖析", "--no-single-frame-targets", "回到每帧 slot 各一份目标（T-04b 的整体回退开关，默认开的是合成一张）" },
         { "剖析", "--serialize-frames", "本帧图形工作等上一帧完成（T-04b；会让 GPU 不再重叠两帧）" },
     { "剖析", "--light-stress", "铺 N 盏点光源做压力场（配合 --clustered-lighting 看聚簇收益）" },

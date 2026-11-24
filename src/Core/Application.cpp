@@ -1016,6 +1016,7 @@ renderPipeline.addPass(std::move(viewModelPass));
 	// 必须放在 initAll 之后：SceneGpuBatch 是在 GeometryPass::init 里创建的。
 	if (geometryPassPtr != nullptr && geometryPassPtr->getSceneGpuBatch() != nullptr)
 geometryPassPtr->getSceneGpuBatch()->getGpuScene().setEnabled(diagnosticsOptions.gpuScenePersist && !diagnosticsOptions.noGpuScenePersist);
+geometryPassPtr->getSceneGpuBatch()->setForceRebuildEvery(diagnosticsOptions.rebuildStructure);
 
 	// TM-17：交换链/渲染目标尺寸变化改成事件通知。必须在 initAll 之后订阅：
 	// Pass 的 resize 会重建附件与导入视图，早于 init 调等于拿半初始化的对象干活。

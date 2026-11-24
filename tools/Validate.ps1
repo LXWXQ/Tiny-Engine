@@ -414,9 +414,34 @@ if ($EnableProfiling) {
         Args = @("--selftest", "20", "--capture-frame", "10");
         MustContain = @("[Diag] Tracy Vulkan context created", "[Diag] RenderDoc not injected") }
 }
+# 引擎退出时会把相机位姿、渲染设置写回这两个运行态文件，editor 用例的自检又依赖
+# 仓库里的默认场景。若不还原，先跑的用例会把状态改脏，后面的 editor 用例会因为
+# 「运行时角色找不到 / 相机位姿不同」假失败（现象：stderr 340 字节、
+# [Editor] runtime character selfTest FAIL ... interpolatedFollows=0）。
+$stateFiles = @("Resources/Scenes/main.scene.json", "config/engine.json")
+$stateSnapshot = @{}
+foreach ($stateFile in $stateFiles)
+{
+    $stateFullPath = Join-Path $repoRoot $stateFile
+    if (Test-Path -LiteralPath $stateFullPath)
+    {
+        $stateSnapshot[$stateFile] = [IO.File]::ReadAllBytes($stateFullPath)
+    }
+}
+function Restore-EngineState
+{
+    foreach ($stateFile in $stateFiles)
+    {
+        if (-not $stateSnapshot.ContainsKey($stateFile)) { continue }
+        $stateFullPath = Join-Path $repoRoot $stateFile
+        [IO.File]::WriteAllBytes($stateFullPath, $stateSnapshot[$stateFile])
+    }
+}
+
 $failed = @()
 foreach ($test in $tests) {
     Write-Host "[validate] Test: $($test.Name)"
+    Restore-EngineState
     $caseExe = $exe
     if ($test.ContainsKey("Exe") -and $test.Exe -eq "editor") {
         if ([string]::IsNullOrWhiteSpace($editorExe)) {

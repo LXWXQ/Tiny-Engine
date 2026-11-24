@@ -4,8 +4,8 @@ title: 已踩过的坑
 type: debug
 scope: 空（跨代码库）
 read-when: 改任何代码之前；或遇到"看起来不可能"的怪异现象时
-size: ~590 行
-updated: 2026-11-23
+size: ~609 行
+updated: 2026-11-24
 ---
 
 # 已踩过的坑
@@ -587,3 +587,23 @@ vec2 sampleSphericalMap(vec3 v) {
 - **判据**：回读全 0 且失败点永远在第 0 个字；在同一处打印槽位与「上次排队的帧号」就能看到两者不匹配。
 - **修法**：不反推，**记录**。每个槽位存 `externalCopyFrames[frame] = frameNumber`，校验时只认「记录过、且 `记录值 + kFramesInFlight <= 当前帧`」，验完清零（一格只验一次）。改后 `[T01] external buffer verified` 正常打印。
 - **通用教训**：帧号、槽位号、pass 序号之间不要做算术反推 —— 只要编号起点或周期不是 1:1，反推就会在边界上指到不存在的帧。有写入者时当场记录，读的时候查记录。
+
+## 42. 在 `return` 前插注释，把 `if` 的守卫变成无条件返回
+
+**现象**：`tools/Validate.ps1` 的 `f1b-merged-buffers` 报 `missing stdout marker '[SceneGpu] merged buffers built'`，但运行本身 `EXIT=0`、`errors=0`；截图与帧率都正常。看 `[SceneGpu] indirect batch | groups=103` 也正常 —— 只是合并网格那次构建整段没跑。
+
+**原因**：为了在 `ensureMergedMesh` 的签名命中分支加一句注释，按行插入了 `return true;   // 签名命中：不重建`，而原来的 `return true;` 还留在下一行。结果变成：
+
+```cpp
+if (mergedMesh.valid && mergedMesh.signature == signature)
+    return true;   // 现在这个 if 只保护第一句
+    return true;   // 无条件返回：后面的构建永远不执行
+```
+
+`if` 不带花括号时只保护紧跟的一条语句，第二条 `return true;` 直接把函数截断。编译器不会警告（没有不可达代码，因为它在 `if` 之后、函数返回之前是可达的 —— 每次调用都走这里）。
+
+**判据**：函数里有 `if (cond)` 后面跟着两条同形的 `return X;`，且第二条没有任何缩进差。用 `Select-String 'return true;'` 数一遍、看行号是否成对出现。
+
+**修法**：删掉多余那条，或者给 `if` 加花括号。凡是「在 `if` 分支末尾加注释/加语句」的行插入，都要在写回后 `Select-String` 回读该函数体的全部 `return`。
+
+**顺带修的第二个坑（同一类假失败）**：`Resources/Scenes/main.scene.json` 与 `config/engine.json` 是**运行态文件** —— 引擎退出时会写回相机位姿与渲染设置，而 editor 用例的自检依赖仓库里的默认场景。先跑的用例把状态改脏之后，后面的 `e8-editor-mode` / `e9-runtime-character` / `f3-voxel-persist` 等会假失败：`stderr 340 字节` + `[Editor] runtime character selfTest FAIL: ... interpolatedFollows=0`。`tools/Validate.ps1` 现在在脚本开头快照这两个文件，并在**每个用例启动前**还原（`Restore-EngineState`）。判据：同一个用例单独跑通过、放进整轮却失败，且 stderr 里是 editor 自检断言。
