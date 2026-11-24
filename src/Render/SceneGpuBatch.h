@@ -69,8 +69,8 @@ public:
     {
         const Model* model = nullptr;
         uint32_t subMeshIndex = 0;
-        glm::mat4 transform{ 1.0f };
         uint32_t materialSlot = 0;
+        glm::mat4 transform{ 1.0f };
     };
 
     // 剔除累计量：每帧 readStats 之后累加，退出时由 logCullSummary 打一行。
@@ -86,6 +86,7 @@ public:
         uint64_t screenCulled = 0;
 		uint64_t flattenMicros = 0; // 结构摊平累计微秒（P2 的「CPU 摊平时间」判据）
         uint64_t mergedBuildSamples = 0;   // 真正重建合并网格的样本数（首帧那类一次性成本）
+    uint64_t externalReused = 0;    // 复用缓存记录的外部实例数（P2 增量重建）
         // P2 度量：摊平分段耗时（微秒，只在重建结构的帧累加）。
         uint64_t structureSamples = 0;
         uint64_t collectMicros = 0;
@@ -356,6 +357,21 @@ private:
     Stats stats;
     CullTotals cullTotals;
 
+
+    // P2 增量重建：外部实例的逐条记录缓存。变换没变就不重算逆矩阵转置与 AABB。
+    // 键里带模型指针与子网格号，模型重新加载（指针变了）会自动失效。
+    struct ExternalRecordCache
+    {
+        const Model* model = nullptr;
+        uint32_t subMeshIndex = 0;
+        uint32_t materialSlot = 0;
+        glm::mat4 transform{ 1.0f };
+        InstanceRecord record{};
+        glm::vec3 worldCenter{ 0.0f };
+        glm::vec3 worldHalf{ 0.0f };
+        bool valid = false;
+    };
+    std::vector<ExternalRecordCache> externalRecordCache;
     std::vector<ExternalInstance> externalInstances;
 // P2 尺子：立方体阵列的模板与参数（数量变化时才重建实例）。
 std::shared_ptr<Model> cubeFieldModel;

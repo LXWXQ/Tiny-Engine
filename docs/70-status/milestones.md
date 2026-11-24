@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1658 行
+size: ~1665 行
 updated: 2026-11-24
 ---
 
@@ -1656,3 +1656,10 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 一次性成本对照：default 首重建 4.55、10k 7.83、30k 14.67 —— 差额是合并网格构建（192496 顶点 / 786801 索引的上传）+ `buckets` 首次扩容 + 预热前的包围盒扫描。
 - 结论：摊平只在结构签名变化时发生；P2 的 −70% 要按「每次重建」计，不能按帧数平均。「合并网格持久化」不需要做（已按签名复用），真要再压只能做按需增量重建。
 - 校验：`--rebuild-structure` 三档 `EXIT=0`、`errors=0 warnings=0`（Debug/release 各自跑过）。
+
+## P2 第五步：外部实例记录缓存（2026-11-24）
+
+- `SceneGpuBatch::ExternalRecordCache` 按「模型 + 子网格 + 材质槽 + 变换 memcmp」复用逐实例记录，`flatten breakdown` 多打 `extReused=`。
+- Release 30k 一次重建 10.08 → **8.91 ms**（`external` 9.4 → 7.0）；Debug 30k 57.60 → **35.32**（`external` 40.9 → 27.6）、Debug 10k 26.46 → 14.11。
+- 第一版用逐浮点 FNV 哈希做键，30k 下哈希本身比 `memcmp` 贵一个数量级，换成 64 字节 `memcmp` 才拿到收益。
+- 剩余成本：`extPush` 3.2 ms（Release 30k）。要再压只能让持久缓冲直接当剔除输入，不再每帧重建 `buckets`。

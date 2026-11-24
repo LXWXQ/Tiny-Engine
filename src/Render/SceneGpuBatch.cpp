@@ -1122,8 +1122,11 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
     // bounds 缓存按模型复用：外部实例通常共享同一个模型，逐实例查表是纯浪费。
     const Model* cachedBoundsModel = nullptr;
     const std::vector<SubMeshBounds>* cachedBounds = nullptr;
-    for (const ExternalInstance& external : externalInstances)
+    if (externalRecordCache.size() != externalInstances.size())
+        externalRecordCache.assign(externalInstances.size(), ExternalRecordCache{});
+    for (size_t externalIndex = 0; externalIndex < externalInstances.size(); ++externalIndex)
     {
+        const ExternalInstance& external = externalInstances[externalIndex];
         const Model* model = external.model;
         if (model == nullptr || model->getIndexCount() == 0)
             continue;
@@ -1177,35 +1180,63 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             localMax = boundsList[external.subMeshIndex].max;
         }
 
-        const auto extRecordStart = std::chrono::steady_clock::now();
+        // 缓存命中判定：先比模型/子网格/材质槽（整型），再 memcmp 变换矩阵（64 字节）。
+        // 不用逐浮点哈希：16 次 FNV 在 30k 实例上比 memcmp 贵一个数量级。
+        ExternalRecordCache& cache = externalRecordCache[externalIndex];
+        const bool sameBinding = cache.valid && cache.model == model &&
+            cache.subMeshIndex == external.subMeshIndex && cache.materialSlot == external.materialSlot;
         InstanceRecord record{};
-        record.model = external.transform;
-        const auto extNormalStart = std::chrono::steady_clock::now();
-        record.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(external.transform))));
-        externalNormalMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extNormalStart).count());
-        record.flags = glm::uvec4(external.materialSlot, 1u, subMesh.alphaMasked ? 1u : 0u,
-                                  subMesh.albedoFallback ? 1u : 0u);
-        record.misc = glm::vec4(subMesh.alphaCutoff, 1.0f, 0.0f, 0.0f);
-        record.uvTransform = glm::vec4(0.0f);
-        record.boundsMin = glm::vec4(localMin, 1.0f);
-        record.boundsMax = glm::vec4(localMax, 0.0f);
-        record.draw = glm::uvec4(0u);
-        externalRecordMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extRecordStart).count());
+        glm::vec3 worldCenter{ 0.0f };
+        glm::vec3 worldHalf{ 0.0f };
+        if (sameBinding && std::memcmp(&cache.transform, &external.transform, sizeof(glm::mat4)) == 0)
+        {
+            record = cache.record;
+            worldCenter = cache.worldCenter;
+            worldHalf = cache.worldHalf;
+            ++cullTotals.externalReused;
+        }
+        else
+        {
+            const auto extRecordStart = std::chrono::steady_clock::now();
+            record.model = external.transform;
+            const auto extNormalStart = std::chrono::steady_clock::now();
+            record.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(external.transform))));
+            externalNormalMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extNormalStart).count());
+            record.flags = glm::uvec4(external.materialSlot, 1u, subMesh.alphaMasked ? 1u : 0u,
+                                      subMesh.albedoFallback ? 1u : 0u);
+            record.misc = glm::vec4(subMesh.alphaCutoff, 1.0f, 0.0f, 0.0f);
+            record.uvTransform = glm::vec4(0.0f);
+            record.boundsMin = glm::vec4(localMin, 1.0f);
+            record.boundsMax = glm::vec4(localMax, 0.0f);
+            record.draw = glm::uvec4(0u);
+            externalRecordMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extRecordStart).count());
+
+            // 中心/半长求世界 AABB：对仿射变换是精确解，只要 9 次乘法，
+            // 比 8 个角点各做一次 mat4 * vec4 便宜一个数量级。
+            const glm::vec3 localCenter = (localMin + localMax) * 0.5f;
+            const glm::vec3 localHalf = (localMax - localMin) * 0.5f;
+            const glm::mat3 basis(external.transform);
+            worldCenter = glm::vec3(external.transform * glm::vec4(localCenter, 1.0f));
+            worldHalf = glm::abs(basis[0]) * localHalf.x +
+                        glm::abs(basis[1]) * localHalf.y +
+                        glm::abs(basis[2]) * localHalf.z;
+
+            cache.transform = external.transform;
+            cache.model = model;
+            cache.subMeshIndex = external.subMeshIndex;
+            cache.materialSlot = external.materialSlot;
+            cache.record = record;
+            cache.worldCenter = worldCenter;
+            cache.worldHalf = worldHalf;
+            cache.valid = true;
+        }
+
         const auto extPushStart = std::chrono::steady_clock::now();
         buckets[groupIndexValue].push_back(record);
         externalPushMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extPushStart).count());
 
         const auto extAabbStart = std::chrono::steady_clock::now();
         ModelGroup& group = modelGroups[groupIndexValue];
-        // 中心/半长求世界 AABB：对仿射变换是精确解，只要 9 次乘法，
-        // 比 8 个角点各做一次 mat4 * vec4 便宜一个数量级。
-        const glm::vec3 localCenter = (localMin + localMax) * 0.5f;
-        const glm::vec3 localHalf = (localMax - localMin) * 0.5f;
-        const glm::mat3 basis(external.transform);
-        const glm::vec3 worldCenter = glm::vec3(external.transform * glm::vec4(localCenter, 1.0f));
-        const glm::vec3 worldHalf = glm::abs(basis[0]) * localHalf.x +
-                                    glm::abs(basis[1]) * localHalf.y +
-                                    glm::abs(basis[2]) * localHalf.z;
         if (!group.hasBounds)
         {
             group.boundsMin = worldCenter - worldHalf;
@@ -1389,6 +1420,7 @@ void SceneGpuBatch::logCullSummary() const
                   << " extRecord=" << (static_cast<double>(cullTotals.externalRecordMicros) / samples / 1000.0) << " ms"
                   << " extPush=" << (static_cast<double>(cullTotals.externalPushMicros) / samples / 1000.0) << " ms"
                   << " mergedBuild=" << cullTotals.mergedBuildSamples
+                  << " extReused=" << cullTotals.externalReused
                   << " aabbInEntity=" << (static_cast<double>(cullTotals.entityAabbMicros) / samples / 1000.0)
                   << " ms (" << (total > 0.0 ? 100.0 * static_cast<double>(cullTotals.entityAabbMicros) / total : 0.0) << "%)"
                   << "\n";

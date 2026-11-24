@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1221 行
+size: ~1254 行
 updated: 2026-11-24
 ---
 
@@ -1219,3 +1219,36 @@ P2 的 −70% 只能靠改结构拿到：持久缓冲变成权威数据、逐实
 ### 不引入的
 
 - 不做「合并网格持久化」：它已经按签名复用，跨帧不会重建。真正要做的是**按需增量重建**（只重建变化的组），那是 P2 之后的独立一单。
+
+## 决策 57：外部实例按「绑定 + 变换」缓存记录，重建只重算变化的那部分（P2 第五步）
+
+### 问题
+
+`--rebuild-structure` 量出来的稳态里，30k 立方体一次重建 10.08 ms（Release），其中 `external` 9.4 ms。可这批实例是静态的：变换、模型、材质都没变，每次重建却重做一次 `transpose(inverse(mat3))`、一次中心/半长 AABB。
+
+### 做法
+
+`SceneGpuBatch::ExternalRecordCache`：每个外部实例留一份 `{model, subMeshIndex, materialSlot, transform, record, worldCenter, worldHalf, valid}`。重建时先比三个整型绑定，再 `std::memcmp(&cache.transform, &external.transform, sizeof(glm::mat4))`；全同就复用 `record` 与中心/半长，只做一次 `buckets` push 与 AABB 合并。汇总行加 `extReused=` 计数。
+
+**为什么不用逐浮点哈希**：第一版用 FNV 把 16 个 float 混成一个键，30k 实例下光哈希就吃掉 0.4 µs/实例（Debug 实测 `external` 只从 40.9 降到 30.8 ms）。换成 64 字节 `memcmp` 后同一场景降到 27.6 ms。
+
+### 结果（`--rebuild-structure 10`，相机固定）
+
+| 场景 | 改前 total | 改后 total | external |
+| --- | --- | --- | --- |
+| Release 30k | 10.08 ms | **8.91 ms** | 9.4 → 7.0 |
+| Release 10k | 3.80 | 3.83（合并网格 1.2 ms 计入本批样本） | 3.5 → 2.3 |
+| Debug 30k | 57.60 | **35.32** | 40.9 → 27.6 |
+| Debug 10k | 26.46 | **14.11** | 13.7 → 8.6 |
+
+`extReused=90000`（30k 实例 × 3 个样本）说明缓存确实命中；`extPush` 仍是 3.2 ms（Release 30k），是对外可见的下限 —— 要把这段也压掉，必须让持久缓冲直接成为剔除输入，而不是每帧重建 `buckets`。
+
+### 代价与边界
+
+- 缓存按 `externalInstances` 下标对齐；数量变化时整表重建（`assign`）。
+- 变换比较是逐位相等：同一实例被写入一个数值相同但符号位不同的矩阵（`-0.0f` vs `0.0f`）会被判为不同，重算一次，不影响正确性。
+- 只覆盖外部实例。ECS 实体的逐实例成本在 30k 场景里不可见（`entities=0.0 ms`），暂不做。
+
+### 不引入的
+
+- 不做「组级签名 + 局部重摊」：cube-field 只有一个组，组级签名命中就直接是 0.11 ms 的既有快速路径；组内有实例变化时仍要全组重摊，本轮收益在"单组内实例未变"这一档，已经吃到。
