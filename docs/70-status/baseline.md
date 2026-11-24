@@ -4,8 +4,8 @@ title: 三场景性能基线
 type: status
 scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/ResourceStats.h, src/RHI/ResourceStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp, src/Render/SceneGpuBatch.cpp
 read-when: 改渲染图 / 屏障 / 管线绑定之前要一份可对比的数字，或怀疑性能回退时
-size: ~102 行
-updated: 2026-11-23
+size: ~114 行
+updated: 2026-11-24
 ---
 
 # 三场景性能基线
@@ -30,16 +30,17 @@ FPS 波动超 `-MaxVariancePct` 只是**警告**，加 `-Strict` 才升级成失
 剔除读数也不同。加上 `--camera` 之前，本机 config 里存的是 `(-66.06, 15.92, -76.19)`——站在 Sponza 外面 100 米看向天空，
 于是 `default` 场景实测只有 1 draw call / 8192 三角形，`visibleRatio = 0.00`，那种基线测不到任何几何。
 
-## 三个场景
+## 四个场景
 
 | 场景 | 附加开关 | 压的是什么 |
 |---|---|---|
 | `default` | 固定机位 | 104 draw calls / 270459 三角形，Sponza 庭院内视角，测几何 + 后处理 |
 | `voxel-world` | `--voxel-world 1` | 106 draw calls / 336889 三角形，几何与提交压力 |
 | `lights-512` | `--voxel-world 1 --light-stress 512 --clustered-lighting --clustered-gpu-build` | 512 盏点光 + GPU 建簇，光照压力 |
+| `cube-field` | `--cube-field 10000` | 1 万个立方体走外部实例注入，压「每帧摊平 + 剔除」这条 CPU 路径（P2 的尺子） |
 
-与 [ue-borrowing-plan](../80-roadmap/ue-borrowing-plan.md) P0-1 的口径偏差：计划里写的 `cube-field`
-（1 万立方体）在引擎里没有生成器，这一轮用 `--voxel-world 1` 当几何压力场景；`editor-default`
+与 [ue-borrowing-plan](../80-roadmap/ue-borrowing-plan.md) P0-1 的口径偏差：本版之前 `cube-field`
+（1 万立方体）在引擎里没有生成器，那一轮用 `--voxel-world 1` 当几何压力场景；2026-11-24 起 `--cube-field 10000` 已落地，几何压力改由它承担，`voxel-world` 保留给体素/地形路径；`editor-default`
 用 `--selftest` 的 `default` 代替（编辑器面板不在 selftest 路径上）。两处偏差要以这份表和脚本里的场景表为准。
 
 ## 基线（2026-11-23 15:29，Debug，RTX 2070，600 帧 × 3 次；T-04b 默认生效）
@@ -50,6 +51,13 @@ FPS 波动超 `-MaxVariancePct` 只是**警告**，加 `-Strict` 才升级成失
 | voxel-world | 103.66 | 2.81 | 9.65 | 25 | 47 | 34 | 0 | 38.5 | 50.6 | 106 | 4 | 336889 | 8.88 | 10.12 | 97.83 | 0.24 | 964.7 | 1.00 |
 | lights-512 | 94.56 | 3.77 | 10.58 | 27 | 47 | 36 | 2 | 39.5 | 49.4 | 106 | 4 | 336889 | 10.12 | 11.88 | 101.23 | 0.24 | 964.7 | 1.00 |
 
+`cube-field` 场景的基线（2026-11-24 10:44，Debug，300 帧 × 3 次）：
+`106.57 FPS / 波动 2.89% / 9.38 ms / 16 passes / 27 屏障调用 / 18.9 绑定 / 35.1% 冗余 / 2 draw calls / 333144 三角形 / 中位 9.38 ms / p95 9.62 ms / 最长 137.65 ms / heap0 964.7 MiB / visible 0.62 / instances 10063 / flattenUs 18871`。
+`passes = 16` 比 `default` 的 21 少，是因为这个场景不带 `--clustered-lighting`（聚簇的三个 Pass 不进图）。
+`flattenUs = 18871` 是每帧把一万个实例摊平成 GPU 记录的时间——这就是 P2 要砍掉 70% 的那一段；
+它是 Debug 构建下的数字，和发布构建不可比，但改造前后用同一个构建比就有意义。
+注意 `visible = 0.62` 仍是**组级**读数：一万个立方体合并成一个组，组级剔除只能全剔或全留，
+P2 要把粒度换成实例级，届时这个数才会真的变化。
 上一版（T-04b 之前）是 115.91 / 98.73 / 89.57，`heap0` 1220.7 MiB、`images/frame` 0.27（160 张）。
 T-04b 把「只在本帧内读写」的目标合成一张并把 GPU 侧两帧排开，三行分别涨 +4.9% / +5.0% / +5.6%，图少 15 张、堆少 256 MiB。
 `default` 的 115.91 仍不能和更早的 164.80 比：那一版相机在场景外，只有天空盒（1 draw call）。
@@ -58,6 +66,7 @@ T-04b 把「只在本帧内读写」的目标合成一张并把 GPU 侧两帧排
 - `屏障调用/帧`：`vkCmdPipelineBarrier2` 的调用次数。T-03 之前它恒等于 `entries`（每个 mip × layer 各发一条）；T-03 之后同一个 Pass 内同键的屏障合进一次调用，于是 `calls < entries`（38 / 47 对 45.2 / 61.2）。
 - `entries`：追加的屏障条数（`--stats-frame` 的第二列），是正确性度量——批处理前后不变。
 - `sameState`：状态本来就相同、且是读访问，因此跳过的次数（不发屏障是对的）。
+- `instances` / `flattenUs`：`[SceneGpu] cull summary` 里的每帧实例数与**结构摊平**耗时（微秒）。`flattenUs` 是 P2 的直接判据：一万个实例现在每帧要摊平近 19 ms，P2 要求降 ≥ 70%。
 - `crossQueue`：跨队列资源交给 timeline 信号后跳过的次数。`lights-512` 的 2 是簇表 ranges / indices 两段，也是 T-02 通路是否走通的判据。
 - `绑定/帧` 与 `冗余 %`：管线绑定次数，以及"与上一次绑的是同一条管线"的占比。冗余占比是 T-09 状态缓存能消掉的上限，不是它的目标值。
 - `中位 / p95 / 最长 ms`：`[FrameTime]` 的桶直方图（0.25 ms 一格，0~250 ms，溢出桶单列）。最长帧出现在启动那几帧（建管线、上传纹理），所以它衡量的是首帧 hitch，不是稳态抖动。

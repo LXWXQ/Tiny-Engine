@@ -207,6 +207,16 @@ public:
 
     entt::entity createMeshEntity(const std::string& absolutePath, const std::string& name);
 
+// P2 的入场尺子：立方体阵列的模板。单独加载、不进实体表 ——
+// 一万个实体各自持材质槽会撞 256 个槽位的上限，阵列走外部实例注入路径。
+struct CubeFieldTemplate
+{
+std::shared_ptr<Model> model;
+uint32_t subMeshIndex = 0;
+uint32_t materialSlot = 0;
+};
+CubeFieldTemplate loadCubeFieldTemplate();
+
     // ---- Voxel world (F3) ----
     // 一个管理器实体 + 每块一个 32^3 chunk 实体。方块坐标是世界整数格，
     // 第 (x,y,z) 格占 [x,x+1] x [y,y+1] x [z,z+1]。

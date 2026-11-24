@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 #include "Core/FrameInFlight.h"
+#include "Scene/Model.h"
 #include "RHI/Device.h"
 #include "RHI/Pipeline.h"
 
@@ -82,6 +83,7 @@ public:
         uint64_t visibleInstances = 0;
         uint64_t occlusionCulled = 0;
         uint64_t screenCulled = 0;
+		uint64_t flattenMicros = 0; // 结构摊平累计微秒（P2 的「CPU 摊平时间」判据）
     };
 
     struct Stats
@@ -132,6 +134,20 @@ public:
         externalInstances = std::move(instances);
     }
 
+// P2 的入场尺子：立方体阵列。走外部实例注入路径，不建一万个实体 ——
+// 那会撞材质槽上限（256），阵列只需要一个共享槽位。
+// center 是阵列中心，由 Application 用相机前方算好传进来。
+void setCubeField(std::shared_ptr<Model> model, uint32_t subMeshIndex, uint32_t materialSlot,
+uint32_t count, float spacing, float distance)
+{
+cubeFieldModel = std::move(model);
+cubeFieldSubMesh = subMeshIndex;
+cubeFieldMaterialSlot = materialSlot;
+cubeFieldCount = count;
+cubeFieldSpacing = spacing > 0.0f ? spacing : 1.0f;
+cubeFieldDistance = distance > 0.0f ? distance : 26.0f;
+cubeFieldBuilt = 0;
+}
     uint32_t getExternalInstanceCount() const
     {
         return static_cast<uint32_t>(externalInstances.size());
@@ -252,6 +268,7 @@ private:
     const std::vector<SubMeshBounds>& subMeshBoundsFor(const Model& model, uint64_t frameNumber);
     void readStats(uint32_t frameInFlightIndex);
     void refreshDebugExternalInstances(FrameInfo& frameInfo);
+	void refreshCubeFieldInstances(FrameInfo& frameInfo);
 
     Device& vulkanDevice;
     bool available = false;
@@ -308,6 +325,15 @@ private:
     CullTotals cullTotals;
 
     std::vector<ExternalInstance> externalInstances;
+// P2 尺子：立方体阵列的模板与参数（数量变化时才重建实例）。
+std::shared_ptr<Model> cubeFieldModel;
+uint32_t cubeFieldSubMesh = 0;
+uint32_t cubeFieldMaterialSlot = 0;
+uint32_t cubeFieldCount = 0;
+float cubeFieldSpacing = 1.2f;
+float cubeFieldDistance = 26.0f;
+// 阵列中心在第一次构建时按传入帧的 view 矩阵反算：启动期相机还没刷过 view。
+uint32_t cubeFieldBuilt = 0;
     uint32_t debugExternalCount = 0;
 
     bool reportedFirstBatch = false;

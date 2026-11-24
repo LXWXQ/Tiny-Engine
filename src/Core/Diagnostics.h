@@ -78,6 +78,8 @@ namespace diag
         bool renderTargetPool = false;
         bool statsQueue = false;
         bool noAsyncSplit = false;
+// P2 的入场尺子：n 个立方体排成立方格点，走外部实例注入路径。
+uint32_t cubeField = 0;
     // T-04b：同帧目标合成一张。默认开：实测更快（lights-512 +5.4%）且少 15 张图；
     // 它自带「本帧等上一帧」的等待，用 --no-single-frame-targets 整体回退。
     bool singleFrameTargets = true;

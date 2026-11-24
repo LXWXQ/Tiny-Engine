@@ -3164,6 +3164,39 @@ entt::entity Scene::createMeshEntity(const std::string& absolutePath, const std:
     return entity;
 }
 
+Scene::CubeFieldTemplate Scene::loadCubeFieldTemplate()
+{
+CubeFieldTemplate result{};
+if (!device || !descriptorManager)
+return result;
+
+const std::string path = std::string(TINY_RESOURCE_DIR) + "Models/debug_cube.obj";
+try
+{
+result.model = Model::createModelFromFile(*device, commandPool, path);
+}
+catch (const std::exception& ex)
+{
+std::cerr << "[Scene] cube field template load failed: " << ex.what() << "\n";
+return result;
+}
+if (!result.model || result.model->getSubMeshes().empty())
+{
+std::cerr << "[Scene] cube field template has no submesh\n";
+result.model.reset();
+return result;
+}
+
+// 阵列共享一个材质槽：材质是常量（白 albedo、不切贴图），每个立方体各持一个槽位
+// 既没必要，也会撞 256 个槽位的上限。
+const std::shared_ptr<Material> material = materialSystem.getOrCreateMaterial("CubeField_mat");
+if (!material)
+return result;
+result.materialSlot = descriptorManager->allocateMaterialSet(*material);
+result.subMeshIndex = 0;
+return result;
+}
+
 bool Scene::applyVoxelChunkMesh(entt::entity entity, const terrain::TerrainMeshData& mesh,
 	const voxel::MeshStats& stats, const std::shared_ptr<terrain::TerrainMeshData>& glassMesh,
 	const voxel::GlassStats& glassStats, const std::shared_ptr<Material>& material)

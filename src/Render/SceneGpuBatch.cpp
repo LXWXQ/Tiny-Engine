@@ -1,5 +1,6 @@
 #include "Render/SceneGpuBatch.h"
 #include "RHI/ResourceStats.h"
+#include <cmath>
 #include <iomanip>
 
 #include "AssetPaths.h"
@@ -731,6 +732,68 @@ uint64_t SceneGpuBatch::computeStructureSignature(const FrameInfo& frameInfo) co
     return signature;
 }
 
+void SceneGpuBatch::refreshCubeFieldInstances(FrameInfo& frameInfo)
+{
+if (cubeFieldCount == 0u || !cubeFieldModel)
+return;
+// 阵列是静态的：只有数量变了才重建。重建会改结构签名、触发一次整帧摊平，
+// 那正是要量的东西，但只在第一帧发生，不能每帧都算进 flattenUs。
+if (cubeFieldBuilt == cubeFieldCount)
+return;
+
+// 中心点在这里算而不是在 Application 里：启动期相机的 view 矩阵还没被 update 刷过。
+const glm::mat4 cubeFieldInverseView = glm::inverse(frameInfo.viewMatrix);
+const glm::vec3 cubeFieldEye = glm::vec3(cubeFieldInverseView[3]);
+// 视图矩阵逆的第三列是世界空间里的相机 +Z（相机看 -Z）。实测本引擎这里取 +列
+// 才对得上画面（取反的那次投影 w 为负，整组被视锥剔除），所以按 +列取。
+const glm::vec3 cubeFieldForward = glm::normalize(glm::vec3(cubeFieldInverseView[2]));
+// 只取水平方向、高度钉 8 米：相机约 20 度俯仰，沿视线直铺会把一半立方体埋到地下。
+const glm::vec2 cubeFieldFlat{ cubeFieldForward.x, cubeFieldForward.z };
+const glm::vec2 cubeFieldDir = glm::length(cubeFieldFlat) > 1e-4f
+? glm::normalize(cubeFieldFlat) : glm::vec2(0.0f, 1.0f);
+const glm::vec3 cubeFieldCenter{
+cubeFieldEye.x + cubeFieldDir.x * cubeFieldDistance,
+8.0f,
+cubeFieldEye.z + cubeFieldDir.y * cubeFieldDistance };
+
+externalInstances.clear();
+externalInstances.reserve(cubeFieldCount);
+const uint32_t side = static_cast<uint32_t>(
+std::ceil(std::cbrt(static_cast<double>(cubeFieldCount))));
+const float half = static_cast<float>(side - 1u) * 0.5f;
+
+// 立方体按 1 米建模，缩到 0.35 米：格点之间留缝，剔除结果肉眼可查。
+glm::mat4 unitScale(1.0f);
+unitScale[0][0] = 0.35f;
+unitScale[1][1] = 0.35f;
+unitScale[2][2] = 0.35f;
+glm::mat4 place(1.0f);
+place[3] = glm::vec4(cubeFieldCenter, 1.0f);
+
+for (uint32_t i = 0; i < cubeFieldCount; ++i)
+{
+const uint32_t x = i % side;
+const uint32_t y = (i / side) % side;
+const uint32_t z = i / (side * side);
+ExternalInstance instance{};
+instance.model = cubeFieldModel.get();
+instance.subMeshIndex = cubeFieldSubMesh;
+instance.materialSlot = cubeFieldMaterialSlot;
+glm::mat4 local = unitScale;
+local[3][0] = -half + static_cast<float>(x) * cubeFieldSpacing;
+local[3][1] = -half + static_cast<float>(y) * cubeFieldSpacing;
+local[3][2] = -half + static_cast<float>(z) * cubeFieldSpacing;
+instance.transform = place * local;
+externalInstances.push_back(instance);
+}
+
+cubeFieldBuilt = cubeFieldCount;
+std::cout << "[SceneGpu] cube field | count=" << cubeFieldCount
+          << " side=" << side << " spacing=" << cubeFieldSpacing
+          << " center=" << cubeFieldCenter.x << "," << cubeFieldCenter.y << "," << cubeFieldCenter.z
+          << "\n";
+}
+
 void SceneGpuBatch::refreshDebugExternalInstances(FrameInfo& frameInfo)
 {
     if (frameInfo.settings.gpuSceneExternalDebugCount == debugExternalCount)
@@ -1144,6 +1207,7 @@ void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
         cullTotals.visibleInstances += stats.visibleInstances;
         cullTotals.occlusionCulled += stats.occlusionCulled;
         cullTotals.screenCulled += stats.screenCulled;
+        cullTotals.flattenMicros += structureMicros;
     }
 }
 
@@ -1170,6 +1234,7 @@ void SceneGpuBatch::logCullSummary() const
               << " | instances/frame=" << (static_cast<double>(cullTotals.visibleInstances) / frames)
               << " submitted/frame=" << (static_cast<double>(cullTotals.submitted) / frames)
               << " | hizCulled/frame=" << (static_cast<double>(cullTotals.occlusionCulled) / frames)
+              << " | flattenUs/frame=" << (static_cast<double>(cullTotals.flattenMicros) / frames)
               << " screenCulled/frame=" << (static_cast<double>(cullTotals.screenCulled) / frames)
               << "\n";
 }
@@ -1505,7 +1570,11 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
         return;
 
     // 调试注入：把第一个可批模型复制 N 份当外部实例（验证粒子/体素那条链路）。
-    refreshDebugExternalInstances(frameInfo);
+    // P2 的尺子优先：有立方体阵列时不再走调试注入（两者都写 externalInstances）。
+    if (cubeFieldCount > 0u)
+        refreshCubeFieldInstances(frameInfo);
+    else
+        refreshDebugExternalInstances(frameInfo);
     stats.externalInstances = getExternalInstanceCount();
 
     const uint32_t frame = frameInfo.frameInFlightIndex;

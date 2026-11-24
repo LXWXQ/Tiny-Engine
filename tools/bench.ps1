@@ -67,9 +67,10 @@ $scenarios = [ordered]@{
     "default"    = @()
     "voxel-world" = @("--voxel-world", "1")
     "lights-512" = @("--voxel-world", "1", "--light-stress", "512", "--clustered-lighting", "--clustered-gpu-build")
+    "cube-field" = @("--cube-field", "10000")
 }
 if ($Scenario -ne "all") {
-    if (-not $scenarios.Contains($Scenario)) { throw "unknown scenario '$Scenario' (default / voxel-world / lights-512 / all)" }
+    if (-not $scenarios.Contains($Scenario)) { throw "unknown scenario '$Scenario' (default / voxel-world / lights-512 / cube-field / all)" }
     $only = [ordered]@{}
     $only[$Scenario] = $scenarios[$Scenario]
     $scenarios = $only
@@ -120,6 +121,8 @@ function Invoke-Run([string]$dir, [string]$name, [int]$index, [string[]]$extra) 
         images   = Get-Metric $out '\[Resources\] frames=\d+ \| images/frame=([\d.]+)' 1
         heapMb   = Get-Metric $out '\[Memory\] heap0 used first=[\d.]+ last=([\d.]+) peak=' 1
         visible  = Get-Metric $out 'cull summary \| frames=\d+ visibleRatio=([\d.]+)' 1
+        instances = Get-Metric $out 'instances/frame=([\d.]+)' 1
+        flattenUs = Get-Metric $out 'flattenUs/frame=([\d.]+)' 1
     }
     if ($null -eq $row.fps) { throw "no [SelfTest] performance line in $stdout (scenario $name run $index)" }
     return [pscustomobject]$row
@@ -180,6 +183,8 @@ foreach ($name in $scenarios.Keys) {
         images    = $first.images
         heapMb    = $first.heapMb
         visible   = $first.visible
+        instances = $first.instances
+        flattenUs = $first.flattenUs
     }
     if ($spread -gt $MaxVariancePct) {
         $warnings += ("{0}: FPS spread {1}% > {2}% ({3}..{4}) - machine noise first, re-run before suspecting code" -f $name, [math]::Round($spread, 2), $MaxVariancePct, $fps[0], $fps[-1])
@@ -194,13 +199,13 @@ $md = New-Object System.Collections.ArrayList
 [void]$md.Add("- config: $Config")
 [void]$md.Add("- engine: $exe")
 [void]$md.Add("")
-[void]$md.Add("| scenario | FPS (median) | spread % | frame ms | passes/frame | barriers/frame | sameState | crossQueue | binds/frame | redundant % | draw calls | desc binds | triangles | median ms | p95 ms | max ms | images/frame | heap0 MiB | visible ratio |")
-[void]$md.Add("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+[void]$md.Add("| scenario | FPS (median) | spread % | frame ms | passes/frame | barriers/frame | sameState | crossQueue | binds/frame | redundant % | draw calls | desc binds | triangles | median ms | p95 ms | max ms | images/frame | heap0 MiB | visible ratio | instances | flattenUs |")
+[void]$md.Add("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 foreach ($s in $summary) {
-    [void]$md.Add(("| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} | {14} | {15} | {16} | {17} | {18} |" -f `
+    [void]$md.Add(("| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} | {14} | {15} | {16} | {17} | {18} | {19} | {20} |" -f `
         $s.scenario, $s.fpsMedian, $s.spreadPct, $s.frameMs, $s.passes, $s.barriers, $s.sameState, $s.crossQ, `
         $s.binds, $s.redundant, $s.draws, $s.descBinds, $s.tris, `
-        $s.medMs, $s.p95Ms, $s.maxMs, $s.images, $s.heapMb, $s.visible))
+        $s.medMs, $s.p95Ms, $s.maxMs, $s.images, $s.heapMb, $s.visible, $s.instances, $s.flattenUs))
 }
 [void]$md.Add("")
 [void]$md.Add("| scenario | run | FPS | s | exit | stderr | errors | warnings |")
@@ -227,9 +232,9 @@ $mdPath = Join-Path $OutDir "baseline.md"
 Set-Content -LiteralPath (Join-Path $buildRoot "bench\latest.txt") -Value $mdPath -Encoding ASCII
 
 Write-Host ""
-Write-Host ("{0,-13} {1,10} {2,9} {3,8} {4,7} {5,8} {6,9} {7,8}" -f "scenario", "FPS", "spread%", "frame ms", "passes", "barriers", "p95 ms", "max ms")
+Write-Host ("{0,-13} {1,10} {2,9} {3,8} {4,7} {5,8} {6,9} {7,8} {8,10}" -f "scenario", "FPS", "spread%", "frame ms", "passes", "barriers", "p95 ms", "max ms", "flattenUs")
 foreach ($s in $summary) {
-    Write-Host ("{0,-13} {1,10} {2,9} {3,8} {4,7} {5,8} {6,9} {7,8}" -f $s.scenario, $s.fpsMedian, $s.spreadPct, $s.frameMs, $s.passes, $s.barriers, $s.p95Ms, $s.maxMs)
+    Write-Host ("{0,-13} {1,10} {2,9} {3,8} {4,7} {5,8} {6,9} {7,8} {8,10}" -f $s.scenario, $s.fpsMedian, $s.spreadPct, $s.frameMs, $s.passes, $s.barriers, $s.p95Ms, $s.maxMs, $s.flattenUs)
 }
 Write-Host ("[bench] baseline -> {0}" -f $mdPath)
 

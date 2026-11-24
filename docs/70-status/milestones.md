@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1557 行
+size: ~1573 行
 updated: 2026-11-24
 ---
 
@@ -1555,3 +1555,19 @@ T-04 的 `[RTPool] top creators` 全是 `Frame0` / `Frame1` 成对出现。顺�
 三条保守规则：拆点是第 0 个 graphics Pass 时不拆；`--no-async-split` 整体退回单次提交；没有 compute 写时提交路径与改造前逐位一致（默认场景 `passes/frame=16.0`、截图差异落在噪声内：`mean=0.0262` 对同二进制噪声地板 `mean=0.0173`）。
 
 校验：默认场景 150 帧 + sync + 截图 `errors=0`；`--cross-queue-test` 的 `[TD02]` 两向与 `[T01]` 两条断言全绿、`overlap=0.10 ms (41.8%)`（g2c 帧不拆，符合设计）。
+## cube-field：P2 的入场尺子（2026-11-24）
+
+用户选 A（先量再动）之后的第一个改动：引擎里终于有了一万个实例。
+做法不是建一万个实体——材质槽上限 256（`DescriptorManager::init(Device&, uint32_t maxMaterials = 256)`），
+一万个实体各持一个槽位直接撞墙；走的是既有的外部实例注入路径（`SceneGpuBatch::ExternalInstance`），
+一万个立方体共享一个材质槽、一个模板模型（`Resources/Models/debug_cube.obj`）。
+
+- `--cube-field <n>`：`Scene::loadCubeFieldTemplate()` 加载模板，`SceneGpuBatch::setCubeField(...)` 只登记参数，
+  真正铺开在第一次构建时做（`refreshCubeFieldInstances`），数量不变就不再重建。
+- 阵列中心在构建时按本帧 `viewMatrix` 的逆算：启动期相机的视图矩阵还没被 `update()` 刷过，在 `Application` 里算会拿到单位矩阵
+  （踩过两次：先算出 (0,0,-14) 把阵列铺在原点，再按错的方向铺到相机背后，被视锥整组剔掉）。
+- 读数（`--cube-field 10000`，300 帧 × 3 次）：`106.57 FPS`、`flattenUs 18871`（**每帧 18.9 ms 花在摊平一万个实例上**）、
+  `instances/frame 10063`、`visible 0.62`、`heap0 964.7 MiB`、`errors=0`。
+- `tools/bench.ps1` 新增 `cube-field` 场景与 `instances` / `flattenUs` 两列；`[SceneGpu] cull summary` 也带上 `flattenUs/frame`。
+- 一个必须记住的口径：`visible = 0.62` 还是**组级**的。一万个立方体合并成一个组，组级剔除只能全剔或全留，
+  所以 P2 的「visible/submitted ≤ 0.6」在实例级剔除落地之前不会因为这个场景而改善。

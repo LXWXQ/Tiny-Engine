@@ -1054,6 +1054,19 @@ renderPipeline.addPass(std::move(viewModelPass));
 		renderer->getCommandPool());
 	presentPassPtr->setImGuiSystem(imguiSystem.get());
 
+// P2 的入场尺子：--cube-field <n> 铺 n 个立方体。
+// 走外部实例注入而不是建实体：材质槽上限 256，一万个实体各持一个槽位不可行。
+if (diagnosticsOptions.cubeField > 0u)
+{
+const Scene::CubeFieldTemplate cubeField = scene->loadCubeFieldTemplate();
+if (!cubeField.model)
+throw std::runtime_error("--cube-field: template model could not be loaded");
+// 阵列中心由 SceneGpuBatch 在第一次构建时按本帧 view 矩阵算（这里拿不到最终相机）。
+// 26 米、间距 1.2：一万个立方体排成 22^3 的格点，跨度 ±12.6 米，落在中景里。
+geometryPassPtr->getSceneGpuBatch()->setCubeField(cubeField.model, cubeField.subMeshIndex,
+cubeField.materialSlot, diagnosticsOptions.cubeField, 0.55f, 14.0f);
+std::cout << "[Config] cube field instances=" << diagnosticsOptions.cubeField << "\n";
+}
 	// F2-a：流送世界。与 --terrain-test 的区别是这里给的是可持续运行的世界入口：
 	// 半径 3 = 7x7 = 49 个 chunk 实体，chunk 32 单位见方、33x33 顶点、3 级 LOD。
 	// 49 低于地形 GPU 选择的 64 个 slot 上限，所以整圈都能走 GPU 选层路径。

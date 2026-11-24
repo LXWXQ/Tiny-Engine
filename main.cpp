@@ -412,6 +412,13 @@ bool audioSpatialTest = false;
         else if (arg == "--rt-pool") diagOptions.renderTargetPool = true;
         else if (arg == "--stats-queue") diagOptions.statsQueue = true;
         else if (arg == "--no-async-split") diagOptions.noAsyncSplit = true;
+else if (arg == "--cube-field")
+{
+uint32_t value = 0u;
+try { value = static_cast<uint32_t>(std::stoul(argv[++i])); }
+catch (...) { value = 0u; }
+diagOptions.cubeField = value;
+}
                 else if (arg == "--single-frame-targets") diagOptions.singleFrameTargets = true;
         else if (arg == "--no-single-frame-targets") diagOptions.noSingleFrameTargets = true;
                 else if (arg == "--serialize-frames") diagOptions.serializeFrames = true;
