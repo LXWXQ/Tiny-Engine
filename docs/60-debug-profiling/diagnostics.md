@@ -4,7 +4,7 @@ title: 诊断基础设施实现
 type: debug
 scope: src/RHI/RenderGraph.cpp（准备 / 录制拆分与耗时）、src/Core/Diagnostics.h, src/Core/Diagnostics.cpp, src/RHI/GpuTimer.*, src/RHI/ScreenshotCapture.*, src/RHI/RenderDocHook.*, src/RHI/Breadcrumbs.*, src/RHI/PipelineStats.*, src/RHI/RenderGraphAlias.*
 read-when: 修改验证层回调、GPU 计时、截图、抓帧、排查 device lost，或看管线统计与别名报告
-size: ~329 行
+size: ~361 行
 updated: 2026-11-24
 ---
 
@@ -327,3 +327,35 @@ build\Debug\TinyEngine.exe --selftest 60 --stats-rendergraph
 第一段是单次提交：compute 的 0.27 ms 完全串行躺在关键路径上，`overlap=0.00`。第二段是拆分后：`overlap` 等于 compute 的全部忙碌时间（100%），`makespan` 少 1.03 ms。
 
 读法：`overlap / compute busy` 是队列窗口层面的上限，不要直接换算成帧率收益 —— 600 帧 × 3 轮交替实测只 +1.05%，因为 compute 本来就只占帧时间的 2.5%。
+
+### 13.7 `flatten breakdown`：摊平到底花在哪（P2 入场）
+
+`--stats-frame` 的退出摘要里多一行，只在**重建结构的那一帧**有样本（稳定帧不跑这段，所以 `samples` 通常等于 1）：
+
+```
+[SceneGpu] flatten breakdown | samples=1 | total=56.52 ms/rebuild
+  | collect=1.0 ms (1.7%) merged=8.6 ms (15.1%)
+  | entities=17.6 ms (31.1%) external=23.3 ms (41.3%)
+  | sort=0.0 ms (0.0%) assemble=0.5 ms (0.9%) mirror=5.6 ms (9.8%)
+  | entities=1.0 records=824.0 bounds=17.0 ms node=0.0 ms normal=0.0 ms aabbInEntity=0.4 ms (0.6%)
+```
+
+七段的口径：
+
+| 段 | 覆盖什么 |
+|---|---|
+| `collect` | 遍历 registry 收集可批实体、收集参与合并的模型集合 |
+| `merged` | `ensureMergedMesh()`：模型集合变了就重建合并缓冲 |
+| `entities` | ECS 实体的逐（实体 × 子网格）记录构造，含组索引查表、节点矩阵、法线矩阵、8 角点 AABB |
+| `external` | 外部实例（粒子 / 体素 / cube-field）的同型构造 |
+| `sort` | 组排序（合并模式下按 materialSlot，非合并再按模型） |
+| `assemble` | 按序把 `buckets` 拼进 `instanceScratch`、写 `firstInstance/instanceCount` |
+| `mirror` | T-08 的持久场景镜像（`ensurePrimitive/ensureInstance` 的内容比对与脏区间） |
+
+三个读数值得记住：
+
+- **每实例成本约 2.3~2.5 µs**（10000 个立方体 23.3 ms、30000 个 74.6 ms，线性）。这是 P2 要打的目标：它由「逐实例算 `mat4` 法线 + 8 角点变换求并集」构成，`aabbInEntity` 只占 0.4 ms，所以钱花在记录构造本身而不是包围盒。
+- **`bounds` 17 ms 是一次性的**：`subMeshBoundsFor()` 第一次被调用时按索引扫描整个模型的顶点，之后按 `geometryId` 缓存。它落在"第一帧"的摊平里，看起来像摊平很贵，其实是加载期该做的事被推到了首帧。默认场景（Sponza，1 个实体 824 个子网格）里 `entities=17.9 ms` 中有 17.3 ms 是这一段。
+- **`mirror` 是骨架的纯开销**：10k 实例 5.6 ms、30k 17.0 ms，和实例数线性。T-08 的镜像现在没有消费者，等 P2 让持久缓冲变成权威数据，这笔钱才会转成"构建成本"而不是"额外成本"。
+
+复现：`TinyEngine.exe --selftest 30 --stats-frame --cube-field 10000 --camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`。

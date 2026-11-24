@@ -4,7 +4,7 @@ title: 三场景性能基线
 type: status
 scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/ResourceStats.h, src/RHI/ResourceStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp, src/Render/SceneGpuBatch.cpp
 read-when: 改渲染图 / 屏障 / 管线绑定之前要一份可对比的数字，或怀疑性能回退时
-size: ~114 行
+size: ~132 行
 updated: 2026-11-24
 ---
 
@@ -112,3 +112,21 @@ T-04b 把「只在本帧内读写」的目标合成一张并把 GPU 侧两帧排
 
 改渲染图、屏障发射、管线绑定这三处之前跑一次留底；改完再跑一次同批次对比。
 两次的数字并排算比例，结论与偏差写进 [milestones](milestones.md)。
+
+## 摊平成本分解（2026-11-24，P2 入场）
+
+`[SceneGpu] flatten breakdown` 只在重建结构的那一帧有样本，所以 `samples` 通常为 1。三组读数（Debug，30 帧自检）：
+
+| 场景 | total | entities | external | merged | mirror | 备注 |
+|---|---|---|---|---|---|---|
+| default（Sponza，1 实体 824 子网格） | 33.55 ms | 17.9 ms（其中 `bounds` 17.3） | 0.0 | 15.4 ms | 0.1 ms | `bounds` 是一次性索引扫描 |
+| `--cube-field 10000` | 56.52 ms | 17.6 ms | 23.3 ms | 8.6 ms | 5.6 ms | 每实例 ≈ 2.3 µs |
+| `--cube-field 30000` | 126.25 ms | 17.2 ms | 74.6 ms | 12.7 ms | 17.0 ms | 每实例 ≈ 2.5 µs，线性 |
+
+三条结论：
+
+- 摊平的大头是**逐实例**的，不是排序或拼接（`sort` + `assemble` 合计 < 2%）。P2 的「摊平 CPU 时间 −70%」必须打在逐实例构造上，靠在 `buckets` 里做搬家省不出来。
+- `bounds` 的 17 ms 是**一次性**的：`subMeshBoundsFor()` 首次调用要按索引扫整个模型，之后按 `geometryId` 缓存。它让"首帧摊平"看起来比稳态贵一倍多，正确做法是在加载期预热而不是留到第一帧。
+- `mirror`（T-08 骨架的持久场景镜像）与实例数线性：10k → 5.6 ms、30k → 17.0 ms。等 P2 让持久缓冲变成权威数据，这笔钱从"额外成本"变成"构建成本"，届时 `flattenUs` 的口径要一起改。
+
+复现：`TinyEngine.exe --selftest 30 --stats-frame --cube-field 10000 --camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`。

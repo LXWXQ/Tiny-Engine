@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1042 行
+size: ~1044 行
 updated: 2026-11-24
 ---
 
@@ -823,6 +823,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 
 **T-08 只读骨架（2026-11-24）**：`GpuScene` 用内容键给图元与实例分配跨帧稳定编号（图元键 `(模型指针, 子网格)`，实例键再混组内序号），脏区间攒成一帧一次 `vkCmdCopyBuffer`；`SceneGpuBatch::buildInstances` 末尾镜像一份进持久缓冲，`prepare` 里 `beginFrame/flush/endFrame`。实测 cube-field `primitives=104 / instances=10103`、`dirtyFrames=1/40`、`upload=35.6 KB/frame`；Sponza `103/103`、`dirtyFrames=1/120`、`upload=0.2 KB/frame`。骨架阶段没有任何着色器绑定这两条缓冲，剔除仍走 `GroupRecord`，所以**这一步不产生帧时间收益**——它的价值是把「编号不漂移」变成可验收的不变量，供 P2 的实例级剔除直接记账。开关 `--no-gpu-scene-persist`（默认开）。踩坑：`SceneGpuBatch` 在 `GeometryPass::init()` 里才创建，`setEnabled` 必须放在 `renderPipeline.initAll()` 之后，否则启动期空指针 `0xC0000005`（stderr 0 字节、日志停在 `[Tiny] 材质就绪`）。
 | T-09（已落地） | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
+
+**P2 的摊平分解（2026-11-24）**：`[SceneGpu] flatten breakdown` 把一次结构重建拆成 collect / merged / entities / external / sort / assemble / mirror 七段。`--cube-field 10000` 实测 total 56.5 ms：`external` 23.3 ms（每实例 ≈ 2.3 µs）、`entities` 17.6 ms（其中 `subMeshBoundsFor` 首次索引扫描 17.3 ms，一次性）、`merged` 8.6 ms、`mirror` 5.6 ms；`30000` 时 total 126.3 ms、`external` 74.6 ms、`mirror` 17.0 ms —— 逐实例部分是线性大头，`sort` + `assemble` 合计 < 2%。**结论：P2 的 −70% 必须打在逐实例构造上（把法线矩阵与 8 角点 AABB 挪到 GPU 或按实例缓存），搬家/排序省不出来；另外 `subMeshBoundsFor` 应该在加载期预热，否则首帧摊平被一次性扫描虚高。**
 
 T-01~T-07 总计 14 人日，完成后 P1 结束；T-08 开始 P2；T-09 开始 P3。
 ### 已落地的工单（2026-11-23）

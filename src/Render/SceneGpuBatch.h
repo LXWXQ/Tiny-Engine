@@ -85,6 +85,21 @@ public:
         uint64_t occlusionCulled = 0;
         uint64_t screenCulled = 0;
 		uint64_t flattenMicros = 0; // 结构摊平累计微秒（P2 的「CPU 摊平时间」判据）
+        // P2 度量：摊平分段耗时（微秒，只在重建结构的帧累加）。
+        uint64_t structureSamples = 0;
+        uint64_t collectMicros = 0;
+        uint64_t mergedMicros = 0;
+        uint64_t entityMicros = 0;
+        uint64_t externalMicros = 0;
+        uint64_t sortMicros = 0;
+        uint64_t assembleMicros = 0;
+        uint64_t mirrorMicros = 0;
+        uint64_t entityAabbMicros = 0;
+        uint64_t entityRecords = 0;
+        uint64_t entityCount = 0;
+        uint64_t entityBoundsMicros = 0;
+        uint64_t entityNodeMicros = 0;
+        uint64_t entityNormalMicros = 0;
     };
 
     struct Stats

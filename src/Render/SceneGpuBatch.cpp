@@ -855,6 +855,17 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
     instanceScratch.clear();
     modelGroups.clear();
     buckets.clear();
+    // P2 度量：摊平到底花在哪。分七段计时，只在重建结构的帧累加（稳定帧不跑这段）。
+    const auto profileStart = std::chrono::steady_clock::now();
+    auto profileMark = profileStart;
+    auto lap = [&profileMark]()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const uint64_t us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(now - profileMark).count());
+        profileMark = now;
+        return us;
+    };
 
     // 1) 收集可批实体，同时得到参与合并的模型集合（集合变了才重建合并缓冲）。
     std::vector<const Model*> batchModels;
@@ -898,19 +909,28 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
                 batchModels.push_back(external.model);
         }
     }
+    cullTotals.collectMicros += lap();
     mergedActive = frameInfo.settings.gpuMergedBuffers && ensureMergedMesh(batchModels);
+    cullTotals.mergedMicros += lap();
 
     // 2) 每个实体按（模型, 子网格）归组：同一子网格被多个实体复用时实例连续排列，
     //    一条命令 instanceCount = N 就画完（实例化），而不是每实例一条命令。
     std::map<std::pair<const Model*, uint32_t>, uint32_t> groupIndex;
     auto view = frameInfo.registry.view<MeshComponent, WorldTransformComponent>();
+    uint64_t entityAabbMicros = 0;
+    uint64_t entityRecords = 0;
+    uint64_t entityBoundsMicros = 0;
+    uint64_t entityNodeMicros = 0;
+    uint64_t entityNormalMicros = 0;
     for (entt::entity entity : entities)
     {
         const MeshComponent& mesh = view.get<MeshComponent>(entity);
         const WorldTransformComponent& worldTransform = view.get<WorldTransformComponent>(entity);
         const Model* model = mesh.model.get();
         const std::vector<SubMesh>& subMeshes = model->getSubMeshes();
+        const auto boundsStart = std::chrono::steady_clock::now();
         const std::vector<SubMeshBounds>& boundsList = subMeshBoundsFor(*model, frameInfo.frameNumber);
+        entityBoundsMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - boundsStart).count());
 
         const MaterialComponent* materialComp = frameInfo.registry.try_get<MaterialComponent>(entity);
         const uint32_t objectMaterialSlot = materialComp ? materialComp->materialSetIndex
@@ -994,8 +1014,10 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
             // F4：glTF 几何存在它所属节点的局部空间，实例矩阵 = 实体世界矩阵 * 节点世界矩阵。
             // 没有节点信息的模型（OBJ / 地形 / 体素 / 蒙皮）nodeMatrix 保持单位矩阵。
             const bool hasNode = (subMesh.node != kNoModelNode);
+            const auto nodeStart = std::chrono::steady_clock::now();
             const glm::mat4 nodeMatrix = hasNode ? model->getNodeWorldMatrix(subMesh.node)
                                                  : glm::mat4(1.0f);
+            entityNodeMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nodeStart).count());
             // C1c: blend the previous tick pose with the current one, then apply
             // the node matrix. renderAlpha is 0 outside the editor play mode, in
             // which case this is exactly worldTransform.matrix.
@@ -1032,9 +1054,11 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
 
             InstanceRecord record{};
             record.model = instanceMatrix;
+            const auto normalStart = std::chrono::steady_clock::now();
             record.normal = (hasNode || interpolateEntity)
                 ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(instanceMatrix))))
                 : worldTransform.normalMatrix;
+            entityNormalMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - normalStart).count());
             record.flags = glm::uvec4(slot, materialValid ? 1u : 0u,
                                       subMesh.alphaMasked ? 1u : 0u,
                                       (subMesh.albedoFallback || entityAlbedoFallback) ? 1u : 0u);
@@ -1045,6 +1069,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             record.draw = glm::uvec4(0u);   // 命令由 compute 写，这里不再塞绘制参数
             buckets[groupIndexValue].push_back(record);
 
+            const auto aabbStart = std::chrono::steady_clock::now();
             // 组的并集世界 AABB：8 个角点变换后求并集，供剔除使用。
             ModelGroup& group = modelGroups[groupIndexValue];
             for (int corner = 0; corner < 8; ++corner)
@@ -1064,10 +1089,20 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
                     group.boundsMin = glm::min(group.boundsMin, worldPoint);
                     group.boundsMax = glm::max(group.boundsMax, worldPoint);
                 }
+            entityAabbMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - aabbStart).count());
+            ++entityRecords;
             }
         }
     }
 
+    cullTotals.entityAabbMicros += entityAabbMicros;
+    cullTotals.entityBoundsMicros += entityBoundsMicros;
+    cullTotals.entityNodeMicros += entityNodeMicros;
+    cullTotals.entityNormalMicros += entityNormalMicros;
+    cullTotals.entityCount += static_cast<uint64_t>(entities.size());
+    cullTotals.entityRecords += entityRecords;
+    cullTotals.entityMicros += lap();
     // 3) 排序后拼接实例：命令顺序即组顺序。合并模式只绑一次 VBO/IBO，顺序任意；
     //    非合并模式要先按模型排，保证同一模型的组连续，才能一条命令画完一组。
     // 2b) 外部实例：没有 ECS 实体，变换由调用方直接给（粒子/体素）。
@@ -1154,6 +1189,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         }
     }
 
+    cullTotals.externalMicros += lap();
     std::vector<uint32_t> order(modelGroups.size());
     for (uint32_t i = 0; i < static_cast<uint32_t>(order.size()); ++i)
         order[i] = i;
@@ -1167,6 +1203,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             return left.materialSlot < right.materialSlot;
         return a < b;
     });
+    cullTotals.sortMicros += lap();
 
     std::vector<ModelGroup> sorted;
     sorted.reserve(modelGroups.size());
@@ -1179,6 +1216,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         sorted.push_back(group);
     }
     modelGroups.swap(sorted);
+    cullTotals.assembleMicros += lap();
     // T-08：把同一批数据镜像进持久场景缓冲（稳定编号 + 脏区间上传）。
     // 这里只是骨架：剔除仍然读每帧上传的 instances/groups，本段不改变任何渲染结果。
     for (uint32_t groupIndexValue = 0; groupIndexValue < static_cast<uint32_t>(modelGroups.size()); ++groupIndexValue)
@@ -1209,6 +1247,8 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             gpuScene.ensureInstance(instanceKey, record);
         }
     }
+    cullTotals.mirrorMicros += lap();
+    ++cullTotals.structureSamples;
     buckets.clear();
 }
 
@@ -1274,6 +1314,42 @@ void SceneGpuBatch::logCullSummary() const
               << " | flattenUs/frame=" << (static_cast<double>(cullTotals.flattenMicros) / frames)
               << " screenCulled/frame=" << (static_cast<double>(cullTotals.screenCulled) / frames)
               << "\n";
+
+    // P2 度量：摊平花在哪。只在重建结构的帧有样本，稳定帧不计入。
+    if (cullTotals.structureSamples > 0)
+    {
+        const double samples = static_cast<double>(cullTotals.structureSamples);
+        const double total = static_cast<double>(cullTotals.collectMicros + cullTotals.mergedMicros +
+            cullTotals.entityMicros + cullTotals.externalMicros + cullTotals.sortMicros +
+            cullTotals.assembleMicros + cullTotals.mirrorMicros);
+        auto share = [total](uint64_t us)
+        {
+            return total > 0.0 ? 100.0 * static_cast<double>(us) / total : 0.0;
+        };
+        std::cout << "[SceneGpu] flatten breakdown | samples=" << cullTotals.structureSamples
+                  << " | total=" << std::setprecision(2) << (total / samples / 1000.0) << " ms/rebuild"
+                  << " | collect=" << std::setprecision(1) << (static_cast<double>(cullTotals.collectMicros) / samples / 1000.0)
+                  << " ms (" << share(cullTotals.collectMicros) << "%)"
+                  << " merged=" << (static_cast<double>(cullTotals.mergedMicros) / samples / 1000.0)
+                  << " ms (" << share(cullTotals.mergedMicros) << "%)"
+                  << " | entities=" << (static_cast<double>(cullTotals.entityMicros) / samples / 1000.0)
+                  << " ms (" << share(cullTotals.entityMicros) << "%)"
+                  << " external=" << (static_cast<double>(cullTotals.externalMicros) / samples / 1000.0)
+                  << " ms (" << share(cullTotals.externalMicros) << "%)"
+                  << " | sort=" << (static_cast<double>(cullTotals.sortMicros) / samples / 1000.0)
+                  << " ms (" << share(cullTotals.sortMicros) << "%)"
+                  << " assemble=" << (static_cast<double>(cullTotals.assembleMicros) / samples / 1000.0)
+                  << " ms (" << share(cullTotals.assembleMicros) << "%)"
+                  << " mirror=" << (static_cast<double>(cullTotals.mirrorMicros) / samples / 1000.0)
+                  << " ms (" << share(cullTotals.mirrorMicros) << "%)"
+                  << " | entities=" << (cullTotals.entityCount / samples) << " records=" << (cullTotals.entityRecords / samples)
+                  << " bounds=" << (static_cast<double>(cullTotals.entityBoundsMicros) / samples / 1000.0) << " ms"
+                  << " node=" << (static_cast<double>(cullTotals.entityNodeMicros) / samples / 1000.0) << " ms"
+                  << " normal=" << (static_cast<double>(cullTotals.entityNormalMicros) / samples / 1000.0) << " ms"
+                  << " aabbInEntity=" << (static_cast<double>(cullTotals.entityAabbMicros) / samples / 1000.0)
+                  << " ms (" << (total > 0.0 ? 100.0 * static_cast<double>(cullTotals.entityAabbMicros) / total : 0.0) << "%)"
+                  << "\n";
+    }
 }
 
 void SceneGpuBatch::ensureHiZ(VkExtent2D extent)
