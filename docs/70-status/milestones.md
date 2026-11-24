@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1622 行
+size: ~1634 行
 updated: 2026-11-24
 ---
 
@@ -1620,3 +1620,15 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 3. **开关的位置比开关的值更容易出错**。`SceneGpuBatch` 在 `GeometryPass::init()` 里才被创建，把 `setEnabled` 写在 `initAll()` 之前就是空指针解引用（`0xC0000005`、stderr 0 字节、日志停在 `[Tiny] 材质就绪`）。判据：凡是往"Pass 内部成员"上落开关，先确认那个成员是哪一步构造出来的。
 
 校验：四场景（default 120 帧 + sync、cube-field 40 帧 + sync、`--cross-queue-test`、`--no-gpu-scene-persist`）全部 `EXIT=0`、`errors=0 warnings=0`、stderr 0 字节；`--cross-queue-test` 的两条 `[TD02]` 与两条 `[T01]` 断言照旧通过。
+## P2 第一步：实例 AABB 用中心/半长，子网格包围盒加载期预热（2026-11-24）
+
+| 场景 | flatten 改前 | 改后 | 稳态帧率 |
+|---|---|---|---|
+| default（Sponza 103 子网格） | 33.55 ms | 9.75~10.94 ms | 不变 |
+| `--cube-field 10000` | 56.52 ms | 34.31 ms | 88.75 → 88.20 FPS（噪声内） |
+| `--cube-field 30000` | 116.99 ms | 72.05 ms | 不变 |
+
+- 世界 AABB：8 个角点各一次 `mat4 * vec4` → 中心/半长（`worldHalf = |basis[i]| · half`），对仿射变换精确。
+- `subMeshBoundsFor()` 首次索引扫描（默认场景 16.6 ms）从第一帧挪到加载期，启动打 `[SceneGpu] prewarm | models=2`。
+- 两者都只影响**结构重建帧**，所以帧率不动；`[FrameTime] max` 从 90 ms 量级降到 76.5 ms。
+- 验证：default / 10000 / 30000 三组 `--validation-features sync` 均 `errors=0 warnings=0`、EXIT=0、stderr 0 字节；A/B 用 `git stash` 反构建三次取中位。

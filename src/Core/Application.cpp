@@ -1076,6 +1076,25 @@ geometryPassPtr->getSceneGpuBatch()->setCubeField(cubeField.model, cubeField.sub
 cubeField.materialSlot, diagnosticsOptions.cubeField, 0.55f, 14.0f);
 std::cout << "[Config] cube field instances=" << diagnosticsOptions.cubeField << "\n";
 }
+// P2：子网格包围盒的首次索引扫描放到加载期做，别留到第一帧的摊平里。
+if (geometryPassPtr != nullptr && geometryPassPtr->getSceneGpuBatch() != nullptr)
+{
+    uint32_t warmed = 0;
+    std::unordered_set<const Model*> seen;
+    auto warmView = scene->getRegistry().view<MeshComponent>();
+    for (entt::entity entity : warmView)
+    {
+        const MeshComponent& mesh = warmView.get<MeshComponent>(entity);
+        if (!mesh.model || mesh.model->getIndexCount() == 0)
+            continue;
+        if (seen.insert(mesh.model.get()).second)
+        {
+            geometryPassPtr->getSceneGpuBatch()->prewarmModelBounds(*mesh.model);
+            ++warmed;
+        }
+    }
+    std::cout << "[SceneGpu] prewarm | models=" << warmed << "\n";
+}
 	// F2-a：流送世界。与 --terrain-test 的区别是这里给的是可持续运行的世界入口：
 	// 半径 3 = 7x7 = 49 个 chunk 实体，chunk 32 单位见方、33x33 顶点、3 级 LOD。
 	// 49 低于地形 GPU 选择的 64 个 slot 上限，所以整圈都能走 GPU 选层路径。

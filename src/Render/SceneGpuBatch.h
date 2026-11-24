@@ -100,6 +100,8 @@ public:
         uint64_t entityBoundsMicros = 0;
         uint64_t entityNodeMicros = 0;
         uint64_t entityNormalMicros = 0;
+        uint64_t externalNormalMicros = 0;
+        uint64_t externalAabbMicros = 0;
     };
 
     struct Stats
@@ -188,6 +190,8 @@ cubeFieldBuilt = 0;
     // T-08：持久场景（先只读骨架）。消费者尚未接入，只用于验证编号稳定与脏区间上传量。
     tiny::GpuScene& getGpuScene() { return gpuScene; }
     const tiny::GpuScene& getGpuScene() const { return gpuScene; }
+    // P2：把 subMeshBoundsFor 的首次索引扫描挪到加载期，避免第一帧摊平被一次性成本虚高。
+    void prewarmModelBounds(const Model& model);
 
 private:
     struct GpuBuffer

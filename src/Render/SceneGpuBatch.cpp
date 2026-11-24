@@ -475,6 +475,12 @@ void SceneGpuBatch::destroyResources()
     instanceSetLayout = VK_NULL_HANDLE;
 }
 
+void SceneGpuBatch::prewarmModelBounds(const Model& model)
+{
+    // 只为填充 modelBoundsCache：几何包围盒扫索引是加载期该付的一次性成本。
+    (void)subMeshBoundsFor(model, 0ull);
+}
+
 const std::vector<SceneGpuBatch::SubMeshBounds>& SceneGpuBatch::subMeshBoundsFor(const Model& model, uint64_t frameNumber)
 {
     const uint64_t geometryId = model.getGeometryId();
@@ -922,6 +928,8 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
     uint64_t entityBoundsMicros = 0;
     uint64_t entityNodeMicros = 0;
     uint64_t entityNormalMicros = 0;
+    uint64_t externalNormalMicros = 0;
+    uint64_t externalAabbMicros = 0;
     for (entt::entity entity : entities)
     {
         const MeshComponent& mesh = view.get<MeshComponent>(entity);
@@ -1068,31 +1076,27 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             record.boundsMax = glm::vec4(localMax, 0.0f);
             record.draw = glm::uvec4(0u);   // 命令由 compute 写，这里不再塞绘制参数
             buckets[groupIndexValue].push_back(record);
-
-            const auto aabbStart = std::chrono::steady_clock::now();
-            // 组的并集世界 AABB：8 个角点变换后求并集，供剔除使用。
+            // 世界 AABB 用中心/半长直接算：对仿射变换是精确解，9 次乘法。
+            const glm::vec3 localCenter = (localMin + localMax) * 0.5f;
+            const glm::vec3 localHalf = (localMax - localMin) * 0.5f;
+            const glm::mat3 basis(instanceMatrix);
+            const glm::vec3 worldCenter = glm::vec3(instanceMatrix * glm::vec4(localCenter, 1.0f));
+            const glm::vec3 worldHalf = glm::abs(basis[0]) * localHalf.x +
+                                        glm::abs(basis[1]) * localHalf.y +
+                                        glm::abs(basis[2]) * localHalf.z;
             ModelGroup& group = modelGroups[groupIndexValue];
-            for (int corner = 0; corner < 8; ++corner)
+            if (!group.hasBounds)
             {
-                const glm::vec3 localPoint((corner & 1) ? localMax.x : localMin.x,
-                                           (corner & 2) ? localMax.y : localMin.y,
-                                           (corner & 4) ? localMax.z : localMin.z);
-                const glm::vec3 worldPoint = glm::vec3(instanceMatrix * glm::vec4(localPoint, 1.0f));
-                if (!group.hasBounds)
-                {
-                    group.boundsMin = worldPoint;
-                    group.boundsMax = worldPoint;
-                    group.hasBounds = true;
-                }
-                else
-                {
-                    group.boundsMin = glm::min(group.boundsMin, worldPoint);
-                    group.boundsMax = glm::max(group.boundsMax, worldPoint);
-                }
-            entityAabbMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - aabbStart).count());
-            ++entityRecords;
+                group.boundsMin = worldCenter - worldHalf;
+                group.boundsMax = worldCenter + worldHalf;
+                group.hasBounds = true;
             }
+            else
+            {
+                group.boundsMin = glm::min(group.boundsMin, worldCenter - worldHalf);
+                group.boundsMax = glm::max(group.boundsMax, worldCenter + worldHalf);
+            }
+            ++entityRecords;
         }
     }
 
@@ -1106,6 +1110,9 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
     // 3) 排序后拼接实例：命令顺序即组顺序。合并模式只绑一次 VBO/IBO，顺序任意；
     //    非合并模式要先按模型排，保证同一模型的组连续，才能一条命令画完一组。
     // 2b) 外部实例：没有 ECS 实体，变换由调用方直接给（粒子/体素）。
+    // bounds 缓存按模型复用：外部实例通常共享同一个模型，逐实例查表是纯浪费。
+    const Model* cachedBoundsModel = nullptr;
+    const std::vector<SubMeshBounds>* cachedBounds = nullptr;
     for (const ExternalInstance& external : externalInstances)
     {
         const Model* model = external.model;
@@ -1149,7 +1156,12 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
 
         glm::vec3 localMin = model->getBoundsMin();
         glm::vec3 localMax = model->getBoundsMax();
-        const std::vector<SubMeshBounds>& boundsList = subMeshBoundsFor(*model, frameInfo.frameNumber);
+        if (cachedBoundsModel != model)
+        {
+            cachedBoundsModel = model;
+            cachedBounds = &subMeshBoundsFor(*model, frameInfo.frameNumber);
+        }
+        const std::vector<SubMeshBounds>& boundsList = *cachedBounds;
         if (external.subMeshIndex < boundsList.size() && boundsList[external.subMeshIndex].valid)
         {
             localMin = boundsList[external.subMeshIndex].min;
@@ -1158,7 +1170,9 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
 
         InstanceRecord record{};
         record.model = external.transform;
+        const auto extNormalStart = std::chrono::steady_clock::now();
         record.normal = glm::mat4(glm::transpose(glm::inverse(glm::mat3(external.transform))));
+        externalNormalMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extNormalStart).count());
         record.flags = glm::uvec4(external.materialSlot, 1u, subMesh.alphaMasked ? 1u : 0u,
                                   subMesh.albedoFallback ? 1u : 0u);
         record.misc = glm::vec4(subMesh.alphaCutoff, 1.0f, 0.0f, 0.0f);
@@ -1168,27 +1182,33 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         record.draw = glm::uvec4(0u);
         buckets[groupIndexValue].push_back(record);
 
+        const auto extAabbStart = std::chrono::steady_clock::now();
         ModelGroup& group = modelGroups[groupIndexValue];
-        for (int corner = 0; corner < 8; ++corner)
+        // 中心/半长求世界 AABB：对仿射变换是精确解，只要 9 次乘法，
+        // 比 8 个角点各做一次 mat4 * vec4 便宜一个数量级。
+        const glm::vec3 localCenter = (localMin + localMax) * 0.5f;
+        const glm::vec3 localHalf = (localMax - localMin) * 0.5f;
+        const glm::mat3 basis(external.transform);
+        const glm::vec3 worldCenter = glm::vec3(external.transform * glm::vec4(localCenter, 1.0f));
+        const glm::vec3 worldHalf = glm::abs(basis[0]) * localHalf.x +
+                                    glm::abs(basis[1]) * localHalf.y +
+                                    glm::abs(basis[2]) * localHalf.z;
+        if (!group.hasBounds)
         {
-            const glm::vec3 localPoint((corner & 1) ? localMax.x : localMin.x,
-                                       (corner & 2) ? localMax.y : localMin.y,
-                                       (corner & 4) ? localMax.z : localMin.z);
-            const glm::vec3 worldPoint = glm::vec3(external.transform * glm::vec4(localPoint, 1.0f));
-            if (!group.hasBounds)
-            {
-                group.boundsMin = worldPoint;
-                group.boundsMax = worldPoint;
-                group.hasBounds = true;
-            }
-            else
-            {
-                group.boundsMin = glm::min(group.boundsMin, worldPoint);
-                group.boundsMax = glm::max(group.boundsMax, worldPoint);
-            }
+            group.boundsMin = worldCenter - worldHalf;
+            group.boundsMax = worldCenter + worldHalf;
+            group.hasBounds = true;
         }
+        else
+        {
+            group.boundsMin = glm::min(group.boundsMin, worldCenter - worldHalf);
+            group.boundsMax = glm::max(group.boundsMax, worldCenter + worldHalf);
+        }
+        externalAabbMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extAabbStart).count());
     }
 
+    cullTotals.externalNormalMicros += externalNormalMicros;
+    cullTotals.externalAabbMicros += externalAabbMicros;
     cullTotals.externalMicros += lap();
     std::vector<uint32_t> order(modelGroups.size());
     for (uint32_t i = 0; i < static_cast<uint32_t>(order.size()); ++i)
@@ -1346,6 +1366,8 @@ void SceneGpuBatch::logCullSummary() const
                   << " bounds=" << (static_cast<double>(cullTotals.entityBoundsMicros) / samples / 1000.0) << " ms"
                   << " node=" << (static_cast<double>(cullTotals.entityNodeMicros) / samples / 1000.0) << " ms"
                   << " normal=" << (static_cast<double>(cullTotals.entityNormalMicros) / samples / 1000.0) << " ms"
+                  << " | extNormal=" << (static_cast<double>(cullTotals.externalNormalMicros) / samples / 1000.0) << " ms"
+                  << " extAabb=" << (static_cast<double>(cullTotals.externalAabbMicros) / samples / 1000.0) << " ms"
                   << " aabbInEntity=" << (static_cast<double>(cullTotals.entityAabbMicros) / samples / 1000.0)
                   << " ms (" << (total > 0.0 ? 100.0 * static_cast<double>(cullTotals.entityAabbMicros) / total : 0.0) << "%)"
                   << "\n";

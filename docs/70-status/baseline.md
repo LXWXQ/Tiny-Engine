@@ -4,7 +4,7 @@ title: 三场景性能基线
 type: status
 scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/ResourceStats.h, src/RHI/ResourceStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp, src/Render/SceneGpuBatch.cpp
 read-when: 改渲染图 / 屏障 / 管线绑定之前要一份可对比的数字，或怀疑性能回退时
-size: ~132 行
+size: ~159 行
 updated: 2026-11-24
 ---
 
@@ -130,3 +130,30 @@ T-04b 把「只在本帧内读写」的目标合成一张并把 GPU 侧两帧排
 - `mirror`（T-08 骨架的持久场景镜像）与实例数线性：10k → 5.6 ms、30k → 17.0 ms。等 P2 让持久缓冲变成权威数据，这笔钱从"额外成本"变成"构建成本"，届时 `flattenUs` 的口径要一起改。
 
 复现：`TinyEngine.exe --selftest 30 --stats-frame --cube-field 10000 --camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`。
+## P2 第一步：实例 AABB 走中心/半长，子网格包围盒在加载期预热（2026-11-24）
+
+两处改动，目标是 flatten 里最贵的两项。
+
+**1. 世界 AABB 不再变换 8 个角点。** 原来每个实例对包围盒的 8 个角点各做一次 `mat4 * vec4`，再逐点取 min/max；现在用中心 + 半长：
+
+```
+localCenter = (min + max) * 0.5;  localHalf = (max - min) * 0.5;
+worldCenter = instanceMatrix * vec4(localCenter, 1);
+worldHalf   = abs(basis[0]) * localHalf.x + abs(basis[1]) * localHalf.y + abs(basis[2]) * localHalf.z;
+```
+
+对仿射变换这是**精确解**（不是保守近似），代价是 9 次乘法 + 一次 `mat4 * vec4`。`--cube-field 30000` 的 `external` 段因此从 69.2 ms 降到 40.2 ms。
+
+**2. `subMeshBoundsFor()` 提前到加载期。** 它第一次被调用要按索引扫整个模型算每个子网格的包围盒，默认场景（Sponza，103 个子网格、几十万索引）要 16~17 ms，而这段成本原来落在**第一帧**的摊平里。现在 `SceneGpuBatch::prewarmModelBounds()` 在 `Application` 里按 `view<MeshComponent>` 去重预热，启动日志打 `[SceneGpu] prewarm | models=N`。默认场景 `bounds` 段从 16.6 ms 变成 0.0 ms。
+
+摊平总时间（Debug，30 帧，`--camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`）：
+
+| 场景 | 改前 | 改后 | 变化 |
+|---|---|---|---|
+| default（Sponza） | 33.55 ms | 9.75~10.94 ms | −68% |
+| `--cube-field 10000` | 56.52 ms | 34.31 ms | −39% |
+| `--cube-field 30000` | 116.99 ms | 72.05 ms | −38% |
+
+**帧率没有变化**（cube-field 10000，120 帧 × 3 轮：改前中位 88.75 FPS，改后 88.20 FPS，在噪声内）。原因是摊平只在**结构重建的那一帧**发生，稳态帧不跑这段：省下来的是首帧/结构变化帧的 hitch，不是每帧的固定成本。`[FrameTime] max` 因此从 90 ms 量级降到 76.5 ms。
+
+剩下的大头（改后）：`merged`（`ensureMergedMesh`，9~13 ms，模型集合变化才跑）、`external`（逐实例 1.3 µs，30000 时 40 ms）、`mirror`（T-08 骨架，与实例数线性）。

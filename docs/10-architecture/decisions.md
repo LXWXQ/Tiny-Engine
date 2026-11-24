@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1068 行
+size: ~1102 行
 updated: 2026-11-24
 ---
 
@@ -1066,3 +1066,37 @@ if (!ImGui::CollapsingHeader("Config", ImGuiTreeNodeFlags_DefaultOpen))
 **踩坑。** `GpuScene.h` 第一次只在头里写了 `class Device;`，用 `VkCommandBuffer`/`VkBuffer`/`VmaAllocation` 却忘了 `#include <vulkan/vulkan.h>` 与 `<vk_mem_alloc.h>`，报 `error C2061: 语法错误: 标识符"VkCommandBuffer"` 加一串 C3646/C2059/C2238 —— 头文件日志里第一个错误常常不是根因，要从最靠前的那条往下读。
 
 **不引入的。** 不做实例池压缩（`instances` 只增不减，编号不复用）、不做 GPU 侧分配、不做跨帧持久化到磁盘。这些都要等 P2 的实例级剔除落地、确认"编号稳定"真的能换成剔除率之后再说。
+## 决策 53：世界 AABB 用中心/半长算，子网格包围盒在加载期预热（P2 第一步）
+
+### 问题
+
+`flatten breakdown` 量出两笔钱：`--cube-field 30000` 的 `external` 段 69.2 ms（其中 8 角点变换 30.5 ms），默认场景 `entities` 段 17.9 ms（其中 `subMeshBoundsFor` 首次索引扫描 17.3 ms）。
+
+### 做法
+
+1. 世界 AABB 改成中心/半长：`worldCenter = M * vec4(center,1)`、`worldHalf = |M3x3 列| · half`。对仿射变换精确，9 次乘法对比 8 次 `mat4 * vec4`。
+2. `subMeshBoundsFor()` 的首次扫描挪到加载期：新增 `SceneGpuBatch::prewarmModelBounds(const Model&)`，`Application` 在场景就绪后按 `view<MeshComponent>` 去重预热，打 `[SceneGpu] prewarm | models=N`。
+
+### 结果
+
+| 场景 | 改前 flatten | 改后 | 首帧 `max` |
+|---|---|---|---|
+| default | 33.55 ms | 9.75~10.94 ms | 76.5 ms |
+| cube-field 10000 | 56.52 ms | 34.31 ms | — |
+| cube-field 30000 | 116.99 ms | 72.05 ms | — |
+
+帧率不变（cube-field 10000，120 帧 × 3：88.75 → 88.20 FPS，噪声内）。
+
+### 为什么帧率可以不变
+
+摊平只在**结构重建帧**跑（`structureSignature` 变了才重建），稳态帧完全不走这段。所以这一步买到的是首帧与结构变化帧的 hitch，而不是每帧成本。要动稳态帧率，得打剩下的 `external`（逐实例 1.3 µs）与 `mirror`（T-08 骨架），那属于 P2 的实例级剔除本体。
+
+### 代价与边界
+
+- `abs(basis[i])` 的写法要求 `instanceMatrix` 是仿射（无投影行）。本引擎所有实例矩阵都来自 TRS 或 `entityMatrix * nodeMatrix`，成立。
+- `prewarmModelBounds` 对每个模型扫一遍索引，启动时间增加（默认场景 2 个模型，几十毫秒量级）；换来首帧不再有 16 ms 尖峰。
+- 归并（`merged`）与镜像（`mirror`）没动，仍是 9~13 ms / 5.5~16 ms。
+
+### 不引入的
+
+- 没在这步做实例级剔除：剔除的输入（每实例世界 AABB）现在仍在 CPU 算，只是便宜了。上 GPU 是下一步的事。
