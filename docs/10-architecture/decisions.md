@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1142 行
+size: ~1183 行
 updated: 2026-11-24
 ---
 
@@ -1140,3 +1140,44 @@ P2 的 −70% 只能靠改结构拿到：持久缓冲变成权威数据、逐实
 
 - 没做实例级剔除：`shaders/scene_cull.comp` 现在是组级（`GroupRecord` 5 word/组 + `stats[3]`），实例级要改成 remap + 逐实例两段式，属于下一步。
 - 没给镜像加消费者：消费它的应该是实例级剔除与视锥/遮挡查询，等那条链路通了再打开。
+
+## 决策 55：P2 的尺子要先换成 Release，「直写映射内存」这一刀实测无效（P2 第三步）
+
+### 问题
+
+决策 54 把 P2 的方向定成「持久缓冲变权威、逐实例直写映射内存」。动手前先做了一次对照：同一份代码在 Release 下重跑三档摊平。
+
+| 场景 | Debug total | Release total | Release external | Release merged | Release extPush |
+| --- | --- | --- | --- | --- | --- |
+| default | 9.5~11.6 ms | 4.55 ms | 0.0 | 4.5 | 0.0 |
+| cube-field 10k | 26.5~32.5 | 7.83 | 2.9 | 4.5 | 0.9 |
+| cube-field 30k | 57.6~60.2 | 14.67 | 9.0 | 4.5 | 2.9 |
+
+两个结论直接改写了计划：
+
+1. **Debug 把逐实例成本放大 4 倍**（30k：`external` 43.9 → 9.0 ms，每实例 1.27 µs → 0.30 µs）。按 Debug 数字做优化决策会系统性地高估收益。
+2. **default 场景 98.7% 的摊平花在 `merged`（4.5 ms）**，不是逐实例：`ensureMergedMesh` 在结构重建时把 103 个组的几何合并一遍。逐实例那条线在 Release 下只剩 0.3 µs/实例，已经不是瓶颈。
+
+### 做法与结果（试过，回退）
+
+按原计划实现「预分配 `instanceScratch` + 只记已写条数 + 组装时逐条拷贝」：
+
+- 把 `instanceScratch.clear()/insert()` 换成 `instanceScratchCount = 0` + `instanceScratch[count++] = record`，`ensureCapacity` 里 `resize(instanceCapacity)`。
+- 结果（Debug 30k）：`assemble 1.2 → 3.2 ms`、`total 57.60 → 58.78 ms`，`extPush` 仍 4.5（`buckets` 的扩容没动）。
+
+**这是负收益**：`std::vector::insert` 对 POD 会走 `memmove`，比逐条赋值的循环快一倍多；而真正想省的「扩容拷贝」在稳态下本来就不发生（`buckets.clear()` 保留容量，稳态重建不再扩容）。已 `git checkout --` 回退，工作树与 `3dd2865` 一致。
+
+### 为什么
+
+- 收益前提错了：以为每实例 1.27 µs 是「构造 + 拷贝」的锅，实际是 Debug 构建 + GLM 不内联的锅。
+- 结构前提也错了：`buckets` 的容量跨帧保留，第一次重建之后就没有扩容成本；`instanceScratch` 的 `insert` 已经是 memmove。
+
+### 代价与边界
+
+- 本轮**没有代码改动**，只加了两处文档与一个判断：P2 的验收口径必须写明「Release 构建 + 稳态重建帧」。
+- `merged` 之前被当成常数（9~15 ms 的固定开销），现在看它才是 default 场景的大头；要动它得改合并策略（按材质合并、持久化合并网格），是独立一单。
+
+### 不引入的
+
+- 不做「逐实例直写映射内存」：实测更慢。
+- 不按 Debug 数字继续调优：后续 P2 的数字一律同时给 Debug 与 Release，判据看 Release。

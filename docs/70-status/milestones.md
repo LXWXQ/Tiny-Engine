@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1642 行
+size: ~1650 行
 updated: 2026-11-24
 ---
 
@@ -1640,3 +1640,11 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 读数：`mirror` 三档归零；30k `total 59.79 → 57.60 ms`、`external 40.9 → 43.9`（运行间 ±3 ms）；`extPush 4.9`、`extRecord 0.6`、`extAabb 0.2`，其余约 38 ms 在循环体。
 - 结论：P2 的 −70% 不能靠 AABB 上 GPU，要靠「持久缓冲变权威 + 直写映射内存 + 去掉组查表」。
 - 校验：三档 `--validation-features sync` 全部 `EXIT=0`、`errors=0 warnings=0`、stderr 0 字节。
+
+## P2 第三步：把尺子换成 Release，回退一次负收益改动（2026-11-24）
+
+- 实测 Release：30k `total 14.67 ms`（`external 9.0`、`merged 4.5`）、10k `7.83`、default `4.55`（`merged` 占 98.7%）；FPS `100.45 / 119.26 / 198.53`。
+- Debug 与 Release 的逐实例成本差 4 倍（1.27 µs → 0.30 µs）。
+- 试做「预分配 `instanceScratch` + 逐条写入」：`assemble 1.2 → 3.2 ms`、`total 57.60 → 58.78`（Debug 30k），**负收益**，已 `git checkout --` 回退。原因是 `vector::insert` 对 POD 走 `memmove`，比逐条赋值快，且稳态下 `buckets` 容量保留、本来就不扩容。
+- 结论：P2 的大头是 `merged`（合并网格），逐实例那条线在 Release 下已不是瓶颈；后续 P2 判据一律看 Release + 稳态重建帧。
+- 校验：三档 `--validation-features sync` 全部 `EXIT=0`、`errors=0 warnings=0`、stderr 0 字节（回退后复测同前）。

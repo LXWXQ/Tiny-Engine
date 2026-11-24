@@ -4,7 +4,7 @@ title: 三场景性能基线
 type: status
 scope: tools/bench.ps1, src/RHI/FrameStats.h, src/RHI/FrameStats.cpp, src/RHI/ResourceStats.h, src/RHI/ResourceStats.cpp, src/RHI/RenderGraph.cpp, src/RHI/Pipeline.cpp, src/Render/SceneGpuBatch.cpp
 read-when: 改渲染图 / 屏障 / 管线绑定之前要一份可对比的数字，或怀疑性能回退时
-size: ~170 行
+size: ~186 行
 updated: 2026-11-24
 ---
 
@@ -168,3 +168,19 @@ worldHalf   = abs(basis[0]) * localHalf.x + abs(basis[1]) * localHalf.y + abs(ba
 `external` 段里只有约 6 ms 被细分计时认领，剩下约 38 ms（每实例 1.27 µs）在循环体其余部分：`std::map` 组查表、`std::vector<std::vector>` 的 `push_back` 扩容拷贝、Debug 构建下每次迭代 4 次 `steady_clock` 采样。
 
 同日把 T-08 持久镜像改成 opt-in（`--gpu-scene-persist`，默认关）：`mirror` 三档全部归零，`[GpuScene]` 在默认配置下打 `primitives=0 instances=0`。这一列从此是「打开镜像时的额外成本」，不是常驻成本。
+
+## Release 下的摊平（P2 第三步，2026-11-24）
+
+同一份代码 `--config Release`（30 帧，相机固定）：
+
+| 场景 | total | merged | external | extPush | FPS |
+| --- | --- | --- | --- | --- | --- |
+| default | 4.55 ms | 4.5（98.7%） | 0.0 | 0.0 | 198.53 |
+| cube-field 10k | 7.83 | 4.5 | 2.9 | 0.9 | 119.26 |
+| cube-field 30k | 14.67 | 4.5 | 9.0 | 2.9 | 100.45 |
+
+与 Debug 对照（同场景 30k）：`total 57.6~60.2 → 14.67`、`external 43.9 → 9.0`、每实例 `1.27 µs → 0.30 µs`。**Debug 把逐实例成本放大 4 倍**，按 Debug 数字做 P2 的优化决策会高估收益约 4 倍。
+
+`default` 场景 98.7% 的摊平在 `merged` —— 合并网格的固定开销，与实例数无关。三档的 `merged` 都是 4.5 ms，正是这条线的证据。
+
+P2 的验收口径因此定为：**Release 构建 + 稳态重建帧**（首帧含 `buckets` 扩容，不是稳态）。

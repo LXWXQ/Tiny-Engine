@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1047 行
+size: ~1049 行
 updated: 2026-11-24
 ---
 
@@ -828,6 +828,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 **P2 的摊平分解（2026-11-24）**：`[SceneGpu] flatten breakdown` 把一次结构重建拆成 collect / merged / entities / external / sort / assemble / mirror 七段。`--cube-field 10000` 实测 total 56.5 ms：`external` 23.3 ms（每实例 ≈ 2.3 µs）、`entities` 17.6 ms（其中 `subMeshBoundsFor` 首次索引扫描 17.3 ms，一次性）、`merged` 8.6 ms、`mirror` 5.6 ms；`30000` 时 total 126.3 ms、`external` 74.6 ms、`mirror` 17.0 ms —— 逐实例部分是线性大头，`sort` + `assemble` 合计 < 2%。**结论：P2 的 −70% 必须打在逐实例构造上（把法线矩阵与 8 角点 AABB 挪到 GPU 或按实例缓存），搬家/排序省不出来；另外 `subMeshBoundsFor` 应该在加载期预热，否则首帧摊平被一次性扫描虚高。**
 
 **P2 第二步（2026-11-24）**：先关掉没消费者的镜像 —— `--gpu-scene-persist` 默认关（`diag::Options::gpuScenePersist = false`），镜像整段包在 `if (gpuScene.isEnabled())` 里，`mirror` 三档归零。再认清剩下 80% 在哪：外部循环新增 `extRecord` / `extPush` 两段计时后，30k 实例下 `external 43.9 ms` 里只认领 6 ms（`extPush 4.9`、`extRecord 0.6`、`extAabb 0.2`、`extNormal 0.3`），其余约 38 ms（每实例 1.27 µs）是循环脚手架 + `std::map` 组查表 + `std::vector<std::vector>` 的 `push_back` 扩容拷贝 + Debug 下 4 次 `steady_clock` 采样。**结论：AABB 上 GPU 不再是 P2 的第一步**（`extAabb` 已 0.2 ms）；−70% 要靠「持久缓冲变权威、逐实例直写映射内存、去掉组查表」，实例级剔除则要先改 `shaders/scene_cull.comp`（现为组级，`GroupRecord` 5 word/组 + `stats[3]`）成 remap + 逐实例两段式。
+
+**P2 第三步（2026-11-24）**：把尺子换成 Release 再判。实测 Release 摊平：30k `14.67 ms`（`external 9.0`、`merged 4.5`）、10k `7.83`、default `4.55`（`merged` 占 98.7%），FPS `100.45 / 119.26 / 198.53`；Debug 的逐实例成本被放大 4 倍（1.27 µs → 0.30 µs）。按本轮结论，**「持久缓冲变权威 + 逐实例直写映射内存」这一刀不做了**：试做「预分配 `instanceScratch` + 逐条写入」在 Debug 30k 上是负收益（`assemble 1.2 → 3.2 ms`、`total 57.60 → 58.78`），因为 `vector::insert` 对 POD 走 `memmove`、且稳态下 `buckets` 容量保留本来就不扩容，已回退。**P2 的下一个大头是 `merged`（合并网格，三档恒为 4.5 ms）**，要动它得改合并策略（按材质合并 / 持久化合并网格），判据统一改成「Release 构建 + 稳态重建帧」。
 
 T-01~T-07 总计 14 人日，完成后 P1 结束；T-08 开始 P2；T-09 开始 P3。
 ### 已落地的工单（2026-11-23）
