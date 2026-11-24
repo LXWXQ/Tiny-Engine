@@ -2,10 +2,10 @@
 id: architecture/rendergraph
 title: 渲染图：屏障推导与语义校验
 type: architecture
-scope: src/RHI/RenderGraph.h, src/RHI/RenderGraph.cpp, src/Render/IRenderPass.h
+scope: src/RHI/RenderGraph.h, src/RHI/RenderGraph.cpp, src/RHI/RenderGraphBlackboard.h, src/Render/FramePayloads.h, src/Render/IRenderPass.h
 read-when: 修改任何 Pass 的资源声明、新增资源、调整 Pass 顺序、调试 layout/hazard 报错
-size: ~318 行
-updated: 2026-11-23
+size: ~342 行
+updated: 2026-11-24
 ---
 
 # 渲染图：屏障推导与语义校验
@@ -288,7 +288,32 @@ mip 3 超出 mipLevels 1"才是可行动的。
 
 ---
 
-## 8. GPU 计时挂钩
+## 8. 图级黑板（T-06）
+
+`RenderGraph` 带一块**生命周期一帧**的黑板，用来在 Pass 之间、以及 Pass 与 UI 之间交接"值"（而不是资源）：
+
+```cpp
+tiny::RenderGraphBlackboard& bb = graph.getBlackboard();
+bb.set(tiny::payload::ExposureOverride{ 1.4f });          // 写
+if (const auto* e = bb.find<tiny::payload::ExposureOverride>()) { ... }  // 读
+```
+
+三条约定：
+
+| 约定 | 含义 | 违反的后果 |
+|---|---|---|
+| 生命周期一帧 | `beginFrame()` 第一件事是 `blackboard.clear()` | 想跨帧保留的东西必须放进 Pass 自己的成员 |
+| 只放交接值 | 资源用 `createTexture` / `importTexture`，不要塞进黑板 | 黑板不参与屏障推导，资源放进去等于绕过图 |
+| 类型即键 | `find<T>()` 是编译期确定的 `type_index` 查找 | 同一类型只能有一个写者，后写覆盖先写 |
+
+载荷类型的定义集中放在 `src/Render/FramePayloads.h`（曝光覆盖、选中项、模拟插值、UI 回调四类）。`FrameInfo` 只保留一个 `tiny::RenderGraphBlackboard* blackboard` 句柄，供**没有 `RenderGraph` 的消费者**（`ImGuiSystem`）使用。
+
+**时序注意**：任何读黑板的代码都必须排在 `renderGraph->beginFrame(...)` 与"挂载荷"之后。`imguiSystem->prepareDrawData(frameInfo)` 原来在 `beginFrame` 之前，T-06 把它挪到了载荷之后 —— 否则面板永远读到空载荷。
+
+---
+
+
+## 9. GPU 计时挂钩
 
 `RenderGraph` 在每个 Pass 前后调 `GpuTimer`，但**只在 `--gpu-timing` 开启时**插 timestamp：
 
@@ -303,7 +328,7 @@ if (gpuTimer) { /* vkCmdWriteTimestamp2 */ }
 
 ---
 
-## 9. 改动检查清单
+## 10. 改动检查清单
 
 修改渲染图或 Pass 声明后：
 

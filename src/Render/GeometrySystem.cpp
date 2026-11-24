@@ -1,3 +1,5 @@
+#include "RHI/RenderGraphBlackboard.h"
+#include "Render/FramePayloads.h"
 #include "GeometrySystem.h"
 #include "Core/DescriptorManager.h"
 #include "RHI/CommandUtils.h"
@@ -961,11 +963,16 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
 
         // C1c: blend the previous tick pose with the current one. Outside the
         // editor play mode renderAlpha is 0 and this is the authoritative matrix.
+// T-06：插值权重从图级黑板取，FrameInfo 上已没有这两个字段。
+const tiny::payload::RenderInterpolation* interpolation =
+frameInfo.blackboard != nullptr ? frameInfo.blackboard->find<tiny::payload::RenderInterpolation>() : nullptr;
+const float renderAlpha = interpolation != nullptr ? interpolation->alpha : 0.0f;
+const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         const bool interpolateEntity = scene::shouldInterpolateTransform(
-            *worldTransform, frameInfo.renderAlpha, frameInfo.renderTick);
+            *worldTransform, renderAlpha, renderTick);
         glm::mat4 entityMatrix = interpolateEntity
             ? scene::interpolateTransform(worldTransform->previousMatrix,
-                                          worldTransform->matrix, frameInfo.renderAlpha)
+                                          worldTransform->matrix, renderAlpha)
             : worldTransform->matrix;
         glm::mat4 entityNormalMatrix = interpolateEntity
             ? glm::mat4(glm::transpose(glm::inverse(glm::mat3(entityMatrix))))

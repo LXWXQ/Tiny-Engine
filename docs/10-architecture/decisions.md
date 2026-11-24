@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~960 行
+size: ~1036 行
 updated: 2026-11-24
 ---
 
@@ -958,3 +958,79 @@ resize 的创建量随之从 44 掉到 25 上下，而且省的是常驻显存�
 
 - 不做任意多段提交（FramePlan 的完整形态）。两段已经能覆盖「一个生产者 + 一个消费者」的真实场景；更多段要先把 Pass 依赖图与资源生命周期一起搬进图，那是 P1 之后的活。
 - 不引入 `VK_KHR_synchronization2` 之外的队列优先级 / `vkQueueSubmit2` 权重调整 —— 本机两族队列，收益无法验证。
+
+## 决策 51：帧间交接走图级黑板，`FrameInfo` 不再当万能总线（T-06）
+
+### 问题
+
+`FrameInfo` 原本承担"每帧把所有东西递给 Pass 与 UI"的职责，字段只增不减。到 T-06 开工时，里面躺着八个**只有一个生产者（`Application`）、消费者只有三四个**的交接字段：
+
+| 字段 | 生产者 | 消费者 |
+|---|---|---|
+| `renderAlpha` / `renderTick` | `Scene`（编辑器播放态） | `GeometrySystem`、`SceneGpuBatch` |
+| `exposureOverride` | `AutoExposurePass::update` | `PresentPass` |
+| `editorSelection` | `EditorLayer` | `EditorOverlayPass` |
+| `onSaveConfig` / `onLoadConfig` / `onBuildEditorUI` / `isEditorMode` | `Application` | `ImGuiSystem` |
+
+每加一个这样的交接点，就要改 `FrameInfo` 的定义、所有聚合初始化点、以及"谁负责填"的约定 —— 而 `FrameInfo` 是**聚合初始化**（位置对应），插在中间会让后面所有字段错位，编译期报一堆莫名其妙的类型转换错误。这条成本每次都付。
+
+### 做法
+
+新增 `src/RHI/RenderGraphBlackboard.h`（header-only）与 `src/Render/FramePayloads.h`：
+
+```cpp
+class tiny::RenderGraphBlackboard
+{
+public:
+    template <typename T, typename... Args> T& getOrCreate(Args&&... args);
+    template <typename T> T* find();
+    template <typename T> const T* find() const;
+    template <typename T> void set(T value);
+    template <typename T> bool has() const;
+    void clear();
+    std::size_t size() const;
+};
+```
+
+- 键是 `std::type_index`，值是 `Entry{ void* object; void (*destroy)(void*); }` —— 析构函数在创建时按 `T` 记下来，`clear()` 时逐个调。
+- `RenderGraph::getBlackboard()` 暴露给 Pass；`beginFrame()` 的第一件事是 `blackboard.clear()`，所以**载荷生命周期严格一帧**。
+- 四个载荷类型放在 `src/Render/FramePayloads.h`：`ExposureOverride{float}`、`SelectionHighlight{entt::entity}`、`RenderInterpolation{float alpha; uint64_t tick;}`、`ConfigCallbacks{ save/load/buildEditorUI/isEditorMode }`。
+- `FrameInfo` 只留一个句柄 `tiny::RenderGraphBlackboard* blackboard`，给**没有 RenderGraph 的消费者**用（`ImGuiSystem`）。八个旧字段全部删除。
+
+顺带必须改的一处时序：`imguiSystem->prepareDrawData(frameInfo)` 原本在 `renderGraph->beginFrame(...)` **之前**，而 `beginFrame` 会清空黑板 —— 不改的话面板永远读到空载荷。现在它挪到"黑板填好之后、`renderPipeline.registerAll` 之前"。
+
+### 为什么
+
+- **生产者与消费者的对应关系变成局部知识**：加一个交接点只动 `FramePayloads.h` 的类型与两个调用点，不动 `FrameInfo` 的布局。
+- **类型即键，不需要字符串注册**：`find<T>()` 在编译期就确定，写错类型是编译错误而不是运行期空值。
+- **生命周期一帧是刻意的**：黑板不承担跨帧状态（TAA 历史、曝光适应曲线这类仍在各自的 Pass 里），避免变成"第二个全局变量池"。
+
+### 代价与边界
+
+- 每帧 `clear()` 会把载荷 `delete` 一次、下一帧再 `new` 一次。`ConfigCallbacks` 里四个 `std::function` 每帧一次分配，实测在噪声内（三个场景的 `[FrameStats]` 与 T-07 后逐位一致），但如果将来放重对象要考虑池化。
+- 只有拿到 `RenderGraph` 的消费者能直接用 `getBlackboard()`；`ImGuiSystem` 这类不持有的，靠 `FrameInfo::blackboard` 句柄 —— 所以 `FrameInfo` 还留着这一个指针字段，`FrameInfo.h` 因此需要前置声明 `tiny::RenderGraphBlackboard`。
+- 黑板**不校验写入者**：两个 Pass 写同一类型时后写的覆盖前面的。约定是"一个类型一个写者"，没有运行期检查。
+
+### 踩过的坑（值得单独记）
+
+第一次是一次性改完九个文件，编译过了但启动即崩：`EXIT=-1073741819`（0xC0000005）、stderr 0 字节、日志停在自检开始处。回退后分四步重做，最后定位到 `ImGuiSystem::renderConfigPanel`：`callbacks` 的四行声明被插到了
+
+```cpp
+if (!ImGui::CollapsingHeader("Config", ImGuiTreeNodeFlags_DefaultOpen))
+    return;
+```
+
+这条 `if` 与它那句 `return;` **之间** —— 等价于把 `return` 挪到了声明之后，后面的 Save/Reload 读到未初始化的指针。教训：往"没有花括号的单语句 `if`"中间插代码，会静默切断控制流；插之前先把它改成花括号块，或者把声明放到函数体第一行。
+
+### 验证
+
+- 默认场景 40 帧 + `--validation-features sync`：`EXIT=0`、`errors=0 warnings=0`、`stderr 0` 字节；`[FrameTime] median=13.12ms p95=41.62ms max=95.70ms`、`[Resources] total=145 peakFrame=145`、`[SceneGpu] visibleRatio=0.61`。
+- `--cube-field 10000` 120 帧：`85.45 FPS`、`median=8.62ms p95=29.88ms max=132.36ms`、`instances/frame=10063`、`visibleRatio=0.62`、`errors=0`。
+- `--cross-queue-test`：`[TD02]` 两个方向 + `[T01]` 两条断言全绿、`errors=0`、`stderr 0` 字节。
+- 三个场景的 `[FrameStats]`（`passes/frame`、`pipelineBinds`、`redundant`）与 T-07 之后逐位一致 —— 黑板没有改变渲染图的录制内容。
+
+### 不引入的
+
+- 不做跨帧黑板：生命周期一帧就是它的定义，跨帧状态有明确所有者（Pass 自己的成员）。
+- 不做字符串键或反射注册：类型即键已经够用，字符串键会把拼写错误推到运行期。
+- 不把 `Scene` / `EngineSettings` 搬进黑板：它们有明确的生命周期与所有者，进黑板只会变成第二个全局变量池。

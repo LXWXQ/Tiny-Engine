@@ -1,3 +1,5 @@
+#include "RHI/RenderGraphBlackboard.h"
+#include "Render/FramePayloads.h"
 #include "EditorOverlayPass.h"
 #include "AssetPaths.h"
 
@@ -132,7 +134,10 @@ void EditorOverlayPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         return;
 
     const uint32_t frame = frameInfo.frameInFlightIndex;
-    const entt::entity selected = frameInfo.editorSelection;
+    // T-06：选中项从图级黑板取（编辑器写、本 Pass 读），FrameInfo 上不再有该字段。
+    const tiny::payload::SelectionHighlight* highlight =
+        graph.getBlackboard().find<tiny::payload::SelectionHighlight>();
+    const entt::entity selected = highlight != nullptr ? highlight->entity : entt::null;
 
     // 每个盒子 24 个顶点；最多同时画选中包围盒 + 体积雾盒。
     constexpr uint32_t kVerticesPerBox = 24;

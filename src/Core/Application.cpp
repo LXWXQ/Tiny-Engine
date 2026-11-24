@@ -18,6 +18,8 @@
 #include "Core/StartupLog.h"
 #include "RHI/PipelineStats.h"
 #include "RHI/FrameStats.h"
+#include "RHI/RenderGraphBlackboard.h"
+#include "Render/FramePayloads.h"
 #include "RHI/StateCache.h"
 #include "RHI/ResourceStats.h"
 #include "RHI/QueueStats.h"
@@ -3266,45 +3268,55 @@ if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
 			&scene->getCameraController()
 		};
 
-		// F6-02：读回两帧前的亮度统计并推进曝光。必须在 endFrame 之前 ——
-		// Present 用的是本帧算出来的这个值。
-		if (autoExposurePassPtr != nullptr && diagnosticsOptions.autoExposure)
-			frameInfo.exposureOverride = autoExposurePassPtr->update(frameInFlight, dt);
+// F6-02：读回两帧前的亮度统计并推进曝光。必须在 endFrame 之前 ——
+// Present 用的是本帧算出来的这个值。
+// T-06：这些交接值不再挂到 FrameInfo 上，直接进图级黑板交给消费方。
+float exposureOverride = 0.0f;
+if (autoExposurePassPtr != nullptr && diagnosticsOptions.autoExposure)
+exposureOverride = autoExposurePassPtr->update(frameInFlight, dt);
 
-		// C1c：模拟插值权重由编辑器按播放态写入 Scene，这里每帧搬进帧数据。
-frameInfo.renderAlpha = scene->renderInterpolationAlpha();
-    frameInfo.renderTick = scene->simulationTick();
+// C1c：模拟插值权重由编辑器按播放态写入 Scene，这里每帧搬进帧数据。
+const float renderAlpha = scene->renderInterpolationAlpha();
+const uint64_t renderTick = scene->simulationTick();
 
 // 编辑器选中项交给渲染侧（画包围盒用）
+entt::entity selectedEntity = entt::null;
 if (editorLayer)
-frameInfo.editorSelection = editorLayer->getState().selection.primary();
+selectedEntity = editorLayer->getState().selection.primary();
 
 // W1：把配置存取交给 UI 层。用回调而不是让 ImGuiSystem 持有 FirstApp，
-		// 保持"UI 不依赖引擎总控"这条边界。
-		frameInfo.onSaveConfig = [this] { saveConfig(); };
-		frameInfo.onLoadConfig = [this] { loadConfig(); };
+// 保持"UI 不依赖引擎总控"这条边界。
+tiny::payload::ConfigCallbacks configCallbacks{};
+configCallbacks.save = [this] { saveConfig(); };
+configCallbacks.load = [this] { loadConfig(); };
+if (editorLayer)
+{
+configCallbacks.isEditorMode = [this] { return editorLayer != nullptr; };
+configCallbacks.buildEditorUI = [this, &frameInfo]
+{
+editorLayer->setFrameSlot(frameInfo.frameInFlightIndex);
+editorLayer->drawUI();
+};
+}
 
-		// 编辑器接管 UI 时，ImGuiSystem 不再画内置面板，改调这个回调。
-		if (editorLayer)
-		{
-			frameInfo.isEditorMode = [this] { return editorLayer != nullptr; };
-			frameInfo.onBuildEditorUI = [this, &frameInfo]
-			{
-				editorLayer->setFrameSlot(frameInfo.frameInFlightIndex);
-				editorLayer->drawUI();
-			};
-		}
-
-		// D-2：先把本帧的 ImGui 面板建好并生成绘制列表（纯 CPU 工作，不含 GPU 命令）。
-		// 放在这里而不是 Present 回调里，是为了让面板上的改动（曝光、Bloom 参数）
-		// 当帧就生效 —— 否则会有一帧延迟，拖滑块的手感会发飘。
-		imguiSystem->prepareDrawData(frameInfo);
-
-		// D-1(b)：所有 Pass 把自己的工作声明进渲染图，
-		// 屏障、布局转换、vkCmdBeginRendering 全部由渲染图负责。
+// D-1(b)：所有 Pass 把自己的工作声明进渲染图，
+// 屏障、布局转换、vkCmdBeginRendering 全部由渲染图负责。
 // T-07：把第二段图形命令缓冲交给图；--no-async-split 时置空，退回单次提交。
 renderGraph->setSecondaryGraphicsCommandBuffer(diagnosticsOptions.noAsyncSplit ? VK_NULL_HANDLE : renderer->getSecondaryGraphicsCommandBuffer());
 renderGraph->beginFrame(commandBuffer, renderer->getComputeCommandBuffer(), renderer->getCurrentFrameInFlightIndex(), renderer->getFrameNumber());
+// T-06：beginFrame 刚清空黑板，这里挂本帧的交接载荷（生命周期一帧）。
+{
+auto& blackboard = renderGraph->getBlackboard();
+blackboard.set(tiny::payload::ExposureOverride{ exposureOverride });
+blackboard.set(tiny::payload::SelectionHighlight{ selectedEntity });
+blackboard.set(tiny::payload::RenderInterpolation{ renderAlpha, renderTick });
+blackboard.set(std::move(configCallbacks));
+frameInfo.blackboard = &blackboard;
+}
+
+// D-2：ImGui 面板在"黑板填好之后、Pass 注册之前"生成绘制列表。
+// 放在这个位置是为了让面板读到本帧载荷（曝光覆盖等），同时保持改动当帧生效。
+imguiSystem->prepareDrawData(frameInfo);
 		renderPipeline.registerAll(*renderGraph, frameInfo);
 		// 渲染完成 -> 把这张交换链图像转入 PRESENT_SRC_KHR 供 present
 		renderGraph->presentTransition(renderResources->swapchainImages[frameInfo.swapchainImageIndex]);

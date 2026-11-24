@@ -14,6 +14,7 @@
 
 class DescriptorManager;
 class CameraController;
+namespace tiny { class RenderGraphBlackboard; }
 
 struct PointLight
 {
@@ -433,33 +434,8 @@ VkCommandBuffer commandBuffer;
 	TransformComponent* cameraTransform = nullptr;
 	CameraController* cameraController = nullptr;
 
-	// M1-C1c：模拟插值权重，取值 [0, 1)。0 表示"按当前姿态原样绘制"，所有自检与
-	// 无头回归都走这一档；编辑器播放态由 EditorLayer 用 SimulationClock::alpha() 填。
-	float renderAlpha = 0.0f;
-    // M1-C1c：刚结束的那个模拟 tick 编号。只有 changedTick 等于它的实体才插值。
-    uint64_t renderTick = 0;
-
-    // F6-02：自动曝光算出来的本帧曝光值。0 = 不覆盖，用 SceneSettings::exposure。
-    // 刻意不走 SceneSettings：那条值会被 EngineConfig 存进 config/engine.json，
-    // 等于随时间把用户配置改掉。
-    float exposureOverride = 0.0f;
-
-	// W1：配置存取的入口。
-	// 用回调而不是让 ImGuiSystem 直接持有 FirstApp，是为了不让 UI 层依赖引擎总控 ——
-	// 数据总线（FrameInfo）本来就承担"每帧把东西递给 Pass/UI"的职责，这里沿用同一套。
-	// 为空表示"当前上下文不支持配置操作"（例如还没接上）。
-	std::function<void()> onSaveConfig;
-	std::function<void()> onLoadConfig;
-
-	// 编辑器接管 UI 时的绘制回调。
-	// 为空 -> ImGuiSystem 画内置面板（运行时模式）；
-	// 非空 -> 由编辑器画自己的菜单栏与面板，内置面板不再绘制。
-	// 用回调而不是让 ImGuiSystem 认识 EditorLayer：保持 "Core 不依赖 Editor" 的边界。
-	std::function<void()> onBuildEditorUI;
-	std::function<bool()> isEditorMode;
-
-	// 编辑器当前选中的实体（entt::null = 没选）。渲染侧用它画"选中包围盒"。
-	// 【必须放在结构体末尾】FrameInfo 是聚合初始化（位置对应），
-	// 插在中间会让后面所有字段整体错位，编译期会报一堆莫名其妙的类型转换错误。
-	entt::entity editorSelection = entt::null;
+// T-06：图级黑板句柄（生命周期一帧，由 Application 每帧填）。
+// 没有 RenderGraph 的消费者（ImGuiSystem）靠它取交接载荷；
+// 有 RenderGraph 的 Pass 请直接用 graph.getBlackboard()。
+tiny::RenderGraphBlackboard* blackboard = nullptr;
 };

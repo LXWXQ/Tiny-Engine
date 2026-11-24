@@ -1,7 +1,8 @@
 #pragma once
 
 #include "Device.h"
-#include "GpuTimer.h"   // P0-4：每 pass GPU 计时
+#include "GpuTimer.h"
+#include "RenderGraphBlackboard.h"   // P0-4：每 pass GPU 计时
 
 class GpuProfiler;   // P1-1：Tracy GPU zone（前置声明，避免头文件污染）
 namespace tiny { class RenderTargetPool; }   // T-04：跨帧 RT 池（前置声明，头文件不拖 vma）
@@ -309,6 +310,11 @@ public:
     // 准备与录制各自的每帧耗时（--stats-rendergraph）。
     void reportPrepareStats() const;
 
+    // T-06：图级黑板。生命周期一帧 —— beginFrame 清空，写方在 beginFrame 之后写，
+    // 读方在 addToGraph 里用 find<T>() 取；nullptr 表示"本帧没人提供"。
+    tiny::RenderGraphBlackboard& getBlackboard() { return blackboard; }
+    const tiny::RenderGraphBlackboard& getBlackboard() const { return blackboard; }
+
     // P0-4：每 pass GPU 计时挂钩。TINY_ENABLE_GPU_TIMING 关闭时是空实现，
     // 默认构建为此一处也不产生（零分支、零命令）。
     void setGpuTimer(GpuTimer* timer) { gpuTimer = timer; }
@@ -560,6 +566,7 @@ private:
     std::vector<TextureEntry> textures;
     std::vector<BufferEntry> buffers;
     std::vector<std::unique_ptr<Pass>> passes;
+    tiny::RenderGraphBlackboard blackboard;
 
     // T-07：第二段图形命令缓冲与拆分点。
     VkCommandBuffer secondaryGraphicsCmd = VK_NULL_HANDLE;

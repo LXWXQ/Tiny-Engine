@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1027 行
+size: ~1040 行
 updated: 2026-11-24
 ---
 
@@ -817,7 +817,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 | T-03（已落地） | 图像屏障在 Pass 内按六元组分桶合并（新增 `src/RHI/RenderGraphBarrier.cpp`） | `src/RHI/RenderGraph.{h,cpp}`、`src/RHI/RenderGraphBarrier.cpp` | 调用 45.2→38.0 / 61.2→47.0；`entries` 不变；A/B FPS +0.1% | 2 |
 | T-04 | 跨帧 RT 池 | 新增 `src/RHI/RenderTargetPool.{h,cpp}`，`--rt-pool` 才开 | **已落地（默认关）**：稳态本来就是 0 创建；一次 resize 约 44 张，池只省 13~15% 且要 256 MiB 空闲图 → 判据改成「一次 resize 创建量 44 → ≤25」 | 2 |
 | T-05 | Pass 剔除 + dry-run 校验 | `src/RHI/RenderGraph.cpp` | **已落地（默认关）**：机制正确但本引擎没有「输出无人读」的 Pass，实测 `culled/frame=0.0`；`--no-bloom` 的 21 → 14 是 Pass 自己不进图 | 2 |
-| T-06 | Blackboard（`std::any` + `type_index`） | 新增 `src/RHI/Blackboard.h` | SSAO 输出与 Hi-Z 金字塔改走黑板，`FrameInfo` 字段减少 ≥ 4 | 1 |
+| T-06（已落地） | Blackboard（`type_index` + 类型擦除，生命周期一帧） | `src/RHI/RenderGraphBlackboard.h`、`src/Render/FramePayloads.h` | 八个交接字段搬进图级黑板，`FrameInfo` 字段减少 8 个（≥ 4 达标） | 1 |
 | T-07 | `FramePlan` + 三提交点 `G0 -> C0 -> G1`（**已落地**：队列窗口时间戳 + 拆分提交，默认开，`--no-async-split` 回退） | `src/RHI/Renderer.{h,cpp}:214`、`src/RHI/RenderGraph.{h,cpp}` | compute 与 graphics 有重叠：`[Queue] overlap` 0.00 -> 0.51 ms（100% of compute）；`--no-async-split` 截图在噪声内 | 3 |
 | T-08 | `primitiveBuffer` + `instanceBuffer` 骨架（先只读） | 新增 `src/Render/GpuScene.{h,cpp}` | 一万实例的世界矩阵来自持久 buffer；剔除结果与旧路径一致 | 3 |
 | T-09（已落地） | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
@@ -844,6 +844,19 @@ default 160.82 FPS / voxel-world 96.15 / lights-512 88.93，波动 2.78% / 1.18%
 
 **P0 的状态**：P0-1 / P0-3 / P0-4 已落地，P0-2 只补了本轮需要的部分（屏障条数、管线绑定与冗余、draw calls、
 desc binds、三角形数；显存占用与 submitted/visible 组数仍靠 `--stats-clusters` 与编辑器面板人工看）。
+
+**T-06 图级黑板**：新增 `src/RHI/RenderGraphBlackboard.h`（`std::type_index` → `Entry{void*, destroy}`，
+`getOrCreate` / `find` / `set` / `has` / `clear`）与 `src/Render/FramePayloads.h`（曝光覆盖、选中项、
+模拟插值、UI 回调四个载荷）；`beginFrame()` 第一件事 `blackboard.clear()`，载荷严格一帧。
+`FrameInfo` 的八个交接字段全部删除，只留 `tiny::RenderGraphBlackboard* blackboard` 句柄供 `ImGuiSystem` 使用。
+必须同改的一处时序：`imguiSystem->prepareDrawData(frameInfo)` 从 `beginFrame` 之前挪到载荷之后，否则面板读到空黑板。
+
+- 默认 40 帧 + `sync`：`EXIT=0`、`errors=0`、`stderr 0` 字节、`[FrameTime] median=13.12ms p95=41.62ms max=95.70ms`、`[Resources] total=145`。
+- `--cube-field 10000` 120 帧：`85.45 FPS`、`median=8.62ms p95=29.88ms max=132.36ms`、`instances/frame=10063`、`visibleRatio=0.62`、`errors=0`。
+- `--cross-queue-test`：`[TD02]` 两向 + `[T01]` 两条断言全绿。
+- 一次 `0xC0000005` 的代价：第一版一次性改完九个文件，编译过但启动即崩；回退后分四步重做，
+  根因是 `callbacks` 的声明被插进 `if (!ImGui::CollapsingHeader(...))` 与它的 `return;` 之间，
+  后面的 Save/Reload 读到未初始化指针。教训：往无花括号的单语句 `if` 中间插代码会静默切断控制流。
 因此 P0 算**完成但有一处口径偏差**：计划里写的 `cube-field` 场景在引擎里没有生成器，改用 `--voxel-world 1`；
 `editor-default` 改用 `--selftest` 的 `default`。偏差以 [baseline](../70-status/baseline.md) 的场景表为准。
 

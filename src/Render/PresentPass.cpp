@@ -1,3 +1,5 @@
+#include "RHI/RenderGraphBlackboard.h"
+#include "Render/FramePayloads.h"
 #include "PresentPass.h"
 #include "AssetPaths.h"
 #include <stdexcept>
@@ -231,8 +233,11 @@ void PresentPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
 
     PresentPush push{};
     // F6-02：自动曝光给出本帧覆盖值时优先用它（0 = 没开，跟随场景设置）。
-    push.exposure = frameInfo.exposureOverride > 0.0f
-        ? frameInfo.exposureOverride
+    // T-06：曝光覆盖值从图级黑板取（Present 拿得到 graph）。
+    const tiny::payload::ExposureOverride* exposure = graph.getBlackboard().find<tiny::payload::ExposureOverride>();
+    const float exposureOverride = exposure != nullptr ? exposure->value : 0.0f;
+    push.exposure = exposureOverride > 0.0f
+        ? exposureOverride
         : frameInfo.settings.exposure;
     push.bloomIntensity = bloomEnabled ? frameInfo.settings.bloomIntensity : 0.0f;
     push.bloomEnabled = bloomEnabled ? 1.0f : 0.0f;

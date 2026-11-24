@@ -1,3 +1,5 @@
+#include "RHI/RenderGraphBlackboard.h"
+#include "Render/FramePayloads.h"
 #include "Render/SceneGpuBatch.h"
 #include "RHI/ResourceStats.h"
 #include <cmath>
@@ -997,11 +999,16 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
             // C1c: blend the previous tick pose with the current one, then apply
             // the node matrix. renderAlpha is 0 outside the editor play mode, in
             // which case this is exactly worldTransform.matrix.
+// T-06：插值权重从图级黑板取，FrameInfo 上已没有这两个字段。
+const tiny::payload::RenderInterpolation* interpolation =
+frameInfo.blackboard != nullptr ? frameInfo.blackboard->find<tiny::payload::RenderInterpolation>() : nullptr;
+const float renderAlpha = interpolation != nullptr ? interpolation->alpha : 0.0f;
+const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             const bool interpolateEntity = scene::shouldInterpolateTransform(
-                worldTransform, frameInfo.renderAlpha, frameInfo.renderTick);
+                worldTransform, renderAlpha, renderTick);
             const glm::mat4 entityMatrix = interpolateEntity
                 ? scene::interpolateTransform(worldTransform.previousMatrix,
-                                              worldTransform.matrix, frameInfo.renderAlpha)
+                                              worldTransform.matrix, renderAlpha)
                 : worldTransform.matrix;
             const glm::mat4 instanceMatrix = entityMatrix * nodeMatrix;
 

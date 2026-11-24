@@ -1,3 +1,5 @@
+#include "RHI/RenderGraphBlackboard.h"
+#include "Render/FramePayloads.h"
 #include "ImGuiSystem.h"
 #include "AssetPaths.h"   // TINY_IMGUI_INI_PATH
 #include "Scene/CameraController.h"
@@ -132,10 +134,15 @@ void ImGuiSystem::prepareDrawData(FrameInfo& frameInfo)
 // 编辑器模式：UI 由 EditorLayer 全权构建（它有自己的菜单栏与面板布局），
 // 内置的 "Tiny Engine Core" 面板不再绘制。
 // 两者不并存，避免两套面板同时修改同一批 EngineSettings 造成控制权歧义。
-if (frameInfo.isEditorMode && frameInfo.isEditorMode())
+// T-06：UI 回调从图级黑板取。ImGuiSystem 没有 RenderGraph，靠 FrameInfo 里的哨柄。
+const tiny::payload::ConfigCallbacks* callbacks = frameInfo.blackboard != nullptr
+? frameInfo.blackboard->find<tiny::payload::ConfigCallbacks>()
+: nullptr;
+const bool editorMode = callbacks != nullptr && callbacks->isEditorMode && callbacks->isEditorMode();
+if (editorMode)
 {
-if (frameInfo.onBuildEditorUI)
-frameInfo.onBuildEditorUI();
+if (callbacks->buildEditorUI)
+callbacks->buildEditorUI();
 ImGui::Render();
 return;
 }
@@ -355,6 +362,11 @@ ImGui::TextDisabled("Hold RMB: look  |  Hold MMB: orbit  |  Wheel: speed/zoom");
 
 void ImGuiSystem::renderConfigPanel(FrameInfo& frameInfo)
 {
+// T-06：回调在图级黑板上，这里取一次，Save/Reload 两个按钮共用。
+const tiny::payload::ConfigCallbacks* callbacks = frameInfo.blackboard != nullptr
+? frameInfo.blackboard->find<tiny::payload::ConfigCallbacks>()
+: nullptr;
+
 	if (!ImGui::CollapsingHeader("Config", ImGuiTreeNodeFlags_DefaultOpen))
 		return;
 
@@ -378,13 +390,13 @@ void ImGuiSystem::renderConfigPanel(FrameInfo& frameInfo)
 	const float spacing = ImGui::GetStyle().ItemSpacing.x;
 	const float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
 
-	if (ImGui::Button("Save", ImVec2(half, 0.0f)) && frameInfo.onSaveConfig)
-		frameInfo.onSaveConfig();
+if (ImGui::Button("Save", ImVec2(half, 0.0f)) && callbacks != nullptr && callbacks->save)
+callbacks->save();
 
 	ImGui::SameLine();
 
-	if (ImGui::Button("Reload", ImVec2(half, 0.0f)) && frameInfo.onLoadConfig)
-		frameInfo.onLoadConfig();
+if (ImGui::Button("Reload", ImVec2(half, 0.0f)) && callbacks != nullptr && callbacks->load)
+callbacks->load();
 
 	ImGui::TextDisabled("(exit also saves)");
 

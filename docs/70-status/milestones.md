@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1573 行
+size: ~1602 行
 updated: 2026-11-24
 ---
 
@@ -1571,3 +1571,32 @@ T-04 的 `[RTPool] top creators` 全是 `Frame0` / `Frame1` 成对出现。顺�
 - `tools/bench.ps1` 新增 `cube-field` 场景与 `instances` / `flattenUs` 两列；`[SceneGpu] cull summary` 也带上 `flattenUs/frame`。
 - 一个必须记住的口径：`visible = 0.62` 还是**组级**的。一万个立方体合并成一个组，组级剔除只能全剔或全留，
   所以 P2 的「visible/submitted ≤ 0.6」在实例级剔除落地之前不会因为这个场景而改善。
+
+## T-06：帧间交接改走图级黑板（2026-11-24）
+
+`FrameInfo` 上八个"只有一个生产者、消费者三四个"的交接字段搬进 `RenderGraph` 的黑板，
+`FrameInfo.h` 从 470 行降到 441 行。
+
+| 项 | 之前 | 之后 |
+|---|---|---|
+| `FrameInfo` 交接字段 | 8 个（`renderAlpha` / `renderTick` / `exposureOverride` / `editorSelection` / `onSaveConfig` / `onLoadConfig` / `onBuildEditorUI` / `isEditorMode`） | 1 个句柄 `tiny::RenderGraphBlackboard* blackboard` |
+| 交接点定义位置 | `FrameInfo.h`（聚合初始化，插中间会让后续字段错位） | `src/Render/FramePayloads.h`（四个载荷类型） |
+| ImGui 读载荷的时机 | `prepareDrawData` 在 `beginFrame` 之前（读不到） | 挪到黑板填好之后 |
+| 默认场景 `passes/frame` | 16.0（T-07 后） | 16.0（不变） |
+
+读数（默认 40 帧 + `sync`）：`[FrameTime] median=13.12ms p95=41.62ms max=95.70ms`、
+`[Resources] total=145 peakFrame=145`、`[SceneGpu] visibleRatio=0.61`、`errors=0`、`stderr 0` 字节。
+`--cube-field 10000` 120 帧：`85.45 FPS`、`median=8.62ms p95=29.88ms max=132.36ms`、
+`instances/frame=10063`、`visibleRatio=0.62`、`errors=0`。
+`--cross-queue-test`：`[TD02]` 两向 + `[T01]` 两条断言全绿。
+
+三处实现要点：
+
+- 黑板键是 `std::type_index`，值是 `Entry{void*, void(*)(void*)}` —— 析构函数在创建时按 `T` 记下来。
+- `beginFrame()` 第一件事是 `blackboard.clear()`，所以载荷**严格一帧**；跨帧状态留在各 Pass 自己的成员里。
+- `ImGuiSystem` 不持有 `RenderGraph`，靠 `FrameInfo::blackboard` 句柄取载荷。
+
+一次崩在 `0xC0000005` 的经历值得记：第一次一次性改完九个文件，编译过但启动即崩（`EXIT=-1073741819`、
+`stderr 0` 字节、日志停在自检开始）。回退后分四步重做，根因是 `ImGuiSystem::renderConfigPanel` 里
+`callbacks` 的四行声明被插到了 `if (!ImGui::CollapsingHeader(...))` 与它那句 `return;` **之间** ——
+等于把 `return` 挪到了声明之后，Save/Reload 随后读到未初始化的指针。

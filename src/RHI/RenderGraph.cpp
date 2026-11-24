@@ -120,6 +120,7 @@ void RenderGraph::beginFrame(VkCommandBuffer graphicsCommandBuffer,
     // T-09：绑定缓存的窗口与帧统计对齐（都在这里开一帧），两张表才能互相校验。
     tiny::statecache::beginFrame(graphicsCommandBuffer, computeCommandBuffer);
     tiny::resourcestats::beginFrame();
+    blackboard.clear();   // T-06：黑板生命周期一帧
     if (texturePool) texturePool->beginFrame(frameNumber);
 
     // TM-07：帧首把暂存区轮转到这一帧的槽位（offset 归零、上一轮淘汰的旧块回收）。
