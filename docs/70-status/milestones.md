@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1672 行
+size: ~1683 行
 updated: 2026-11-25
 ---
 
@@ -1671,3 +1671,14 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 验收：三档 120 帧前后 `cull stats` / `cull summary` 的整数读数逐位相同（default `103/63/40`、10k `instances=10063`、30k `30063`；`instFrustum=6756/10000`、`11157/30000`；`visibleRatio 0.61/0.62/0.62`），只有计时列不同；`--validation-features sync` `errors=0 warnings=0`、stderr 0 字节。
 - 全套回归 **96 项** ALL PASS（含 `f1d-sync-validation`、`f3v-water-off`），stderr 全 0，验证日志 `build/validation/20261125-103927`；DocCheck PASS（documents=81 lines=18000）。
 - 边界：`Stats` 字段顺序与 GPU 字序不同（`groups`/`drawCalls` 占 words[6..7]，与 GPU 的 `occlusionTests`/`occlusionCulled` 重叠），`readStats` 只能按名字逐字读，不能整块 memcpy。
+
+## P2 第七步：实例级视锥统计上 GPU（2026-11-25）
+
+- `shaders/scene_cull.comp` 加 binding 5（`readonly buffer InstanceBuffer{InstanceRecord[]}`，与 C++ 侧 224 字节的 `InstanceRecord` 同构），push constant 16 → 32 字节（`uvec4 more`：`x = count`、`y = mode`）；同一命令缓冲里两遍 dispatch：`mode = 0` 跑原组剔除，`mode = 1` 跑 `countInstanceVisibility()`（一个 invocation 一个实例，`(count + 63) / 64` 个工作组）。
+- 计数写 `stats[3]`：`x` = 测过实例数、`y` = 可见实例数；`Stats` 的 `reserved[3]` 换成 `instanceTests` / `instanceVisible` / `reserved`（仍 16 个 uint，`readStats` 读 words[12]/[13]），`CullTotals` 加 `gpuInstanceTested` / `gpuInstanceVisible`，日志多一行 `[SceneGpu] instance summary | frames=118 gpuInst=0.67 (804288/1192154) | tested/frame=10103.0`。
+- 口径：测**整条**实例缓冲，不是只测可见组 —— CPU 的 `instFrustum` 度量本来就是全量，同口径才谈得上对照；组门控要的「实例 → 组」表留到第三步压缩索引时一起建。两遍之间不加屏障（写集合不重叠，第二遍之后原有的全屏障已覆盖）。
+- 验收（120 帧固定机位）：10k `gpuInst=0.6747` 对 CPU `0.6756`（差 0.09 个百分点）、30k `0.3726` 对 `0.3719`（差 0.07），default `0.58 (7080/12154)`；三档 `errors=0 warnings=0`、stderr 0 字节，`--validation-features sync`（10k）同。
+- 代价：cube-field 30k 600 帧 × 3 轮交替 A/B，开启 `4.696/4.715/4.725 s` 对关掉这条 dispatch 的 `4.687/4.694/4.707 s`，median 帧时间同为 7.62 ms —— ≤0.5%，落在噪声内。
+- 全套回归 **96 项** ALL PASS（stderr 全 0），验证日志 `build/validation/20261125-111243`；DocCheck PASS（documents=81 lines=18077）。
+- 踩坑：GLSL 的 `half` 是保留字（局部变量改名 `worldHalf`）；`Copy-Item` 覆盖源码带回旧 mtime，MSBuild 跳过重编、读数全 0（实际在跑旧二进制）。
+- 本步不裁剪：indirect 的 `instanceCount` 与 `visibleRatio` 仍是组级，第三步才换成 remap 后的数量。

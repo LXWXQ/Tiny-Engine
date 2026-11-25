@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1052 行
+size: ~1054 行
 updated: 2026-11-25
 ---
 
@@ -1051,3 +1051,5 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **T-07 第二步（2026-11-24，已落地）**：图形拆成 `G0 -> C0 -> G1` 两段命令缓冲、三次提交。拆分点由图自己算（第一个「带读位且与 compute 写范围重叠」的 graphics Pass），三条保守规则：拆点为第 0 个 Pass 时不拆、`--no-async-split` 整体退回单次提交、没有 compute 写时提交路径与改造前完全一致。实测 512 灯 + sync：`makespan 10.06 -> 9.03 ms`、`overlap 0.00 -> 0.51 ms`（等于 compute 全部忙碌时间，100% 被遮住）；无验证层 600 帧 × 3 轮交替 `102.00` 对 `100.94` FPS（+1.05%）；默认场景 `passes/frame=16.0` 不变、截图差异在噪声内。**验收偏差**：本单收益上限本来就只有 compute 占比（2.5%），+1.05% 已是这个上限的一半。
 
 **P2 第六步（2026-11-25，布局验证）**：实例级剔除先做纯扩容，不动读数 —— `shaders/scene_cull.comp` 的 `uvec4 stats[3]` 扩成 `stats[4]`，`src/Render/SceneGpuBatch.h` 的 `Stats` 13 → 16 个 `uint32_t`（`reserved[3]`，否则扩槽越界），`SceneGpuBatch.cpp` 的 stats 缓冲改按 `sizeof(Stats)` 分配；跨语言布局锁进编译期：`sizeof(Stats) == 64`，并 include `scene_cull.comp.reflect.h` 把 `kStatsBufferBlockSize` 与 `kStatsBufferStatsCount = 4` 断言到 C++ 侧。三档 120 帧的整数读数逐位不变、`--validation-features sync` `errors=0 warnings=0`，全量回归 96 项 ALL PASS（`build/validation/20261125-103927`）。这一步只证明「扩槽不越界、不改读数」，真正的实例计数（`stats[3]`）留到第二步随实例缓冲一起加。
+
+**P2 第七步（2026-11-25，GPU 侧实例统计）**：`shaders/scene_cull.comp` 加第 6 个 binding（`InstanceRecord[]`）与第二遍 dispatch，把实例级视锥统计搬到 GPU —— push constant 16 → 32 字节（`uvec4 more`：`count` + `mode`），`stats[3]` 存「测过 / 可见」，`readStats` 读 words[12]/[13]，日志多打一行 `[SceneGpu] instance summary`。实测与 CPU 度量一致到 0.1 个百分点以内：10k `0.6747` 对 `0.6756`、30k `0.3726` 对 `0.3719`，default `0.58`（CPU 侧无外部实例，没有对照）。**验收偏差**：backlog 写的是「对可见组的实例做视锥测试」，实现改成全量 —— CPU 的 `instFrustum` 就是全量口径，同口径才能验证；组门控要的「实例 → 组」表留到第三步压缩索引时一起建，到时门控是顺带的。代价 ≤0.5%（30k，600 帧 × 3 轮交替 A/B，median 帧时间都是 7.62 ms）。本步只数不裁：indirect 的 `instanceCount` 与 `visibleRatio` 仍是组级。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-111243`）；DocCheck PASS（documents=81 lines=18077）。

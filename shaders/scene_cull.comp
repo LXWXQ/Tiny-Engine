@@ -45,7 +45,7 @@ layout(set = 0, binding = 3) buffer StatsBuffer
     // [0] = (总组数, 可见组数, 被剔除组数, 可见实例数)
     // [1] = (可见三角形, 可见顶点, 遮挡测试组数, 遮挡剔除组数)
     // [2] = (屏幕误差测试组数, 屏幕误差剔除组数, 保留, 保留)
-    // [3] = 实例级剔除的保留槽（4 个 uint 计数器，P2 第二步起启用）
+    // [3] = (实例级视锥测试数, 其中在视锥内, 保留, 保留)
     //
     // 缓冲固定 4 个 uvec4 = 64 字节，与 C++ SceneGpuBatch::Stats 的
     // static_assert 同一口径；扩槽要同时改这里和 Stats，否则写越界。
@@ -54,9 +54,31 @@ layout(set = 0, binding = 3) buffer StatsBuffer
 
 layout(set = 0, binding = 4) uniform sampler2D hizPyramid;
 
+// 实例缓冲：和 C++ 的 SceneGpuBatch::InstanceRecord 是同一份 224 字节记录（mrt.vert 读的是同一个
+// 缓冲，只是绑在图形 set 上）。这里只读它做实例级视锥统计，不写。
+struct InstanceRecord
+{
+    mat4 model;
+    mat4 normal;
+    uvec4 flags;       // x = materialId, y = materialValid, z = alphaMasked, w = albedoFallback
+    vec4 misc;         // x = alphaCutoff, y = checkerScale, z = terrainMode, w = 保留
+    vec4 uvTransform;
+    vec4 boundsMin;    // xyz = 局部 AABB 下界，w = 1 表示包围盒有效
+    vec4 boundsMax;
+    uvec4 draw;        // 顶点/片元阶段用，这里不读
+};
+
+layout(set = 0, binding = 5) readonly buffer InstanceBuffer
+{
+    InstanceRecord instances[];
+} instanceBuffer;
+
 layout(push_constant) uniform Push
 {
     uvec4 params;   // x = groupCount, y = Hi-Z 宽, z = Hi-Z 高, w = Hi-Z 层数
+    // 第二段：一次 dispatch 只做一件事。mode = 0 组剔除（count 不用）；
+    // mode = 1 实例级视锥统计（count = 实例总数）。
+    uvec4 more;     // x = count, y = mode
 } push;
 
 const uint kCommandWords = 5u;
@@ -130,8 +152,52 @@ bool occludedByHiZ(vec3 minimum, vec3 maximum)
     return nearest > farthest + kOcclusionBias;
 }
 
+// 与 C++ buildInstances 里 instanceInFrustum 同一套算式：同样的 6 个未归一化平面、同样的
+// 「沿平面法线投影半长」半径。两边必须一起改，否则 GPU 读数和 CPU 的 instFrustum 对不上。
+bool instanceInFrustum(uint instanceIndex)
+{
+    const InstanceRecord record = instanceBuffer.instances[instanceIndex];
+    if (record.boundsMin.w <= 0.5)
+        return true;   // 没有包围盒的实例按可见算：和组级剔除一样取保守口径
+
+    const vec3 localCenter = (record.boundsMin.xyz + record.boundsMax.xyz) * 0.5;
+    const vec3 localHalf = (record.boundsMax.xyz - record.boundsMin.xyz) * 0.5;
+    const mat3 basis = mat3(record.model);
+    const vec3 center = (record.model * vec4(localCenter, 1.0)).xyz;
+    const vec3 worldHalf = abs(basis[0]) * localHalf.x + abs(basis[1]) * localHalf.y + abs(basis[2]) * localHalf.z;
+
+    for (int plane = 0; plane < 6; ++plane)
+    {
+        const vec4 p = frame.planes[plane];
+        const float distance = p.x * center.x + p.y * center.y + p.z * center.z + p.w;
+        const float radius = abs(p.x) * worldHalf.x + abs(p.y) * worldHalf.y + abs(p.z) * worldHalf.z;
+        if (distance + radius < 0.0)
+            return false;
+    }
+    return true;
+}
+
+// 实例级视锥统计：一个 invocation 一个实例。这一步只数数 —— 不写命令、不做压缩，
+// 唯一作用是让 GPU 侧的比例能和 CPU 读出的 instFrustum 直接对照。
+void countInstanceVisibility()
+{
+    const uint instanceIndex = gl_GlobalInvocationID.x;
+    if (instanceIndex >= push.more.x)
+        return;
+
+    atomicAdd(statsBuffer.stats[3].x, 1u);   // 做过实例视锥测试的实例数
+    if (instanceInFrustum(instanceIndex))
+        atomicAdd(statsBuffer.stats[3].y, 1u);   // 其中在视锥内的实例数
+}
+
 void main()
 {
+    if (push.more.y == 1u)
+    {
+        countInstanceVisibility();
+        return;
+    }
+
     const uint groupIndex = gl_GlobalInvocationID.x;
     if (groupIndex >= push.params.x)
         return;

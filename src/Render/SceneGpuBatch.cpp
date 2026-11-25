@@ -35,9 +35,10 @@ constexpr uint32_t kMaxCachedModels = 64;
 
 struct CullPushConstants
 {
-    glm::uvec4 params{ 0u };   // x=groupCount
+    glm::uvec4 params{ 0u };   // x=groupCount, y/z/w = Hi-Z 宽/高/层数
+    glm::uvec4 more{ 0u };     // x=count, y=mode（0 = 组剔除，1 = 实例视锥统计）
 };
-static_assert(sizeof(CullPushConstants) == 16, "scene_cull.comp push constant layout mismatch");
+static_assert(sizeof(CullPushConstants) == 32, "scene_cull.comp push constant layout mismatch");
 
 // 与着色器共享的记录布局。任何字段变动都必须两边一起改。
 static_assert(sizeof(SceneGpuBatch::InstanceRecord) == 224,
@@ -63,6 +64,15 @@ static_assert(tiny::reflect::scene_cull_comp::kStatsBufferBlockSize == sizeof(Sc
               "Stats 与 scene_cull.comp 的 StatsBuffer 块大小不一致（看 scene_cull.comp.reflect.h）");
 static_assert(tiny::reflect::scene_cull_comp::kStatsBufferStatsCount == 4,
               "scene_cull.comp 的 stats 必须是 4 个 uvec4，扩/缩槽要同时改 Stats");
+
+// P2 第二步：push constant 多了一段 more（x=实例数, y=mode），实例缓冲挂在 binding 5。
+// 同样用反射出来的事实锁住，避免 shader 与 C++ 各改一半。
+static_assert(tiny::reflect::scene_cull_comp::kPushBlockSize == sizeof(CullPushConstants),
+              "scene_cull.comp 的 push constant 块大小与 CullPushConstants 不一致");
+static_assert(tiny::reflect::scene_cull_comp::kPushMoreOffset == 16u,
+              "scene_cull.comp 的 push constant 第二段必须紧跟 params（偏移 16）");
+static_assert(tiny::reflect::scene_cull_comp::kInstanceBufferBinding == 5u,
+              "实例缓冲在 scene_cull.comp 里必须是 binding 5");
 
 // 组的世界 AABB 由实例的局部 AABB 变换后求并集；少于这个数的组不值得单独剔除。
 constexpr uint32_t kCommandWords = 5u;
@@ -164,7 +174,7 @@ void SceneGpuBatch::destroyBuffer(GpuBuffer& buffer)
 void SceneGpuBatch::createLayoutsAndPipeline()
 {
     // compute：组记录 / 命令 / 帧数据 / 统计
-    VkDescriptorSetLayoutBinding computeBindings[5]{};
+    VkDescriptorSetLayoutBinding computeBindings[6]{};
     for (uint32_t i = 0; i < 4u; ++i)
     {
         computeBindings[i].binding = i;
@@ -177,9 +187,14 @@ void SceneGpuBatch::createLayoutsAndPipeline()
     computeBindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     computeBindings[4].descriptorCount = 1;
     computeBindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    // binding 5 = 实例缓冲（只读）：实例级视锥统计要按实例取局部 AABB 与世界矩阵。
+    computeBindings[5].binding = 5;
+    computeBindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    computeBindings[5].descriptorCount = 1;
+    computeBindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo computeLayoutInfo{};
     computeLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    computeLayoutInfo.bindingCount = 5;
+    computeLayoutInfo.bindingCount = 6;
     computeLayoutInfo.pBindings = computeBindings;
     if (vkCreateDescriptorSetLayout(vulkanDevice.getDevice(), &computeLayoutInfo, nullptr,
                                     &computeSetLayout) != VK_SUCCESS)
@@ -200,7 +215,7 @@ void SceneGpuBatch::createLayoutsAndPipeline()
         throw std::runtime_error("SceneGpuBatch: instance descriptor layout failed");
     VkDescriptorPoolSize computePoolSizes[2]{};
     computePoolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    computePoolSizes[0].descriptorCount = 4u * kFramesInFlight;
+    computePoolSizes[0].descriptorCount = 5u * kFramesInFlight;
     computePoolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     computePoolSizes[1].descriptorCount = kFramesInFlight;
     VkDescriptorPoolCreateInfo computePoolInfo{};
@@ -390,13 +405,15 @@ void SceneGpuBatch::writeDescriptors()
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
         FrameResources& res = frames[frame];
-        VkDescriptorBufferInfo infos[4]{};
+        // binding 0..3 = 组 / 命令 / 帧数据 / 统计；binding 5 = 实例缓冲（binding 4 是 Hi-Z 采样器）。
+        VkDescriptorBufferInfo infos[5]{};
         infos[0] = { res.groups.buffer, 0, VK_WHOLE_SIZE };
         infos[1] = { res.commands.buffer, 0, VK_WHOLE_SIZE };
         infos[2] = { res.frameData.buffer, 0, VK_WHOLE_SIZE };
         infos[3] = { res.stats.buffer, 0, VK_WHOLE_SIZE };
+        infos[4] = { res.instances.buffer, 0, VK_WHOLE_SIZE };
 
-        VkWriteDescriptorSet writes[4]{};
+        VkWriteDescriptorSet writes[5]{};
         for (uint32_t i = 0; i < 4u; ++i)
         {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -406,7 +423,14 @@ void SceneGpuBatch::writeDescriptors()
             writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[i].pBufferInfo = &infos[i];
         }
-        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 4, writes, 0, nullptr);
+        // 实例缓冲排在 Hi-Z 采样器后面：写入项的 binding 是 5，信息项的下标是 4。
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet = res.computeSet;
+        writes[4].dstBinding = 5;
+        writes[4].descriptorCount = 1;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[4].pBufferInfo = &infos[4];
+        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 5, writes, 0, nullptr);
         // binding 4 指向「另一个帧槽」的 Hi-Z：本帧剔除读的是上一帧建好的那份。
         const HiZFrame& readHiZ = hiz[(frame + 1u) % kFramesInFlight];
         if (readHiZ.fullView != VK_NULL_HANDLE)
@@ -1391,8 +1415,8 @@ void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
     // 必须先 invalidate 才能读到 GPU 写进去的计数（否则永远是 0）。
     vmaInvalidateAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation,
                             0, VK_WHOLE_SIZE);
-    // 只读前 10 个 GPU 字（stats[0] 的 4 个 + stats[1] 的 4 个 + stats[2] 的前 2 个）；
-    // words[10..15]（含 stats[3] 的实例级保留槽）这一步没有写入者。
+    // 按名字逐字读：主读前 10 个 GPU 字（stats[0] 的 4 个 + stats[1] 的 4 个 + stats[2] 的前 2 个），
+    // 再加 words[12..13]（stats[3].xy）的实例级视锥统计；words[10..11]、words[14..15] 没有写入者。
     const uint32_t* words = static_cast<const uint32_t*>(res.stats.mapped);
     stats.submitted = words[0];
     stats.visibleGroups = words[1];
@@ -1404,6 +1428,8 @@ void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
     stats.occlusionCulled = words[7];
     stats.screenTests = words[8];
     stats.screenCulled = words[9];
+    stats.instanceTests = words[12];
+    stats.instanceVisible = words[13];
 
     // 累计剔除量：只在 GPU 真跑过剔除的那些帧里累加（words[1]+words[2] > 0）。
     // 回读值滞后两帧，前两帧可能是 0，那不算样本。
@@ -1416,6 +1442,8 @@ void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
         cullTotals.visibleInstances += stats.visibleInstances;
         cullTotals.occlusionCulled += stats.occlusionCulled;
         cullTotals.screenCulled += stats.screenCulled;
+        cullTotals.gpuInstanceTested += stats.instanceTests;
+        cullTotals.gpuInstanceVisible += stats.instanceVisible;
         cullTotals.flattenMicros += structureMicros;
     }
 }
@@ -1446,6 +1474,19 @@ void SceneGpuBatch::logCullSummary() const
               << " | flattenUs/frame=" << (static_cast<double>(cullTotals.flattenMicros) / frames)
               << " screenCulled/frame=" << (static_cast<double>(cullTotals.screenCulled) / frames)
               << "\n";
+
+    // P2 第二步的对照读数：GPU 侧的实例级视锥可见比例。和 CPU 的 instFrustum 用同一套算式，
+    // 差别只在覆盖面 —— GPU 覆盖整条实例缓冲（含实体），CPU 只测外部记录缓存。
+    if (cullTotals.gpuInstanceTested > 0u)
+    {
+        const double tested = static_cast<double>(cullTotals.gpuInstanceTested);
+        std::cout << "[SceneGpu] instance summary | frames=" << cullTotals.frames
+                  << " gpuInst=" << std::fixed << std::setprecision(2)
+                  << (static_cast<double>(cullTotals.gpuInstanceVisible) / tested)
+                  << " (" << cullTotals.gpuInstanceVisible << "/" << cullTotals.gpuInstanceTested << ")"
+                  << " | tested/frame=" << std::setprecision(1) << (tested / frames)
+                  << "\n";
+    }
 
     // P2 度量：摊平花在哪。只在重建结构的帧有样本，稳定帧不计入。
     if (cullTotals.structureSamples > 0)
@@ -1946,9 +1987,19 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     vkCmdPushConstants(commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(CullPushConstants), &push);
 
-    // 一个组一个 invocation：组数远小于实例数，剔除本身几乎不花时间。
+    // 第一遍：一个组一个 invocation。组数远小于实例数，剔除本身几乎不花时间。
     const uint32_t dispatchGroups = (push.params.x + 63u) / 64u;
     vkCmdDispatch(commandBuffer, dispatchGroups, 1u, 1u);
+
+    // 第二遍：实例级视锥统计，一个 invocation 一个实例。这段不能塞进组内循环 ——
+    // cube field 就是一个组压着 30000 个实例，那样等于用一个线程跑完整个测试。
+    // 两遍之间不用屏障：第二遍只读实例缓冲与帧数据（dispatch 之前都已就绪），写的是
+    // stats[3]，与第一遍写的命令 / stats[0..2] 不重叠。
+    const uint32_t instanceCount = static_cast<uint32_t>(instanceScratch.size());
+    push.more = glm::uvec4(instanceCount, 1u, 0u, 0u);
+    vkCmdPushConstants(commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(CullPushConstants), &push);
+    vkCmdDispatch(commandBuffer, (instanceCount + 63u) / 64u, 1u, 1u);
 
     // 命令是 compute 写的，随后 indirect draw 与 vertex/fragment 要读；
     // 一条全屏障同时覆盖这两个阶段。

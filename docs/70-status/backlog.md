@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~372 行
+size: ~373 行
 updated: 2026-11-25
 ---
 
@@ -364,9 +364,10 @@ updated: 2026-11-25
 **为什么分三步**：它能用纯布局/统计方式验证的部分先做，避免一次动 shader、描述符、顶点取值三处而无法定位。
 
 1. **布局扩容（纯验证）**：`shaders/scene_cull.comp` 的 `stats[3]` 扩成 `stats[4]`；`src/Render/SceneGpuBatch.h` 的 `Stats` 现在是 13 个 `uint32_t`（对应 3 个 `uvec4` 的 12 个 + 1 个），必须补到 16 个（加 3 个 pad），否则扩 slot 会越界。验收：三档 `--stats-frame` 读数与原值逐位相同，`--validation-features sync` `errors=0`。 **已落地（2026-11-25，决策 58）**：`stats[4]` + `Stats` 16 个 uint + 反射头断言，三档读数逐位不变（见下方第 1 步读数）。
-2. **绑实例缓冲 + GPU 统计**：`src/Render/SceneGpuBatch.cpp:156-175` 的 `computeBindings[5]` 加第 6 个 binding（`InstanceRecord[]`），池大小与 set 写入同步（`:190-202`、`:380-410`）；shader 对可见组的实例做视锥测试并 `atomicAdd` 计数。验收：GPU 侧比例与 CPU 侧 0.676 / 0.372 对得上（允许 ±2%）。
+2. **绑实例缓冲 + GPU 统计**：`src/Render/SceneGpuBatch.cpp:156-175` 的 `computeBindings[5]` 加第 6 个 binding（`InstanceRecord[]`），池大小与 set 写入同步（`:190-202`、`:380-410`）；shader 对可见组的实例做视锥测试并 `atomicAdd` 计数。验收：GPU 侧比例与 CPU 侧 0.676 / 0.372 对得上（允许 ±2%）。 **已落地（2026-11-25，决策 59）**：`computeBindings[5] → [6]`（binding 5 = `InstanceRecord[]`）、push constant 16 → 32 字节（`uvec4 more`：`count` + `mode`）、同一命令缓冲里的第二遍 dispatch 写 `stats[3]`（测过 / 可见），`logCullSummary` 多打一行 `[SceneGpu] instance summary`。口径改成测整条实例缓冲（组门控要的「实例 → 组」表留到第三步），读数见下方第 2 步读数。
 3. **紧凑索引表 + remap 取实例**：shader 写出可见实例的紧凑索引，`mrt.vert` 等走 `InstanceRecord` 的顶点着色器改为经该表索引，`vkCmdDrawIndexedIndirect` 的 `instanceCount` 用 remap 后的数量。验收：`instFrustum` 的比例变成实际提交比例，`--no-instance-cull` 可整体回退且画面逐像素一致。
 
 **第 1 步读数（2026-11-25，纯布局验证）**：三档（default / cube-field 10k / 30k，120 帧固定机位）改前改后逐行比对 `[SceneGpu] cull stats` 与 `cull summary`，整数读数逐位相同：groups `103/104/104`、visible `63/64/64`、culled `40/40/40`、instances `63/10063/30063`、hizTests `63/64/64`、hizCulled `0/0/0`、screenTests `0/0/0`、external `0/10000/30000`、visibleRatio `0.61/0.62/0.62`，CPU 侧 `instFrustum` 仍是 `0/0`、`6756/10000`、`11157/30000`；只有 `flattenUs` / `ms/rebuild` 这类计时列不同。`--validation-features sync`（10k）`errors=0 warnings=0`、stderr 0 字节。也就是说第 2 步加 `InstanceRecord[]` binding 与 `atomicAdd` 时，`stats[3]` 这 4 个 word 已经有宿主、也不会再踩到别人。
+**第 2 步读数（2026-11-25）**：新增 `[SceneGpu] instance summary` 行，120 帧固定机位三档：default `gpuInst=0.58 (7080/12154) tested/frame=103`（CPU 侧无外部实例，没有对照）；cube-field 10k `0.6747 (804288/1192154) tested/frame=10103` 对 CPU `instFrustum=6756/10000=0.6756`；30k `0.3726 (1323606/3552154) tested/frame=30103` 对 `11157/30000=0.3719` —— 差 0.09 / 0.07 个百分点，落在 ±2% 判据内。组级读数与第 1 步逐位相同（`103/63/40`、`10063 / total 9.06 ms`、`30063 / 17.33 ms`），三档 `errors=0 warnings=0`、stderr 0 字节；`--validation-features sync`（10k）同样干净。代价：30k 600 帧 × 3 轮交替 A/B，第二遍 dispatch ≤0.5%，median 帧时间同为 7.62 ms。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-111243`）；DocCheck PASS（documents=81 lines=18077）。
 
 **回退开关**：第三步完成后加 `--no-instance-cull`（默认开）。

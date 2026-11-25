@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1298 行
+size: ~1357 行
 updated: 2026-11-25
 ---
 
@@ -1297,3 +1297,62 @@ P2 的 −70% 只能靠改结构拿到：持久缓冲变成权威数据、逐实
 
 - 不顺手把 `Stats` 重排成与 GPU 逐字对应：`groups`/`drawCalls` 是 CPU 字段，重排会让「这块内存可以直接 memcpy」变得更像真的，反而增加误用风险。
 - 不在本步就加实例计数：那样一次要动 shader 槽位、描述符、计数三处，出问题无法定位。
+
+## 决策 59：实例级视锥统计放进第二遍 dispatch，这一步只数不裁（P2 第七步）
+
+### 问题
+
+P2 的目标是把 `visible/submitted` 从组级的 0.62 压到 0.6 以下，靠的是逐实例剔除。但组级 `main()` 是「一个 invocation 一个组」：cube-field 把 30000 个实例压在**同一个组**里，在组内串行遍历实例等于一个线程跑完 30000 次视锥测试，比不做还慢。而且这一步不改绘制，先要证明的是「GPU 算出的实例可见比例与 CPU 只读度量一致」（`instFrustum`：10k 0.6756、30k 0.3719），否则后面把绘制接到这套数据上就是盲接。
+
+### 做法
+
+- `shaders/scene_cull.comp` 加 binding 5：`readonly buffer InstanceBuffer{InstanceRecord instances[]}`，与 `src/Render/SceneGpuBatch.h` 的 `InstanceRecord` 逐字节同构（224 字节）。`instanceInFrustum()` 用记录里的**局部** AABB（`boundsMin/boundsMax`，`w <= 0.5` 视为无界）与世界矩阵复现 CPU 的算式：`center = model * vec4(localCenter, 1)`、`worldHalf = abs(basis[0])*localHalf.x + abs(basis[1])*localHalf.y + abs(basis[2])*localHalf.z`，逐平面 `distance + radius < 0` 判剔除。
+- push constant 16 → 32 字节（追加 `uvec4 more`：`x = count`、`y = mode`）；同一 command buffer 里两次 `vkCmdPushConstants` + 两次 `vkCmdDispatch`：第一遍 `mode = 0` 跑原来的组剔除，第二遍 `mode = 1` 跑 `countInstanceVisibility()` —— `gl_GlobalInvocationID.x` 直接当实例下标，`(count + 63) / 64` 个工作组。
+- 计数落在 `stats[3]`：`x` = 测过的实例数、`y` = 其中在视锥内的；`Stats` 尾部把 `reserved[3]` 换成 `instanceTests` / `instanceVisible` / `reserved`（仍是 16 个 uint），`readStats` 读 `words[12]` / `words[13]`（结构体位置 13/14），`CullTotals` 加 `gpuInstanceTested` / `gpuInstanceVisible`，`logCullSummary` 多打一行 `[SceneGpu] instance summary | frames= gpuInst=… (visible/tested) | tested/frame=`。
+- 描述符同步：`computeBindings[6]`、`bindingCount = 6`、storage 池 `5u * kFramesInFlight`、`writeDescriptors` 的 `infos[5]` / `writes[5]`（第 5 项 `dstBinding = 5`）。三条新的编译期锁：`kPushBlockSize == sizeof(CullPushConstants)`（32）、`kPushMoreOffset == 16`、`kInstanceBufferBinding == 5`。
+
+### 为什么测整条实例缓冲，而不是只测可见组里的实例
+
+backlog 原文写的是「对可见组的实例做视锥测试」，实现改成**全量**，两个理由：
+
+1. CPU 侧的度量就是全量：`buildInstances` 末尾遍历 `externalRecordCache` 时完全不看组可见性。只有同口径，「0.676 / 0.372 对得上（±2%）」这条验收才有意义；GPU 若只测可见组，分母变小、比例必然偏高，等于没有对照物。
+2. 组门控需要「实例 → 所属组」的归属表，而第一步的布局里没有这张表。这张表在第三步做紧凑索引时本来就要建（要按组写连续区间），到时门控是顺带的，现在单开一份数据是重复投资。
+
+代价是 GPU 多测了非外部的实体实例：10k 场景 `tested/frame = 10103` 对 CPU 的 10000，比例差 0.2%（0.6747 对 0.6756），正好落在验收容差内，方向可解释。
+
+### 为什么两遍之间不加屏障
+
+第二遍只读实例缓冲与帧数据（dispatch 前已写好）、只写 `stats[3]` 的两个 word；第一遍写的是 5 word 的 indirect 命令与 `stats[0..2]`。两组写入不重叠，读的也不是第一遍写的内容，所以不需要 `vkCmdPipelineBarrier`。真正需要屏障的位置在第二遍之后 —— 那里原本就有一条 `SHADER_WRITE → INDIRECT_COMMAND_READ | SHADER_READ` 的全屏障，覆盖两遍的全部输出。
+
+### 验收
+
+同一机位、120 帧、三档场景，`[SceneGpu] instance summary` 与 CPU 侧 `flatten breakdown … instFrustum=` 对照：
+
+| 读数 | default | cube-field 10k | cube-field 30k |
+| --- | --- | --- | --- |
+| GPU `tested/frame` | 103 | 10103 | 30103 |
+| GPU `gpuInst` | 0.58 (7080/12154) | **0.6747** (804288/1192154) | **0.3726** (1323606/3552154) |
+| CPU `instFrustum` | 0/0（无外部实例） | 0.6756 (6756/10000) | 0.3719 (11157/30000) |
+| 差值 | — | 0.09 个百分点 | 0.07 个百分点 |
+
+组级读数与第一步逐位相同（default `103/63/40`、10k `instances=10063 / total 9.06 ms`、30k `30063 / 17.33 ms`），三档 `[Validation] errors=0 warnings=0`、stderr 0 字节；`--validation-features sync`（10k）同样干净。
+
+全量回归 `tools/Validate.ps1 -Incremental -SkipSetup` **96 项** ALL PASS（stderr 全 0），日志 `build/validation/20261125-111243`；DocCheck PASS（documents=81 lines=18077）。
+
+### 代价与边界
+
+- 第二遍在 cube-field 30k 上的开销 ≤0.5%，落在噪声内：600 帧 × 3 轮交替 A/B，开启时 `4.69599 / 4.71483 / 4.72523 s`（127.0~127.8 FPS），把这条 dispatch 的组数临时改成 0 后 `4.68706 / 4.69427 / 4.70678 s`（127.5~128.0 FPS）；两种配置的 FrameTime median 都是 7.62 ms。
+- 两侧共用同一套近似（未归一化平面 + 沿法线投影的世界半长 = 包围盒判定），所以差值只剩「非外部实体实例」，不是算法差异。
+- 无界实例（`boundsMin.w <= 0.5`）直接按可见算，并且**也计入 tested** —— 保守口径与组级剔除一致；本轮三档场景里没有这种实例，所以不影响上表。
+- 本步没有任何裁剪：indirect 的 `instanceCount` 仍是整组实例数，`cull summary` 的 `visibleRatio` 仍是组级。新读数只是把第三步要用的数字先量出来。
+
+### 不引入的
+
+- 不在组内循环里跑实例测试（cube-field 是单组 30000 实例，会退化成单线程）。
+- 不在本步改绘制路径：先把统计与 CPU 对上，第三步再把 `instanceCount` 换成 remap 后的数量，出问题时能分清是「测错了」还是「裁错了」。
+- 不把实例计数塞进 `stats[0..2]`：那三组已被组级计数占满，且 `Stats` 的 words[6..7] 是 CPU 字段，塞进去只会诱发「整块 memcpy」。
+
+### 踩到的两个坑
+
+- GLSL 里 `half` 是保留字（`error : 'half' : Reserved word.`），局部变量得叫 `worldHalf`。
+- 用 `Copy-Item` 覆盖源码会带回旧 mtime，MSBuild 认为 `.obj` 已是最新而跳过重编，跑出来读数是 0（实际在跑上一次 A/B 的旧二进制）。改完源码要 `(Get-Item <file>).LastWriteTime = Get-Date`，并确认构建日志里出现该 `.cpp` 的名字。

@@ -89,6 +89,8 @@ public:
     uint64_t externalReused = 0;    // 复用缓存记录的外部实例数（P2 增量重建）
         uint64_t instanceFrustumTested = 0;   // P2：做过视锥测试的实例数（每重建累加）
         uint64_t instanceFrustumVisible = 0;  // P2：其中在视锥内的实例数
+        uint64_t gpuInstanceTested = 0;       // P2 第二步：GPU 侧实例视锥测试数（每帧累加）
+        uint64_t gpuInstanceVisible = 0;      // P2 第二步：GPU 侧判定在视锥内的实例数
         // P2 度量：摊平分段耗时（微秒，只在重建结构的帧累加）。
         uint64_t structureSamples = 0;
         uint64_t collectMicros = 0;
@@ -110,14 +112,14 @@ public:
         uint64_t externalPushMicros = 0;
     };
 
-    // 与 shaders/scene_cull.comp 的 StatsBuffer 同一块内存：GPU 缓冲是 4 个 uvec4
-    // = 16 个 uint。前 10 个 uint 由 GPU 写，顺序与 shader 的 stats[0..2] 一致：
-    //   words[0..3] = stats[0] = (submitted, visibleGroups, culledGroups, visibleInstances)
-    //   words[4..7] = stats[1] = (visibleTriangles, visibleVertices, occlusionTests, occlusionCulled)
-    //   words[8..9] = stats[2].xy = (screenTests, screenCulled)；stats[2].zw 未用
+    // 与 shaders/scene_cull.comp 的 StatsBuffer 同一块内存：GPU 缓冲是 4 个 uvec4 = 16 个
+    // uint，但 host 结构体的字段顺序和 GPU 字下标并不一一对应（中间插了两个 CPU 字段）：
+    //   words[0..3]  = stats[0]   = (submitted, visibleGroups, culledGroups, visibleInstances)
+    //   words[4..7]  = stats[1]   = (visibleTriangles, visibleVertices, occlusionTests, occlusionCulled)
+    //   words[8..9]  = stats[2].xy = (screenTests, screenCulled)；stats[2].zw 未用
+    //   words[12..13]= stats[3].xy = (instanceTests, instanceVisible)；stats[3].zw 未用
     // 注意 groups / drawCalls 是 CPU 字段，位置 (6,7) 与 GPU 的遮挡计数重叠，所以
-    // readStats 只按名字逐字读，绝不 memcpy 整块。words[12..15] = stats[3] 留给
-    // 实例级剔除的计数器，本步只有布局，没有写入者。
+    // readStats 只按名字逐字读，绝不 memcpy 整块。
     struct Stats
     {
         uint32_t submitted = 0;
@@ -133,7 +135,9 @@ public:
         uint32_t screenTests = 0;       // 做过屏幕空间误差测试的组数
         uint32_t screenCulled = 0;      // 其中因为投影太小被剔除的组数
         uint32_t externalInstances = 0; // 本帧来自外部（粒子/体素）的实例数
-        uint32_t reserved[3] = {};      // 补到 16 个 uint，与 shader 的 stats[4] 对齐
+        uint32_t instanceTests = 0;     // GPU 侧做过实例视锥测试的实例数（滞后两帧）
+        uint32_t instanceVisible = 0;   // 其中判定在视锥内的实例数
+        uint32_t reserved = 0;          // 补到 16 个 uint，与 shader 的 stats[4] 对齐
     };
     static_assert(sizeof(Stats) == 16u * sizeof(uint32_t),
                   "Stats 必须与 scene_cull.comp 的 uvec4 stats[4] 同为 64 字节");
