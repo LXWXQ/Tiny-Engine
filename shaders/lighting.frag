@@ -17,7 +17,6 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     vec4 cameraPos;
     int numLights;
     float exposure;
-    PointLight pointLights[100];
     // F6：阴影数据接在 UBO 尾部 —— 顺序必须和 C++ 的 GlobalUbo 一致。
     mat4 previousProjectionView;
     mat4 shadowMatrices[3];
@@ -28,6 +27,10 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     // TM-13：x = 是否按簇取灯（0 = 逐灯遍历）, y = near, z = far, w 保留
     vec4 clusterParams;
 } ubo;
+
+// P2-6：灯数据从 UBO 搬进 storage buffer —— UBO 只剩 numLights，
+// 上限由缓冲容量（kMaxPointLights = 1024）决定，不再是数组长度 100。
+layout(set = 0, binding = 19) readonly buffer LightBuffer { PointLight lights[]; };
 
 layout(set = 0, binding = 1) uniform sampler2D environmentMap;
 
@@ -289,7 +292,8 @@ void main() {
     float viewDepth = (ubo.projectionView * vec4(fragPosWorld, 1.0)).w;
     Lo += CalcDirectionalLight(N, V, albedo, roughness, metallic, F0, fragPosWorld, viewDepth);
 
-    // TM-13：两条路径共用同一个 CalcPointLight，只是灯来源不同。
+    // TM-13 / P2-6：两条路径共用同一个 CalcPointLight，只是灯来源不同 ——
+    // 聚簇路径读簇内灯表（binding 18），逐灯路径读全量灯表（binding 19）。
     if (ubo.clusterParams.x > 0.5)
     {
         const uint cluster = ComputeClusterIndex(gl_FragCoord.xy, viewDepth);
@@ -303,7 +307,7 @@ void main() {
     else
     {
         for (int i = 0; i < ubo.numLights; i++)
-            Lo += CalcPointLight(ubo.pointLights[i], N, fragPosWorld, V, albedo, roughness, metallic, F0);
+            Lo += CalcPointLight(lights[i], N, fragPosWorld, V, albedo, roughness, metallic, F0);
     }
 
     // ---------------- IBL（split-sum 近似）----------------

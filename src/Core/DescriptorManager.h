@@ -10,6 +10,7 @@
 #include "RHI/Device.h"
 #include "RHI/GBuffer.h"
 #include "Core/MaterialSlot.h"
+#include "Core/FrameInfo.h"   // kMaxPointLights
 
 #include <glm/glm.hpp>
 
@@ -92,6 +93,15 @@ public:
 	// 平面反射通道自己建了一套 set 0（有自己的 G-Buffer 与反射目标），
 	// 但 lighting.frag 仍然静态使用那四条 SSBO，不填就是未定义描述符。
 	void applyClusterBindings(VkDescriptorSet set);
+
+	// P2-6：灯数据（set 0, binding 19）。缓冲由本类持有（每帧槽一块，
+	// kMaxPointLights 条 × 两个 vec4），灯是每帧整体重写的流数据，所以常驻映射，
+	// 上传只做 memcpy + flush，描述符每个帧槽只写一次。
+	void uploadLights(uint32_t frameInFlightIndex, const void* lights, VkDeviceSize bytes);
+	// 把最近一次上传的灯缓冲写到任意一个用 globalSetLayout 建的 set 上
+	// （平面反射通道自建 set 0，必须显式补齐，否则验证层报未更新）。
+	void applyLightBinding(VkDescriptorSet set);
+	const VkDescriptorBufferInfo& lastLightBinding() const { return lastLightBinding_; }
 
 	// TM-13 第二步：GPU 建簇那一次 dispatch 要按这份偏移发 buffer 屏障，
 	// 所以把"最近一帧绑定的四张表"读出来。
@@ -223,5 +233,13 @@ private:
 	VmaAllocation materialFactorAllocation = nullptr;
 	void* materialFactorMapped = nullptr;
 	uint32_t materialFactorCount = 0;
+
+	// P2-6：每帧槽一块灯缓冲，`kMaxPointLights * 32` 字节，常驻映射。
+	std::array<VkBuffer, kFramesInFlight> lightBuffers{};
+	std::array<VmaAllocation, kFramesInFlight> lightAllocations{};
+	std::array<void*, kFramesInFlight> lightMapped{};
+	std::array<bool, kFramesInFlight> lightBindingWritten_{};
+	VkDescriptorBufferInfo lastLightBinding_{};
+	void writeLightBinding(VkDescriptorSet set, const VkDescriptorBufferInfo& info);
 
 };

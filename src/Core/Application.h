@@ -205,6 +205,8 @@ private:
 	std::chrono::high_resolution_clock::time_point currentTime;
 	std::chrono::high_resolution_clock::time_point lastPerfLog;
 	uint32_t framesSincePerfLog = 0;
+	// P2-6：灯数只在与上一次打印不同时打一行，避免每帧刷屏。
+	uint32_t loggedAppliedLights = 0xFFFFFFFFu;
 	double updateMsAccum = 0.0;
 	double renderMsAccum = 0.0;
 	uint32_t profiledFrames = 0;

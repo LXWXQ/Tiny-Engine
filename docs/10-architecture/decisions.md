@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1461 行
+size: ~1513 行
 updated: 2026-11-25
 ---
 
@@ -1460,3 +1460,55 @@ P2 的验收还差 `visible/submitted ≤ 0.6` 这一条：第三步落地后 10
 - 不做「只含静态遮挡体」的第二份金字塔（要额外一遍不含实例的深度 pass，且当前两个场景都测不出收益）。
 - 不做逐实例屏幕尺寸剔除：它会真的少画东西（远处的亚像素方块消失），属于 LOD（P6）的活，需要单独的画面验收口径。
 - 不改 `≤ 0.6` 的判定文字，但读数口径按实例记录：10k `0.67`（视锥）、30k `0.37`，并注明这是机位相关的几何值。
+
+## 决策 62：灯数据搬出 UBO，放进 set 0 binding 19 的灯缓冲（P2 第十步）
+
+### 问题
+
+点光源数组一直躺在 `GlobalUbo.pointLights[100]`（`src/Core/FrameInfo.h`）：3.2 KiB / 帧槽，「最多 100 盏」是硬编码上限，而且每帧整块重写的流数据占着 uniform 的语义。P7-5 的灯随机采样要先有「上限不是一个数组长度」这个前提（`docs/80-roadmap/ue-borrowing-plan.md:738`）。
+
+### 做法
+
+- `src/Core/FrameInfo.h`：删 `struct PointLight` 与 `pointLights[MAX_POINT_LIGHTS]`，`#define MAX_POINT_LIGHTS 100` 换成 `constexpr uint32_t kMaxPointLights = 1024;`。UBO 里只剩 `int numLights`，`sizeof(GlobalUbo)` **3680 → 480 字节**（`previousProjectionView` 144、`shadowMatrices` 208、`shadowCascadeSplits` 400、`shadowParams` 416、`fogParams` 432、`shadowFilterParams` 448、`clusterParams` 464）。
+- `previousProjectionView` 显式 `alignas(16)`：这个偏移以前是**搭便车**搭在 `pointLights` 数组的 `alignas(16)` 上的。数组搬走后前面的 `float exposure` 只到 136，不写 alignas 就会与 GLSL std140 的 144 错位（`static_assert` 当场报 `GlobalUbo.previousProjectionView offset mismatch`）。
+- 新 SSBO 放在 **set 0 binding 19**：`layout(set = 0, binding = 19) readonly buffer LightBuffer { PointLight lights[]; } lights;`，`lighting.frag` 的逐灯循环改成 `lights[i]`，`ubo.numLights` 的语义不变。
+- 缓冲由 `DescriptorManager` 持有：每帧槽一块 `kMaxPointLights × 2 × vec4` = 32 KiB（`CPU_TO_GPU` + 常驻映射），`uploadLights(frameInFlightIndex, lights, bytes)` 只做 `memcpy` + 一次整块 `vmaFlushAllocation`；描述符每帧槽写一次（缓冲身份不变）。`applyLightBinding(set)` 供 `buildGlobalSet` 与平面反射通道自建 set 0 复用。
+- `src/Core/Application.cpp` 把「逐盏写 UBO」换成一行上传 + `[Lights] lightBuffer | applied=… requested=… capacity=1024`（数量变化时才打）。
+- `shaders/present.frag`、`shaders/present_no_bloom.frag`、`shaders/taa.frag` 里那三份 `struct PointLight` + `pointLights[100]` 一并删掉：它们不读灯，但 std140 下这 3200 字节占位还在，留着就与新的 C++ 结构整体错开。
+
+### 为什么是 SSBO，而不是「UBO 再大一点」
+
+1. UBO 每条 range 的硬上限是 64 KiB，1024 盏就是 32 KiB，再加别的每帧参数会顶到天花板；SSBO 没有这个限制。
+2. std140 下 `PointLight` 数组的元素 stride 要取整到 16 字节、结构体尾部还要 padding；SSBO 的 std430 里 32 字节一条就是 32 字节，C++/GLSL 只需要 `static_assert` 一个 `sizeof`。
+3. 灯是每帧整体重写的流数据，不该占 uniform 的「常量」语义；换成常驻映射缓冲后，上传就是 `memcpy`。
+
+### 为什么不新开一个 set，或者挂到 set 3
+
+set 0 已经绑在所有需要灯的着色器上（`lighting.frag` 与三个后效 shader），加一条 binding 只是多一个 layout entry；新开 set 要同步改 pipeline layout、池容量、每个 Pass 的绑定顺序与重绑时机。灯只需要和 UBO 一起被片元着色器看到。
+
+### 验收（2026-11-25）
+
+- **容量解除**：`[Lights] lightBuffer` 日志 —— 默认场景 `applied=0 requested=0`、`--light-stress 100` → `100/100`、`512` → `512/512`、`1024` → `1024/1024`、`1500` → **`1024/1500`**（夹取到容量，不崩）。旧代码在 1500 时只会上传 100 盏。
+- **灯真的亮起来**（截图，1920×1080、第 30 帧、固定机位 `-4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`，`--light-stress-radius 12`）：0 盏 vs 100 盏 118,653 个像素不同（其中 ≥8 的 311 个）；100 盏 vs 512 盏 **208,703 个像素不同（≥8 的 2,446 个）**，平均亮度 97.87 → 98.01 —— 超过 100 的那 412 盏确实参与着色。（默认半径 60 时同一对照是 190,951 / 404，因为灯铺得稀、每个片元命中的少。）
+- **两条路径第一次对齐**：逐灯 512 盏 vs 聚簇 512 盏现在只差 9,785 个像素（0.47%，迭代顺序/浮点差异）；而「只上 100 盏」的逐灯结果对聚簇 512 盏差 182,807 个像素（9.5%）—— 差距缩小约 19 倍，说明逐灯路径真的看到了全部 512 盏。
+- **验证必须用 Debug**（`src/RHI/Device.h:145-148` 在 `NDEBUG` 下把 `enableValidationLayers` 设成 `false`）：`--light-stress 512`（逐灯）、`512 --clustered-lighting`、再加 `--clustered-gpu-build`、`--light-stress 1024`、默认场景、`--voxel-world 1 --light-stress 200` 六组，全部 `errors=0 warnings=0`、stderr 0 字节、exit=0。
+- 全量回归 **96 项 ALL PASS**（`build/validation/20261125-132707`，stderr 全 0）。
+
+### 代价与边界
+
+- 每帧多一次 32 KiB `memcpy` + 一次整块 flush（灯整体重写，没有脏区跟踪）。这一步没做 A/B：它的验收是「上限解除 + 画面真的变」，而 512 盏灯下的帧时间由聚簇/光照主导；要量的话沿用 600 帧 × 3 轮交替的同一套方法。
+- 灯仍然每帧全量上传（哪怕一帧只动了一盏）；`applied` 的上限是 1024，`numLights` 仍是 `int`。
+- 簇里的 `lightId` 仍是 32 位索引：roadmap 里说的 16 bit `lightId` 属于聚簇编码，与本步解耦，没有做。
+
+### 不引入的
+
+- 不做「只上传变化的灯」的脏区/版本号机制（当前没有能测出收益的用例）。
+- 不做 16 bit `lightId`，不动 `ClusteredLighting` / `clusterBuildPass` 的簇表布局。
+- 不改 `--light-stress` 的默认半径 60（它决定压力场铺多大，与本步无关）。
+
+### 踩到的坑
+
+1. `previousProjectionView` 的 16 字节对齐以前是搭在 `pointLights` 的 `alignas(16)` 上，删掉数组后必须显式写 —— 好在 `static_assert` 当场报，不是留到运行时画面错乱。
+2. 声明 `GlobalUbo` 的 10 个 shader 里有 3 个（present / present_no_bloom / taa）也声明了 `PointLight pointLights[100]`：不读灯，但会占 std140 的 3200 字节，漏删就整体错位。
+3. `DescriptorManager::buildGlobalSet` 的 writes 是「先绑占位、末尾用最近的表覆盖」，灯表必须同样在末尾 `applyLightBinding`，否则着色器会把材质 factor 缓冲当灯数组读。
+4. 平面反射通道自己建 set 0（`ReflectionPass::rebuildDescriptors`），也必须显式 `applyLightBinding`，否则每帧一条 `VUID-vkCmdDrawIndexedIndirect-None-08114` —— 与 P2 第二步体素实例表那处同一类问题：**静态引用了新 binding 的 set，每一处分配者都要写满**。

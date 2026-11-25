@@ -3029,7 +3029,8 @@ void FirstApp::render(float dt)
 		ubo.lightColor = scene->getSettings().directionalLightColor;
 		// TM-13：点光源。以前这里是 ubo.numLights = 0 —— 引擎此前根本没有点光源，
 		// lighting.frag 里的逐灯循环是死代码。现在两条路径都填：
-		//   旧路径：灯塞进 UBO 的固定数组（最多 MAX_POINT_LIGHTS 盏）；
+		//   逐灯路径：灯整块上传到 set 0 binding 19 的灯缓冲（P2-6 搬家前是 UBO
+		//             里的固定数组，上限 100；现在由缓冲容量决定，最多 kMaxPointLights 盏）；
 		//   聚簇路径：灯数据走 SSBO，片元只遍历自己所在簇的灯表。
 		// 贴地采样：压力场与萤火虫都必须压在地表附近，否则"灯在半空、可见片元在地面"，
 		// 半径再大也照不到。这里按体素地形重算高度（与 createVoxelWorld 同 seed / baseY）。
@@ -3132,15 +3133,21 @@ if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
 				diagnosticsOptions.lightStressRadius, sampleGround);
 		}
 
+		// P2-6：灯不再逐盏写进 UBO，直接整块上传到 set 0 binding 19 的灯缓冲。
+		// 上限由缓冲容量（kMaxPointLights）决定，UBO 里只剩灯数。
 		const auto& pointLights = lightSources.lights();
-		const uint32_t legacyLightCount = static_cast<uint32_t>(
-			std::min<size_t>(pointLights.size(), MAX_POINT_LIGHTS));
-		for (uint32_t i = 0; i < legacyLightCount; ++i)
+		const uint32_t appliedLightCount = static_cast<uint32_t>(
+			std::min<size_t>(pointLights.size(), kMaxPointLights));
+		ubo.numLights = static_cast<int>(appliedLightCount);
+		descriptorManager->uploadLights(frameInFlight, pointLights.data(),
+			static_cast<VkDeviceSize>(appliedLightCount) * sizeof(GpuPointLight));
+		if (loggedAppliedLights != appliedLightCount)
 		{
-			ubo.pointLights[i].position = pointLights[i].positionRadius;
-			ubo.pointLights[i].color = pointLights[i].colorIntensity;
+			loggedAppliedLights = appliedLightCount;
+			std::cout << "[Lights] lightBuffer | applied=" << appliedLightCount
+				<< " requested=" << pointLights.size()
+				<< " capacity=" << kMaxPointLights << std::endl;
 		}
-		ubo.numLights = static_cast<int>(legacyLightCount);
 
 		ubo.clusterParams = glm::vec4(0.0f, 0.1f, 5000.0f, 0.0f);
 

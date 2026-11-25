@@ -8,19 +8,15 @@
 #include <functional>  // FrameInfo 的配置回调
 #include "Core/FrameInFlight.h"
 
-#define MAX_POINT_LIGHTS 100
+// P2-6：点光源上限不再由 UBO 里的固定数组决定，而是由灯缓冲的容量决定。
+// 1024 条 × 32 字节 = 32 KiB / 帧槽，三帧槽共 96 KiB。
+constexpr uint32_t kMaxPointLights = 1024;
 #define WIDTH 1920
 #define HEIGHT 1080
 
 class DescriptorManager;
 class CameraController;
 namespace tiny { class RenderGraphBlackboard; }
-
-struct PointLight
-{
-	glm::vec4 position{};
-	glm::vec4 color{};
-};
 
 struct GlobalUbo
 {
@@ -33,12 +29,18 @@ struct GlobalUbo
 
 	alignas(16) int numLights = 0;
 	float exposure = 1.0f;   // D-2 起光照着色器不再读它，保留字段是为了不动 UBO 布局
-	alignas(16) PointLight pointLights[MAX_POINT_LIGHTS];
+	// P2-6：灯数组搬出 UBO，放到 set 0 binding 19 的 SSBO（lighting.frag 的
+	// `LightBuffer`）。这里只剩上面的 numLights —— 上限从「UBO 里 100 条固定数组」
+	// 变成「缓冲能装多少」（kMaxPointLights）。搬家理由：灯是每帧整体重写的流数据，
+	// 占着 UBO 的 3.2 KB 只会把其他每帧参数挤出去，也让 100 盏变成硬编码上限。
 
 	// Previous rendered frame's projection * view. Present uses it to
 	// reproject each pixel's world position into screen space and derive a
 	// camera motion vector for motion blur.
-	glm::mat4 previousProjectionView{ 1.f };
+	// std140 里 mat4 的起点必须 16 字节对齐。P2-6 之前这个偏移是被上面
+	// pointLights 数组的 alignas(16) 顶到 144 的；数组搬走后前面的 float 只到
+	// 136，所以这里显式写上 alignas，宁可多 8 字节空洞也不让 C++ 与 GLSL 错位。
+	alignas(16) glm::mat4 previousProjectionView{ 1.f };
 
 	// F6：3 级联阴影。矩阵放在 UBO 尾部而不是单独的 SSBO —— 光照着色器本来
 	// 每帧就要读这个 block，多 3 个 mat4 比多一次描述符绑定便宜。
@@ -57,7 +59,7 @@ struct GlobalUbo
 	alignas(16) glm::vec4 shadowFilterParams{ 0.f, 0.f, 0.f, 0.f };
 
 	// TM-13：x = 是否按簇取灯（0 = 逐灯遍历）, y = near, z = far, w 保留。
-	// 放在 UBO 尾部：四个旧着色器只声明到 pointLights，加在末尾不动已有偏移。
+	// 放在 UBO 尾部：四个旧着色器只声明到 previousProjectionView，加在末尾不动已有偏移。
 	alignas(16) glm::vec4 clusterParams{ 0.f, 0.1f, 5000.f, 0.f };
 };
 
@@ -73,28 +75,21 @@ static_assert(offsetof(GlobalUbo, lightColor)        == 96,  "GlobalUbo.lightCol
 static_assert(offsetof(GlobalUbo, cameraPos)         == 112, "GlobalUbo.cameraPos 偏移错误");
 static_assert(offsetof(GlobalUbo, numLights)         == 128, "GlobalUbo.numLights 偏移错误");
 static_assert(offsetof(GlobalUbo, exposure)          == 132, "GlobalUbo.exposure 偏移错误");
-static_assert(offsetof(GlobalUbo, pointLights)       == 144, "GlobalUbo.pointLights 偏移错误");
-static_assert(sizeof(PointLight) == 32, "PointLight 应等于两个 vec4 的大小");
-static_assert(offsetof(GlobalUbo, previousProjectionView) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight),
+static_assert(offsetof(GlobalUbo, previousProjectionView) == 144,
 	"GlobalUbo.previousProjectionView offset mismatch");
-static_assert(offsetof(GlobalUbo, shadowMatrices) ==
-		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + sizeof(glm::mat4),
+static_assert(offsetof(GlobalUbo, shadowMatrices) == 208,
 	"GlobalUbo.shadowMatrices offset mismatch");
-static_assert(offsetof(GlobalUbo, shadowCascadeSplits) ==
-		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + sizeof(glm::mat4) + 3 * sizeof(glm::mat4),
+static_assert(offsetof(GlobalUbo, shadowCascadeSplits) == 208 + 3 * sizeof(glm::mat4),
 	"GlobalUbo.shadowCascadeSplits offset mismatch");
-static_assert(offsetof(GlobalUbo, shadowParams) ==
-		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) + sizeof(glm::vec4),
+static_assert(offsetof(GlobalUbo, shadowParams) == 208 + 3 * sizeof(glm::mat4) + sizeof(glm::vec4),
 	"GlobalUbo.shadowParams offset mismatch");
-static_assert(offsetof(GlobalUbo, fogParams) ==
-		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) + 2 * sizeof(glm::vec4),
+static_assert(offsetof(GlobalUbo, fogParams) == 208 + 3 * sizeof(glm::mat4) + 2 * sizeof(glm::vec4),
 	"GlobalUbo.fogParams offset mismatch");
-static_assert(offsetof(GlobalUbo, shadowFilterParams) ==
-		144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) +
-		3 * sizeof(glm::vec4),
+static_assert(offsetof(GlobalUbo, shadowFilterParams) == 208 + 3 * sizeof(glm::mat4) + 3 * sizeof(glm::vec4),
 	"GlobalUbo.shadowFilterParams offset mismatch");
-static_assert(sizeof(GlobalUbo) == 144 + MAX_POINT_LIGHTS * sizeof(PointLight) + 4 * sizeof(glm::mat4) +
-		5 * sizeof(glm::vec4),
+static_assert(offsetof(GlobalUbo, clusterParams) == 208 + 3 * sizeof(glm::mat4) + 4 * sizeof(glm::vec4),
+	"GlobalUbo.clusterParams offset mismatch");
+static_assert(sizeof(GlobalUbo) == 208 + 3 * sizeof(glm::mat4) + 5 * sizeof(glm::vec4),
 	"GlobalUbo size mismatch");
 
 struct SimplePushConstantData

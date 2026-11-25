@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1707 行
+size: ~1719 行
 updated: 2026-11-25
 ---
 
@@ -1706,3 +1706,15 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 原因：① 金字塔来自上一帧、被测试实例自己的深度就在里面（自遮挡），静止场景里比较必然为假；② 背景写 `kFarDepth = 1e9`，按屏幕尺寸选的 mip 一旦擦到天空就必然失败；③ 俯视平地上的 100×100 阵列在屏幕上不重叠，`0.68` 是视锥覆盖的几何事实。
 - 结论：收益为 0，整段代码回退（工作树与 `f5ad4f3` 一致）。A/B 显示探针成本也在噪声内（cf30k 600 帧 144.3~146.6 vs 回退后 147.0/146.5/146.8 FPS），所以否决纯粹因为没收益。
 - 不做：不含实例的第二份静态遮挡金字塔（要额外深度 pass，当前场景无收益）；逐实例屏幕尺寸剔除（真会少画东西，留给 P6 LOD）。
+
+## P2 第十步：灯数据搬出 UBO 进灯缓冲，上限 100 → 1024（P2-6，2026-11-25）
+
+- `src/Core/FrameInfo.h`：删 `pointLights[MAX_POINT_LIGHTS]` 与 `struct PointLight`，新增 `constexpr uint32_t kMaxPointLights = 1024;`；`previousProjectionView` 显式 `alignas(16)`（以前靠 `pointLights` 的 alignas 顶到 144，数组搬走后必须自己写）；`sizeof(GlobalUbo)` 3680 → 480。
+- 灯缓冲在 **set 0 binding 19**（`layout(set = 0, binding = 19) readonly buffer LightBuffer { PointLight lights[]; }`），`lighting.frag` 逐灯循环改读 `lights[i]`；`present.frag` / `present_no_bloom.frag` / `taa.frag` 删掉各自的 `PointLight pointLights[100]` 声明（不读，但占 std140 的 3200 字节）。
+- `src/Core/DescriptorManager.h/.cpp`：每帧槽一块 32 KiB 常驻映射灯缓冲（`CPU_TO_GPU` + `MAPPED`），`uploadLights()` 做 `memcpy` + 整块 flush、描述符每帧槽只写一次；全局 set 布局 19 → 20 条 binding、池 SSBO 占位循环扩到 `i <= 19`；新增 `applyLightBinding(set)` 并让 `writeLightBinding()` 供两个调用点复用。
+- `src/Core/Application.cpp`：「逐盏写 UBO」换成一次 `uploadLights()` + `[Lights] lightBuffer | applied=… requested=… capacity=1024`（数量变化才打）；`src/Render/ReflectionPass.cpp` 自建 set 0 末尾补 `applyLightBinding()`（否则每帧一条 `VUID-vkCmdDrawIndexedIndirect-None-08114`）。
+- 容量解除读数：`--light-stress 100/512/1024/1500` → `applied=100/512/1024/1024`（1500 夹取到容量），默认场景 `0`。
+- 画面证据（截图 1920×1080 第 30 帧、固定机位、半径 12）：0 vs 100 盏 118,653 像素不同（≥8 的 311）、**100 vs 512 盏 208,703（≥8 的 2,446）**；逐灯 512 vs 聚簇 512 只差 9,785（0.47%），而「只上 100 盏」对聚簇 512 差 182,807（9.5%）。
+- 验证（**必须 Debug**）：`--light-stress 512`、`512 --clustered-lighting`、`512 --clustered-lighting --clustered-gpu-build`、`1024`、默认场景、`--voxel-world 1 --light-stress 200` 六组全部 `errors=0 warnings=0`、stderr 0 字节。
+- 全量回归 **96 项 ALL PASS**（`build/validation/20261125-132707`，stderr 全 0）；DocCheck PASS（documents=81 lines=18290）。
+- 不做：灯脏区增量上传、16 bit `lightId`、簇表布局改动、`--light-stress` 默认半径调整。

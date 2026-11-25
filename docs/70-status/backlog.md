@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~376 行
+size: ~386 行
 updated: 2026-11-25
 ---
 
@@ -374,3 +374,13 @@ updated: 2026-11-25
 **第 4 步（测量，否决）读数（2026-11-25）**：逐实例 Hi-Z 遮挡「只数不裁」量了一遍 —— 参考机位 `--cube-field 10000` 120 帧执行 790656 次、判定被遮挡 **0**；平视三个机位 376264 / 391384 / 409416 次、`--voxel-world 1` 5768 次，全部 0；探针（`occludedByHiZ` 临时 `return true`）能让 `occInst` 跳到 0.66，链路是通的。原因是自遮挡（金字塔来自上一帧）、背景 `kFarDepth=1e9` 污染粗 mip、以及俯视平地上的阵列屏幕不重叠。结论：收益为 0，代码回退，`≤ 0.6` 的差距是机位相关的几何值（10k `0.67`、30k `0.37`）。
 
 **回退开关**：`--no-instance-cull`（默认开）。关掉后 GPU 写恒等 remap、命令不再改写实例区间，顶点着色器仍走同一段取下标代码，画面与默认路径逐像素一致（验证方式见第 3 步读数）。
+
+## P2 待办：灯数据搬进灯缓冲（P2-6）
+
+**现状（搬家前）**：点光源数组在 `GlobalUbo.pointLights[MAX_POINT_LIGHTS = 100]`（`src/Core/FrameInfo.h`），3.2 KiB / 帧槽，灯数硬上限 100；`lighting.frag` 的逐灯循环直接读 UBO 数组。roadmap 的 P2-6 要求把它换成「灯数 + 缓冲句柄」，上限由缓冲容量决定，也是 P7-5 随机采样的前置（`docs/80-roadmap/ue-borrowing-plan.md:560`、`:738`）。
+
+**已落地（2026-11-25，决策 62）**：UBO 删数组、只留 `numLights`（`sizeof(GlobalUbo)` 3680 → 480）；灯进 **set 0 binding 19** 的 SSBO（容量 `kMaxPointLights = 1024`、32 KiB / 帧槽、`DescriptorManager` 持有常驻映射缓冲，`uploadLights()` = `memcpy` + 整块 flush）；`applyLightBinding()` 覆盖全局 set 与反射通道自建 set 0；`--light-stress` 超过容量的部分被夹取而不是被静默截到 100。读数见下。
+
+**读数（2026-11-25）**：容量 —— `--light-stress 0 / 100 / 512 / 1024 / 1500` 分别打 `applied=0 / 100 / 512 / 1024 / 1024`（最后一条 `requested=1500`）。画面（1920×1080 第 30 帧、固定机位、半径 12）：0 vs 100 盏 118,653 个像素不同（≥8 的 311 个）、100 vs 512 盏 208,703（≥8 的 2,446）、平均亮度 97.87 → 98.01；逐灯 512 vs 聚簇 512 差 9,785（0.47%），而「只上 100 盏」对聚簇 512 差 182,807（9.5%）。验证（必须 Debug）：六组用例 `errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项 ALL PASS**（`build/validation/20261125-132707`）。
+
+**回退开关**：无。这一步是纯数据通路搬家，没有行为开关；要回到旧行为只能回退提交（`pointLights` 数组与三份 shader 声明会一起回来）。

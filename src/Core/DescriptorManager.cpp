@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <utility>
+#include <cstring>
 
 void DescriptorManager::init(Device& dev, uint32_t maxMaterials)
 {
@@ -73,6 +74,28 @@ void DescriptorManager::init(Device& dev, uint32_t maxMaterials)
 		}
 	}
 
+	// P2-6：灯缓冲。布局对着 lighting.frag 的 `struct PointLight`（两个 vec4），
+	// 每帧槽一块、容量 kMaxPointLights，常驻映射 —— 灯每帧整体重写，只做 memcpy。
+	{
+		VkBufferCreateInfo lightInfo{};
+		lightInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		lightInfo.size = static_cast<VkDeviceSize>(kMaxPointLights) * sizeof(glm::vec4) * 2u;
+		lightInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+
+		VmaAllocationCreateInfo lightAlloc{};
+		lightAlloc.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+		lightAlloc.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+		for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+		{
+			VmaAllocationInfo lightAllocInfo{};
+			if (vmaCreateBuffer(device->getVmaAllocator(), &lightInfo, &lightAlloc,
+				&lightBuffers[frame], &lightAllocations[frame], &lightAllocInfo) != VK_SUCCESS)
+				throw std::runtime_error("DescriptorManager: 灯缓冲创建失败");
+			lightMapped[frame] = lightAllocInfo.pMappedData;
+		}
+	}
+
 	// ---- D-3：材质 set 只申请一个，长度 = 材质容量 ----
 	//
 	// 用 VARIABLE_DESCRIPTOR_COUNT 让数组长度在**分配时**决定，而不是写死在布局里。
@@ -138,6 +161,17 @@ void DescriptorManager::cleanup()
 		materialFactorMapped = nullptr;
 		materialFactorCount = 0;
 	}
+	for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+	{
+		if (lightBuffers[frame] != VK_NULL_HANDLE)
+			vmaDestroyBuffer(device->getVmaAllocator(), lightBuffers[frame], lightAllocations[frame]);
+		lightBuffers[frame] = VK_NULL_HANDLE;
+		lightAllocations[frame] = nullptr;
+		lightMapped[frame] = nullptr;
+	}
+	lastLightBinding_ = VkDescriptorBufferInfo{};
+	lightBindingWritten_.fill(false);
+
 	if (pool) vkDestroyDescriptorPool(device->getDevice(), pool, nullptr);
 }
 
@@ -155,7 +189,8 @@ void DescriptorManager::createGlobalLayout()
 	// F6-01：binding 13 = 水面 SSR 结果（半分辨率）。
 	// R-06：binding 14 = 水面法线贴图（世界 XZ 平铺）。
 	// TM-13：binding 15~18 = 聚簇光照的参数与三张表（storage buffer）。
-	std::vector<VkDescriptorSetLayoutBinding> bindings(19);
+	// P2-6：binding 19 = 点光源数组（storage buffer，容量 kMaxPointLights）。
+	std::vector<VkDescriptorSetLayoutBinding> bindings(20);
 
 	bindings[0].binding = 0;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -197,6 +232,12 @@ void DescriptorManager::createGlobalLayout()
 		// TM-13 第二步：GPU 侧建簇的 compute 着色器也读/写这四张表。
 		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	}
+
+	// P2-6：19 = 点光源数组。灯数上限从此由缓冲容量决定，不再是 UBO 数组长度。
+	bindings[19].binding = 19;
+	bindings[19].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	bindings[19].descriptorCount = 1;
+	bindings[19].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	for (uint32_t i = 1; i <= 9; i++)
 	{
@@ -402,7 +443,7 @@ void DescriptorManager::buildGlobalSet(
 			irradianceCopy, prefilteredCopy, brdfLutCopy
 		};
 
-		std::array<VkWriteDescriptorSet, 19> writes{};
+		std::array<VkWriteDescriptorSet, 20> writes{};
 
 		VkDescriptorImageInfo shadowInfo{ shadowSampler, shadowViews[frame],
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -454,9 +495,9 @@ void DescriptorManager::buildGlobalSet(
 		writes[10].descriptorCount = 1;
 		writes[10].pBufferInfo = &factorBufferInfo;
 
-		// TM-13：聚簇四张表先绑材质 factor 缓冲占位。真正的内容每帧由
-		// updateClusterBindings() 覆盖；关掉聚簇时着色器不会读这几条。
-		for (uint32_t i = 15; i <= 18; ++i)
+		// TM-13 / P2-6：聚簇四张表 + 灯表先绑材质 factor 缓冲占位。真正的内容每帧由
+		// updateClusterBindings() / applyLightBinding() 覆盖；关掉聚簇时着色器不读 15~18。
+		for (uint32_t i = 15; i <= 19; ++i)
 		{
 			writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 			writes[i].dstSet = globalSets[frame];
@@ -479,10 +520,11 @@ void DescriptorManager::buildGlobalSet(
 		vkUpdateDescriptorSets(device->getDevice(),
 			static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
-		// TM-13：上面那 19 条里的 15~18 只是占位。这个函数可能在建完聚簇表之后
-		// 才被调用（重建 G-Buffer 视图等），所以最后再用最近一帧的四张表覆盖一遍，
-		// 否则着色器会把材质 factor 缓冲当成簇参数读 —— 阈值全是垃圾，实测挂驱动。
+		// TM-13 / P2-6：上面那 20 条里的 15~19 只是占位。这个函数可能在建完聚簇表
+		// 或灯缓冲之后才被调用（重建 G-Buffer 视图等），所以最后再用最近一帧的表覆盖
+		// 一遍，否则着色器会把材质 factor 缓冲当成簇参数/灯数组读 —— 实测会挂驱动。
 		applyClusterBindings(globalSets[frame]);
+		applyLightBinding(globalSets[frame]);
 	}
 }
 
@@ -546,6 +588,66 @@ void DescriptorManager::applyClusterBindings(VkDescriptorSet set)
 	}
 	vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
+void DescriptorManager::writeLightBinding(VkDescriptorSet set, const VkDescriptorBufferInfo& info)
+{
+	if (set == VK_NULL_HANDLE || info.buffer == VK_NULL_HANDLE)
+		return;
+
+	VkWriteDescriptorSet write{};
+	write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	write.dstSet = set;
+	write.dstBinding = 19;
+	write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	write.descriptorCount = 1;
+	write.pBufferInfo = &info;
+	vkUpdateDescriptorSets(device->getDevice(), 1, &write, 0, nullptr);
+}
+
+void DescriptorManager::uploadLights(uint32_t frameInFlightIndex, const void* lights, VkDeviceSize bytes)
+{
+	if (frameInFlightIndex >= lightBuffers.size() || lightBuffers[frameInFlightIndex] == VK_NULL_HANDLE)
+		return;
+
+	const VkDeviceSize capacity = static_cast<VkDeviceSize>(kMaxPointLights) * sizeof(glm::vec4) * 2u;
+	if (bytes > capacity)
+		bytes = capacity;
+
+	if (bytes > 0 && lightMapped[frameInFlightIndex] != nullptr)
+	{
+		std::memcpy(lightMapped[frameInFlightIndex], lights, static_cast<size_t>(bytes));
+		// 整块 flush：32 KiB 比按 count 算对齐边界便宜，也不会漏掉尾部。
+		vmaFlushAllocation(device->getVmaAllocator(), lightAllocations[frameInFlightIndex], 0, capacity);
+	}
+
+	lastLightBinding_.buffer = lightBuffers[frameInFlightIndex];
+	lastLightBinding_.offset = 0;
+	lastLightBinding_.range = VK_WHOLE_SIZE;
+
+	// 缓冲身份每个帧槽固定，所以描述符只写一次；内容变化靠 flush。
+	if (frameInFlightIndex < globalSets.size() && globalSets[frameInFlightIndex] != VK_NULL_HANDLE
+		&& !lightBindingWritten_[frameInFlightIndex])
+	{
+		writeLightBinding(globalSets[frameInFlightIndex], lastLightBinding_);
+		lightBindingWritten_[frameInFlightIndex] = true;
+	}
+}
+
+void DescriptorManager::applyLightBinding(VkDescriptorSet set)
+{
+	if (set == VK_NULL_HANDLE)
+		return;
+
+	VkDescriptorBufferInfo info = lastLightBinding_;
+	if (info.buffer == VK_NULL_HANDLE)
+	{
+		// 还没上传过灯（例如第一帧之前就建 set）：先绑一块合法的近似大小缓冲。
+		info.buffer = lightBuffers[0] != VK_NULL_HANDLE ? lightBuffers[0] : materialFactorBuffer;
+		info.offset = 0;
+		info.range = VK_WHOLE_SIZE;
+	}
+	writeLightBinding(set, info);
+}
+
 void DescriptorManager::setFrameTimelineCallbacks(std::function<uint64_t()> completed,
 	std::function<void(uint64_t)> waitUntil,
 	std::function<uint64_t()> lastSubmitted)

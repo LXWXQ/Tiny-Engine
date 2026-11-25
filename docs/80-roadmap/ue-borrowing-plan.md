@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1058 行
+size: ~1060 行
 updated: 2026-11-25
 ---
 
@@ -1057,3 +1057,5 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P2 第八步（2026-11-25，紧凑索引 + remap）**：实例级剔除真正落地 —— 组级通过之后，`scene_cull.comp` 用三段追加 dispatch 把可见实例压成「每组一段紧凑区间」并改写 indirect 命令（`instanceCount` = 本组可见数、`firstInstance` = 前缀和起点），`mrt.vert` 经 set 3 新增的 remap 表取 `InstanceRecord`（`fragInstanceIndex` 同样换成真实下标）。实测提交比例第一次等于实例级可见比例：10k `6815.0/帧`（第二步 10063.0）、30k `11216.0/帧`（30063.0），`gpuInst` 与第二步逐位相同；30k 600 帧 × 3 轮 A/B `142.19/142.86/142.08` 对 `125.86/126.09/125.66 FPS`（**+13.1%**，median 6.88 对 7.88 ms），default 场景 −0.6~1.1%（实例太少，四段 dispatch 是纯开销）。`--no-instance-cull` 写恒等 remap 回退，两版截图 832 个差异像素全在 HUD 面板内、画面外 0 差异。三档 + `--no-instance-cull` + `--voxel-world 1/12` + `--validation-features sync` + `--cube-field-motion 500 --rebuild-structure 7` 在 Debug 构建下全部 `errors=0 warnings=0`、stderr 0 字节（Release 的 `enableValidationLayers` 在 `NDEBUG` 下是 `false`，`errors=0` 不作数）。**踩坑**：同一套实例布局还有第二处分配者（体素 chunk 实例表），漏了它会让 9 项体素/水面/TAA/SSR 回归各报一条 `VUID-vkCmdDrawIndexedIndirect-None-08114`。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-121228`）；DocCheck PASS（documents=81）。
 
 **P2 第九步（2026-11-25，测量后否决）**：逐实例 Hi-Z 遮挡先按「只数不裁」量了一遍 —— 模式 1 里对通过视锥的实例算世界 AABB 并调 `occludedByHiZ`，命中写 `stats[3].z`、`instance summary` 增 `occInst=`。参考机位 `--cube-field 10000` 120 帧执行 790656 次、判定被遮挡 **0**；平视三个机位 376264 / 391384 / 409416 次、`--voxel-world 1` 5768 次，全部 0。原因是自遮挡（金字塔来自上一帧，实例自己的深度就在里面）、背景 `1e9` sentinel 会污染粗 mip、以及俯视平地上的阵列屏幕不重叠 —— `0.68` 是视锥覆盖的几何事实。收益为 0，代码整段回退（工作树回到 `f5ad4f3`），探针成本也在噪声内（cf30k 600 帧 144.3~146.6 vs 147.0/146.5/146.8 FPS）。
+
+**P2 第十步（2026-11-25，灯数据搬进灯缓冲）**：`GlobalUbo.pointLights[100]` 搬出 UBO，进 set 0 新增的 binding 19（`LightBuffer { PointLight lights[]; }`，容量 `kMaxPointLights = 1024`、32 KiB / 帧槽、`DescriptorManager` 持有常驻映射缓冲）；UBO 只剩 `numLights`，`sizeof(GlobalUbo)` 3680 → 480，`previousProjectionView` 改为显式 `alignas(16)`（以前靠被搬走的数组顶对齐）。`lighting.frag` 的逐灯循环改读 `lights[i]`，`present.frag` / `present_no_bloom.frag` / `taa.frag` 删掉各自的 `PointLight pointLights[100]` 声明（不读但占 std140 的 3200 字节）。容量第一次真正解除：`--light-stress 1500` → `applied=1024 requested=1500`（旧代码只会上 100）。画面证据：半径 12 的 `--light-stress` 截图，0 → 100 盏 118,653 个像素不同、**100 → 512 盏 208,703 个（≥8 的 2,446）**；逐灯 512 与聚簇 512 的差异从「只上 100 盏时」的 182,807（9.5%）缩到 9,785（0.47%），说明逐灯路径第一次看到全部灯。**踩坑**：`alignas(16)` 的搭便车、三个后效 shader 的占位数组、`buildGlobalSet` 末尾的占位覆盖、以及反射通道自建 set 0 必须补 `applyLightBinding`（漏了会每帧一条 `VUID-vkCmdDrawIndexedIndirect-None-08114`）。验证必须在 Debug 下做（Release 的 `enableValidationLayers` 在 `NDEBUG` 下是 `false`）：六组用例全部 `errors=0 warnings=0`、stderr 0 字节。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-132707`）；DocCheck PASS（documents=81）。

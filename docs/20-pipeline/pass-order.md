@@ -4,8 +4,8 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~208 行
-updated: 2026-11-20
+size: ~209 行
+updated: 2026-11-25
 ---
 
 # Pass 顺序与原因
@@ -154,8 +154,10 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 
 | `clusterParams.x` | 灯从哪里读 | 每片元成本 |
 |---|---|---|
-| 0（默认） | `ubo.pointLights[MAX_POINT_LIGHTS]`，逐盏遍历 | 最多 100 盏 |
+| 0（默认） | Set 0 binding 19 的灯缓冲（`lights[]`，P2-6 起从 UBO 搬出），逐盏遍历 | 最多 1024 盏 |
 | 1（`--clustered-lighting`） | Set 0 binding 15~18 的簇参数 / ranges / indices / 灯数组 | 所在簇的灯数 |
+
+P2-6（2026-11-25）起，逐灯路径的灯数组不在 UBO 里，而在 Set 0 binding 19 的 `LightBuffer`（容量 `kMaxPointLights = 1024`）；UBO 只剩 `numLights`，所以这一行的「最多 1024 盏」是缓冲容量，改容量只改 `constexpr`。聚簇路径（binding 15~18）不变。
 
 主视角用聚簇时，平面反射通道仍走逐灯（`reflectionUbo.clusterParams.x = 0`）：它的 Set 0 是 `ReflectionPass` 自己建的，簇表按主视角算，复用会读到与屏幕分块不匹配的区间。
 

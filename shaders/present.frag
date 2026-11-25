@@ -8,12 +8,6 @@
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
-struct PointLight
-{
-    vec4 position;
-    vec4 color;
-};
-
 layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 projectionView;
     vec4 ambientLightColor;
@@ -22,7 +16,6 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     vec4 cameraPos;
     int numLights;
     float exposure;
-    PointLight pointLights[100];
     mat4 previousProjectionView;
 } ubo;
 

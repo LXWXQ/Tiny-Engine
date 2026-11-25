@@ -318,6 +318,9 @@ void ReflectionPass::rebuildDescriptors()
         // lighting.frag 静态使用 binding 15~18（聚簇四张表）。这个 set 是反射通道
         // 自己建的，不会被 buildGlobalSet 覆盖，必须显式补齐，否则验证层会报未更新。
         descriptorManager->applyClusterBindings(reflectionSets[frame]);
+        // P2-6：lighting.frag 还静态使用 binding 19（点光源数组），这个自建的
+        // set 0 同样要补齐，否则验证层报 08114。
+        descriptorManager->applyLightBinding(reflectionSets[frame]);
     }
 }
 
