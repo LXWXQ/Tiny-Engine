@@ -4,8 +4,8 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~358 行
-updated: 2026-11-20
+size: ~370 行
+updated: 2026-11-25
 ---
 
 # 后续任务台账
@@ -356,3 +356,15 @@ updated: 2026-11-20
 2. 在 [milestones](milestones.md) 追加 D-xx 记录；
 3. 同步 `known-limits`、`tech-debt`、`terrain-plan` 中仍然成立/已撤销的条目；
 4. 运行 `tools\Validate.ps1 -Incremental -SkipSetup` 与 `tools\DocCheck.ps1`。
+
+## P2 待办：实例级剔除（remap）
+
+**现状**：剔除是组级的（`shaders/scene_cull.comp` 每个组一次判定，写 5 word 的 indirect 命令）。一万个立方体合成 1 个组，组一旦可见就画满整组，`visibleRatio 0.62` 说的是「104 个组里 64 个可见」，与实例数无关。实测（`747a3e5` 起的只读度量，Release 40 帧每帧强制重建）实例级视锥可见比例：cube-field 10k **0.676**、30k **0.372**——目标 `visible/submitted <= 0.6` 在 30k 靠纯视锥就能过线，10k 需要叠加 Hi-Z。
+
+**为什么分三步**：它能用纯布局/统计方式验证的部分先做，避免一次动 shader、描述符、顶点取值三处而无法定位。
+
+1. **布局扩容（纯验证）**：`shaders/scene_cull.comp` 的 `stats[3]` 扩成 `stats[4]`；`src/Render/SceneGpuBatch.h` 的 `Stats` 现在是 13 个 `uint32_t`（对应 3 个 `uvec4` 的 12 个 + 1 个），必须补到 16 个（加 3 个 pad），否则扩 slot 会越界。验收：三档 `--stats-frame` 读数与原值逐位相同，`--validation-features sync` `errors=0`。
+2. **绑实例缓冲 + GPU 统计**：`src/Render/SceneGpuBatch.cpp:156-175` 的 `computeBindings[5]` 加第 6 个 binding（`InstanceRecord[]`），池大小与 set 写入同步（`:190-202`、`:380-410`）；shader 对可见组的实例做视锥测试并 `atomicAdd` 计数。验收：GPU 侧比例与 CPU 侧 0.676 / 0.372 对得上（允许 ±2%）。
+3. **紧凑索引表 + remap 取实例**：shader 写出可见实例的紧凑索引，`mrt.vert` 等走 `InstanceRecord` 的顶点着色器改为经该表索引，`vkCmdDrawIndexedIndirect` 的 `instanceCount` 用 remap 后的数量。验收：`instFrustum` 的比例变成实际提交比例，`--no-instance-cull` 可整体回退且画面逐像素一致。
+
+**回退开关**：第三步完成后加 `--no-instance-cull`（默认开）。
