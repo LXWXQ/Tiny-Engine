@@ -196,6 +196,7 @@ cubeFieldBuilt = 0;
     uint32_t forceRebuildEvery = 0;   // P2 度量：强制重建周期（0 = 关）
     uint32_t forceRebuildTick = 0;
     void setForceRebuildEvery(uint32_t frames) { forceRebuildEvery = frames; }
+    void setCubeFieldMotion(uint32_t microradiansPerFrame) { cubeFieldMotion = microradiansPerFrame; }
     tiny::GpuScene& getGpuScene() { return gpuScene; }
     const tiny::GpuScene& getGpuScene() const { return gpuScene; }
     // P2：把 subMeshBoundsFor 的首次索引扫描挪到加载期，避免第一帧摊平被一次性成本虚高。
@@ -380,6 +381,7 @@ uint32_t cubeFieldMaterialSlot = 0;
 uint32_t cubeFieldCount = 0;
 float cubeFieldSpacing = 1.2f;
 float cubeFieldDistance = 26.0f;
+    uint32_t cubeFieldMotion = 0;    // P2 度量：每帧整体旋转量（微弧度），> 0 时阵列每帧重建
 // 阵列中心在第一次构建时按传入帧的 view 矩阵反算：启动期相机还没刷过 view。
 uint32_t cubeFieldBuilt = 0;
     uint32_t debugExternalCount = 0;

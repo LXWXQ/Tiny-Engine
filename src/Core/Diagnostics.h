@@ -86,6 +86,7 @@ namespace diag
 uint32_t cubeField = 0;
     // P2 度量：每 N 帧强制重建一次结构，用来取"稳态重建"样本（0 = 关）。
     uint32_t rebuildStructure = 0;
+    uint32_t cubeFieldMotion = 0;   // P2 度量：立方体阵列每帧整体旋转（>0 时每帧强制重建，量「动态实例」的摊平成本）
     // T-04b：同帧目标合成一张。默认开：实测更快（lights-512 +5.4%）且少 15 张图；
     // 它自带「本帧等上一帧」的等待，用 --no-single-frame-targets 整体回退。
     bool singleFrameTargets = true;

@@ -748,8 +748,10 @@ if (cubeFieldCount == 0u || !cubeFieldModel)
 return;
 // 阵列是静态的：只有数量变了才重建。重建会改结构签名、触发一次整帧摊平，
 // 那正是要量的东西，但只在第一帧发生，不能每帧都算进 flattenUs。
-if (cubeFieldBuilt == cubeFieldCount)
-return;
+    // P2 度量：--cube-field-motion 打开时每帧重建一次，量「动态实例」的真实成本。
+    const bool cubeFieldAnimated = cubeFieldMotion > 0u;
+    if (!cubeFieldAnimated && cubeFieldBuilt == cubeFieldCount)
+        return;
 
 // 中心点在这里算而不是在 Application 里：启动期相机的 view 矩阵还没被 update 刷过。
 const glm::mat4 cubeFieldInverseView = glm::inverse(frameInfo.viewMatrix);
@@ -793,7 +795,14 @@ glm::mat4 local = unitScale;
 local[3][0] = -half + static_cast<float>(x) * cubeFieldSpacing;
 local[3][1] = -half + static_cast<float>(y) * cubeFieldSpacing;
 local[3][2] = -half + static_cast<float>(z) * cubeFieldSpacing;
-instance.transform = place * local;
+        glm::mat4 animatedLocal = local;
+        if (cubeFieldAnimated)
+        {
+            const float angle = static_cast<float>(frameInfo.frameNumber % 6283u) * 0.001f *
+                                static_cast<float>(cubeFieldMotion) * 0.001f;
+            animatedLocal = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0.0f, 1.0f, 0.0f)) * local;
+        }
+        instance.transform = place * animatedLocal;
 externalInstances.push_back(instance);
 }
 
