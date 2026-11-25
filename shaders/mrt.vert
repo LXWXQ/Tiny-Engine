@@ -73,14 +73,22 @@ struct InstanceRecord
     uvec4 draw;
 };
 layout(set = 3, binding = 0) readonly buffer InstanceBuffer { InstanceRecord instances[]; };
+// P2 实例级剔除：命令里的实例区间是紧凑后的，gl_InstanceIndex 只是这段区间里的位置，
+// 真实实例下标要去 remap 表里取。表由 scene_cull.comp 每帧写；剔除关着时写恒等映射，
+// 所以这段代码在两种模式下都是唯一的取记录路径。
+layout(set = 3, binding = 1) readonly buffer InstanceRemapBuffer { uint instanceRemap[]; };
 
 void main() 
 {
     mat4 modelMatrix = push.modelMatrix;
     mat4 normalMatrix = push.normalMatrix;
+    // 地形批处理没有 remap 表（它自己的实例表就按 gl_InstanceIndex 排），只有 GPU 场景这条
+    // 路径要过 remap。
+    const uint instanceIndex = push.gpuScene != 0u ? instanceRemap[gl_InstanceIndex]
+                                                   : uint(gl_InstanceIndex);
     if (push.gpuScene != 0u || push.terrainBatched != 0u)
     {
-        InstanceRecord inst = instances[gl_InstanceIndex];
+        InstanceRecord inst = instances[instanceIndex];
         modelMatrix = inst.model;
         normalMatrix = inst.normal;
     }
@@ -92,5 +100,6 @@ void main()
     fragUV = inUV;
     fragPosLocal = inPosition;
     fragNormalLocal = inNormal;
-    fragInstanceIndex = uint(gl_InstanceIndex);
+    // 片元拿这个下标去实例缓冲取材质参数，必须和顶点用的是同一个真实下标。
+    fragInstanceIndex = instanceIndex;
 }

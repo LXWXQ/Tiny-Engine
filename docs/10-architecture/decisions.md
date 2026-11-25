@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1357 行
+size: ~1420 行
 updated: 2026-11-25
 ---
 
@@ -1356,3 +1356,66 @@ backlog 原文写的是「对可见组的实例做视锥测试」，实现改成
 
 - GLSL 里 `half` 是保留字（`error : 'half' : Reserved word.`），局部变量得叫 `worldHalf`。
 - 用 `Copy-Item` 覆盖源码会带回旧 mtime，MSBuild 认为 `.obj` 已是最新而跳过重编，跑出来读数是 0（实际在跑上一次 A/B 的旧二进制）。改完源码要 `(Get-Item <file>).LastWriteTime = Get-Date`，并确认构建日志里出现该 `.cpp` 的名字。
+
+## 决策 60：实例级剔除用「每组一段紧凑区间 + remap 表」，四段 dispatch 接力（P2 第八步）
+
+### 问题
+
+组级剔除只能整组保留或整组剔除：cube-field 一万个立方体合成 1 个组，组一旦可见就画满整组。`visibleRatio 0.62` 说的是「104 个组里 64 个可见」，与实例数无关；而实测实例级视锥可见比例是 10k `0.6756`、30k `0.3719`（决策 59 的度量）。要把这个比例变成真正的提交比例，得同时解决三件事：决定哪些实例进绘制、让顶点着色器按紧凑后的序号取记录、让 indirect 命令的 `instanceCount` / `firstInstance` 指向紧凑区间 —— 同时**保持「所有组共用一条 multidraw」**，否则组级剔除省下来的提交次数就白省了。
+
+### 做法
+
+- **命令写两处**：组剔除阶段在实例级剔除开着时（`push.more.z != 0`）不再累加实例级统计；紧凑化阶段按每组可见实例数重写 `commands[base + 1] = count`、`commands[base + 4] = running`（`running` 是前缀和得到的紧凑起点），并顺手累加 `stats[0].w` / `stats[1].x` / `stats[1].y`。
+- **remap**：`instanceRemap[i]` = 紧凑序号 `i` 对应的真实实例下标。名次由每个实例一次 `atomicAdd(cullGroupBuffer.cullGroups[g].x, 1)` 领号，先暂存在 scratch 后半段（`push.more.z` 是分界，前一半是 remap、后一半是名次），最后一段把它搬成 `remap[base + rank] = instanceIndex`。
+- **`mrt.vert` 只在 `push.gpuScene != 0` 时过 remap**：`const uint instanceIndex = push.gpuScene != 0u ? instanceRemap[gl_InstanceIndex] : uint(gl_InstanceIndex);`，取矩阵与 `fragInstanceIndex` 都用这个真实下标，所以顶点取的矩阵与片元取的材质参数是同一份记录。地形批处理（`terrainBatched`）不过 remap。
+- **实例 → 组用 shader 内二分**：CPU 端按 `stable_sort(order)` 的顺序把实例拼进缓冲（`group.firstInstance = instanceScratch.size()`），所以组区间按 `firstInstance` 升序、连续无空隙；二分找「最后一个 `draw.w <= instanceIndex` 的组」即可。
+- **回退写恒等表**：`--no-instance-cull` 时跑第 5 个模式（一个 invocation 一个实例写 `remap[i] = i`），命令保持组剔除写下的原值。
+
+四段 dispatch 全部挂在同一个 compute pipeline 上，用 `push.more.y` 选阶段：`0` = 组剔除、`1` = 测视锥 + 领名次、`2` = 组前缀和 + 改命令、`3` = 搬 remap、`4` = 恒等 remap。
+
+### 为什么是四段，而不是两段或塞进组内循环
+
+- **塞进组内循环不可行**：`layout(local_size_x = 64)` 一个 invocation 一个组，cube-field 就是一个组压着 30000 个实例，等于用一个线程跑完所有测试（决策 59 已经踩过这个结论）。
+- **名次必须在起点之前领，起点必须在可见数之后算**：要避免重复测视锥，就得把「名次」暂存下来，于是拆成「测 + 领号」「前缀和」「搬运」三段。少一段就要多测一次视锥，多一段就要多一块暂存。
+- **前缀和单 invocation 串行**：组数只有几十到几百（实测 103 / 104），而这一步本来就要「每组只写一次 5 word 命令」—— 天然是单写者，串行比并行扫描省事得多。
+- **段间用 compute → compute 屏障**（`SHADER_WRITE` → `SHADER_READ | SHADER_WRITE`）：第 1 段写的 `cullGroups` / scratch 后段被第 2、3 段读，第 2 段写的命令被第 3 段读。第 3 段之后仍然走原来那条 `SHADER_WRITE` → `INDIRECT_COMMAND_READ | VERTEX | FRAGMENT` 的全屏障。
+
+### 为什么回退路径也要写 remap
+
+两条路径共用同一段顶点取下标代码，才能让「关掉开关画面逐像素一致」成为可验证的结论 —— 否则关掉开关跑的是另一条着色器路径，不一致时分不清是裁剪错了还是路径不同。顺带避免了 host 侧往在飞帧里写 remap（那需要额外的同步）。
+
+### 验收
+
+| 场景 | 组级 `groups/visible/culled` | 提交实例数 `instances/frame` | GPU `gpuInst` | 第二步的 `instances/frame` |
+| --- | --- | --- | --- | --- |
+| default | 103 / 63 / 40 | 59.0 | 0.58 (7080/12154) | 63.0 |
+| cube-field 10k | 104 / 64 / 40 | **6815.0** | 0.6747 (804288/1192154) | 10063.0 |
+| cube-field 30k | 104 / 64 / 40 | **11216.0** | 0.3726 (1323606/3552154) | 30063.0 |
+
+- `cull summary` 的 `instances/frame` 现在就是真正提交的实例数（6815 / 11216），与 `instance summary` 的 `submit/frame` 逐位一致；`gpuInst` 仍是「测过里可见的」比例，比提交数每帧多 1 个实例 —— 那个实例所在的组被组级剔除掉了，紧凑化阶段按 `commands[base+1] == 0` 跳过，不会复活。
+- **逐像素一致**：cf10k 第 30 帧 1920×1080 截图，开 / 关两版共 832 个像素不同，全部落在左上角 HUD 的「Performance」面板内（x 60~330 / y 90~300），面板外 **0 个像素不同**；两次同样配置的运行本身也有 285 个像素不同（同一区域，FPS 数字在跳），所以几何完全一致。
+- 三档 + `--no-instance-cull` + 体素（`--voxel-world 1` / `12`）+ `--validation-features sync`（10k）在 **Debug** 构建下全部 `[Validation] errors=0 warnings=0`、stderr 0 字节；`--cube-field-motion 500 --rebuild-structure 7`（200 帧、每帧强制重建）也 `errors=0`、`gpuInst=0.6705 (1341261/2000394)`。
+- 注意验证层只在 Debug 里存在（`src/RHI/Device.h:145-148`，`NDEBUG` 下 `enableValidationLayers = false`），所以「Release 跑出 errors=0」不能当证据 —— 这一版第一次全量回归就是被它骗过去一次，见下方踩坑。
+- 全量回归 `tools/Validate.ps1 -BuildDir build -Config Debug -Frames 120 -Incremental -SkipSetup`：**96 项 ALL PASS**（stderr 全 0，日志 `build/validation/20261125-121228`），DocCheck PASS（documents=81）。上一轮 96 项里有 9 项体素/水面/TAA/SSR 用例变红，就是下面第一条坑。
+
+### 代价与收益
+
+- cube-field 30k（600 帧 × 3 轮，带 `--stats-frame`）：开 `142.19 / 142.86 / 142.08 FPS`、median 6.88 ms、p95 7.62 ms；关（`--no-instance-cull`）`125.86 / 126.09 / 125.66 FPS`、median 7.88 ms、p95 8.12~8.38 ms —— **+13.1% FPS、median −1.00 ms（−12.7%）**。这就是本步的目的：少提交约 63% 的实例，顶点与片元两边都少跑。
+- default 场景（103 组 / 63 实例）：开 `202.55 / 203.82 FPS`，关 `204.81 / 204.65 FPS` —— **−0.6~1.1%**，median 都是 4.88 ms。实例数很少时这四段 dispatch 是纯开销，收益要千级实例往上才盖得住。
+- 组级读数与第二步逐位相同（`104/64/40`、`external=10000/30000`、`instFrustum=6756/10000`、`11157/30000`）。`flatten breakdown` 的 `total` 单样本 9.06 → 8.11、17.33 → 16.19 ms 波动全在 `merged` 列（4.9 → 3.8 ms），不当收益计入。
+
+### 不引入的
+
+- 不做并行前缀和 / GPU 排序：组数只有百余个，单 invocation 串行足够，代码少一半。
+- 不动 `shadow.vert` 等其它顶点着色器：它们不读实例记录，这一步只改 `mrt.vert`。
+- 不改 `Stats` 的 16 个 word 与 `readStats`：提交量复用 `stats[0].w`（`CullTotals::visibleInstances`），语义从「可见组的实例数之和」变成「紧凑后真正提交的实例数」，`gpuInst` 仍由 `stats[3]` 提供。
+- 不给地形批处理做 remap：它有独立的实例表与 indirect 路径，set 3 的 binding 1 只是为了让同一套布局能绑上（指向同一块实例缓冲，内容不被读）。
+
+### 踩到的坑与边界
+
+- `scene_cull.comp` 的 binding 1（命令缓冲）必须去掉 `writeonly`：前缀和阶段要读 `commands[base + 1]` 来判断这一组是否已被组级剔除。
+- 地形 chunk 实例表的描述符池 `descriptorCount` 必须同步 ×2（`src/Render/GeometrySystem.cpp`）：池容量是按「set 数 × 每 set 描述符数」配的，binding 变多后不加会 `vkAllocateDescriptorSets` 失败。
+- remap 与名次共用一块 `2 × capacity` 的缓冲，`push.more.z` 同时兼任「实例级剔除是否开着」的开关：0 = 关（此时走恒等模式），非 0 = 开。
+- 组剔除把整条 5 word 命令清 0，所以紧凑化阶段用 `commands[base + 1] == 0` 判「这组没实例要画」；可见组里一个实例都没通过视锥时也会把命令清 0，两条路径同一个出口。
+- **用同一套实例布局的不止一处**：除了地形 chunk 实例表（`GeometrySystem::ensureTerrainChunkInstances`），体素 chunk 实例表（`GeometrySystem::ensureVoxelBatchResources`）也从 `sceneInstanceSetLayout` 分配 set。加 binding 1 时只改了地形那边，体素场景每帧报一条 `VUID-vkCmdDrawIndexedIndirect-None-08114`（`Descriptor in binding #1 index 0 is being used in draw but has never been updated via vkUpdateDescriptorSets()`），`f3-voxel*`、`f3v-taa/water/ssr` 共 9 项回归全红。两处都要「池 `descriptorCount` ×2 + 写满两个 binding」，binding 1 都指向同一块实例缓冲（这两条路径不过 remap，内容不会被读）。
+- **Release 里没有验证层**（`src/RHI/Device.h:145-148`）：`NDEBUG` 下 `enableValidationLayers` 直接是 `false`，验证回调不注册，`[Validation] errors=0` 恒成立。所以本步的「验证干净」必须用 `-Config Debug` 的 `TinyEngine.exe` 或 `tools/Validate.ps1` 证明；Release 版的 `--validation-features sync` 只验证了参数解析。

@@ -99,6 +99,7 @@ const std::vector<UsageLine> kCatalog = {
 { "剖析", "--cube-field <n>", "铺 n 个立方体排成立方格点，走外部实例注入路径（P2 的入场尺子）" },
                     { "剖析", "--rebuild-structure <n>", "每 n 帧强制重建一次实例结构，用来取摊平的稳态样本（0 = 关）" },
         { "剖析", "--cube-field-motion <n>", "立方体阵列每帧整体旋转 n 微弧度，用来量「动态实例」的每帧摊平成本（配合 --cube-field）" },
+        { "剖析", "--no-instance-cull", "关掉实例级剔除（P2 第三步的整体回退：GPU 写恒等 remap，画面应与默认逐像素一致）" },
         { "剖析", "--no-single-frame-targets", "回到每帧 slot 各一份目标（T-04b 的整体回退开关，默认开的是合成一张）" },
         { "剖析", "--serialize-frames", "本帧图形工作等上一帧完成（T-04b；会让 GPU 不再重叠两帧）" },
     { "剖析", "--light-stress", "铺 N 盏点光源做压力场（配合 --clustered-lighting 看聚簇收益）" },

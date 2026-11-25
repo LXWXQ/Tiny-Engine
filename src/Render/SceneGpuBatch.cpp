@@ -36,7 +36,10 @@ constexpr uint32_t kMaxCachedModels = 64;
 struct CullPushConstants
 {
     glm::uvec4 params{ 0u };   // x=groupCount, y/z/w = Hi-Z 宽/高/层数
-    glm::uvec4 more{ 0u };     // x=count, y=mode（0 = 组剔除，1 = 实例视锥统计）
+    // 第二段：一次 dispatch 只做一件事。x = 这一阶段处理的实例数 / 组数，
+    // y = 阶段（0 组剔除 / 1 实例视锥+名次 / 2 组前缀和 / 3 写紧凑索引 / 4 恒等 remap），
+    // z = 实例容量（remap 与名次在同一块缓冲里的分界；0 表示实例级剔除关着）。
+    glm::uvec4 more{ 0u };
 };
 static_assert(sizeof(CullPushConstants) == 32, "scene_cull.comp push constant layout mismatch");
 
@@ -73,6 +76,11 @@ static_assert(tiny::reflect::scene_cull_comp::kPushMoreOffset == 16u,
               "scene_cull.comp 的 push constant 第二段必须紧跟 params（偏移 16）");
 static_assert(tiny::reflect::scene_cull_comp::kInstanceBufferBinding == 5u,
               "实例缓冲在 scene_cull.comp 里必须是 binding 5");
+// P2 第三步：binding 6 = 每组紧凑区间，binding 7 = remap + 名次。
+static_assert(tiny::reflect::scene_cull_comp::kCullGroupBufferBinding == 6u,
+              "每组紧凑区间在 scene_cull.comp 里必须是 binding 6");
+static_assert(tiny::reflect::scene_cull_comp::kScratchBufferBinding == 7u,
+              "remap/名次缓冲在 scene_cull.comp 里必须是 binding 7");
 
 // 组的世界 AABB 由实例的局部 AABB 变换后求并集；少于这个数的组不值得单独剔除。
 constexpr uint32_t kCommandWords = 5u;
@@ -174,7 +182,7 @@ void SceneGpuBatch::destroyBuffer(GpuBuffer& buffer)
 void SceneGpuBatch::createLayoutsAndPipeline()
 {
     // compute：组记录 / 命令 / 帧数据 / 统计
-    VkDescriptorSetLayoutBinding computeBindings[6]{};
+    VkDescriptorSetLayoutBinding computeBindings[8]{};
     for (uint32_t i = 0; i < 4u; ++i)
     {
         computeBindings[i].binding = i;
@@ -187,35 +195,51 @@ void SceneGpuBatch::createLayoutsAndPipeline()
     computeBindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     computeBindings[4].descriptorCount = 1;
     computeBindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    // binding 5 = 实例缓冲（只读）：实例级视锥统计要按实例取局部 AABB 与世界矩阵。
+    // binding 5 = 实例缓冲（只读）：实例级剔除要按实例取局部 AABB 与世界矩阵。
     computeBindings[5].binding = 5;
     computeBindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     computeBindings[5].descriptorCount = 1;
     computeBindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    // binding 6 = 每组紧凑区间（可见实例数 + remap 起点），binding 7 = remap + 名次。
+    // 7 与 6 分开挂是为了让「实例 → 组」和「组 → 起点」两次改写各走各的缓冲：
+    // 同一块缓冲里 remap 是拓扑结果、名次是临时量，混在一个数组里会让下标算式变复杂。
+    for (uint32_t i = 6; i < 8u; ++i)
+    {
+        computeBindings[i].binding = i;
+        computeBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        computeBindings[i].descriptorCount = 1;
+        computeBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo computeLayoutInfo{};
     computeLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    computeLayoutInfo.bindingCount = 6;
+    computeLayoutInfo.bindingCount = 8;
     computeLayoutInfo.pBindings = computeBindings;
     if (vkCreateDescriptorSetLayout(vulkanDevice.getDevice(), &computeLayoutInfo, nullptr,
                                     &computeSetLayout) != VK_SUCCESS)
         throw std::runtime_error("SceneGpuBatch: compute descriptor layout failed");
 
-    // 图形：set 3 binding 0 = 实例缓冲（顶点/片元都读）
-    VkDescriptorSetLayoutBinding instanceBinding{};
-    instanceBinding.binding = 0;
-    instanceBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    instanceBinding.descriptorCount = 1;
-    instanceBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    // 图形：set 3 binding 0 = 实例缓冲（顶点/片元都读），binding 1 = 实例 remap（顶点读）。
+    VkDescriptorSetLayoutBinding instanceBindings[2]{};
+    instanceBindings[0].binding = 0;
+    instanceBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    instanceBindings[0].descriptorCount = 1;
+    instanceBindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    // 地形批处理的实例表不走 remap，但同一个管线布局要能绑它的 set，所以这个 binding 必须存在；
+    // GeometrySystem 会往它里面写一份有效的存储缓冲（内容不会被读）。
+    instanceBindings[1].binding = 1;
+    instanceBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    instanceBindings[1].descriptorCount = 1;
+    instanceBindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     VkDescriptorSetLayoutCreateInfo instanceLayoutInfo{};
     instanceLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    instanceLayoutInfo.bindingCount = 1;
-    instanceLayoutInfo.pBindings = &instanceBinding;
+    instanceLayoutInfo.bindingCount = 2;
+    instanceLayoutInfo.pBindings = instanceBindings;
     if (vkCreateDescriptorSetLayout(vulkanDevice.getDevice(), &instanceLayoutInfo, nullptr,
                                     &instanceSetLayout) != VK_SUCCESS)
         throw std::runtime_error("SceneGpuBatch: instance descriptor layout failed");
     VkDescriptorPoolSize computePoolSizes[2]{};
     computePoolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    computePoolSizes[0].descriptorCount = 5u * kFramesInFlight;
+    computePoolSizes[0].descriptorCount = 7u * kFramesInFlight;
     computePoolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     computePoolSizes[1].descriptorCount = kFramesInFlight;
     VkDescriptorPoolCreateInfo computePoolInfo{};
@@ -229,7 +253,7 @@ void SceneGpuBatch::createLayoutsAndPipeline()
 
     VkDescriptorPoolSize graphicsPoolSize{};
     graphicsPoolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    graphicsPoolSize.descriptorCount = kFramesInFlight;
+    graphicsPoolSize.descriptorCount = 2u * kFramesInFlight;
     VkDescriptorPoolCreateInfo graphicsPoolInfo{};
     graphicsPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     graphicsPoolInfo.maxSets = kFramesInFlight;
@@ -395,6 +419,16 @@ void SceneGpuBatch::createFrameBuffers()
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
         std::memset(res.stats.mapped, 0, static_cast<size_t>(res.stats.size));
         vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation, 0, VK_WHOLE_SIZE);
+        // 每组紧凑区间：一个组一个 uvec4（可见实例数 / remap 起点）。每帧由 CPU 清零。
+        createBuffer(res.cullGroups,
+                     static_cast<VkDeviceSize>(groupCapacity) * sizeof(glm::uvec4),
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+        std::memset(res.cullGroups.mapped, 0, static_cast<size_t>(res.cullGroups.size));
+        vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.cullGroups.allocation, 0, VK_WHOLE_SIZE);
+        // remap + 名次：前一半（容量个 uint）是紧凑索引，后一半是本帧每个实例的名次。
+        createBuffer(res.instanceRemap,
+                     static_cast<VkDeviceSize>(instanceCapacity) * 2u * sizeof(uint32_t),
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
         res.computeSet = computeSets[frame];
         res.graphicsSet = graphicsSets[frame];
     }
@@ -405,32 +439,30 @@ void SceneGpuBatch::writeDescriptors()
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
         FrameResources& res = frames[frame];
-        // binding 0..3 = 组 / 命令 / 帧数据 / 统计；binding 5 = 实例缓冲（binding 4 是 Hi-Z 采样器）。
-        VkDescriptorBufferInfo infos[5]{};
+        // 存储缓冲的 binding 是 0 / 1 / 2 / 3 / 5 / 6 / 7（binding 4 是 Hi-Z 采样器）。
+        // 写成「binding 表 + 信息表」两张平行数组：加一个槽位只改这两行，不会漏掉某个下标。
+        constexpr uint32_t kStorageBindingCount = 7u;
+        constexpr uint32_t kStorageBindings[kStorageBindingCount] = { 0u, 1u, 2u, 3u, 5u, 6u, 7u };
+        VkDescriptorBufferInfo infos[kStorageBindingCount]{};
         infos[0] = { res.groups.buffer, 0, VK_WHOLE_SIZE };
         infos[1] = { res.commands.buffer, 0, VK_WHOLE_SIZE };
         infos[2] = { res.frameData.buffer, 0, VK_WHOLE_SIZE };
         infos[3] = { res.stats.buffer, 0, VK_WHOLE_SIZE };
         infos[4] = { res.instances.buffer, 0, VK_WHOLE_SIZE };
+        infos[5] = { res.cullGroups.buffer, 0, VK_WHOLE_SIZE };
+        infos[6] = { res.instanceRemap.buffer, 0, VK_WHOLE_SIZE };
 
-        VkWriteDescriptorSet writes[5]{};
-        for (uint32_t i = 0; i < 4u; ++i)
+        VkWriteDescriptorSet writes[kStorageBindingCount]{};
+        for (uint32_t i = 0; i < kStorageBindingCount; ++i)
         {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = res.computeSet;
-            writes[i].dstBinding = i;
+            writes[i].dstBinding = kStorageBindings[i];
             writes[i].descriptorCount = 1;
             writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[i].pBufferInfo = &infos[i];
         }
-        // 实例缓冲排在 Hi-Z 采样器后面：写入项的 binding 是 5，信息项的下标是 4。
-        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[4].dstSet = res.computeSet;
-        writes[4].dstBinding = 5;
-        writes[4].descriptorCount = 1;
-        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[4].pBufferInfo = &infos[4];
-        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 5, writes, 0, nullptr);
+        vkUpdateDescriptorSets(vulkanDevice.getDevice(), kStorageBindingCount, writes, 0, nullptr);
         // binding 4 指向「另一个帧槽」的 Hi-Z：本帧剔除读的是上一帧建好的那份。
         const HiZFrame& readHiZ = hiz[(frame + 1u) % kFramesInFlight];
         if (readHiZ.fullView != VK_NULL_HANDLE)
@@ -449,15 +481,21 @@ void SceneGpuBatch::writeDescriptors()
             vkUpdateDescriptorSets(vulkanDevice.getDevice(), 1, &hizWrite, 0, nullptr);
         }
 
-        VkDescriptorBufferInfo instanceInfo{ res.instances.buffer, 0, VK_WHOLE_SIZE };
-        VkWriteDescriptorSet instanceWrite{};
-        instanceWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        instanceWrite.dstSet = res.graphicsSet;
-        instanceWrite.dstBinding = 0;
-        instanceWrite.descriptorCount = 1;
-        instanceWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        instanceWrite.pBufferInfo = &instanceInfo;
-        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 1, &instanceWrite, 0, nullptr);
+        VkDescriptorBufferInfo instanceInfos[2] = {
+            { res.instances.buffer, 0, VK_WHOLE_SIZE },
+            { res.instanceRemap.buffer, 0, VK_WHOLE_SIZE },
+        };
+        VkWriteDescriptorSet instanceWrites[2]{};
+        for (uint32_t i = 0; i < 2u; ++i)
+        {
+            instanceWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            instanceWrites[i].dstSet = res.graphicsSet;
+            instanceWrites[i].dstBinding = i;
+            instanceWrites[i].descriptorCount = 1;
+            instanceWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            instanceWrites[i].pBufferInfo = &instanceInfos[i];
+        }
+        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 2, instanceWrites, 0, nullptr);
     }
 }
 
@@ -470,6 +508,8 @@ void SceneGpuBatch::destroyFrameBuffers()
         destroyBuffer(res.groups);
         destroyBuffer(res.frameData);
         destroyBuffer(res.stats);
+        destroyBuffer(res.cullGroups);
+        destroyBuffer(res.instanceRemap);
         res.computeSet = VK_NULL_HANDLE;
         res.graphicsSet = VK_NULL_HANDLE;
     }
@@ -1475,8 +1515,9 @@ void SceneGpuBatch::logCullSummary() const
               << " screenCulled/frame=" << (static_cast<double>(cullTotals.screenCulled) / frames)
               << "\n";
 
-    // P2 第二步的对照读数：GPU 侧的实例级视锥可见比例。和 CPU 的 instFrustum 用同一套算式，
+    // P2 的对照读数：GPU 侧的实例级视锥可见比例。和 CPU 的 instFrustum 用同一套算式，
     // 差别只在覆盖面 —— GPU 覆盖整条实例缓冲（含实体），CPU 只测外部记录缓存。
+    // submit/frame 是紧凑之后真正提交的实例数：实例级剔除开着时它小于 visible，关着时两者相等。
     if (cullTotals.gpuInstanceTested > 0u)
     {
         const double tested = static_cast<double>(cullTotals.gpuInstanceTested);
@@ -1485,6 +1526,8 @@ void SceneGpuBatch::logCullSummary() const
                   << (static_cast<double>(cullTotals.gpuInstanceVisible) / tested)
                   << " (" << cullTotals.gpuInstanceVisible << "/" << cullTotals.gpuInstanceTested << ")"
                   << " | tested/frame=" << std::setprecision(1) << (tested / frames)
+                  << " submit/frame=" << (static_cast<double>(cullTotals.visibleInstances) / frames)
+                  << " cull=" << (instanceCullEnabled ? "on" : "off")
                   << "\n";
     }
 
@@ -1971,6 +2014,10 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
     std::memset(res.stats.mapped, 0, static_cast<size_t>(res.stats.size));
     vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation, 0, VK_WHOLE_SIZE);
+    // 每组可见实例数靠 atomicAdd 领号，必须每帧从 0 开始。它和 stats 一样是「本帧独有」的
+    // 累积器，槽位缓冲由帧栅栏保证没有被在飞的帧读着。
+    std::memset(res.cullGroups.mapped, 0, static_cast<size_t>(res.cullGroups.size));
+    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.cullGroups.allocation, 0, VK_WHOLE_SIZE);
 
     // T-08：把本帧脏区间搬进持久缓冲。骨架阶段没有任何消费者，只统计上传量。
     gpuScene.flush(commandBuffer);
@@ -1987,19 +2034,57 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     vkCmdPushConstants(commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(CullPushConstants), &push);
 
-    // 第一遍：一个组一个 invocation。组数远小于实例数，剔除本身几乎不花时间。
-    const uint32_t dispatchGroups = (push.params.x + 63u) / 64u;
-    vkCmdDispatch(commandBuffer, dispatchGroups, 1u, 1u);
-
-    // 第二遍：实例级视锥统计，一个 invocation 一个实例。这段不能塞进组内循环 ——
-    // cube field 就是一个组压着 30000 个实例，那样等于用一个线程跑完整个测试。
-    // 两遍之间不用屏障：第二遍只读实例缓冲与帧数据（dispatch 之前都已就绪），写的是
-    // stats[3]，与第一遍写的命令 / stats[0..2] 不重叠。
     const uint32_t instanceCount = static_cast<uint32_t>(instanceScratch.size());
-    push.more = glm::uvec4(instanceCount, 1u, 0u, 0u);
-    vkCmdPushConstants(commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(CullPushConstants), &push);
-    vkCmdDispatch(commandBuffer, (instanceCount + 63u) / 64u, 1u, 1u);
+    // 实例级剔除开着时，组剔除那一步不再累加实例级统计（改由前缀和按紧凑后的数量累加），
+    // 所以用 more.z 把「实例容量」带过去；0 表示关着。
+    const bool instanceCull = instanceCullEnabled && instanceCount > 0u;
+
+    // 一次 dispatch 只做一件事：push 好这一段用的参数再发。
+    const auto dispatchStage = [&](uint32_t mode, uint32_t count, uint32_t capacity)
+    {
+        push.more = glm::uvec4(count, mode, capacity, 0u);
+        vkCmdPushConstants(commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(CullPushConstants), &push);
+        vkCmdDispatch(commandBuffer, (count + 63u) / 64u, 1u, 1u);
+    };
+    const auto computeBarrier = [&]()
+    {
+        VkMemoryBarrier computeToCompute{};
+        computeToCompute.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        computeToCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        computeToCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &computeToCompute,
+                             0, nullptr, 0, nullptr);
+    };
+
+    // 第一遍：一个组一个 invocation。组数远小于实例数，剔除本身几乎不花时间。
+    dispatchStage(0u, static_cast<uint32_t>(modelGroups.size()),
+                  instanceCull ? instanceCapacity : 0u);
+
+    if (instanceCull)
+    {
+        // 第二遍：一个 invocation 一个实例，测视锥并给可见实例领名次。这段不能塞进组内循环 ——
+        // cube field 就是一个组压着 30000 个实例，那样等于用一个线程跑完整个测试。
+        // 组剔除写的命令在下一段才读，这里先挂一条 compute→compute 屏障，后面两段同样。
+        computeBarrier();
+        dispatchStage(1u, instanceCount, instanceCapacity);
+
+        // 第三遍：组前缀和 + 把命令的实例区间改写成紧凑区间。组数几十到几百，
+        // 一个 invocation 串行过完比并行扫描省事（而且每组只写一次命令）。
+        computeBarrier();
+        dispatchStage(2u, static_cast<uint32_t>(modelGroups.size()), instanceCapacity);
+
+        // 第四遍：把名次搬成 remap[起点 + 名次] = 真实实例下标。
+        computeBarrier();
+        dispatchStage(3u, instanceCount, instanceCapacity);
+    }
+    else
+    {
+        // 回退路径：写恒等 remap，命令保持组剔除写下的原值。顶点着色器仍然走同一段代码，
+        // 所以这条路径的画面与「没有 remap」逐像素一致，用来验证实例级剔除没有副作用。
+        dispatchStage(4u, instanceCount, 0u);
+    }
 
     // 命令是 compute 写的，随后 indirect draw 与 vertex/fragment 要读；
     // 一条全屏障同时覆盖这两个阶段。

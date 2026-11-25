@@ -1018,6 +1018,8 @@ renderPipeline.addPass(std::move(viewModelPass));
 geometryPassPtr->getSceneGpuBatch()->getGpuScene().setEnabled(diagnosticsOptions.gpuScenePersist && !diagnosticsOptions.noGpuScenePersist);
 geometryPassPtr->getSceneGpuBatch()->setForceRebuildEvery(diagnosticsOptions.rebuildStructure);
         geometryPassPtr->getSceneGpuBatch()->setCubeFieldMotion(diagnosticsOptions.cubeFieldMotion);
+        // P2 第三步：实例级剔除默认开，--no-instance-cull 时走恒等 remap 的回退路径。
+        geometryPassPtr->getSceneGpuBatch()->setInstanceCullEnabled(!diagnosticsOptions.noInstanceCull);
 
 	// TM-17：交换链/渲染目标尺寸变化改成事件通知。必须在 initAll 之后订阅：
 	// Pass 的 resize 会重建附件与导入视图，早于 init 调等于拿半初始化的对象干活。

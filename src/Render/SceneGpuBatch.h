@@ -214,6 +214,9 @@ cubeFieldBuilt = 0;
     uint32_t forceRebuildTick = 0;
     void setForceRebuildEvery(uint32_t frames) { forceRebuildEvery = frames; }
     void setCubeFieldMotion(uint32_t microradiansPerFrame) { cubeFieldMotion = microradiansPerFrame; }
+    // P2 实例级剔除：--no-instance-cull 时关掉（命令只按组剔除，remap 写成恒等）。
+    void setInstanceCullEnabled(bool enabled) { instanceCullEnabled = enabled; }
+    bool isInstanceCullEnabled() const { return instanceCullEnabled; }
     tiny::GpuScene& getGpuScene() { return gpuScene; }
     const tiny::GpuScene& getGpuScene() const { return gpuScene; }
     // P2：把 subMeshBoundsFor 的首次索引扫描挪到加载期，避免第一帧摊平被一次性成本虚高。
@@ -289,6 +292,11 @@ private:
         GpuBuffer groups;
         GpuBuffer frameData;
         GpuBuffer stats;
+        // P2 实例级剔除：每组一个 uvec4（x = 可见实例数, y = remap 起点），CPU 每帧清零。
+        GpuBuffer cullGroups;
+        // P2 实例级剔除：前半是 remap（紧凑下标 -> 真实实例下标），后半是本帧名次。
+        // 顶点着色器按前半取 InstanceRecord，所以图形 set 也绑这一份。
+        GpuBuffer instanceRemap;
         VkDescriptorSet computeSet = VK_NULL_HANDLE;
         VkDescriptorSet graphicsSet = VK_NULL_HANDLE;
     };
@@ -399,6 +407,9 @@ uint32_t cubeFieldCount = 0;
 float cubeFieldSpacing = 1.2f;
 float cubeFieldDistance = 26.0f;
     uint32_t cubeFieldMotion = 0;    // P2 度量：每帧整体旋转量（微弧度），> 0 时阵列每帧重建
+    // P2 实例级剔除：开着时命令的实例区间换成紧凑区间，顶点着色器经 remap 取记录；
+    // 关掉是整体回退（--no-instance-cull），画面应与开着时逐像素一致。
+    bool instanceCullEnabled = true;
 // 阵列中心在第一次构建时按传入帧的 view 矩阵反算：启动期相机还没刷过 view。
 uint32_t cubeFieldBuilt = 0;
     uint32_t debugExternalCount = 0;

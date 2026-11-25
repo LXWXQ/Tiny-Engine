@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~373 行
+size: ~374 行
 updated: 2026-11-25
 ---
 
@@ -365,9 +365,10 @@ updated: 2026-11-25
 
 1. **布局扩容（纯验证）**：`shaders/scene_cull.comp` 的 `stats[3]` 扩成 `stats[4]`；`src/Render/SceneGpuBatch.h` 的 `Stats` 现在是 13 个 `uint32_t`（对应 3 个 `uvec4` 的 12 个 + 1 个），必须补到 16 个（加 3 个 pad），否则扩 slot 会越界。验收：三档 `--stats-frame` 读数与原值逐位相同，`--validation-features sync` `errors=0`。 **已落地（2026-11-25，决策 58）**：`stats[4]` + `Stats` 16 个 uint + 反射头断言，三档读数逐位不变（见下方第 1 步读数）。
 2. **绑实例缓冲 + GPU 统计**：`src/Render/SceneGpuBatch.cpp:156-175` 的 `computeBindings[5]` 加第 6 个 binding（`InstanceRecord[]`），池大小与 set 写入同步（`:190-202`、`:380-410`）；shader 对可见组的实例做视锥测试并 `atomicAdd` 计数。验收：GPU 侧比例与 CPU 侧 0.676 / 0.372 对得上（允许 ±2%）。 **已落地（2026-11-25，决策 59）**：`computeBindings[5] → [6]`（binding 5 = `InstanceRecord[]`）、push constant 16 → 32 字节（`uvec4 more`：`count` + `mode`）、同一命令缓冲里的第二遍 dispatch 写 `stats[3]`（测过 / 可见），`logCullSummary` 多打一行 `[SceneGpu] instance summary`。口径改成测整条实例缓冲（组门控要的「实例 → 组」表留到第三步），读数见下方第 2 步读数。
-3. **紧凑索引表 + remap 取实例**：shader 写出可见实例的紧凑索引，`mrt.vert` 等走 `InstanceRecord` 的顶点着色器改为经该表索引，`vkCmdDrawIndexedIndirect` 的 `instanceCount` 用 remap 后的数量。验收：`instFrustum` 的比例变成实际提交比例，`--no-instance-cull` 可整体回退且画面逐像素一致。
+3. **紧凑索引表 + remap 取实例**：shader 写出可见实例的紧凑索引，`mrt.vert` 等走 `InstanceRecord` 的顶点着色器改为经该表索引，`vkCmdDrawIndexedIndirect` 的 `instanceCount` 用 remap 后的数量。验收：`instFrustum` 的比例变成实际提交比例，`--no-instance-cull` 可整体回退且画面逐像素一致。 **已落地（2026-11-25，决策 60）**：shader 用「测视锥 + 领名次 / 组前缀和 + 改命令 / 搬 remap」三段 dispatch 把可见实例压成每组一段紧凑区间（binding 6 = 每组 `uvec4`、binding 7 = `remap + 名次`），`mrt.vert` 经 set 3 binding 1 的 remap 表取记录，`--no-instance-cull` 写恒等表回退，读数见下方第 3 步读数。
 
 **第 1 步读数（2026-11-25，纯布局验证）**：三档（default / cube-field 10k / 30k，120 帧固定机位）改前改后逐行比对 `[SceneGpu] cull stats` 与 `cull summary`，整数读数逐位相同：groups `103/104/104`、visible `63/64/64`、culled `40/40/40`、instances `63/10063/30063`、hizTests `63/64/64`、hizCulled `0/0/0`、screenTests `0/0/0`、external `0/10000/30000`、visibleRatio `0.61/0.62/0.62`，CPU 侧 `instFrustum` 仍是 `0/0`、`6756/10000`、`11157/30000`；只有 `flattenUs` / `ms/rebuild` 这类计时列不同。`--validation-features sync`（10k）`errors=0 warnings=0`、stderr 0 字节。也就是说第 2 步加 `InstanceRecord[]` binding 与 `atomicAdd` 时，`stats[3]` 这 4 个 word 已经有宿主、也不会再踩到别人。
 **第 2 步读数（2026-11-25）**：新增 `[SceneGpu] instance summary` 行，120 帧固定机位三档：default `gpuInst=0.58 (7080/12154) tested/frame=103`（CPU 侧无外部实例，没有对照）；cube-field 10k `0.6747 (804288/1192154) tested/frame=10103` 对 CPU `instFrustum=6756/10000=0.6756`；30k `0.3726 (1323606/3552154) tested/frame=30103` 对 `11157/30000=0.3719` —— 差 0.09 / 0.07 个百分点，落在 ±2% 判据内。组级读数与第 1 步逐位相同（`103/63/40`、`10063 / total 9.06 ms`、`30063 / 17.33 ms`），三档 `errors=0 warnings=0`、stderr 0 字节；`--validation-features sync`（10k）同样干净。代价：30k 600 帧 × 3 轮交替 A/B，第二遍 dispatch ≤0.5%，median 帧时间同为 7.62 ms。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-111243`）；DocCheck PASS（documents=81 lines=18077）。
+**第 3 步读数（2026-11-25）**：提交实例数第一次等于实例级可见数 —— 120 帧固定机位，`cull summary` 的 `instances/frame`（= `stats[0].w`）从「可见组实例数之和」变成「紧凑后真正提交的实例数」：default `63.0 → 59.0`、10k `10063.0 → 6815.0`、30k `30063.0 → 11216.0`，与 `instance summary` 的 `submit/frame` 逐位一致；`gpuInst`（`0.58` / `0.6747` / `0.3726`）与第二步逐位相同，每帧比提交数多 1 个实例（所在组被组级剔除，紧凑化按 `commands[base+1] == 0` 跳过）。收益（600 帧 × 3 轮，30k）`142.19/142.86/142.08` 对 `125.86/126.09/125.66 FPS`（+13.1%，median 6.88 对 7.88 ms）；default 场景 202.55/203.82 对 204.81/204.65（−0.6~1.1%，实例太少时四段 dispatch 是纯开销）。`--no-instance-cull` 回退：两版 1920×1080 截图共 832 个差异像素、全部落在 HUD「Performance」面板内，面板外 0 差异（两次同样配置的运行本身也有 285 个像素在跳）。验证必须用 Debug（Release 的 `enableValidationLayers` 在 `NDEBUG` 下是 `false`）：三档 + `--no-instance-cull` + `--voxel-world 1/12` + `sync`（10k）+ `--cube-field-motion 500 --rebuild-structure 7` 全部 `errors=0 warnings=0`、stderr 0 字节。全量回归 **96 项 ALL PASS**（`build/validation/20261125-121228`）。
 
-**回退开关**：第三步完成后加 `--no-instance-cull`（默认开）。
+**回退开关**：`--no-instance-cull`（默认开）。关掉后 GPU 写恒等 remap、命令不再改写实例区间，顶点着色器仍走同一段取下标代码，画面与默认路径逐像素一致（验证方式见第 3 步读数）。

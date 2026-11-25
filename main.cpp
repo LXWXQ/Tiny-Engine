@@ -423,6 +423,7 @@ diagOptions.cubeField = value;
 }
         else if (arg == "--rebuild-structure") diagOptions.rebuildStructure = static_cast<uint32_t>(std::stoul(argv[++i]));
         else if (arg == "--cube-field-motion") diagOptions.cubeFieldMotion = static_cast<uint32_t>(std::stoul(argv[++i]));
+        else if (arg == "--no-instance-cull") diagOptions.noInstanceCull = true;
                 else if (arg == "--single-frame-targets") diagOptions.singleFrameTargets = true;
         else if (arg == "--no-single-frame-targets") diagOptions.noSingleFrameTargets = true;
                 else if (arg == "--serialize-frames") diagOptions.serializeFrames = true;

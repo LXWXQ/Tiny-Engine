@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1683 行
+size: ~1698 行
 updated: 2026-11-25
 ---
 
@@ -1682,3 +1682,18 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 全套回归 **96 项** ALL PASS（stderr 全 0），验证日志 `build/validation/20261125-111243`；DocCheck PASS（documents=81 lines=18077）。
 - 踩坑：GLSL 的 `half` 是保留字（局部变量改名 `worldHalf`）；`Copy-Item` 覆盖源码带回旧 mtime，MSBuild 跳过重编、读数全 0（实际在跑旧二进制）。
 - 本步不裁剪：indirect 的 `instanceCount` 与 `visibleRatio` 仍是组级，第三步才换成 remap 后的数量。
+
+## P2 第八步：实例级剔除落地（紧凑索引 + remap）（2026-11-25）
+
+- `shaders/scene_cull.comp` 加 binding 6（`uvec4 cullGroups[]`：每组可见实例数 + remap 起点）与 binding 7（`uint scratch[]`：前一半 remap、后一半名次），binding 1（命令缓冲）去掉 `writeonly`；push constant 的 `more` 扩成「count / mode / 实例容量」三用，阶段 `0` 组剔除、`1` 测视锥 + 领名次、`2` 组前缀和 + 改命令、`3` 搬 remap、`4` 恒等 remap。
+- `shaders/mrt.vert` 加 set 3 binding 1（`InstanceRemapBuffer`）：`instanceIndex = push.gpuScene != 0 ? instanceRemap[gl_InstanceIndex] : uint(gl_InstanceIndex)`，取矩阵与 `fragInstanceIndex` 都用它；地形批处理不过 remap。
+- `src/Render/SceneGpuBatch.h/.cpp`：`FrameResources` 加 `cullGroups` / `instanceRemap`，compute 描述符从 6 槽扩到 8 槽、池 7×帧槽，图形 set 3 从 1 槽扩到 2 槽、池 2×帧槽；`prepare()` 每帧清零 `cullGroups`，按 `instanceCullEnabled && instanceCount > 0` 决定跑四段还是只跑恒等段，段间挂 compute → compute 屏障。
+- 实例 → 组用 shader 内二分：CPU 按 `stable_sort(order)` 顺序拼实例缓冲，组区间按 `firstInstance` 升序连续；组级被剔除的组由 `commands[base + 1] == 0` 跳过，不复活。
+- 语义变化：`cull summary` 的 `instances/frame` 与 `stats[0].w` 从「可见组的实例数之和」变成「紧凑后真正提交的实例数」，`instance summary` 多打 `submit/frame` 与 `cull=on/off`；`gpuInst` 口径不变。
+- 回退开关 `--no-instance-cull`（`src/Core/Diagnostics.h` → `main.cpp` → `src/Core/CliCatalog.cpp` → `src/Core/Application.cpp` 调 `setInstanceCullEnabled(false)`）：GPU 写恒等 remap，命令不再改写 —— 顶点着色器走的还是同一段取下标代码。
+- 验收（120 帧固定机位）：10k 提交 `6815.0/帧`（第二步 10063.0）、30k `11216.0/帧`（30063.0）、default `59.0`（63.0），`gpuInst` 与第二步逐位相同；开关两版截图 832 个差异像素全部落在 HUD「Performance」面板内，面板外 0 差异。
+- 全量回归 **96 项 ALL PASS**（`build/validation/20261125-121228`，stderr 全 0），DocCheck PASS。
+- 验证（必须用 **Debug**，Release 的 `enableValidationLayers` 在 `NDEBUG` 下是 `false`，`errors=0` 是空话）：三档 + `--no-instance-cull` + `--voxel-world 1/12` + `--validation-features sync`（10k）+ `--cube-field-motion 500 --rebuild-structure 7` 全部 `errors=0 warnings=0`、stderr 0 字节。
+- 收益：30k 600 帧 × 3 轮 A/B，开 `142.19/142.86/142.08 FPS`（median 6.88 ms、p95 7.62）、关 `125.86/126.09/125.66 FPS`（median 7.88 ms）—— +13.1% FPS、median −1.00 ms；default 场景开 202.55/203.82 对关 204.81/204.65（−0.6~1.1%，实例太少时四段 dispatch 是纯开销）。
+- 边界：**两处**用这套实例布局的池都要 ×2 并写满两个 binding —— 地形 chunk 实例表（`ensureTerrainChunkInstances`）与体素 chunk 实例表（`ensureVoxelBatchResources`），binding 1 都指向同一块实例缓冲（这两条路径不过 remap，内容不被读）；漏掉体素那处会让 `f3-voxel*` / `f3v-taa` / `f3v-water` / `f3v-ssr` 共 9 项回归因 `VUID-vkCmdDrawIndexedIndirect-None-08114` 变红。
+- 不做并行前缀和、不改 `shadow.vert`、不改 `Stats` 布局。

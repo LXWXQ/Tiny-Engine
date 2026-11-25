@@ -4,7 +4,8 @@
 //
 // 一个组 = 一个（模型, 子网格）。同一个子网格被多个实体复用时，这些实例在实例缓冲里连续排列，
 // 一条命令用 instanceCount = N 就能一次画完（实例化）。剔除按组的并集世界 AABB 做，
-// 属于保守剔除：组内任一实例可见，整组可见。
+// 属于保守剔除：组内任一实例可见，整组可见。组级通过之后再做实例级剔除：可见实例被压成
+// 每组一段紧凑区间，命令的 firstInstance / instanceCount 换成这段区间（见文件下半部分）。
 //
 // Hi-Z 用的是「上一帧最后」的深度金字塔（本帧几何画完才重建），相机帧间连续时漏判代价极小；
 // 金字塔存线性视深度（-viewZ），越大越远，每级取 2x2 最大值，所以「物体最近点比矩形内最远面还远」
@@ -25,9 +26,10 @@ layout(set = 0, binding = 0) readonly buffer GroupBuffer
     GroupRecord groups[];
 } groupBuffer;
 
-layout(set = 0, binding = 1) writeonly buffer CommandBuffer
+layout(set = 0, binding = 1) buffer CommandBuffer
 {
     // 用 5 个 uint 手写而不是结构体数组：避免 std430 对结构体成员对齐的解释差异。
+    // 读回只发生在紧凑区间那一步：前缀和要先看组级剔除有没有把这条命令整条写成 0。
     uint commands[];
 } commandBuffer;
 
@@ -73,12 +75,29 @@ layout(set = 0, binding = 5) readonly buffer InstanceBuffer
     InstanceRecord instances[];
 } instanceBuffer;
 
+// 组级紧凑区间：一个组一个 uvec4。x = 本组可见实例数（模式 1 用 atomicAdd 领号），
+// y = 本组在 remap 表里的起点（模式 2 写），z/w 保留。CPU 每帧和 stats 一起清零。
+layout(set = 0, binding = 6) buffer CullGroupBuffer
+{
+    uvec4 cullGroups[];
+} cullGroupBuffer;
+
+// 实例 remap + 名次混排在同一块缓冲里：[0, capacity) 放 remap，[capacity, 2 * capacity) 放名次。
+// 名次 0xFFFFFFFFu 表示「该实例不可见」，remap 里只放可见实例的下标、且按组连续。
+layout(set = 0, binding = 7) buffer ScratchBuffer
+{
+    uint scratch[];
+} scratchBuffer;
+
 layout(push_constant) uniform Push
 {
     uvec4 params;   // x = groupCount, y = Hi-Z 宽, z = Hi-Z 高, w = Hi-Z 层数
-    // 第二段：一次 dispatch 只做一件事。mode = 0 组剔除（count 不用）；
-    // mode = 1 实例级视锥统计（count = 实例总数）。
-    uvec4 more;     // x = count, y = mode
+    // 第二段：一次 dispatch 只做一件事，y 选阶段：
+    //   0 = 组剔除（x 不用）, 1 = 实例视锥 + 领名次, 2 = 组前缀和,
+    //   3 = 写紧凑索引, 4 = 恒等索引（实例级剔除关闭时的回退）。
+    // z = remap 与名次在同一块缓冲里的分界（实例容量）；z == 0 表示实例级剔除关着，
+    // 组剔除那一步要自己累加实例级统计，回退路径的读数才和 P2 第二步逐位相同。
+    uvec4 more;     // x = count, y = mode, z = 实例容量
 } push;
 
 const uint kCommandWords = 5u;
@@ -177,24 +196,139 @@ bool instanceInFrustum(uint instanceIndex)
     return true;
 }
 
-// 实例级视锥统计：一个 invocation 一个实例。这一步只数数 —— 不写命令、不做压缩，
-// 唯一作用是让 GPU 侧的比例能和 CPU 读出的 instFrustum 直接对照。
-void countInstanceVisibility()
+// ---------------------------------------------------------------------------
+// 实例级剔除：三段 dispatch 把可见实例压成每组的紧凑区间。
+//   1) 每实例测视锥 → 可见的从本组计数器领一个名次，不可见记 0xFFFFFFFFu。
+//   2) 一个 invocation 串行过一遍组：把「本组可见实例数」变成「remap 起点」，顺带把命令的
+//      instanceCount / firstInstance 换成紧凑后的值（组级剔除掉的组不复活）。
+//   3) 每实例把名下写回 remap[起点 + 名次] = 实例下标；顶点着色器按它取 InstanceRecord。
+// 实例缓冲本身不动，动的只有命令的实例区间与这张 remap 表 —— 所以一条 multidraw 仍然成立。
+// ---------------------------------------------------------------------------
+const uint kModeGroupCull = 0u;
+const uint kModeInstanceRank = 1u;
+const uint kModeGroupPrefix = 2u;
+const uint kModeInstanceScatter = 3u;
+const uint kModeIdentityRemap = 4u;
+const uint kInstanceInvisible = 0xFFFFFFFFu;
+
+// 实例 → 组：组按 firstInstance 升序、区间连续无空隙（CPU 组装实例缓冲时就按这个顺序拼），
+// 所以二分找「最后一个 draw.w <= 实例下标」的组即可。
+uint groupForInstance(uint instanceIndex)
+{
+    uint lo = 0u;
+    uint hi = push.params.x;
+    while (lo < hi)
+    {
+        const uint mid = (lo + hi) >> 1u;
+        if (groupBuffer.groups[mid].draw.w <= instanceIndex)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    return lo == 0u ? 0u : lo - 1u;
+}
+
+// 模式 1：测视锥 + 领名次。
+void rankInstanceVisibility()
 {
     const uint instanceIndex = gl_GlobalInvocationID.x;
     if (instanceIndex >= push.more.x)
         return;
 
     atomicAdd(statsBuffer.stats[3].x, 1u);   // 做过实例视锥测试的实例数
+    uint rank = kInstanceInvisible;
     if (instanceInFrustum(instanceIndex))
+    {
         atomicAdd(statsBuffer.stats[3].y, 1u);   // 其中在视锥内的实例数
+        rank = atomicAdd(cullGroupBuffer.cullGroups[groupForInstance(instanceIndex)].x, 1u);
+    }
+    scratchBuffer.scratch[push.more.z + instanceIndex] = rank;
+}
+
+// 模式 2：组前缀和 + 改写命令。组数只有几十到几百，一个 invocation 串行过完比并行扫描省事，
+// 而且这一步本来就要顺手改 5 个 word 的间接命令，天然是「每组只写一次」。
+void buildGroupPrefix()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    uint running = 0u;
+    for (uint groupIndex = 0u; groupIndex < push.params.x; ++groupIndex)
+    {
+        const uint commandBase = groupIndex * kCommandWords;
+        const uint count = cullGroupBuffer.cullGroups[groupIndex].x;
+        cullGroupBuffer.cullGroups[groupIndex].y = running;
+        if (commandBuffer.commands[commandBase + 1u] == 0u)
+            continue;   // 组级剔除已经把这条命令整条写成 0：不复活
+
+        if (count == 0u)
+        {
+            commandBuffer.commands[commandBase + 0u] = 0u;
+            commandBuffer.commands[commandBase + 1u] = 0u;
+            commandBuffer.commands[commandBase + 2u] = 0u;
+            commandBuffer.commands[commandBase + 3u] = 0u;
+            commandBuffer.commands[commandBase + 4u] = 0u;
+            continue;
+        }
+
+        const uint indexCount = groupBuffer.groups[groupIndex].draw.y;
+        statsBuffer.stats[0].w += count;
+        statsBuffer.stats[1].x += count * (indexCount / 3u);
+        statsBuffer.stats[1].y += count * indexCount;
+        commandBuffer.commands[commandBase + 1u] = count;      // instanceCount
+        commandBuffer.commands[commandBase + 4u] = running;    // firstInstance
+        running += count;
+    }
+}
+
+// 模式 3：写紧凑索引。名次是模式 1 领好的，这里只搬运一次，不重复测视锥。
+void scatterVisibleInstances()
+{
+    const uint instanceIndex = gl_GlobalInvocationID.x;
+    if (instanceIndex >= push.more.x)
+        return;
+
+    const uint rank = scratchBuffer.scratch[push.more.z + instanceIndex];
+    if (rank == kInstanceInvisible)
+        return;
+
+    const uint groupIndex = groupForInstance(instanceIndex);
+    if (commandBuffer.commands[groupIndex * kCommandWords + 1u] == 0u)
+        return;   // 组级剔除掉的组：名次作废
+
+    scratchBuffer.scratch[cullGroupBuffer.cullGroups[groupIndex].y + rank] = instanceIndex;
+}
+
+// 模式 4：实例级剔除关闭时的回退 —— 写恒等索引。顶点着色器走同一段 remap 代码，
+// 命令保持组级剔除写下的原值，画面上与「没有 remap」完全一致。
+void writeIdentityRemap()
+{
+    const uint instanceIndex = gl_GlobalInvocationID.x;
+    if (instanceIndex >= push.more.x)
+        return;
+    scratchBuffer.scratch[instanceIndex] = instanceIndex;
 }
 
 void main()
 {
-    if (push.more.y == 1u)
+    if (push.more.y == kModeInstanceRank)
     {
-        countInstanceVisibility();
+        rankInstanceVisibility();
+        return;
+    }
+    if (push.more.y == kModeGroupPrefix)
+    {
+        buildGroupPrefix();
+        return;
+    }
+    if (push.more.y == kModeInstanceScatter)
+    {
+        scatterVisibleInstances();
+        return;
+    }
+    if (push.more.y == kModeIdentityRemap)
+    {
+        writeIdentityRemap();
         return;
     }
 
@@ -243,9 +377,14 @@ void main()
 
     const uint instanceCount = group.counts.x;
     atomicAdd(statsBuffer.stats[0].y, 1u);
-    atomicAdd(statsBuffer.stats[0].w, instanceCount);
-    atomicAdd(statsBuffer.stats[1].x, instanceCount * (group.draw.y / 3u));
-    atomicAdd(statsBuffer.stats[1].y, instanceCount * group.draw.y);
+    // 实例级剔除开着时（more.z != 0），这三项交给前缀和那一步按紧凑后的数量累加；
+    // 关着时在这里按组数量累加，回退路径的读数与 P2 第二步逐位相同。
+    if (push.more.z == 0u)
+    {
+        atomicAdd(statsBuffer.stats[0].w, instanceCount);
+        atomicAdd(statsBuffer.stats[1].x, instanceCount * (group.draw.y / 3u));
+        atomicAdd(statsBuffer.stats[1].y, instanceCount * group.draw.y);
+    }
 
     commandBuffer.commands[base + 0u] = group.draw.y;   // indexCount
     commandBuffer.commands[base + 1u] = instanceCount;  // instanceCount

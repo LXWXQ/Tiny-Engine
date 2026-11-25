@@ -279,7 +279,9 @@ bool GeometrySystem::ensureTerrainChunkInstances()
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = kFramesInFlight;
+    // 每个帧槽两个 binding：0 = 实例记录表，1 = 实例 remap（地形路径不读它，
+    // 但 set 3 的布局里必须有，否则 vkAllocateDescriptorSets 会失败）。
+    poolSize.descriptorCount = 2u * kFramesInFlight;
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = kFramesInFlight;
@@ -308,15 +310,24 @@ bool GeometrySystem::ensureTerrainChunkInstances()
 
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
-        VkDescriptorBufferInfo bufferInfo{ terrainChunkInstances[frame].buffer, 0, VK_WHOLE_SIZE };
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = terrainChunkInstanceSets[frame];
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo = &bufferInfo;
-        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 1, &write, 0, nullptr);
+        // binding 0 = 实例记录；binding 1 = remap。地形批处理不走实例级剔除，
+        // 所以 binding 1 指向同一块实例缓冲就行 —— 它必须存在且是有效的存储缓冲，
+        // 但 terrainBatched 的顶点着色器不读它。
+        VkDescriptorBufferInfo infos[2] = {
+            { terrainChunkInstances[frame].buffer, 0, VK_WHOLE_SIZE },
+            { terrainChunkInstances[frame].buffer, 0, VK_WHOLE_SIZE },
+        };
+        VkWriteDescriptorSet writes[2]{};
+        for (uint32_t i = 0; i < 2u; ++i)
+        {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = terrainChunkInstanceSets[frame];
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 2, writes, 0, nullptr);
     }
 
     terrainChunkInstancesReady = true;
@@ -367,7 +378,9 @@ bool GeometrySystem::ensureVoxelBatchResources()
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = kFramesInFlight;
+    // 与地形 chunk 实例表同样：每个帧槽两个 binding（0 = 实例记录，1 = 实例 remap）。
+    // 体素批次不走实例级剔除，binding 1 指向同一块实例缓冲，只要求它是一个有效的存储缓冲。
+    poolSize.descriptorCount = 2u * kFramesInFlight;
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = kFramesInFlight;
@@ -398,15 +411,23 @@ bool GeometrySystem::ensureVoxelBatchResources()
 
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
-        VkDescriptorBufferInfo bufferInfo{ voxelChunkInstances[frame].buffer, 0, VK_WHOLE_SIZE };
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = voxelChunkInstanceSets[frame];
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo = &bufferInfo;
-        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 1, &write, 0, nullptr);
+        // 两个 binding 都写上：mrt.vert 静态引用了 binding 1（实例级剔除的 remap），
+        // 只要它没被更新过，验证层就会在每次 indirect 绘制时报一条 08114。
+        VkDescriptorBufferInfo infos[2] = {
+            { voxelChunkInstances[frame].buffer, 0, VK_WHOLE_SIZE },
+            { voxelChunkInstances[frame].buffer, 0, VK_WHOLE_SIZE },
+        };
+        VkWriteDescriptorSet writes[2]{};
+        for (uint32_t i = 0; i < 2u; ++i)
+        {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = voxelChunkInstanceSets[frame];
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(vulkanDevice.getDevice(), 2, writes, 0, nullptr);
     }
 
     voxelChunkInstancesReady = true;

@@ -87,6 +87,9 @@ uint32_t cubeField = 0;
     // P2 度量：每 N 帧强制重建一次结构，用来取"稳态重建"样本（0 = 关）。
     uint32_t rebuildStructure = 0;
     uint32_t cubeFieldMotion = 0;   // P2 度量：立方体阵列每帧整体旋转（>0 时每帧强制重建，量「动态实例」的摊平成本）
+    // P2 第三步的整体回退开关：CPU 不再改写实例区间，GPU 写恒等 remap，
+    // 顶点着色器仍走同一段取下标代码 —— 画面应与默认路径逐像素一致。
+    bool noInstanceCull = false;
     // T-04b：同帧目标合成一张。默认开：实测更快（lights-512 +5.4%）且少 15 张图；
     // 它自带「本帧等上一帧」的等待，用 --no-single-frame-targets 整体回退。
     bool singleFrameTargets = true;
