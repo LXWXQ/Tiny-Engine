@@ -873,6 +873,35 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
     modelGroups.clear();
     buckets.clear();
     // P2 度量：摊平到底花在哪。分七段计时，只在重建结构的帧累加（稳定帧不跑这段）。
+    // P2 度量：只做视锥测试的「实例级可见比例」上界（不含 Hi-Z，Debug 读数用）。
+    glm::vec4 instancePlanes[6];
+    {
+        const glm::mat4 m = frameInfo.projectionMatrix * frameInfo.viewMatrix;
+        const glm::vec4 row0(m[0][0], m[1][0], m[2][0], m[3][0]);
+        const glm::vec4 row1(m[0][1], m[1][1], m[2][1], m[3][1]);
+        const glm::vec4 row2(m[0][2], m[1][2], m[2][2], m[3][2]);
+        const glm::vec4 row3(m[0][3], m[1][3], m[2][3], m[3][3]);
+        instancePlanes[0] = row3 + row0;
+        instancePlanes[1] = row3 - row0;
+        instancePlanes[2] = row3 + row1;
+        instancePlanes[3] = row3 - row1;
+        instancePlanes[4] = row2;
+        instancePlanes[5] = row3 - row2;
+    }
+    uint32_t instanceFrustumTested = 0;
+    uint32_t instanceFrustumVisible = 0;
+    const auto instanceInFrustum = [&instancePlanes](const glm::vec3& center, const glm::vec3& half)
+    {
+        for (uint32_t planeIndex = 0; planeIndex < 6u; ++planeIndex)
+        {
+            const glm::vec4& plane = instancePlanes[planeIndex];
+            const float distance = plane.x * center.x + plane.y * center.y + plane.z * center.z + plane.w;
+            const float radius = glm::abs(plane.x) * half.x + glm::abs(plane.y) * half.y + glm::abs(plane.z) * half.z;
+            if (distance + radius < 0.0f)
+                return false;
+        }
+        return true;
+    };
     const auto profileStart = std::chrono::steady_clock::now();
     auto profileMark = profileStart;
     auto lap = [&profileMark]()
@@ -1292,6 +1321,16 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
     }
     modelGroups.swap(sorted);
     cullTotals.assembleMicros += lap();
+    for (const ExternalRecordCache& cache : externalRecordCache)
+    {
+        if (!cache.valid)
+            continue;
+        ++instanceFrustumTested;
+        if (instanceInFrustum(cache.worldCenter, cache.worldHalf))
+            ++instanceFrustumVisible;
+    }
+    cullTotals.instanceFrustumTested += instanceFrustumTested;
+    cullTotals.instanceFrustumVisible += instanceFrustumVisible;
     if (gpuScene.isEnabled())
     {
     // T-08：把同一批数据镜像进持久场景缓冲（稳定编号 + 脏区间上传）。
@@ -1429,6 +1468,7 @@ void SceneGpuBatch::logCullSummary() const
                   << " extRecord=" << (static_cast<double>(cullTotals.externalRecordMicros) / samples / 1000.0) << " ms"
                   << " extPush=" << (static_cast<double>(cullTotals.externalPushMicros) / samples / 1000.0) << " ms"
                   << " mergedBuild=" << cullTotals.mergedBuildSamples
+         << " instFrustum=" << cullTotals.instanceFrustumVisible << "/" << cullTotals.instanceFrustumTested
                   << " extReused=" << cullTotals.externalReused
                   << " aabbInEntity=" << (static_cast<double>(cullTotals.entityAabbMicros) / samples / 1000.0)
                   << " ms (" << (total > 0.0 ? 100.0 * static_cast<double>(cullTotals.entityAabbMicros) / total : 0.0) << "%)"

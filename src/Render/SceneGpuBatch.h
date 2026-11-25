@@ -87,6 +87,8 @@ public:
 		uint64_t flattenMicros = 0; // 结构摊平累计微秒（P2 的「CPU 摊平时间」判据）
         uint64_t mergedBuildSamples = 0;   // 真正重建合并网格的样本数（首帧那类一次性成本）
     uint64_t externalReused = 0;    // 复用缓存记录的外部实例数（P2 增量重建）
+        uint64_t instanceFrustumTested = 0;   // P2：做过视锥测试的实例数（每重建累加）
+        uint64_t instanceFrustumVisible = 0;  // P2：其中在视锥内的实例数
         // P2 度量：摊平分段耗时（微秒，只在重建结构的帧累加）。
         uint64_t structureSamples = 0;
         uint64_t collectMicros = 0;
