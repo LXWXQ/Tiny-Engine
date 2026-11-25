@@ -15,7 +15,7 @@ updated: 2026-11-25
 ```
 TerrainGpuSelection  B-03：无附件 pass；compute 选层/剔除，写 indirect command/count
    |
-SceneGpuCull        F1：无附件 pass；摊平实例 + 视锥/Hi-Z 剔除，写组级 indirect command
+SceneGpuCull        F1：无附件 pass；摊平实例 + 逐实例视锥/屏率剔除，写每组的紧凑 indirect command（P2-5 起不再按组剔除）
    |
 GeometryPass      写 G-Buffer 5 张附件（4 颜色 + 深度，全部 CLEAR），消费 GPU 命令
    |

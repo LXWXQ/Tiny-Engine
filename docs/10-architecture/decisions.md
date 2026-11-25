@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1513 行
+size: ~1582 行
 updated: 2026-11-25
 ---
 
@@ -1512,3 +1512,72 @@ set 0 已经绑在所有需要灯的着色器上（`lighting.frag` 与三个后�
 2. 声明 `GlobalUbo` 的 10 个 shader 里有 3 个（present / present_no_bloom / taa）也声明了 `PointLight pointLights[100]`：不读灯，但会占 std140 的 3200 字节，漏删就整体错位。
 3. `DescriptorManager::buildGlobalSet` 的 writes 是「先绑占位、末尾用最近的表覆盖」，灯表必须同样在末尾 `applyLightBinding`，否则着色器会把材质 factor 缓冲当灯数组读。
 4. 平面反射通道自己建 set 0（`ReflectionPass::rebuildDescriptors`），也必须显式 `applyLightBinding`，否则每帧一条 `VUID-vkCmdDrawIndexedIndirect-None-08114` —— 与 P2 第二步体素实例表那处同一类问题：**静态引用了新 binding 的 set，每一处分配者都要写满**。
+
+## 决策 63：退役组级剔除，组只保留合并网格的索引区间（P2 第十一步）
+
+### 问题
+
+P2 的剔除从第一步起就是「一条组 → 一次判定」：组的 AABB 过视锥、过屏率、过 Hi-Z，不过就把整条 5 word 的间接命令清零。实例级剔除（决策 60）落地之后，这套东西立刻露出两处结构性问题：
+
+1. **两把尺子打架**。组级判定拿组的 AABB 当球，实例级判定拿实例 AABB 逐平面投影半长。前者更粗，经常「整组通过」；后者更细。`visibleRatio` 是组口径（至少一个可见实例的组 / 全部组），`submit/frame` 是实例口径，两个数永远对不上，`visible/submitted ≤ 0.6` 这条 P2 验收也因此说不清在量哪一层。
+2. **组级视锥本身低估半径**。旧 `frustumVisible(minimum, maximum)` 用 `radius = length(extent)`（欧氏长度），却去跟 `dot(plane.xyz, center) + plane.w` 比 —— 那个距离被未归一化平面的 `|plane|` 缩放过了，半径没跟着缩放。于是组级判定比逐实例判定更爱剔：实测每帧恰好漏提交 1 个逐实例判为可见的实例（default 59 / 10k 6815 / 30k 11216，而逐实例可见数是 60 / 6816 / 11217）。10k 场景漏掉的那条在画面左下角露头（包围盒 `(0,1000)-(151,1079)`，就藏在调试面板左边）。
+
+### 做法
+
+- `GroupRecord` 从 64 字节缩到 32 字节：只剩 `uvec4 draw`（firstIndex / indexCount / vertexOffset / firstInstance）与 `uvec4 counts`（instanceCount / materialSlot / merged / 保留）。组 AABB 只留在 CPU 侧（`gpuScene.ensurePrimitive` 还要用它），不再上传给剔除。
+- 模式 0 由「组剔除」改名 `kModeCommandSetup`：只把组记录里的索引/实例区间原样写成基线命令，再加一次 `stats[0].x`。**不再测视锥、不再测屏率、不再测 Hi-Z。**
+- 可见性完全由模式 1 的逐实例判定决定：`instanceWorldBounds` → `instanceInFrustum` →（`frame.screen.x > 0` 时）`tooSmallOnScreen`。
+- 模式 2 变成唯一的裁决策：按「本组可见实例数」写 `instanceCount` 与 `firstInstance`（紧凑区间起点），为 0 就把 5 个命令字清零并把该组计进 `stats[0].z`；否则计 `stats[0].y` 并累加可见实例/三角形/顶点。
+- 屏幕空间误差从组粒度降到**实例粒度**：`tooSmallOnScreen(center, worldHalf)` 用同一套投影公式，在模式 1 里对通过视锥的实例判定，命中计 `stats[2].x/y`。这不是删功能，是把尺子换细 —— `--gpu-scene-min-px` 与 Validate 的 `f1e-screen-space` 仍然成立，而且现在真的能剔到东西。
+- 组级 Hi-Z 遮挡随组级剔除一起退役：删掉 `occludedByHiZ`、`kOcclusionBias` 与 shader 里的 `sampler2D hizPyramid`。金字塔本身仍在建（`buildHiZ`、`--no-hiz`、`hizReady` 都不动），C++ 侧计算布局的 binding 4 与描述符写入也保留 —— 拆整条 Hi-Z 链是另一件事（决策 61 已量过逐实例 Hi-Z 收益为 0）。
+
+### 为什么组不再是剔除单位
+
+一条组存在的理由是「合并网格的一段索引区间」：所有模型拼进同一份顶点/索引缓冲后，每个模型子网格对应一段 `firstIndex/indexCount`，那才是组的意义 —— **draw call 的收益在合并，不在剔除**。组一旦不承担剔除，`visibleRatio` 也就没有存在必要，实例口径的 `submit/frame` 成为唯一读数，`--no-instance-cull` 的语义也变得干净：以前它退回组级剔除，现在它退回「完全不剔除」。
+
+### 为什么屏率误差要降到实例粒度，而不是跟着删
+
+组粒度那版对一个 100×100 的立方体阵列毫无意义：整块的 AABB 投影巨大，永远「不够小」。降到实例粒度之后它才有意义，也正好是 LOD 选择的前置件 —— 等 LOD 链落地，这里会从「剔掉」改成「按误差选级」。所以这一步保留公式、只换粒度。
+
+### 为什么回退路径仍然是「写恒等 remap」
+
+`--no-instance-cull` 不是「跳过 remap」，而是让 GPU 写一张恒等表（模式 4）。顶点着色器里只有一段取下标代码，两条路径都走它，画面才能做到逐像素一致；如果回退路径改成「host 侧不写 remap」，就要处理和正在飞的帧的竞争，还得让着色器分叉出第二套取下标逻辑 —— 用一次 dispatch 换零分支是划算的。关掉时提交量等于实例总数（10k 场景 10103），组口径 `visibleRatio` 1.00。
+
+### 验收（2026-11-25）
+
+Release，120 帧，固定机位 `--camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`，对照决策 60 的读数：
+
+| 场景 | 组（可见/剔除） | instances/frame | submit/frame | visibleRatio | gpuInst |
+| --- | --- | --- | --- | --- | --- |
+| default | 63/40 → **60/43** | 59.0 → **60.0** | 59.0 → **60.0** | 0.61 → **0.58** | 0.58（不变） |
+| cube-field 10k | 64/40 → **61/43** | 6815.0 → **6816.0** | 6815.0 → **6816.0** | 0.62 → **0.59** | 0.6747（不变） |
+| cube-field 30k | 64/40 → **61/43** | 11216.0 → **11217.0** | 11216.0 → **11217.0** | 0.62 → **0.59** | 0.3726（不变） |
+
+- **提交量第一次与逐实例可见数完全相等**：60 = 7080/118、6816 = 804288/118、11217 = 1323606/118。在此之前每帧都漏 1 个。
+- 组读数变化是口径变化而不是退化：43 = 40 条没有实例的组 + 3 条「有实例但一个都不可见」的组；`visibleRatio` 现在是「至少一个可见实例的组 / 全部组」。
+- `flattenUs` 落在噪声里（default 2259.3、10k 8534.3、30k 21163.7，单样本，与决策 60 的 1982.9/8388/20560 同一区间）。
+- 屏率误差剔除修好之后可以分级响应（default 场景）：`--gpu-scene-min-px` 1/4/8 → 剔 0 个；60 → 剔 12 个；120 → 剔 18 个；300 → 剔 28 个。
+- 画面：default 在 HUD 面板外 **0 像素差异**；10k 在面板外 9,425 个像素不同，全部落在左下角 `(0,1000)-(151,1079)` —— 就是那条此前被组级判定误杀的可见实例，现在画出来了。
+- 验证必须在 **Debug** 下做（`src/RHI/Device.h:145-148` 在 `NDEBUG` 下把 `enableValidationLayers` 关掉）：三档 + `--no-instance-cull` + `--gpu-scene-min-px 8/60` + `--no-hiz` + `--voxel-world 1` + `--validation-features sync` 共 9 组，全部 `[Validation] errors=0 warnings=0`、stderr 0 字节。
+- 全量回归 **96 项 ALL PASS**（stderr 全 0，`build/validation/20261125-140206`）；DocCheck PASS（documents=81 lines=18387）。
+
+### 代价与边界
+
+- 组级三个测试（视锥/屏率/遮挡）合起来只省一次 `atomicAdd` 和一点比较，本来就不是性能项：30k 场景 `total` 17.12 ms 与决策 60 的 16.19 ms 之间是单样本噪声（同一二进制重复跑能差 1 ms）。
+- 组 AABB 还在 CPU 侧算（`gpuScene.ensurePrimitive` 用），只是不再往 GPU 传 —— 所以 `buildInstances` 里那两次 `min/max` 不能一起删。
+- Hi-Z 金字塔暂时没有消费者：仍在建、仍可 `--no-hiz` 关，`stats.occlusionTests/Culled` 保留但恒 0。要么后面给逐实例遮挡复活（决策 61 说收益为 0），要么整条拆掉 —— 这是显式遗留项，不是漏做。
+- `--no-instance-cull` 的语义变了（旧：退回组级；新：完全不剔除）。文档与 `CliCatalog` 的说明都已改，老脚本如果靠它「只关实例级」需要改。
+
+### 不引入的
+
+- 不保留「组级剔除」作为第二档回退：两把尺子并存正是这一步要消掉的东西。
+- 不把组 AABB 一起删掉：`gpuScene` 的 primitive 还靠它做粗筛与调试显示。
+- 不把 Hi-Z 金字塔改成「实例化遮挡」的默认路径：决策 61 已经量过收益为 0。
+- 不动 `recordDraw` 的一条 multidraw：命令内容变了，提交方式没变。
+
+### 踩到的坑
+
+1. **`radius` 与未归一化平面**：旧组级 `frustumVisible` 的 `radius = length(extent)` 少乘了平面的 `|plane|`，比逐实例那套 `abs(p.x)*half.x + ...` 更爱剔 —— 这才是「每帧漏 1 个实例」的根因。删函数的时候要把「它一直在误杀」写清楚，否则下次还会有人照着老公式写第三份。
+2. **`projectionMatrix[1][1]` 是负的**（`src/Scene/Camera.cpp:15`，Vulkan 的 Y 轴朝下）。屏率公式里 `radius * (0.5 * screen.y * screen.z) / distance` 拿到负数，于是 `screen.x > 0` 时**每个实例都被判为「太小」** —— 这个 bug 从组级那版就在，只是组 AABB 太大、从来触发不到这条分支，所以没人发现。修法是 `abs(frame.screen.z)`（与 `SunFlarePass.cpp:176`、`ViewModelPass.cpp:245-247` 同一个理由），改完 `--gpu-scene-min-px` 才第一次真的分级响应。
+3. 组的 `instanceCount == 0` 是常态（default 场景 103 条组里有 40 条没有实例），旧代码把它算「可见」，退役后算「剔除」，`visibleRatio` 的分布跟着变 —— 看读数时别把它当退化。
+

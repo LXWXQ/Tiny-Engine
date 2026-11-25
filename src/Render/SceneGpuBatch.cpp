@@ -51,11 +51,11 @@ static_assert(offsetof(SceneGpuBatch::InstanceRecord, flags) == 128,
 static_assert(offsetof(SceneGpuBatch::InstanceRecord, draw) == 208,
               "InstanceRecord.draw offset mismatch");
 
-static_assert(sizeof(SceneGpuBatch::GroupRecord) == 64,
+static_assert(sizeof(SceneGpuBatch::GroupRecord) == 32,
               "GroupRecord must match scene_cull.comp");
-static_assert(offsetof(SceneGpuBatch::GroupRecord, draw) == 32,
+static_assert(offsetof(SceneGpuBatch::GroupRecord, draw) == 0,
               "GroupRecord.draw offset mismatch");
-static_assert(offsetof(SceneGpuBatch::GroupRecord, counts) == 48,
+static_assert(offsetof(SceneGpuBatch::GroupRecord, counts) == 16,
               "GroupRecord.counts offset mismatch");
 
 static_assert(sizeof(SceneGpuBatch::FrameData) == 256,
@@ -1502,7 +1502,8 @@ void SceneGpuBatch::logCullSummary() const
         ? static_cast<double>(cullTotals.visibleGroups) / groupsTotal
         : 0.0;
 
-    // visibleRatio 是 P2 的对照读数：组的粒度现在大概 0.8 上下，实例级剔除的目标是 0.6。
+    // visibleRatio 是 P2 的对照读数。P2-5 起组不再参与剔除，这个比值变成
+    // 「至少有一个可见实例的组 / 全部组」，仍然可用于观察组粒度上的收缩。
     std::cout << "[SceneGpu] cull summary | frames=" << cullTotals.frames
               << " visibleRatio=" << std::fixed << std::setprecision(2) << visibleRatio
               << " | groups/frame=" << std::setprecision(1) << (groupsTotal / frames)
@@ -1956,7 +1957,8 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                    static_cast<uint32_t>(modelGroups.size()));
     FrameResources& res = frames[frame];
     // 结构没变、容量没变、这个槽位的缓冲已经装过同一批数据：跳过 instances/groups 上传。
-    // 命令缓冲由 compute 每帧整组重写（可见写命令、不可见写 0），所以不需要清理旧命令。
+    // 命令缓冲由 compute 每帧整组重写（模式 0 写基线、模式 2 改紧凑区间或清零），
+    // 所以不需要清理旧命令。
     const bool uploadStructure =
         slotSignatures[frame] != signature || slotGenerations[frame] != capacityGeneration;
     if (uploadStructure)
@@ -1972,8 +1974,7 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
             const SubMesh& subMesh = group.model->getSubMeshes()[group.subMeshIndex];
             GroupRecord& record = groups[i];
             record = {};
-            record.boundsMin = glm::vec4(group.boundsMin, group.hasBounds ? 1.0f : 0.0f);
-            record.boundsMax = glm::vec4(group.boundsMax, 0.0f);
+            // 组不再带宽高：剔除按实例做，组级 AABB 只有 primitive 缓冲还用（决策 63）。
             record.draw = glm::uvec4(group.merged ? group.mergedFirstIndex : subMesh.firstIndex,
                                      subMesh.indexCount,
                                      group.merged ? static_cast<uint32_t>(group.mergedBaseVertex) : 0u,

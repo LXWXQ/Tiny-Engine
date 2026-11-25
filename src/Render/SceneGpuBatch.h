@@ -45,10 +45,10 @@ public:
     };
 
     // 与 shaders/scene_cull.comp 的 GroupRecord 逐字节一致。
+    // P2-5 起组只描述「合并网格里的一段索引区间 + 实例缓冲里的一段实例区间」：
+    // 包围盒不再上传（剔除全部按实例做），组的 AABB 只有 CPU 侧的 primitive 缓冲还在用。
     struct GroupRecord
     {
-        glm::vec4 boundsMin;   // xyz=世界 AABB 下界 w=1 表示有效
-        glm::vec4 boundsMax;
         glm::uvec4 draw;       // x=firstIndex y=indexCount z=vertexOffset w=firstInstance
         glm::uvec4 counts;     // x=instanceCount y=materialSlot z=merged w=保留
     };

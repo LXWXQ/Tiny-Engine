@@ -1,22 +1,18 @@
 #version 450
 
-// F1：按组做视锥剔除 + Hi-Z 遮挡剔除，并把可见组的绘制参数写进 indirect 命令。
+// P2-5 起：组只表示「合并网格里的一段索引区间 + 实例缓冲里的一段实例区间」。
+// 剔除不再按组 —— 视锥与屏幕误差全部按实例做，组只是命令的粒度（一条命令 = 一个子网格切片）。
+// 可见实例被压成每组一段紧凑区间，命令的 firstInstance / instanceCount 换成这段区间。
 //
-// 一个组 = 一个（模型, 子网格）。同一个子网格被多个实体复用时，这些实例在实例缓冲里连续排列，
-// 一条命令用 instanceCount = N 就能一次画完（实例化）。剔除按组的并集世界 AABB 做，
-// 属于保守剔除：组内任一实例可见，整组可见。组级通过之后再做实例级剔除：可见实例被压成
-// 每组一段紧凑区间，命令的 firstInstance / instanceCount 换成这段区间（见文件下半部分）。
-//
-// Hi-Z 用的是「上一帧最后」的深度金字塔（本帧几何画完才重建），相机帧间连续时漏判代价极小；
-// 金字塔存线性视深度（-viewZ），越大越远，每级取 2x2 最大值，所以「物体最近点比矩形内最远面还远」
-// 才判定被遮挡 —— 宁可少剔除，不误剔。
+// 一条 multidraw 仍然成立：实例缓冲本身不动，动的只有命令的实例区间与 remap 表。
+// Hi-Z 金字塔仍在建（SceneGpuBatch::buildHiZ），但组级遮挡剔除已随组级剔除一起退役：
+// 逐实例 Hi-Z 在决策 61 里量到 0 收益，所以这次不给它留消费者。
 
 layout(local_size_x = 64) in;
 
 struct GroupRecord
 {
-    vec4 boundsMin;   // xyz = 世界 AABB 下界，w = 1 表示包围盒有效
-    vec4 boundsMax;
+    // 不再带宽高/包围盒：剔除按实例做，组的 AABB 只有 CPU 侧的 primitive 缓冲还在用。
     uvec4 draw;       // x = firstIndex, y = indexCount, z = vertexOffset, w = firstInstance
     uvec4 counts;     // x = instanceCount, y = materialSlot, z = merged, w = 保留
 };
@@ -39,22 +35,20 @@ layout(set = 0, binding = 2) readonly buffer FrameBuffer
     mat4 view;
     vec4 planes[6];
     vec4 screen;       // x = 最小屏幕像素阈值, y = 视口高度, z = 投影 [1][1]
-    uvec4 params;      // x = groupCount, z = 1 表示 Hi-Z 可用
+    uvec4 params;      // x = groupCount；z 是历史字段（Hi-Z 可用），P2-5 起不读
 } frame;
 
 layout(set = 0, binding = 3) buffer StatsBuffer
 {
     // [0] = (总组数, 可见组数, 被剔除组数, 可见实例数)
-    // [1] = (可见三角形, 可见顶点, 遮挡测试组数, 遮挡剔除组数)
-    // [2] = (屏幕误差测试组数, 屏幕误差剔除组数, 保留, 保留)
+    // [1] = (可见三角形, 可见顶点, 保留, 保留)
+    // [2] = (屏幕误差测试实例数, 屏幕误差剔除实例数, 保留, 保留)
     // [3] = (实例级视锥测试数, 其中在视锥内, 保留, 保留)
     //
     // 缓冲固定 4 个 uvec4 = 64 字节，与 C++ SceneGpuBatch::Stats 的
     // static_assert 同一口径；扩槽要同时改这里和 Stats，否则写越界。
     uvec4 stats[4];
 } statsBuffer;
-
-layout(set = 0, binding = 4) uniform sampler2D hizPyramid;
 
 // 实例缓冲：和 C++ 的 SceneGpuBatch::InstanceRecord 是同一份 224 字节记录（mrt.vert 读的是同一个
 // 缓冲，只是绑在图形 set 上）。这里只读它做实例级视锥统计，不写。
@@ -101,90 +95,27 @@ layout(push_constant) uniform Push
 } push;
 
 const uint kCommandWords = 5u;
-const float kOcclusionBias = 0.05;
 
-bool frustumVisible(vec3 minimum, vec3 maximum)
-{
-    const vec3 center = (minimum + maximum) * 0.5;
-    const vec3 extent = (maximum - minimum) * 0.5;
-    const float radius = length(extent);
-    for (int plane = 0; plane < 6; ++plane)
-    {
-        if (dot(frame.planes[plane].xyz, center) + frame.planes[plane].w < -radius)
-            return false;
-    }
-    return true;
-}
-
-// 屏幕空间误差剔除：投影后包围球半径小于阈值像素的组直接丢弃。
-// 这是 LOD 选择的前置件 —— 有了 LOD 链以后，这里会改成按误差选级而不是剔除。
-bool tooSmallOnScreen(vec3 minimum, vec3 maximum)
-{
-    if (frame.screen.x <= 0.0 || frame.screen.y <= 0.0)
-        return false;
-
-    const vec3 center = (minimum + maximum) * 0.5;
-    const float radius = length((maximum - minimum) * 0.5);
-    const vec3 eye = (inverse(frame.view))[3].xyz;
-    const float distance = max(length(center - eye), 1.0e-3);
-    const float pixels = radius * (0.5 * frame.screen.y * frame.screen.z) / distance;
-    return pixels < frame.screen.x;
-}
-
-bool occludedByHiZ(vec3 minimum, vec3 maximum)
-{
-    if (frame.params.z == 0u || push.params.w == 0u)
-        return false;
-
-    vec2 uvMin = vec2(1.0e9);
-    vec2 uvMax = vec2(-1.0e9);
-    float nearest = 1.0e9;
-    for (int corner = 0; corner < 8; ++corner)
-    {
-        const vec3 point = vec3((corner & 1) != 0 ? maximum.x : minimum.x,
-                                (corner & 2) != 0 ? maximum.y : minimum.y,
-                                (corner & 4) != 0 ? maximum.z : minimum.z);
-        const vec4 clip = frame.viewProjection * vec4(point, 1.0);
-        if (clip.w <= 1.0e-5)
-            return false;   // 有顶点在相机背后：不做遮挡判断
-        const vec3 ndc = clip.xyz / clip.w;
-        const vec2 uv = ndc.xy * 0.5 + 0.5;
-        uvMin = min(uvMin, uv);
-        uvMax = max(uvMax, uv);
-        nearest = min(nearest, -(frame.view * vec4(point, 1.0)).z);
-    }
-
-    // 选择让投影矩形大约占 1~2 个 texel 的那一级：矩形越大，用的级别越粗。
-    const vec2 rectPixels = max((uvMax - uvMin) * vec2(push.params.y, push.params.z), vec2(1.0));
-    const float largest = max(rectPixels.x, rectPixels.y);
-    const int level = clamp(int(ceil(log2(largest))), 0, int(push.params.w) - 1);
-
-    const vec2 clampedMin = clamp(uvMin, vec2(0.0), vec2(1.0));
-    const vec2 clampedMax = clamp(uvMax, vec2(0.0), vec2(1.0));
-    float farthest = 0.0;
-    for (int corner = 0; corner < 4; ++corner)
-    {
-        const vec2 uv = vec2((corner & 1) != 0 ? clampedMax.x : clampedMin.x,
-                             (corner & 2) != 0 ? clampedMax.y : clampedMin.y);
-        farthest = max(farthest, textureLod(hizPyramid, uv, float(level)).r);
-    }
-    return nearest > farthest + kOcclusionBias;
-}
-
-// 与 C++ buildInstances 里 instanceInFrustum 同一套算式：同样的 6 个未归一化平面、同样的
-// 「沿平面法线投影半长」半径。两边必须一起改，否则 GPU 读数和 CPU 的 instFrustum 对不上。
-bool instanceInFrustum(uint instanceIndex)
+// 实例的世界包围盒：实例矩阵 + 局部 AABB 展开（与 C++ buildInstances 同一套算式）。
+// 返回 false 表示这条实例没有包围盒 —— 按可见处理，和以前的组级口径一样保守。
+bool instanceWorldBounds(uint instanceIndex, out vec3 center, out vec3 worldHalf)
 {
     const InstanceRecord record = instanceBuffer.instances[instanceIndex];
     if (record.boundsMin.w <= 0.5)
-        return true;   // 没有包围盒的实例按可见算：和组级剔除一样取保守口径
+        return false;
 
     const vec3 localCenter = (record.boundsMin.xyz + record.boundsMax.xyz) * 0.5;
     const vec3 localHalf = (record.boundsMax.xyz - record.boundsMin.xyz) * 0.5;
     const mat3 basis = mat3(record.model);
-    const vec3 center = (record.model * vec4(localCenter, 1.0)).xyz;
-    const vec3 worldHalf = abs(basis[0]) * localHalf.x + abs(basis[1]) * localHalf.y + abs(basis[2]) * localHalf.z;
+    center = (record.model * vec4(localCenter, 1.0)).xyz;
+    worldHalf = abs(basis[0]) * localHalf.x + abs(basis[1]) * localHalf.y + abs(basis[2]) * localHalf.z;
+    return true;
+}
 
+// 与 C++ buildInstances 里 instanceInFrustum 同一套算式：同样的 6 个未归一化平面、同样的
+// 「沿平面法线投影半长」半径。两边必须一起改，否则 GPU 读数和 CPU 的 instFrustum 对不上。
+bool instanceInFrustum(vec3 center, vec3 worldHalf)
+{
     for (int plane = 0; plane < 6; ++plane)
     {
         const vec4 p = frame.planes[plane];
@@ -196,15 +127,33 @@ bool instanceInFrustum(uint instanceIndex)
     return true;
 }
 
+// 屏幕空间误差剔除：投影后包围球半径小于阈值像素的实例直接丢弃。
+// P2-5 起从组粒度降到实例粒度 —— 组级那版把整块的 AABB 当一个球判，太大太粗。
+// 这是 LOD 选择的前置件 —— 有了 LOD 链以后，这里会改成按误差选级而不是剔除。
+bool tooSmallOnScreen(vec3 center, vec3 worldHalf)
+{
+    if (frame.screen.x <= 0.0 || frame.screen.y <= 0.0)
+        return false;
+
+    const float radius = length(worldHalf);
+    const vec3 eye = (inverse(frame.view))[3].xyz;
+    const float distance = max(length(center - eye), 1.0e-3);
+    // Camera.cpp:15 把 projectionMatrix[1][1] 翻成负数（Vulkan 的 Y 轴朝下），这里必须取绝对值，
+    // 否则 screen.x > 0 时每个实例都算出负的像素半径、全部落进「太小」分支。
+    const float pixels = radius * (0.5 * frame.screen.y * abs(frame.screen.z)) / distance;
+    return pixels < frame.screen.x;
+}
+
 // ---------------------------------------------------------------------------
-// 实例级剔除：三段 dispatch 把可见实例压成每组的紧凑区间。
-//   1) 每实例测视锥 → 可见的从本组计数器领一个名次，不可见记 0xFFFFFFFFu。
+// 实例级剔除：四段 dispatch 把可见实例压成每组的紧凑区间。
+//   0) 每条命令先按组记录写成「未剔除」的基线值（组不再是剔除单位，这一步只写命令）。
+//   1) 每实例测视锥（可选屏率误差）→ 可见的从本组计数器领一个名次，不可见记 0xFFFFFFFFu。
 //   2) 一个 invocation 串行过一遍组：把「本组可见实例数」变成「remap 起点」，顺带把命令的
-//      instanceCount / firstInstance 换成紧凑后的值（组级剔除掉的组不复活）。
+//      instanceCount / firstInstance 换成紧凑后的值；本组一个可见实例都没有就把命令清零。
 //   3) 每实例把名下写回 remap[起点 + 名次] = 实例下标；顶点着色器按它取 InstanceRecord。
 // 实例缓冲本身不动，动的只有命令的实例区间与这张 remap 表 —— 所以一条 multidraw 仍然成立。
 // ---------------------------------------------------------------------------
-const uint kModeGroupCull = 0u;
+const uint kModeCommandSetup = 0u;
 const uint kModeInstanceRank = 1u;
 const uint kModeGroupPrefix = 2u;
 const uint kModeInstanceScatter = 3u;
@@ -228,7 +177,7 @@ uint groupForInstance(uint instanceIndex)
     return lo == 0u ? 0u : lo - 1u;
 }
 
-// 模式 1：测视锥 + 领名次。
+// 模式 1：测视锥（+ 可选屏率误差）+ 领名次。
 void rankInstanceVisibility()
 {
     const uint instanceIndex = gl_GlobalInvocationID.x;
@@ -237,9 +186,24 @@ void rankInstanceVisibility()
 
     atomicAdd(statsBuffer.stats[3].x, 1u);   // 做过实例视锥测试的实例数
     uint rank = kInstanceInvisible;
-    if (instanceInFrustum(instanceIndex))
+
+    vec3 center;
+    vec3 worldHalf;
+    const bool hasBounds = instanceWorldBounds(instanceIndex, center, worldHalf);
+    bool visible = !hasBounds || instanceInFrustum(center, worldHalf);
+    if (visible && frame.screen.x > 0.0 && hasBounds)
     {
-        atomicAdd(statsBuffer.stats[3].y, 1u);   // 其中在视锥内的实例数
+        atomicAdd(statsBuffer.stats[2].x, 1u);   // 做过屏率误差测试的实例数
+        if (tooSmallOnScreen(center, worldHalf))
+        {
+            atomicAdd(statsBuffer.stats[2].y, 1u);   // 其中投影太小的实例数
+            visible = false;
+        }
+    }
+
+    if (visible)
+    {
+        atomicAdd(statsBuffer.stats[3].y, 1u);   // 其中通过（视锥 + 屏率）的实例数
         rank = atomicAdd(cullGroupBuffer.cullGroups[groupForInstance(instanceIndex)].x, 1u);
     }
     scratchBuffer.scratch[push.more.z + instanceIndex] = rank;
@@ -258,11 +222,11 @@ void buildGroupPrefix()
         const uint commandBase = groupIndex * kCommandWords;
         const uint count = cullGroupBuffer.cullGroups[groupIndex].x;
         cullGroupBuffer.cullGroups[groupIndex].y = running;
-        if (commandBuffer.commands[commandBase + 1u] == 0u)
-            continue;   // 组级剔除已经把这条命令整条写成 0：不复活
 
         if (count == 0u)
         {
+            // 这一组没有任何可见实例：整条命令清零，下面的 scatter 也不会往这里写。
+            atomicAdd(statsBuffer.stats[0].z, 1u);
             commandBuffer.commands[commandBase + 0u] = 0u;
             commandBuffer.commands[commandBase + 1u] = 0u;
             commandBuffer.commands[commandBase + 2u] = 0u;
@@ -271,6 +235,7 @@ void buildGroupPrefix()
             continue;
         }
 
+        atomicAdd(statsBuffer.stats[0].y, 1u);
         const uint indexCount = groupBuffer.groups[groupIndex].draw.y;
         statsBuffer.stats[0].w += count;
         statsBuffer.stats[1].x += count * (indexCount / 3u);
@@ -293,14 +258,12 @@ void scatterVisibleInstances()
         return;
 
     const uint groupIndex = groupForInstance(instanceIndex);
-    if (commandBuffer.commands[groupIndex * kCommandWords + 1u] == 0u)
-        return;   // 组级剔除掉的组：名次作废
-
+    // 名次不为空就说明本组至少有一个可见实例，模式 2 已经给这条命令写过 count 与起点。
     scratchBuffer.scratch[cullGroupBuffer.cullGroups[groupIndex].y + rank] = instanceIndex;
 }
 
 // 模式 4：实例级剔除关闭时的回退 —— 写恒等索引。顶点着色器走同一段 remap 代码，
-// 命令保持组级剔除写下的原值，画面上与「没有 remap」完全一致。
+// 命令保持模式 0 写下的基线值（不剔除），画面上与「没有 remap」完全一致。
 void writeIdentityRemap()
 {
     const uint instanceIndex = gl_GlobalInvocationID.x;
@@ -332,63 +295,30 @@ void main()
         return;
     }
 
+    // 模式 0：命令初始化。组不再是剔除单位，这里只把组记录里的索引/实例区间原样写成基线命令；
+    // 真正决定「画多少实例」的是模式 2（按紧凑后的可见数改写）。
     const uint groupIndex = gl_GlobalInvocationID.x;
     if (groupIndex >= push.params.x)
         return;
 
-    const uint base = groupIndex * kCommandWords;
     const GroupRecord group = groupBuffer.groups[groupIndex];
-    atomicAdd(statsBuffer.stats[0].x, 1u);
-
-    bool visible = true;
-    if (group.boundsMin.w > 0.5)
-    {
-        visible = frustumVisible(group.boundsMin.xyz, group.boundsMax.xyz);
-        if (visible && frame.screen.x > 0.0)
-        {
-            atomicAdd(statsBuffer.stats[2].x, 1u);   // 做过屏幕空间误差测试的组数
-            if (tooSmallOnScreen(group.boundsMin.xyz, group.boundsMax.xyz))
-            {
-                atomicAdd(statsBuffer.stats[2].y, 1u);   // 其中投影太小的组数
-                visible = false;
-            }
-        }
-        if (visible && frame.params.z != 0u)
-        {
-            atomicAdd(statsBuffer.stats[1].z, 1u);   // 做过遮挡测试的组数
-            if (occludedByHiZ(group.boundsMin.xyz, group.boundsMax.xyz))
-            {
-                atomicAdd(statsBuffer.stats[1].w, 1u);   // 其中判定被遮挡的组数
-                visible = false;
-            }
-        }
-    }
-
-    if (!visible)
-    {
-        atomicAdd(statsBuffer.stats[0].z, 1u);
-        commandBuffer.commands[base + 0u] = 0u;
-        commandBuffer.commands[base + 1u] = 0u;
-        commandBuffer.commands[base + 2u] = 0u;
-        commandBuffer.commands[base + 3u] = 0u;
-        commandBuffer.commands[base + 4u] = 0u;
-        return;
-    }
-
+    const uint base = groupIndex * kCommandWords;
     const uint instanceCount = group.counts.x;
-    atomicAdd(statsBuffer.stats[0].y, 1u);
-    // 实例级剔除开着时（more.z != 0），这三项交给前缀和那一步按紧凑后的数量累加；
-    // 关着时在这里按组数量累加，回退路径的读数与 P2 第二步逐位相同。
-    if (push.more.z == 0u)
-    {
-        atomicAdd(statsBuffer.stats[0].w, instanceCount);
-        atomicAdd(statsBuffer.stats[1].x, instanceCount * (group.draw.y / 3u));
-        atomicAdd(statsBuffer.stats[1].y, instanceCount * group.draw.y);
-    }
+    atomicAdd(statsBuffer.stats[0].x, 1u);      // 提交的组数
 
     commandBuffer.commands[base + 0u] = group.draw.y;   // indexCount
     commandBuffer.commands[base + 1u] = instanceCount;  // instanceCount
     commandBuffer.commands[base + 2u] = group.draw.x;   // firstIndex
     commandBuffer.commands[base + 3u] = group.draw.z;   // vertexOffset
     commandBuffer.commands[base + 4u] = group.draw.w;   // firstInstance
+
+    // 实例级剔除关着（more.z == 0）时这一遍就是最终结果：可见数/三角形/顶点在这里累加，
+    // 读数与 P2 第二步的回退路径逐位相同。
+    if (push.more.z == 0u)
+    {
+        atomicAdd(statsBuffer.stats[0].y, 1u);
+        atomicAdd(statsBuffer.stats[0].w, instanceCount);
+        atomicAdd(statsBuffer.stats[1].x, instanceCount * (group.draw.y / 3u));
+        atomicAdd(statsBuffer.stats[1].y, instanceCount * group.draw.y);
+    }
 }

@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1060 行
+size: ~1063 行
 updated: 2026-11-25
 ---
 
@@ -1059,3 +1059,6 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P2 第九步（2026-11-25，测量后否决）**：逐实例 Hi-Z 遮挡先按「只数不裁」量了一遍 —— 模式 1 里对通过视锥的实例算世界 AABB 并调 `occludedByHiZ`，命中写 `stats[3].z`、`instance summary` 增 `occInst=`。参考机位 `--cube-field 10000` 120 帧执行 790656 次、判定被遮挡 **0**；平视三个机位 376264 / 391384 / 409416 次、`--voxel-world 1` 5768 次，全部 0。原因是自遮挡（金字塔来自上一帧，实例自己的深度就在里面）、背景 `1e9` sentinel 会污染粗 mip、以及俯视平地上的阵列屏幕不重叠 —— `0.68` 是视锥覆盖的几何事实。收益为 0，代码整段回退（工作树回到 `f5ad4f3`），探针成本也在噪声内（cf30k 600 帧 144.3~146.6 vs 147.0/146.5/146.8 FPS）。
 
 **P2 第十步（2026-11-25，灯数据搬进灯缓冲）**：`GlobalUbo.pointLights[100]` 搬出 UBO，进 set 0 新增的 binding 19（`LightBuffer { PointLight lights[]; }`，容量 `kMaxPointLights = 1024`、32 KiB / 帧槽、`DescriptorManager` 持有常驻映射缓冲）；UBO 只剩 `numLights`，`sizeof(GlobalUbo)` 3680 → 480，`previousProjectionView` 改为显式 `alignas(16)`（以前靠被搬走的数组顶对齐）。`lighting.frag` 的逐灯循环改读 `lights[i]`，`present.frag` / `present_no_bloom.frag` / `taa.frag` 删掉各自的 `PointLight pointLights[100]` 声明（不读但占 std140 的 3200 字节）。容量第一次真正解除：`--light-stress 1500` → `applied=1024 requested=1500`（旧代码只会上 100）。画面证据：半径 12 的 `--light-stress` 截图，0 → 100 盏 118,653 个像素不同、**100 → 512 盏 208,703 个（≥8 的 2,446）**；逐灯 512 与聚簇 512 的差异从「只上 100 盏时」的 182,807（9.5%）缩到 9,785（0.47%），说明逐灯路径第一次看到全部灯。**踩坑**：`alignas(16)` 的搭便车、三个后效 shader 的占位数组、`buildGlobalSet` 末尾的占位覆盖、以及反射通道自建 set 0 必须补 `applyLightBinding`（漏了会每帧一条 `VUID-vkCmdDrawIndexedIndirect-None-08114`）。验证必须在 Debug 下做（Release 的 `enableValidationLayers` 在 `NDEBUG` 下是 `false`）：六组用例全部 `errors=0 warnings=0`、stderr 0 字节。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-132707`）；DocCheck PASS（documents=81）。
+
+**P2 第十一步（2026-11-25，退役组级剔除）**：`GroupRecord` 只保留「合并网格的索引区间」—— 64 字节缩到 32 字节（`uvec4 draw` + `uvec4 counts`），组 AABB 留在 CPU 侧给 `gpuScene` 用。`shaders/scene_cull.comp` 的模式 0 由组剔除改成「只写基线命令」，可见性完全由模式 1 的逐实例判定决定，模式 2 成为唯一裁决策（`stats[0].y/z`、可见三角形/顶点都在这里）；屏率误差剔除降到实例粒度，组级 Hi-Z 遮挡随组级剔除一起退役（金字塔仍在建、无消费者）。读数：default `instances 59→60`、`submit 59→60`，10k `6815→6816`，30k `11216→11217`，`submit` 第一次等于逐实例可见数（60/6816/11217 = `gpuInst` 的逐帧分子），`gpuInst` 逐位不变；`visibleRatio` 0.61/0.62/0.62 → 0.58/0.59/0.59（口径变化：43 = 40 条空组 + 3 条全不可见组）。画面：default 面板外 0 像素差异，10k 面板外 9,425 像素变化全在左下角 `(0,1000)-(151,1079)`（旧组级判定误杀的可见实例）。**踩坑**：`projectionMatrix[1][1]` 为负（Vulkan Y 朝下，`src/Scene/Camera.cpp:15`），屏率公式必须 `abs(frame.screen.z)` —— 这个 bug 从组级版本就在，只是组 AABB 太大触发不到。验证必须用 Debug（`NDEBUG` 关验证层）：9 组用例全部 `errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项** ALL PASS（`build/validation/20261125-140206`）；DocCheck PASS（documents=81 lines=18387）。
+

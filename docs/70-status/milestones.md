@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1719 行
+size: ~1732 行
 updated: 2026-11-25
 ---
 
@@ -1718,3 +1718,16 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 验证（**必须 Debug**）：`--light-stress 512`、`512 --clustered-lighting`、`512 --clustered-lighting --clustered-gpu-build`、`1024`、默认场景、`--voxel-world 1 --light-stress 200` 六组全部 `errors=0 warnings=0`、stderr 0 字节。
 - 全量回归 **96 项 ALL PASS**（`build/validation/20261125-132707`，stderr 全 0）；DocCheck PASS（documents=81 lines=18290）。
 - 不做：灯脏区增量上传、16 bit `lightId`、簇表布局改动、`--light-stress` 默认半径调整。
+
+## P2 第十一步：退役组级剔除（P2-5，2026-11-25）
+
+- `src/Render/SceneGpuBatch.h`：`GroupRecord` 64 → 32 字节，只剩 `uvec4 draw` 与 `uvec4 counts`；组 AABB 留在 CPU 侧给 `gpuScene.ensurePrimitive`，不再上传。
+- `shaders/scene_cull.comp`（395 → 325 行）：模式 0 改名 `kModeCommandSetup`，只写基线命令；删 `frustumVisible` / 组级 `tooSmallOnScreen` / `occludedByHiZ` / `kOcclusionBias` / `sampler2D hizPyramid`；新增 `instanceWorldBounds` / `instanceInFrustum(center, worldHalf)` / `tooSmallOnScreen(center, worldHalf)`；模式 1 一次判定视锥 + 屏率，模式 2 成为唯一裁决策（`stats[0].y/z` 与可见三角形/顶点都在这里累加）。
+- 屏率误差剔除从组粒度降到实例粒度，公式不变；`--gpu-scene-min-px` 与 Validate 的 `f1e-screen-space` 保留。
+- 读数：default `visible 63→60 / culled 40→43`、`instances 59→60`、`submit 59→60`、`visibleRatio 0.61→0.58`；10k `6815→6816`、0.62→0.59；30k `11216→11217`、0.62→0.59；三档 `gpuInst` 逐位不变（0.58 / 0.6747 / 0.3726）。
+- **提交量第一次等于逐实例可见数**（60 = 7080/118、6816 = 804288/118、11217 = 1323606/118）—— 旧组级判定每帧误杀 1 个可见实例（`radius = length(extent)` 少乘了平面模长）。
+- 画面：default 面板外 0 像素差异；10k 面板外 9,425 像素变化全在左下角 `(0,1000)-(151,1079)`，即被误杀的那条实例现在画出来了。
+- 坑：`projectionMatrix[1][1]` 为负（`src/Scene/Camera.cpp:15`），屏率公式必须 `abs(frame.screen.z)`，否则 `--gpu-scene-min-px > 0` 一律剔光（这个 bug 从组级版本就在）。
+- 验证（必须 Debug）：三档 + `--no-instance-cull` + `--gpu-scene-min-px 8/60` + `--no-hiz` + `--voxel-world 1` + `--validation-features sync` 共 9 组 `errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项 ALL PASS**（`build/validation/20261125-140206`）；DocCheck PASS（documents=81 lines=18387）。
+- 遗留：Hi-Z 金字塔仍在建但无消费者（`stats.occlusionTests/Culled` 恒 0），待复活或整条拆除；`--no-instance-cull` 语义改为「完全不剔除」。
+
