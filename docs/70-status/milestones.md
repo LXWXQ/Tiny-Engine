@@ -4,8 +4,8 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1665 行
-updated: 2026-11-24
+size: ~1672 行
+updated: 2026-11-25
 ---
 
 # 里程碑与实测基线
@@ -1663,3 +1663,11 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - Release 30k 一次重建 10.08 → **8.91 ms**（`external` 9.4 → 7.0）；Debug 30k 57.60 → **35.32**（`external` 40.9 → 27.6）、Debug 10k 26.46 → 14.11。
 - 第一版用逐浮点 FNV 哈希做键，30k 下哈希本身比 `memcmp` 贵一个数量级，换成 64 字节 `memcmp` 才拿到收益。
 - 剩余成本：`extPush` 3.2 ms（Release 30k）。要再压只能让持久缓冲直接当剔除输入，不再每帧重建 `buckets`。
+
+## P2 第六步：剔除统计缓冲扩到 4 个 uvec4（布局验证，2026-11-25）
+
+- `shaders/scene_cull.comp` 的 `uvec4 stats[3]` → `stats[4]`（第 4 组是实例级剔除的保留槽）；`SceneGpuBatch::Stats` 13 → 16 个 `uint32_t`（`reserved[3]`），stats 缓冲改按 `sizeof(Stats)` 分配，尺寸只有一个来源。
+- 布局锁进编译期：`static_assert(sizeof(Stats) == 16u * sizeof(uint32_t))`，外加 include 生成的 `scene_cull.comp.reflect.h` 后断言 `kStatsBufferBlockSize == sizeof(Stats)`、`kStatsBufferStatsCount == 4`（反射头实测 `kStatsBufferBlockSize = 64`）。
+- 验收：三档 120 帧前后 `cull stats` / `cull summary` 的整数读数逐位相同（default `103/63/40`、10k `instances=10063`、30k `30063`；`instFrustum=6756/10000`、`11157/30000`；`visibleRatio 0.61/0.62/0.62`），只有计时列不同；`--validation-features sync` `errors=0 warnings=0`、stderr 0 字节。
+- 全套回归 **96 项** ALL PASS（含 `f1d-sync-validation`、`f3v-water-off`），stderr 全 0，验证日志 `build/validation/20261125-103927`；DocCheck PASS（documents=81 lines=18000）。
+- 边界：`Stats` 字段顺序与 GPU 字序不同（`groups`/`drawCalls` 占 words[6..7]，与 GPU 的 `occlusionTests`/`occlusionCulled` 重叠），`readStats` 只能按名字逐字读，不能整块 memcpy。

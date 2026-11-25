@@ -4,8 +4,8 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1051 行
-updated: 2026-11-24
+size: ~1052 行
+updated: 2026-11-25
 ---
 
 # UE 借鉴改造总纲
@@ -1049,3 +1049,5 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 默认关且零开销：没有 `--stats-queue` 时 `Application` 直接 `queuestats::shutdown()`，一枚 timestamp 都不写（默认场景 `[FrameStats]` 三行与关闭前后逐位相同）。
 
 **T-07 第二步（2026-11-24，已落地）**：图形拆成 `G0 -> C0 -> G1` 两段命令缓冲、三次提交。拆分点由图自己算（第一个「带读位且与 compute 写范围重叠」的 graphics Pass），三条保守规则：拆点为第 0 个 Pass 时不拆、`--no-async-split` 整体退回单次提交、没有 compute 写时提交路径与改造前完全一致。实测 512 灯 + sync：`makespan 10.06 -> 9.03 ms`、`overlap 0.00 -> 0.51 ms`（等于 compute 全部忙碌时间，100% 被遮住）；无验证层 600 帧 × 3 轮交替 `102.00` 对 `100.94` FPS（+1.05%）；默认场景 `passes/frame=16.0` 不变、截图差异在噪声内。**验收偏差**：本单收益上限本来就只有 compute 占比（2.5%），+1.05% 已是这个上限的一半。
+
+**P2 第六步（2026-11-25，布局验证）**：实例级剔除先做纯扩容，不动读数 —— `shaders/scene_cull.comp` 的 `uvec4 stats[3]` 扩成 `stats[4]`，`src/Render/SceneGpuBatch.h` 的 `Stats` 13 → 16 个 `uint32_t`（`reserved[3]`，否则扩槽越界），`SceneGpuBatch.cpp` 的 stats 缓冲改按 `sizeof(Stats)` 分配；跨语言布局锁进编译期：`sizeof(Stats) == 64`，并 include `scene_cull.comp.reflect.h` 把 `kStatsBufferBlockSize` 与 `kStatsBufferStatsCount = 4` 断言到 C++ 侧。三档 120 帧的整数读数逐位不变、`--validation-features sync` `errors=0 warnings=0`，全量回归 96 项 ALL PASS（`build/validation/20261125-103927`）。这一步只证明「扩槽不越界、不改读数」，真正的实例计数（`stats[3]`）留到第二步随实例缓冲一起加。

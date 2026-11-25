@@ -45,7 +45,11 @@ layout(set = 0, binding = 3) buffer StatsBuffer
     // [0] = (总组数, 可见组数, 被剔除组数, 可见实例数)
     // [1] = (可见三角形, 可见顶点, 遮挡测试组数, 遮挡剔除组数)
     // [2] = (屏幕误差测试组数, 屏幕误差剔除组数, 保留, 保留)
-    uvec4 stats[3];
+    // [3] = 实例级剔除的保留槽（4 个 uint 计数器，P2 第二步起启用）
+    //
+    // 缓冲固定 4 个 uvec4 = 64 字节，与 C++ SceneGpuBatch::Stats 的
+    // static_assert 同一口径；扩槽要同时改这里和 Stats，否则写越界。
+    uvec4 stats[4];
 } statsBuffer;
 
 layout(set = 0, binding = 4) uniform sampler2D hizPyramid;

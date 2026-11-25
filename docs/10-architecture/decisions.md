@@ -4,8 +4,8 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1254 行
-updated: 2026-11-24
+size: ~1298 行
+updated: 2026-11-25
 ---
 
 # 关键设计决策
@@ -1252,3 +1252,48 @@ P2 的 −70% 只能靠改结构拿到：持久缓冲变成权威数据、逐实
 ### 不引入的
 
 - 不做「组级签名 + 局部重摊」：cube-field 只有一个组，组级签名命中就直接是 0.11 ms 的既有快速路径；组内有实例变化时仍要全组重摊，本轮收益在"单组内实例未变"这一档，已经吃到。
+
+## 决策 58：剔除统计缓冲先扩到 4 个 uvec4，只验布局不动读数（P2 第六步）
+
+### 问题
+
+第二步要在 `scene_cull.comp` 里按实例做视锥判定、并 `atomicAdd` 新计数器，但统计缓冲只有 `uvec4 stats[3]`（48 字节），C++ 侧 `SceneGpuBatch::Stats` 是 13 个 `uint32_t`（52 字节）。两边既不相等、也都放不下第 4 组：C++ 多出来的那一个是纯 CPU 写的 `externalInstances`。反过来先加计数再发现缓冲不够，越界踩的是同一块映射内存，验证层抓不到，读出来的会是一堆看着合理的数。
+
+### 做法
+
+- `shaders/scene_cull.comp`：`uvec4 stats[3]` → `stats[4]`，第 4 组（`stats[3]`）标注为实例级剔除的保留槽，本步不写。
+- `src/Render/SceneGpuBatch.h`：`Stats` 末尾补 `uint32_t reserved[3] = {}`（13 → 16 个 uint），并加 `static_assert(sizeof(Stats) == 16u * sizeof(uint32_t))`。
+- `src/Render/SceneGpuBatch.cpp`：stats 缓冲分配从 `12u * sizeof(uint32_t)` 改为 `sizeof(Stats)`，尺寸只留一个来源；`readStats` 注释写明只读前 10 个 GPU 字，`words[10..15]` 本步没有写入者。
+- 把跨语言布局锁进编译期：`SceneGpuBatch.cpp` 直接 include 生成的 `scene_cull.comp.reflect.h`，断言 `kStatsBufferBlockSize == sizeof(SceneGpuBatch::Stats)` 与 `kStatsBufferStatsCount == 4`。数字来自 SPIR-V 反射而不是手抄常量 —— 以后谁只改 shader 的槽位，编译就失败。
+
+### 为什么不是整块 `memcpy`
+
+`Stats` 的字段顺序和 GPU 字序**并不一致**：`groups` / `drawCalls` 是纯 CPU 字段，位置正好落在 words[6..7]，而 GPU 在同一位置写的是 `occlusionTests` / `occlusionCulled`。所以这块映射内存只能按名字逐字读（`readStats` 一直是这么做的），`reserved[3]` 不改变这个性质。本轮把这条边界写进头文件注释，并用上面的反射断言把「想 memcpy 的人」挡在编译期。
+
+### 验收
+
+同一机位、120 帧、三档场景（default / cube-field 10k / 30k），改前改后逐行比对 `[SceneGpu] cull stats` 与 `cull summary`：
+
+| 读数 | default | cube-field 10k | cube-field 30k |
+| --- | --- | --- | --- |
+| groups / visible / culled | 103 / 63 / 40 | 104 / 64 / 40 | 104 / 64 / 40 |
+| instances | 63 | 10063 | 30063 |
+| hizTests / hizCulled | 63 / 0 | 64 / 0 | 64 / 0 |
+| external | 0 | 10000 | 30000 |
+| visibleRatio | 0.61 | 0.62 | 0.62 |
+| instFrustum（CPU 侧） | 0/0 | 6756/10000 | 11157/30000 |
+
+所有整数计数器逐位相同，`[Validation] errors=0 warnings=0`；只有 `flattenUs` 与 `ms/rebuild` 这类计时列不同（单样本噪声）。`--validation-features sync`（cube-field 10k）同样 `errors=0 warnings=0`、stderr 0 字节。
+
+全量回归 `tools/Validate.ps1 -Incremental -SkipSetup` **96 项** ALL PASS（stderr 全 0），日志 `build/validation/20261125-103927`；DocCheck PASS（documents=81 lines=18000）。
+
+### 代价与边界
+
+- 每帧槽位 48 → 64 字节，四帧在飞共多 64 字节，可以忽略。
+- `reserved[3]` 只是占位：真正消费 `stats[3]` 的第二步要在 `readStats` 里显式加 words[12..15]，不能指望 memcpy。
+- 本步没有新计数、没有新 binding、没有动 `computeBindings`。它的价值就是证明「多出来的 16 字节不会被别人踩」，以及下一次扩槽时编译期会先报错。
+
+### 不引入的
+
+- 不顺手把 `Stats` 重排成与 GPU 逐字对应：`groups`/`drawCalls` 是 CPU 字段，重排会让「这块内存可以直接 memcpy」变得更像真的，反而增加误用风险。
+- 不在本步就加实例计数：那样一次要动 shader 槽位、描述符、计数三处，出问题无法定位。

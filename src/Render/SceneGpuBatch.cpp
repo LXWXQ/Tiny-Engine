@@ -10,6 +10,10 @@
 #include "RHI/CommandUtils.h"
 #include "Scene/Model.h"
 
+// 生成的反射头（build/shaders，CMake 在编译前生成）：布局断言直接引用 SPIR-V 里的事实，
+// 改 shader 忘了改 C++ 会在编译期炸，而不是运行期写越界。
+#include "scene_cull.comp.reflect.h"
+
 #include "Core/FrameInfo.h"
 #include "Scene/Components.h"
 #include "Scene/RenderInterpolation.h"
@@ -52,6 +56,13 @@ static_assert(offsetof(SceneGpuBatch::GroupRecord, counts) == 48,
 
 static_assert(sizeof(SceneGpuBatch::FrameData) == 256,
               "FrameData must match scene_cull.comp");
+
+// P2 第一步（决策 58）：剔除统计缓冲的 GLSL 侧与 C++ 侧必须是同一块 64 字节。
+// 数字取自 SPIR-V 反射，不是手抄的常量——两边任何一处改槽位，这里编译失败。
+static_assert(tiny::reflect::scene_cull_comp::kStatsBufferBlockSize == sizeof(SceneGpuBatch::Stats),
+              "Stats 与 scene_cull.comp 的 StatsBuffer 块大小不一致（看 scene_cull.comp.reflect.h）");
+static_assert(tiny::reflect::scene_cull_comp::kStatsBufferStatsCount == 4,
+              "scene_cull.comp 的 stats 必须是 4 个 uvec4，扩/缩槽要同时改 Stats");
 
 // 组的世界 AABB 由实例的局部 AABB 变换后求并集；少于这个数的组不值得单独剔除。
 constexpr uint32_t kCommandWords = 5u;
@@ -363,7 +374,9 @@ void SceneGpuBatch::createFrameBuffers()
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
         createBuffer(res.frameData, sizeof(FrameData),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        createBuffer(res.stats, 12u * sizeof(uint32_t),
+        // 统计缓冲 = 4 个 uvec4（shader 的 stats[4]）。尺寸从 Stats 取，size 由
+        // 头文件的 static_assert 锁在 64 字节，扩槽只需改这一处布局来源。
+        createBuffer(res.stats, sizeof(Stats),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
         std::memset(res.stats.mapped, 0, static_cast<size_t>(res.stats.size));
         vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation, 0, VK_WHOLE_SIZE);
@@ -1378,6 +1391,8 @@ void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
     // 必须先 invalidate 才能读到 GPU 写进去的计数（否则永远是 0）。
     vmaInvalidateAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation,
                             0, VK_WHOLE_SIZE);
+    // 只读前 10 个 GPU 字（stats[0] 的 4 个 + stats[1] 的 4 个 + stats[2] 的前 2 个）；
+    // words[10..15]（含 stats[3] 的实例级保留槽）这一步没有写入者。
     const uint32_t* words = static_cast<const uint32_t*>(res.stats.mapped);
     stats.submitted = words[0];
     stats.visibleGroups = words[1];
