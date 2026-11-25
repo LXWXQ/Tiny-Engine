@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1420 行
+size: ~1461 行
 updated: 2026-11-25
 ---
 
@@ -1419,3 +1419,44 @@ backlog 原文写的是「对可见组的实例做视锥测试」，实现改成
 - 组剔除把整条 5 word 命令清 0，所以紧凑化阶段用 `commands[base + 1] == 0` 判「这组没实例要画」；可见组里一个实例都没通过视锥时也会把命令清 0，两条路径同一个出口。
 - **用同一套实例布局的不止一处**：除了地形 chunk 实例表（`GeometrySystem::ensureTerrainChunkInstances`），体素 chunk 实例表（`GeometrySystem::ensureVoxelBatchResources`）也从 `sceneInstanceSetLayout` 分配 set。加 binding 1 时只改了地形那边，体素场景每帧报一条 `VUID-vkCmdDrawIndexedIndirect-None-08114`（`Descriptor in binding #1 index 0 is being used in draw but has never been updated via vkUpdateDescriptorSets()`），`f3-voxel*`、`f3v-taa/water/ssr` 共 9 项回归全红。两处都要「池 `descriptorCount` ×2 + 写满两个 binding」，binding 1 都指向同一块实例缓冲（这两条路径不过 remap，内容不会被读）。
 - **Release 里没有验证层**（`src/RHI/Device.h:145-148`）：`NDEBUG` 下 `enableValidationLayers` 直接是 `false`，验证回调不注册，`[Validation] errors=0` 恒成立。所以本步的「验证干净」必须用 `-Config Debug` 的 `TinyEngine.exe` 或 `tools/Validate.ps1` 证明；Release 版的 `--validation-features sync` 只验证了参数解析。
+
+## 决策 61：逐实例 Hi-Z 遮挡收益为 0，不落地（P2 第九步，测量后否决）
+
+### 问题
+
+P2 的验收还差 `visible/submitted ≤ 0.6` 这一条：第三步落地后 10k 实例是 `6815/10000 = 0.68`、30k 是 `0.37`。组级 Hi-Z 遮挡剔除一直报 `hizCulled/frame=0.0`，怀疑是「一个组太大、整片 cube-field 是一个组」把遮挡判定稀释掉了 —— 于是先按第二步的路子「只数不裁」，量一下逐实例 Hi-Z 的潜在收益。
+
+### 怎么量的
+
+- `shaders/scene_cull.comp` 的模式 1（`rankInstanceVisibility`）里，对每条通过视锥的实例算世界 AABB（与 CPU `worldCenter`/`worldHalf` 同一算式），再调组级那支 `occludedByHiZ(min, max)`；命中就 `atomicAdd(statsBuffer.stats[3].z, 1)`。**只统计，不让它影响名次**，所以画面与提交量完全不变。
+- `SceneGpuBatch::readStats` 读 `words[14]`（`stats[3].z`）累加进 `CullTotals::gpuInstanceOccluded`，`instance summary` 行打印 `occInst=<比例> (<次数>)`。
+- 探针验证分支可达：把 `occludedByHiZ` 临时改成 `return true`，`occInst` 立刻跳到 `0.66 (787640)`、组级 `hizCulled/frame` 从 0 涨到 34.4 —— 说明统计链路本身没断。
+
+### 读数（Release，`--cube-field 10000`）
+
+| 机位 / 场景 | 执行次数 | 判定被遮挡 |
+|---|---|---|
+| 参考机位（`-4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`），120 帧 | 790656 | **0** |
+| 同一机位 60 帧（对照） | 381696 | 0 |
+| 平视（eye y=1.2、pitch 0） | 376264 | 0 |
+| 平视 pitch −0.05 | 391384 | 0 |
+| 平视 pitch −0.15 | 409416 | 0 |
+| `--voxel-world 1`，60 帧 | 5768 | 0 |
+
+另测：level 0 采样值 `>= 1e6`（背景 sentinel）的次数为 0，所以不是「背景把金字塔填满了」这种实现 bug。
+
+### 为什么必然是 0
+
+1. **自遮挡**：Hi-Z 金字塔来自上一帧的 G-Buffer 位置，被测试的实例自己的像素就在金字塔里，它的最近深度约等于该处的场景深度，`nearest > farthest + 0.05` 只有「整块被别的东西完全挡住」才成立；静止场景里没有东西挡它，结论就是「可见」，这是**正确**的答案。
+2. **背景 sentinel**：G-Buffer 位置 `w <= 0.5` 的像素在金字塔里写 `kFarDepth = 1e9`，而 mip 级别按投影矩形尺寸选（4 px 的方块取 level 2），矩形一旦擦到天空就是 1e9，比较必然失败。平视机位地平线以上的方块全部撞这条。
+3. **场景几何没有遮挡**：参考机位是俯视平地上的 100×100 阵列，方块彼此在屏幕上不重叠，`visible/submitted=0.68` 是视锥覆盖的几何事实，不是缺了遮挡剔除。组级 `hizCulled` 恒为 0 是同一个原因。
+
+### 代价
+
+探针（每实例多做 8 次视投影 + 一次 `textureLod`）与回退后的 A/B：cf30k 600 帧带探针 `144.28 / 146.61 / 146.52 FPS`，回退后 `147.00 / 146.47 / 146.77 FPS` —— 差异落在噪声里（≤1.9%，且方向不一致）。所以否决的理由**不是成本**，而是收益为 0。代码已整段回退，工作树与 `f5ad4f3` 一致（`git status` 干净）。
+
+### 不引入的
+
+- 不做「只含静态遮挡体」的第二份金字塔（要额外一遍不含实例的深度 pass，且当前两个场景都测不出收益）。
+- 不做逐实例屏幕尺寸剔除：它会真的少画东西（远处的亚像素方块消失），属于 LOD（P6）的活，需要单独的画面验收口径。
+- 不改 `≤ 0.6` 的判定文字，但读数口径按实例记录：10k `0.67`（视锥）、30k `0.37`，并注明这是机位相关的几何值。

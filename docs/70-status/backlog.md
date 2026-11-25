@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~374 行
+size: ~376 行
 updated: 2026-11-25
 ---
 
@@ -370,5 +370,7 @@ updated: 2026-11-25
 **第 1 步读数（2026-11-25，纯布局验证）**：三档（default / cube-field 10k / 30k，120 帧固定机位）改前改后逐行比对 `[SceneGpu] cull stats` 与 `cull summary`，整数读数逐位相同：groups `103/104/104`、visible `63/64/64`、culled `40/40/40`、instances `63/10063/30063`、hizTests `63/64/64`、hizCulled `0/0/0`、screenTests `0/0/0`、external `0/10000/30000`、visibleRatio `0.61/0.62/0.62`，CPU 侧 `instFrustum` 仍是 `0/0`、`6756/10000`、`11157/30000`；只有 `flattenUs` / `ms/rebuild` 这类计时列不同。`--validation-features sync`（10k）`errors=0 warnings=0`、stderr 0 字节。也就是说第 2 步加 `InstanceRecord[]` binding 与 `atomicAdd` 时，`stats[3]` 这 4 个 word 已经有宿主、也不会再踩到别人。
 **第 2 步读数（2026-11-25）**：新增 `[SceneGpu] instance summary` 行，120 帧固定机位三档：default `gpuInst=0.58 (7080/12154) tested/frame=103`（CPU 侧无外部实例，没有对照）；cube-field 10k `0.6747 (804288/1192154) tested/frame=10103` 对 CPU `instFrustum=6756/10000=0.6756`；30k `0.3726 (1323606/3552154) tested/frame=30103` 对 `11157/30000=0.3719` —— 差 0.09 / 0.07 个百分点，落在 ±2% 判据内。组级读数与第 1 步逐位相同（`103/63/40`、`10063 / total 9.06 ms`、`30063 / 17.33 ms`），三档 `errors=0 warnings=0`、stderr 0 字节；`--validation-features sync`（10k）同样干净。代价：30k 600 帧 × 3 轮交替 A/B，第二遍 dispatch ≤0.5%，median 帧时间同为 7.62 ms。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-111243`）；DocCheck PASS（documents=81 lines=18077）。
 **第 3 步读数（2026-11-25）**：提交实例数第一次等于实例级可见数 —— 120 帧固定机位，`cull summary` 的 `instances/frame`（= `stats[0].w`）从「可见组实例数之和」变成「紧凑后真正提交的实例数」：default `63.0 → 59.0`、10k `10063.0 → 6815.0`、30k `30063.0 → 11216.0`，与 `instance summary` 的 `submit/frame` 逐位一致；`gpuInst`（`0.58` / `0.6747` / `0.3726`）与第二步逐位相同，每帧比提交数多 1 个实例（所在组被组级剔除，紧凑化按 `commands[base+1] == 0` 跳过）。收益（600 帧 × 3 轮，30k）`142.19/142.86/142.08` 对 `125.86/126.09/125.66 FPS`（+13.1%，median 6.88 对 7.88 ms）；default 场景 202.55/203.82 对 204.81/204.65（−0.6~1.1%，实例太少时四段 dispatch 是纯开销）。`--no-instance-cull` 回退：两版 1920×1080 截图共 832 个差异像素、全部落在 HUD「Performance」面板内，面板外 0 差异（两次同样配置的运行本身也有 285 个像素在跳）。验证必须用 Debug（Release 的 `enableValidationLayers` 在 `NDEBUG` 下是 `false`）：三档 + `--no-instance-cull` + `--voxel-world 1/12` + `sync`（10k）+ `--cube-field-motion 500 --rebuild-structure 7` 全部 `errors=0 warnings=0`、stderr 0 字节。全量回归 **96 项 ALL PASS**（`build/validation/20261125-121228`）。
+
+**第 4 步（测量，否决）读数（2026-11-25）**：逐实例 Hi-Z 遮挡「只数不裁」量了一遍 —— 参考机位 `--cube-field 10000` 120 帧执行 790656 次、判定被遮挡 **0**；平视三个机位 376264 / 391384 / 409416 次、`--voxel-world 1` 5768 次，全部 0；探针（`occludedByHiZ` 临时 `return true`）能让 `occInst` 跳到 0.66，链路是通的。原因是自遮挡（金字塔来自上一帧）、背景 `kFarDepth=1e9` 污染粗 mip、以及俯视平地上的阵列屏幕不重叠。结论：收益为 0，代码回退，`≤ 0.6` 的差距是机位相关的几何值（10k `0.67`、30k `0.37`）。
 
 **回退开关**：`--no-instance-cull`（默认开）。关掉后 GPU 写恒等 remap、命令不再改写实例区间，顶点着色器仍走同一段取下标代码，画面与默认路径逐像素一致（验证方式见第 3 步读数）。

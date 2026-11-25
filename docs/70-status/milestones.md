@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1698 行
+size: ~1707 行
 updated: 2026-11-25
 ---
 
@@ -1697,3 +1697,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 收益：30k 600 帧 × 3 轮 A/B，开 `142.19/142.86/142.08 FPS`（median 6.88 ms、p95 7.62）、关 `125.86/126.09/125.66 FPS`（median 7.88 ms）—— +13.1% FPS、median −1.00 ms；default 场景开 202.55/203.82 对关 204.81/204.65（−0.6~1.1%，实例太少时四段 dispatch 是纯开销）。
 - 边界：**两处**用这套实例布局的池都要 ×2 并写满两个 binding —— 地形 chunk 实例表（`ensureTerrainChunkInstances`）与体素 chunk 实例表（`ensureVoxelBatchResources`），binding 1 都指向同一块实例缓冲（这两条路径不过 remap，内容不被读）；漏掉体素那处会让 `f3-voxel*` / `f3v-taa` / `f3v-water` / `f3v-ssr` 共 9 项回归因 `VUID-vkCmdDrawIndexedIndirect-None-08114` 变红。
 - 不做并行前缀和、不改 `shadow.vert`、不改 `Stats` 布局。
+
+## P2 第九步：逐实例 Hi-Z 遮挡的收益测量（否决，2026-11-25）
+
+- 目的：P2 验收还差 `visible/submitted ≤ 0.6`（10k 现为 0.68），组级 `hizCulled` 恒为 0，先量逐实例 Hi-Z 的潜在收益。
+- 做法：模式 1 里对通过视锥的实例算世界 AABB 并调 `occludedByHiZ`，命中写 `stats[3].z`；**只统计不裁**，画面与提交量不变；`instance summary` 增 `occInst=`。
+- 读数：参考机位 `--cube-field 10000` 120 帧执行 790656 次、判定被遮挡 **0**；平视三个机位（eye y=1.2、pitch 0/−0.05/−0.15）分别 376264 / 391384 / 409416 次，仍全 0；`--voxel-world 1` 5768 次全 0。探针（`occludedByHiZ` 临时 `return true`）能让 `occInst` 跳到 0.66，证明链路没断。
+- 原因：① 金字塔来自上一帧、被测试实例自己的深度就在里面（自遮挡），静止场景里比较必然为假；② 背景写 `kFarDepth = 1e9`，按屏幕尺寸选的 mip 一旦擦到天空就必然失败；③ 俯视平地上的 100×100 阵列在屏幕上不重叠，`0.68` 是视锥覆盖的几何事实。
+- 结论：收益为 0，整段代码回退（工作树与 `f5ad4f3` 一致）。A/B 显示探针成本也在噪声内（cf30k 600 帧 144.3~146.6 vs 回退后 147.0/146.5/146.8 FPS），所以否决纯粹因为没收益。
+- 不做：不含实例的第二份静态遮挡金字塔（要额外深度 pass，当前场景无收益）；逐实例屏幕尺寸剔除（真会少画东西，留给 P6 LOD）。

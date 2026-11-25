@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1056 行
+size: ~1058 行
 updated: 2026-11-25
 ---
 
@@ -1055,3 +1055,5 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P2 第七步（2026-11-25，GPU 侧实例统计）**：`shaders/scene_cull.comp` 加第 6 个 binding（`InstanceRecord[]`）与第二遍 dispatch，把实例级视锥统计搬到 GPU —— push constant 16 → 32 字节（`uvec4 more`：`count` + `mode`），`stats[3]` 存「测过 / 可见」，`readStats` 读 words[12]/[13]，日志多打一行 `[SceneGpu] instance summary`。实测与 CPU 度量一致到 0.1 个百分点以内：10k `0.6747` 对 `0.6756`、30k `0.3726` 对 `0.3719`，default `0.58`（CPU 侧无外部实例，没有对照）。**验收偏差**：backlog 写的是「对可见组的实例做视锥测试」，实现改成全量 —— CPU 的 `instFrustum` 就是全量口径，同口径才能验证；组门控要的「实例 → 组」表留到第三步压缩索引时一起建，到时门控是顺带的。代价 ≤0.5%（30k，600 帧 × 3 轮交替 A/B，median 帧时间都是 7.62 ms）。本步只数不裁：indirect 的 `instanceCount` 与 `visibleRatio` 仍是组级。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-111243`）；DocCheck PASS（documents=81 lines=18077）。
 
 **P2 第八步（2026-11-25，紧凑索引 + remap）**：实例级剔除真正落地 —— 组级通过之后，`scene_cull.comp` 用三段追加 dispatch 把可见实例压成「每组一段紧凑区间」并改写 indirect 命令（`instanceCount` = 本组可见数、`firstInstance` = 前缀和起点），`mrt.vert` 经 set 3 新增的 remap 表取 `InstanceRecord`（`fragInstanceIndex` 同样换成真实下标）。实测提交比例第一次等于实例级可见比例：10k `6815.0/帧`（第二步 10063.0）、30k `11216.0/帧`（30063.0），`gpuInst` 与第二步逐位相同；30k 600 帧 × 3 轮 A/B `142.19/142.86/142.08` 对 `125.86/126.09/125.66 FPS`（**+13.1%**，median 6.88 对 7.88 ms），default 场景 −0.6~1.1%（实例太少，四段 dispatch 是纯开销）。`--no-instance-cull` 写恒等 remap 回退，两版截图 832 个差异像素全在 HUD 面板内、画面外 0 差异。三档 + `--no-instance-cull` + `--voxel-world 1/12` + `--validation-features sync` + `--cube-field-motion 500 --rebuild-structure 7` 在 Debug 构建下全部 `errors=0 warnings=0`、stderr 0 字节（Release 的 `enableValidationLayers` 在 `NDEBUG` 下是 `false`，`errors=0` 不作数）。**踩坑**：同一套实例布局还有第二处分配者（体素 chunk 实例表），漏了它会让 9 项体素/水面/TAA/SSR 回归各报一条 `VUID-vkCmdDrawIndexedIndirect-None-08114`。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-121228`）；DocCheck PASS（documents=81）。
+
+**P2 第九步（2026-11-25，测量后否决）**：逐实例 Hi-Z 遮挡先按「只数不裁」量了一遍 —— 模式 1 里对通过视锥的实例算世界 AABB 并调 `occludedByHiZ`，命中写 `stats[3].z`、`instance summary` 增 `occInst=`。参考机位 `--cube-field 10000` 120 帧执行 790656 次、判定被遮挡 **0**；平视三个机位 376264 / 391384 / 409416 次、`--voxel-world 1` 5768 次，全部 0。原因是自遮挡（金字塔来自上一帧，实例自己的深度就在里面）、背景 `1e9` sentinel 会污染粗 mip、以及俯视平地上的阵列屏幕不重叠 —— `0.68` 是视锥覆盖的几何事实。收益为 0，代码整段回退（工作树回到 `f5ad4f3`），探针成本也在噪声内（cf30k 600 帧 144.3~146.6 vs 147.0/146.5/146.8 FPS）。
