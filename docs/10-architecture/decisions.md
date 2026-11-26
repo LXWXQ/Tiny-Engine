@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~2612 行
+size: ~2674 行
 updated: 2026-11-26
 ---
 
@@ -2611,3 +2611,65 @@ CSM 的三级是「固定 4096^2、按视锥切段」：一级覆盖 2 x 19.83 =
 - residency / 页表稀疏加载：物理页 4096 目前够用，先不做。
 - GPU 侧滚动（compute 里算吸附与滚动）：滚动是每帧三次矩阵乘法，CPU 侧足够，GPU 只在页标记时介入。
 - 按视锥裁剪页面：那是 P4-4（页标记）的事，这里只立几何。
+
+## 决策 82：页标记用三条失效条件换一张脏页位图（P4-4，2026-11-26）
+
+### 问题
+
+P4-3 立起了三级 clipmap，但「这一帧谁该被画进图集」还没定。VSM 的收益全在这里：静态场景里绝大多数页的内容与上一帧逐位相同，重画它们纯属浪费。判据松了会漏阴影，紧了就等于每帧全画、白搭一套结构。
+
+### 做法
+
+1. 脏页位图每级 16 个 `uint64`（1024 位），三级共 384 B，纯 CPU、每帧清零重算。
+2. 三条失效条件，各管一块：
+   - 光源方向变了（`dot(prev, cur) < 0.9999996`）→ 三级全部 1024 页置脏；
+   - 某一级中心整页滚动（位移 > 1e-5 m）→ 该级全部 1024 页置脏；
+   - 投影者的 `version` 变了 → 只把它盖住的页置脏。`version` 是变换矩阵 16 个 float 的 FNV 哈希 ^ `alphaMasked` ^ `alphaCutoff * 1000`。
+3. 页范围换算 `pageRangeForBounds()`：把世界 AABB 中心投到光空间两条轴上，半长按逐分量绝对值加权，得到两条轴上的区间，再除页边长、`floor`、裁到 `0..31`；整个 AABB 在级外就返回 false。
+4. 投影者来源：`ShadowPass::markVirtualShadowPages()` 遍历 `MeshComponent` + `WorldTransformComponent`，逐子网格取局部包围盒（`subMesh.hasBounds` / `Model::getNodeBounds(node)` / 模型整体包围盒），8 个角过 `world->matrix * getNodeWorldMatrix(node)` 得世界 AABB。身份 `id = 实体号 * 64 + 子网格号`，跨帧稳定。
+5. 只在 `virtualShadowMap->isAllocated()`（`--dump-vsm-resources`）时执行，默认路径一行不跑。
+6. 每 60 帧打一行 `[VSM] pages | frame=… dirty=…/3072 clean=… | level0=… level1=… level2=… | light=… scroll=… casters=…`。
+
+### 为什么这三条就是全部
+
+阴影图的内容只由三样东西决定：光的方向（决定投影矩阵）、相机位置（决定每一级覆盖哪块世界）、世界里的投影者（决定画什么）。前两者任一变化都会让「整张图」或「整级」失效，第三个只让局部失效。材质 alpha 模式会改变 alpha 测试的裁剪结果，所以它必须进 `version` —— 它不是几何变化，但同样改变深度图里的像素。
+
+### 为什么滚动是整级重画，而不是只画新露出来的一条
+
+页网格每滚一页，名义上只有新露出一列/一行需要新内容，其余页的内容可以「搬」到新页号上。但那需要页表重映射或图集内拷贝，而 P4-2 的页表是每帧槽 12 KiB 的 CPU 镜像、图集是单一 8192² —— 搬移的代价与整级重画同一量级，收益只在缓慢平移时才出现。所以先取保守解：滚动 = 整级置脏。静态场景里它一次都不触发（不滚就不脏），只在相机移动时把该级退回「全画」；而相机真的在移动时，人眼本来就在看新内容。
+
+### 验收（2026-11-26）
+
+| 项 | 结果 |
+|---|---|
+| 位图字长 | 每级 16 个 `uint64` × 3 级 = 384 B |
+| 静态 130 帧 | frame=1 `dirty=3072/3072 light=1 casters=103`；frame=61/121 `dirty=0/3072 clean=3072 light=0 scroll=0 casters=0` |
+| 一个小投影者每帧改身份（临时探针） | `dirty=6/3072`（level0=4 level1=1 level2=1）、`dirty=8/3072`（6/1/1），`casters=1` |
+| 光方向每帧转 0.002 rad（临时探针） | `dirty=3072/3072 light=1 casters=0`，连续三行都是 3072 |
+| 飞行 `--streaming-fly 60` | `dirty=3072/3072 light=0 scroll=3 casters=0`（三级各滚一次） |
+| 启动自检 | 新增：位图字长整除、级中心极小盒落在中间页、盖住整级裁到 0..31、级外四倍边长判定为不在级内 |
+| 默认路径 | `[VSM]` 行 0 条、`[Diag] zero-overhead guard PASS … vsm=0B` |
+| 带开关 | `SKIP (debug capability on) … vsm=536895488B` |
+| Debug 七组 | 全部 `errors=0 warnings=0`、stderr 0 字节 |
+| 全量回归 | 96 项 ALL PASS（`build/validation/20261126-183953`，日志 201 行，FAIL=0） |
+| DocCheck | PASS（documents=82 lines=20081） |
+
+### 代价与边界
+
+- 每个投影者每帧在上一帧列表里线性找自己：103 个子网格约 1 万次 32 位比较，CPU 侧十微秒量级，且只在 `--dump-vsm-resources` 下发生。要扩到几万个实例得换哈希表。
+- 脏位图只回答「要不要画」，不回答「怎么画」。把页画进图集、按位图跳过未脏页是 P4-4b。
+- 外部实例（`--cube-field`、粒子、`setExternalInstances` 灌进来的那些）不在 `MeshComponent` 里，这一版标记不到它们；它们的包围盒要从 `SceneGpuBatch` 的实例表来，等 P4-4b 接绘制路径时一起解决。
+- 滚动取整级重画，所以「相机匀速平移」是这一版的最坏情况（每帧全脏）。
+
+### 踩到的坑
+
+- `kDirtyWordsPerLevel = kPageTableEntries / 64` 依赖整除（1024/64 = 16）。页数一旦不是 64 的倍数，位图会静默少覆盖若干页，而不报任何错。
+- 页范围必须用 `std::floor` 不能用 `round`：包围盒边界正好压在某一页最后一条 texel 上时，覆盖它的那一页也得置脏。
+- 验证「投影者变了」这条时，现成的 `--cube-field-motion` 不能用作证据：那是外部实例，正好落在这一版标记不到的地方，读数是 0 脏页 —— 会把人引向「页标记坏了」的错误结论。正确的做法是临时塞一个虚构投影者（`build\p4step4\probe.py` / `probe2.py`，测完撤掉，`Select-String TEMP-PROBE` 零命中）。
+- 循环里 `lastCasters` 必须在本帧末尾整体替换成当前列表，否则已消失的投影者会一直留在「上一帧」里，它的旧 `version` 会让重新出现的同 id 投影者被误判成「没变」。
+
+### 不引入的
+
+- GPU 侧页标记（`markPages` compute）：103 个投影者的 CPU 线性扫描在这个规模上没有可测成本，等实例数上千再说。
+- 页表重映射式的「搬页」：见上。
+- HZB 的增量更新：HZB 还没接进任何采样路径（P4-6 才用），先不谈增量。

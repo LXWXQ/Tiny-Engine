@@ -243,6 +243,184 @@ void VirtualShadowMap::resetPageTable()
     }
 }
 
+// ---- P4-4：页标记 ----
+
+bool VirtualShadowMap::pageRangeForBounds(const ClipmapLevel& level, const glm::vec3& lightDirection,
+                                          const glm::vec3& center, const glm::vec3& halfExtent,
+                                          uint32_t& outMinX, uint32_t& outMinY,
+                                          uint32_t& outMaxX, uint32_t& outMaxY)
+{
+    if (level.pageWorldSize <= 0.0f)
+        return false;
+
+    glm::vec3 direction(0.0f);
+    glm::vec3 right(0.0f);
+    glm::vec3 lightUp(0.0f);
+    lightBasis(lightDirection, direction, right, lightUp);
+
+    // 世界 AABB 在光空间两条轴上的区间：中心投过去，半长按逐分量绝对值加权。
+    const glm::vec3 offset = center - level.center;
+    const float alongRight = glm::dot(right, offset);
+    const float alongUp = glm::dot(lightUp, offset);
+    const float halfRight = std::abs(right.x) * halfExtent.x + std::abs(right.y) * halfExtent.y +
+                            std::abs(right.z) * halfExtent.z;
+    const float halfUp = std::abs(lightUp.x) * halfExtent.x + std::abs(lightUp.y) * halfExtent.y +
+                         std::abs(lightUp.z) * halfExtent.z;
+
+    // 页坐标 = （光空间偏移 + 半边）/ 页边长 向下取整；一级就是 32 页 x 32 页。
+    const float halfExtentWorld = level.worldExtent * 0.5f;
+    const float page = level.pageWorldSize;
+    const float axisCount = static_cast<float>(kPageTableAxis);
+
+    const float minX = std::floor((alongRight - halfRight + halfExtentWorld) / page);
+    const float maxX = std::floor((alongRight + halfRight + halfExtentWorld) / page);
+    const float minY = std::floor((alongUp - halfUp + halfExtentWorld) / page);
+    const float maxY = std::floor((alongUp + halfUp + halfExtentWorld) / page);
+
+    if (maxX < 0.0f || maxY < 0.0f || minX >= axisCount || minY >= axisCount)
+        return false;
+
+    outMinX = static_cast<uint32_t>(std::max(0.0f, minX));
+    outMinY = static_cast<uint32_t>(std::max(0.0f, minY));
+    outMaxX = static_cast<uint32_t>(std::min(axisCount - 1.0f, maxX));
+    outMaxY = static_cast<uint32_t>(std::min(axisCount - 1.0f, maxY));
+    return true;
+}
+
+void VirtualShadowMap::setPageDirty(uint32_t level, uint32_t index)
+{
+    if (level >= kClipmapLevels || index >= kPageTableEntries)
+        return;
+    pageDirty[level][index >> 6] |= (1ull << (index & 63u));
+}
+
+void VirtualShadowMap::markWholeLevelDirty(uint32_t level)
+{
+    if (level >= kClipmapLevels)
+        return;
+    for (uint32_t word = 0; word < kDirtyWordsPerLevel; ++word)
+        pageDirty[level][word] = ~0ull;
+}
+
+void VirtualShadowMap::clearPageDirty()
+{
+    for (uint32_t level = 0; level < kClipmapLevels; ++level)
+        for (uint32_t word = 0; word < kDirtyWordsPerLevel; ++word)
+            pageDirty[level][word] = 0ull;
+}
+
+bool VirtualShadowMap::isPageDirty(uint32_t level, uint32_t pageX, uint32_t pageY) const
+{
+    if (level >= kClipmapLevels || pageX >= kPageTableAxis || pageY >= kPageTableAxis)
+        return false;
+    const uint32_t index = pageTableIndex(pageX, pageY);
+    return (pageDirty[level][index >> 6] & (1ull << (index & 63u))) != 0ull;
+}
+
+uint32_t VirtualShadowMap::getDirtyPageCount(uint32_t level) const
+{
+    if (level >= kClipmapLevels)
+        return 0u;
+    uint32_t count = 0;
+    for (uint32_t word = 0; word < kDirtyWordsPerLevel; ++word)
+    {
+        uint64_t bits = pageDirty[level][word];
+        while (bits != 0ull)
+        {
+            bits &= bits - 1ull;
+            ++count;
+        }
+    }
+    return count;
+}
+
+void VirtualShadowMap::markPages(const glm::vec3& lightDirection, const std::vector<CasterBounds>& casters)
+{
+    if (clipmaps.size() != static_cast<size_t>(kClipmapLevels))
+        return;
+
+    clearPageDirty();
+    ++pageMarkFrames;
+    pageMarkStats = PageMarkStats{};
+    pageMarkStats.frames = pageMarkFrames;
+    pageMarkStats.livePages = kClipmapLevels * kPageTableEntries;
+
+    const glm::vec3 light = glm::normalize(lightDirection);
+
+    // 条件一：光源变换 —— 整张图都得重画（首帧也算一次，那一次确实是全画）。
+    const bool lightChanged = !hasMarkLight || glm::dot(light, lastMarkLightDirection) < 0.9999996f;
+    if (lightChanged)
+    {
+        for (uint32_t level = 0; level < kClipmapLevels; ++level)
+            markWholeLevelDirty(level);
+        ++pageMarkStats.lightEvents;
+    }
+
+    // 条件二：页网格滚动 —— 一级中心整页跳了，这一级每一页覆盖的世界方块都变了。
+    for (uint32_t level = 0; level < kClipmapLevels; ++level)
+    {
+        const bool moved = !hasMarkCenters ||
+                           glm::length(clipmaps[level].center - lastMarkCenters[level]) > 1e-5f;
+        if (moved)
+        {
+            markWholeLevelDirty(level);
+            if (!lightChanged)
+                ++pageMarkStats.scrollEvents;
+        }
+    }
+
+    // 条件三：投影者变换 / 变形 / alpha 模式变化 —— 只重画它盖住的那几页。
+    for (const CasterBounds& caster : casters)
+    {
+        bool changed = true;
+        for (const CasterBounds& previous : lastCasters)
+        {
+            if (previous.id == caster.id)
+            {
+                changed = previous.version != caster.version;
+                break;
+            }
+        }
+        if (!changed)
+            continue;
+
+        for (uint32_t level = 0; level < kClipmapLevels; ++level)
+        {
+            uint32_t minX = 0, minY = 0, maxX = 0, maxY = 0;
+            if (!pageRangeForBounds(clipmaps[level], light, caster.center, caster.halfExtent,
+                                    minX, minY, maxX, maxY))
+                continue;
+            for (uint32_t y = minY; y <= maxY; ++y)
+                for (uint32_t x = minX; x <= maxX; ++x)
+                    setPageDirty(level, pageTableIndex(x, y));
+        }
+        ++pageMarkStats.casterEvents;
+    }
+
+    lastCasters = casters;
+    lastMarkLightDirection = light;
+    hasMarkLight = true;
+    hasMarkCenters = true;
+    for (uint32_t level = 0; level < kClipmapLevels; ++level)
+        lastMarkCenters[level] = clipmaps[level].center;
+
+    for (uint32_t level = 0; level < kClipmapLevels; ++level)
+    {
+        pageMarkStats.dirtyByLevel[level] = getDirtyPageCount(level);
+        pageMarkStats.dirtyPages += pageMarkStats.dirtyByLevel[level];
+    }
+    pageMarkStats.cleanPages = pageMarkStats.livePages - pageMarkStats.dirtyPages;
+
+    if (pageMarkFrames % 60ull == 1ull)
+    {
+        std::printf("[VSM] pages | frame=%llu dirty=%u/%u clean=%u | level0=%u level1=%u level2=%u | light=%u scroll=%u casters=%u\n",
+                    static_cast<unsigned long long>(pageMarkFrames), pageMarkStats.dirtyPages,
+                    pageMarkStats.livePages, pageMarkStats.cleanPages, pageMarkStats.dirtyByLevel[0],
+                    pageMarkStats.dirtyByLevel[1], pageMarkStats.dirtyByLevel[2],
+                    pageMarkStats.lightEvents, pageMarkStats.scrollEvents, pageMarkStats.casterEvents);
+    }
+}
+
 glm::vec3 VirtualShadowMap::snapToPageGrid(const glm::vec3& position, const glm::vec3& lightDirection,
                                             float pageWorldSize)
 {
@@ -507,6 +685,41 @@ bool VirtualShadowMap::selfTest()
     if (clip.x < -1.0f || clip.x > 1.0f || clip.y < -1.0f || clip.y > 1.0f)
         return false;
     if (clip.z < 0.0f || clip.z > 1.0f)
+        return false;
+
+
+    // P4-4：脏页位图的字长与页范围换算。
+    if (kDirtyWordsPerLevel * 64u != kPageTableEntries)
+        return false;
+    if (kClipmapLevels * kPageTableEntries != 3072u)
+        return false;
+
+    const glm::vec3 probeLight(0.0f, -1.0f, 0.0f);
+    const ClipmapLevel probe = computeClipmapLevel(0u, glm::vec3(0.0f), probeLight);
+    uint32_t minX = 0, minY = 0, maxX = 0, maxY = 0;
+
+    // 级中心处的一个极小盒子必须落在中间那几页上（32 页的一半附近）。
+    if (!pageRangeForBounds(probe, probeLight, probe.center, glm::vec3(0.001f), minX, minY, maxX, maxY))
+        return false;
+    if (minX > 16u || maxX < 15u || minY > 16u || maxY < 15u)
+        return false;
+
+    // 盖住整级的盒子必须裁到 0..31，不能越界。
+    if (!pageRangeForBounds(probe, probeLight, probe.center, glm::vec3(probe.worldExtent), minX, minY, maxX, maxY))
+        return false;
+    if (minX != 0u || minY != 0u || maxX != kPageTableAxis - 1u || maxY != kPageTableAxis - 1u)
+        return false;
+
+    // 沿两条光轴各移出一级之外四个边长的盒子，必须判定为不在这级里。
+    glm::vec3 outside(0.0f);
+    {
+        glm::vec3 direction(0.0f);
+        glm::vec3 right(0.0f);
+        glm::vec3 lightUp(0.0f);
+        lightBasis(probeLight, direction, right, lightUp);
+        outside = probe.center + right * (probe.worldExtent * 4.0f) + lightUp * (probe.worldExtent * 4.0f);
+    }
+    if (pageRangeForBounds(probe, probeLight, outside, glm::vec3(0.01f), minX, minY, maxX, maxY))
         return false;
 
     return true;

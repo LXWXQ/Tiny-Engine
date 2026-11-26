@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1910 行
+size: ~1919 行
 updated: 2026-11-26
 ---
 
@@ -1909,3 +1909,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - **零开销**：只有 `--dump-vsm-resources`（真的建了图集）才算 clipmap；默认路径输出与 P4-2 一致，
   守卫仍是 `vsm=0B`。
 - **读数**：不变（`total=0.065ms`，改前 0.064）。这一步不画任何东西，与预期一致。
+
+## P4-4：页标记（三条失效条件换一张脏页位图）（P4-4，2026-11-26）
+
+- 形状：脏页位图每级 16 个 `uint64` = 1024 位，三级共 384 B，每帧清零重算，纯 CPU。
+- 三条失效条件：光源方向变（全脏）/ 级中心整页滚动（整级脏）/ 投影者 `version` 变（只脏它盖住的页）。`version` = 变换矩阵 16 个 float 的 FNV 哈希 ^ `alphaMasked` ^ `alphaCutoff`。
+- 页范围换算 `pageRangeForBounds()`：世界 AABB 投到光空间两条轴，除页边长后 `floor` 再裁到 `0..31`；整块在级外返回 false。
+- 投影者采集 `ShadowPass::markVirtualShadowPages()`：逐子网格取局部包围盒（`subMesh.hasBounds` / `getNodeBounds` / 模型整体），8 个角过 `world->matrix * getNodeWorldMatrix(node)`；103 个子网格 = 103 个投影者。
+- 读数：静态 130 帧稳态 `dirty=0/3072`（这是 P4-4b 跳过绘制、拿下验收②60% 的来源）；临时探针下单个小投影者每帧变身份 `dirty=6~8/3072`、光方向每帧转 0.002 rad `dirty=3072 light=1`、飞行 `scroll=3 dirty=3072`。
+- 门控与验证：只在 `--dump-vsm-resources` 下执行（默认路径 `[VSM]` 行 0 条、守卫 `vsm=0B`）；Debug 七组 `errors=0 warnings=0`、stderr 0 字节；全量回归与 DocCheck 见决策 82 的验收表。

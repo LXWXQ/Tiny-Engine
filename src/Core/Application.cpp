@@ -883,6 +883,8 @@ streamingConfig.skirtsEnabled = false;
 	auto shadowPass = std::make_unique<ShadowPass>(*vulkanDevice, *renderGraph, scene->getTerrainMeshArena());
 	// P4 第零步：CSM 基线尺子。只做运行期门控：不开 --stats-shadow-timing 时连 query pool 都不建。
 	shadowPass->setTimingEnabled(diagnosticsOptions.statsShadowTiming);
+	// P4-4：页标记要用本帧的投影者包围盒，所以把这个实例挂到阴影 Pass 上。
+	shadowPass->setVirtualShadowMap(virtualShadowMap.get());
 
 	auto geoPass = std::make_unique<GeometryPass>(*vulkanDevice, gBufferPtrs, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),

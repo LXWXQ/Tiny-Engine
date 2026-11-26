@@ -129,6 +129,43 @@ public:
     uint64_t getClipmapScrolls() const { return clipmapScrolls; }
     bool isClipmapAligned() const { return clipmapAligned; }
 
+    // ---- P4-4：页标记（这一帧哪些页必须重画）----
+    // 一个投影者（子网格）的世界包围盒 + 身份。version 变了就说明它的变换 / 变形 /
+    // 材质 alpha 模式变了，它盖住的那几页必须重画。
+    struct CasterBounds
+    {
+        uint32_t id = 0u;              // 投影者身份（实体号 x 子网格号），跨帧稳定
+        uint64_t version = 0u;         // 变换 + alpha 模式的身份
+        glm::vec3 center{ 0.0f };      // 世界轴对齐包围盒的中心
+        glm::vec3 halfExtent{ 0.0f };  // 世界轴对齐包围盒的半长
+    };
+
+    struct PageMarkStats
+    {
+        uint32_t livePages = 0;        // 本帧参与的页数 = 3 级 x 1024
+        uint32_t dirtyPages = 0;
+        uint32_t cleanPages = 0;
+        uint32_t dirtyByLevel[kClipmapLevels] = { 0u, 0u, 0u };
+        uint32_t lightEvents = 0;      // 光源变换导致整张重画的次数
+        uint32_t scrollEvents = 0;     // 某一级整页滚动导致整级重画的次数
+        uint32_t casterEvents = 0;     // 投影者变了导致局部重画的次数
+        uint64_t frames = 0;
+    };
+
+    // 一级里覆盖某个世界 AABB 的页范围（闭区间）；完全落在这一级之外时返回 false。
+    static bool pageRangeForBounds(const ClipmapLevel& level, const glm::vec3& lightDirection,
+                                   const glm::vec3& center, const glm::vec3& halfExtent,
+                                   uint32_t& outMinX, uint32_t& outMinY,
+                                   uint32_t& outMaxX, uint32_t& outMaxY);
+
+    // 每帧一次：三条失效条件（光源变换 / 页网格滚动 / 投影者变化）各管一块，
+    // 结果是脏页位图。全零就说明上帧内容可以原样复用。
+    void markPages(const glm::vec3& lightDirection, const std::vector<CasterBounds>& casters);
+    void clearPageDirty();
+    bool isPageDirty(uint32_t level, uint32_t pageX, uint32_t pageY) const;
+    uint32_t getDirtyPageCount(uint32_t level) const;
+    const PageMarkStats& getPageMarkStats() const { return pageMarkStats; }
+
     // 吸附到页网格：把世界坐标沿光空间的两条轴分别取整到 pageWorldSize 的整数倍。
     // 拆成静态函数是为了让自检不依赖设备。
     static glm::vec3 snapToPageGrid(const glm::vec3& position, const glm::vec3& lightDirection,
@@ -166,6 +203,19 @@ private:
     uint64_t clipmapFrame = 0;
     uint64_t clipmapScrolls = 0;
     bool clipmapAligned = true;
+
+    static constexpr uint32_t kDirtyWordsPerLevel = kPageTableEntries / 64;
+    void setPageDirty(uint32_t level, uint32_t index);
+    void markWholeLevelDirty(uint32_t level);
+
+    uint64_t pageDirty[kClipmapLevels][kDirtyWordsPerLevel] = {};
+    std::vector<CasterBounds> lastCasters;
+    glm::vec3 lastMarkLightDirection{ 0.0f };
+    bool hasMarkLight = false;
+    glm::vec3 lastMarkCenters[kClipmapLevels] = { glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f) };
+    bool hasMarkCenters = false;
+    PageMarkStats pageMarkStats{};
+    uint64_t pageMarkFrames = 0;
 
     std::unique_ptr<tiny::SparsePageAllocator> allocator;
     VkBuffer pageTableBuffers[kFramesInFlight] = { VK_NULL_HANDLE, VK_NULL_HANDLE };

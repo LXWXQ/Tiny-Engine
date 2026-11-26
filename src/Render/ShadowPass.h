@@ -13,6 +13,7 @@ class TerrainMeshArena;
 class Pipeline;
 class VegetationPass;
 class SceneGpuBatch;
+class VirtualShadowMap;
 
 // F6：方向光阴影（3 级联 CSM）。
 //
@@ -84,6 +85,10 @@ public:
     // instances land in the same cascades without a second render graph pass.
     void setVegetationPass(VegetationPass* pass) { vegetationPass = pass; }
 
+    // P4-4：页标记要本帧的投影者包围盒，渲染管线启动时把虚拟阴影图挂上来。
+    // 不挂（或没有 --dump-vsm-resources 建图）就一行都不执行。
+    void setVirtualShadowMap(VirtualShadowMap* map) { virtualShadowMap = map; }
+
     struct Stats
     {
         uint32_t drewEntities = 0;
@@ -97,6 +102,10 @@ public:
     static bool selfTest();
 
 private:
+
+    // P4-4：把本帧每个子网格的世界包围盒 + 身份交给页标记。
+    void markVirtualShadowPages(VirtualShadowMap& map, FrameInfo& frameInfo);
+    VirtualShadowMap* virtualShadowMap = nullptr;
     struct Frame
     {
         VkImage image = VK_NULL_HANDLE;

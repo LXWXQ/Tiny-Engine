@@ -1,6 +1,7 @@
 #include "Render/ShadowPass.h"
 
 #include "Render/SceneGpuBatch.h"
+#include "Render/VirtualShadowMap.h"
 
 #include "RHI/ResourceStats.h"
 
@@ -24,6 +25,7 @@ static_assert(ShadowPass::kShadowViewBase + ShadowPass::kCascadeCount <= SceneGp
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -377,6 +379,8 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     pass.execute([this, &frameInfo](VkCommandBuffer cmd)
     {
         stats = Stats{};
+        if (virtualShadowMap != nullptr && virtualShadowMap->isAllocated())
+            markVirtualShadowPages(*virtualShadowMap, frameInfo);
 
         // P4 第零步：先读回「上一轮用同一个帧槽」的时间戳（那次提交早已过 timeline
         // 等待点），再把本槽的 query 重置 —— 顺序反了会读到未定义值。
@@ -667,6 +671,97 @@ void ShadowPass::reportTimingSummary()
                 static_cast<unsigned long long>(timingFrameCount),
                 cascadeMsSum[0] * inv, cascadeMsSum[1] * inv, cascadeMsSum[2] * inv,
                 totalMsSum * inv, totalMsMin, totalMsMax);
+}
+
+namespace
+{
+    // 投影者身份：变换的 16 个 float 逐位混进一个 64 位哈希，再叠上 alpha 模式。
+    // 任何一个变了就说明这个投影者这一帧的阴影内容可能变了。
+    uint64_t casterVersionHash(const glm::mat4& matrix, bool alphaMasked, float alphaCutoff)
+    {
+        uint64_t hash = 1469598103934665603ull;
+        for (int i = 0; i < 16; ++i)
+        {
+            uint32_t bits = 0;
+            std::memcpy(&bits, &matrix[i / 4][i % 4], sizeof(bits));
+            hash ^= static_cast<uint64_t>(bits);
+            hash *= 1099511628211ull;
+        }
+        if (alphaMasked)
+            hash ^= 0x9e3779b97f4a7c15ull;
+        hash ^= static_cast<uint64_t>(static_cast<int32_t>(alphaCutoff * 1000.0f)) << 32;
+        return hash;
+    }
+}
+
+void ShadowPass::markVirtualShadowPages(VirtualShadowMap& map, FrameInfo& frameInfo)
+{
+    entt::registry& registry = frameInfo.registry;
+    std::vector<VirtualShadowMap::CasterBounds> casters;
+
+    // 父实体循环 + 子网格循环，和 recordCascade 的逐模型路径同一套取法：
+    // 顶点活在节点局部空间，所以包围盒也要先过节点矩阵。
+    for (auto [entity, mesh] : registry.view<MeshComponent>().each())
+    {
+        if (!mesh.model)
+            continue;
+        const auto* world = registry.try_get<WorldTransformComponent>(entity);
+        if (world == nullptr || !world->valid)
+            continue;
+        const auto* tag = registry.try_get<RenderTagComponent>(entity);
+        if (tag != nullptr && (tag->isSkybox || tag->isSkyGeometry))
+            continue;
+
+        const auto& subMeshes = mesh.model->getSubMeshes();
+        for (uint32_t index = 0; index < static_cast<uint32_t>(subMeshes.size()); ++index)
+        {
+            const auto& subMesh = subMeshes[index];
+
+            glm::vec3 localMin = mesh.model->getBoundsMin();
+            glm::vec3 localMax = mesh.model->getBoundsMax();
+            if (subMesh.hasBounds)
+            {
+                localMin = subMesh.boundsMin;
+                localMax = subMesh.boundsMax;
+            }
+            else if (subMesh.node != kNoModelNode)
+            {
+                glm::vec3 nodeMin(0.0f);
+                glm::vec3 nodeMax(0.0f);
+                if (mesh.model->getNodeBounds(subMesh.node, nodeMin, nodeMax))
+                {
+                    localMin = nodeMin;
+                    localMax = nodeMax;
+                }
+            }
+
+            const glm::mat4 instanceMatrix = (subMesh.node == kNoModelNode)
+                ? world->matrix
+                : world->matrix * mesh.model->getNodeWorldMatrix(subMesh.node);
+
+            // 8 个角过一遍矩阵，取世界轴对齐包围盒。
+            glm::vec3 worldMin(std::numeric_limits<float>::max());
+            glm::vec3 worldMax(-std::numeric_limits<float>::max());
+            for (int corner = 0; corner < 8; ++corner)
+            {
+                const glm::vec3 local((corner & 1) != 0 ? localMax.x : localMin.x,
+                                      (corner & 2) != 0 ? localMax.y : localMin.y,
+                                      (corner & 4) != 0 ? localMax.z : localMin.z);
+                const glm::vec3 world = glm::vec3(instanceMatrix * glm::vec4(local, 1.0f));
+                worldMin = glm::min(worldMin, world);
+                worldMax = glm::max(worldMax, world);
+            }
+
+            VirtualShadowMap::CasterBounds caster;
+            caster.id = static_cast<uint32_t>(entity) * 64u + index;
+            caster.version = casterVersionHash(instanceMatrix, subMesh.alphaMasked, subMesh.alphaCutoff);
+            caster.center = (worldMin + worldMax) * 0.5f;
+            caster.halfExtent = (worldMax - worldMin) * 0.5f;
+            casters.push_back(caster);
+        }
+    }
+
+    map.markPages(frameInfo.settings.directionalLightDir, casters);
 }
 
 void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint32_t frameIndex,
