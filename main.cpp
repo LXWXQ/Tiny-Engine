@@ -132,6 +132,7 @@ int main(int argc, char** argv)
     bool noMergedBuffers = false;
     bool noHiZ = false;
     bool noShadows = false;
+    bool noShadowBatch = false;
     bool noTerrainBatch = false;
     // F2-a：流送世界。radius 默认 3（7x7=49 个 chunk 实体，低于地形 GPU 选择的 64 个 slot 上限）。
     bool streamingWorld = false;
@@ -244,6 +245,7 @@ bool audioSpatialTest = false;
         else if (arg == "--no-merged-buffers") noMergedBuffers = true;
         else if (arg == "--no-hiz") noHiZ = true;
         else if (arg == "--no-shadows") noShadows = true;
+        else if (arg == "--no-shadow-batch") noShadowBatch = true;
         else if (arg == "--no-terrain-batch") noTerrainBatch = true;
         else if (arg == "--gpu-scene-min-px" && i + 1 < argc)
         {
@@ -742,6 +744,7 @@ diagOptions.cubeField = value;
         if (noMergedBuffers) app.setGpuMergedBuffers(false);
         if (noHiZ) app.setHiZEnabled(false);
         if (noShadows) app.setShadowsEnabled(false);
+        if (noShadowBatch) app.setShadowGpuBatchEnabled(false);
         if (noTerrainBatch) app.setTerrainBatchEnabled(false);
         if (gpuSceneMinPixels > 0.0f) app.setGpuSceneMinScreenPixels(gpuSceneMinPixels);
         if (gpuSceneExternal > 0u) app.setGpuSceneExternalDebugCount(gpuSceneExternal);

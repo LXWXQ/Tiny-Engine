@@ -247,6 +247,10 @@ struct EngineSettings
 	float shadowStrength = 0.65f;
 	// 阴影滤波：0 = PCF（固定核，开销低），1 = PCSS（接触硬化软阴影）。
 	int shadowFilterMode = 0;
+	// P4-5：阴影几何复用 P2 的可见实例表 —— 每级联一次剔除 + 一条合并网格的 indirect。
+	// 关掉退回「CPU 逐实体逐子网格」的旧提交（排查 / A-B 对比用）。阴影故意不看
+	// gpuSceneMinInstances 阈值：主视图在小场景上逐子网格更省，阴影却要每级联重画一遍。
+	bool shadowGpuBatch = true;
 	// B-03: compare GPU-selected LOD/visibility against a CPU mirror. Enabled
 	// only by --terrain-test; production frames skip the mirror entirely.
 	bool terrainGpuSelectionSelfTest = false;

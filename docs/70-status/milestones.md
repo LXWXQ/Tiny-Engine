@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1877 行
+size: ~1887 行
 updated: 2026-11-26
 ---
 
@@ -1876,3 +1876,13 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 两套自检：`selfTest()` 每次启动跑（64 页、线性分配 / FIFO 复用 / 版本号 / 双重释放 / 脏页去重 / 无泄漏六个确定性场景）；`stressTest()` 由 `--page-alloc-selftest` 触发（20 万次随机操作，释放概率 = 当前占用率让活跃页数在容量一半附近无界游走，再压一段「几乎全满 + 每 97 次释放一个」；与一份独立数组口径逐项对账，收尾先全释放再全分配，证明无泄漏、无重叠）。
 - 读数：Release `ops=200000 pages=4096 alloc+free=8.3 ns/op`、`peak=4096`、`reuse=99050`、`exhausted=5996`；Debug 43.2~47.5 ns/op。4096 页全量重分配约 34 µs，所以 CPU 侧分配够用，GPU 侧 `page_alloc.comp` 推迟到 P4-4（那时才有消费者，现在写就是无法验证的死代码）。
 - 验证：Debug 六组（默认 / `--page-alloc-selftest` / `--cube-field 4000` / `--streaming-world 2` / `--voxel-world 1` / `--no-shadows`）全部 `errors=0 warnings=0`、stderr 0 字节、exit=0；不带开关时启动自检静默通过。全量回归 96 项 ALL PASS（build/validation/20261126-161321，日志 201 行，FAIL=0）；DocCheck PASS。
+
+## P4-5：阴影复用合并网格的可见实例表（P4-5，2026-11-26）
+
+- 阴影 Pass 此前 CPU 逐实体 × 逐子网格提交：Sponza 一个实体 103 个子网格 × 3 级联 = 309 次 draw、零剔除。P2 第六步已经把静态几何合并成一块缓冲、每帧 compute 剔出紧凑间接命令，视图槽 2/3/4 一直空着 —— 这次把它们接上。
+- 新判据 `SceneGpuBatch::isShadowBatchReady()`（`available && mergedActive && mergedMesh.valid && !instanceScratch.empty()`），**故意不吃** `gpuSceneMinInstances` 门槛（默认 256，Sponza 只有 103）：主视图在小场景逐子网格更省，但阴影是每级联重画一遍，门槛不成立。逐模型路径的跳过判据改成 `isEntityBatched()`，与 `buildInstances` 的 collectView 资格逐条同源。
+- `ShadowPass::recordCascade` 每级联 `prepareView(视图 kShadowViewBase + cascade)` → 绑实例表 → push 64 字节 → 一条 `drawMergedIndirect`；`static_assert(kShadowViewBase + kCascadeCount <= kMaxViews)` 锁视图槽。回退开关 `--no-shadow-batch`（`FrameInfo::Settings::shadowGpuBatch`）。
+- **顺手修掉一个老 bug**：逐模型阴影路径整轮只 push 一次 `world->matrix`，漏了 glTF 节点矩阵。Sponza 子网格顶点活在节点局部空间（0.008 缩放、原始坐标 449~541），于是被放大 125 倍画到离光源相机约 700 单位处、糊满整张 4096²（落盘读数 `mean=0.795`、覆盖 9,023,488 texel）。合并路径（`SceneGpuBatch.cpp:1266`）与主视图 F4（`GeometrySystem.cpp:1241-1255`）都乘过节点矩阵，只有这里漏了 → 此前记的「0.204 ms」是画错地图的开销，真实基线是 0.087 ms。
+- 读数（Release 300 帧，三次一致）：静态 Sponza 0.087 → 0.063~0.066 ms（−24~28%）；`--terrain-test` 0.183 → 0.135；`--voxel-world 1` 0.083 → 0.066；`--light-stress 300` 0.087 → 0.063；`--streaming-world 2` 0.249 → 0.244（地形主导）。验收门槛②「静态 −60%」未达成 —— 基数修正后只到 −28%，要拿到 60% 得靠 P4-3/P4-4 的页标记跳过。
+- 像素等价：`--terrain-test --no-water --no-ssr --no-taa` 第 40 帧 A/B 差 162 像素、Sponza 差 233 像素，bbox 全是 FPS 文字框 `(109,119)-(157,129)`。Debug 七组 `errors=0 warnings=0`、stderr 0 字节；守卫不带开关 PASS；全量回归 96 项 ALL PASS；DocCheck PASS。
+- 顺带记录一个场景问题：默认相机在 `(-182.5, 6.69, 52.63)`、Sponza 世界中心在 `(-0.48, 5.21, -0.31)`，相距约 190 单位、远超 90 m 阴影距离 → 该场景的级联阴影本来就是空的（历史遗留，待收拾）。

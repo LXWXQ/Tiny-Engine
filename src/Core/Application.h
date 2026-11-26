@@ -68,6 +68,8 @@ public:
 	void setHiZEnabled(bool enabled);
 	// F6：关掉级联阴影（排查 / 对比截图用）。
 	void setShadowsEnabled(bool enabled);
+	// P4-5：阴影退回 CPU 逐模型提交（--no-shadow-batch，排查 / A-B 对比用）。
+	void setShadowGpuBatchEnabled(bool enabled);
 	// TAA：无人值守自检里对比开关效果。
 	void setTAAEnabled(bool enabled);
 	void setTAAMatrixReprojection(bool enabled);

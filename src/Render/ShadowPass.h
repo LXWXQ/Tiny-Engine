@@ -17,10 +17,12 @@ class SceneGpuBatch;
 // F6：方向光阴影（3 级联 CSM）。
 //
 // 设计取舍说明：
-// 1) 阴影几何走 CPU 逐实体提交，而不是复用 GPU 驱动的间接提交。
-//    GPU 批量只为一个视图（主相机）生成命令，阴影要每个级联一份；把剔除拆成
-//    「每级联一次 dispatch」的工作量远大于收益 —— 阴影图一张只有 4096x4096、
-//    而场景静态网格只有 103 个子网格。等体素/粒子真接进来（F3/F6 后续）再考虑。
+// 1) P4-5 起阴影几何复用 P2 的可见实例表：每级联一次剔除 + 一条合并网格的 indirect。
+//    P4-5 之前这里是 CPU 逐实体逐子网格提交（Sponza 103 个子网格 x 3 级联 = 309 次 draw，
+//    一次剔除都不做）。修掉「逐模型路径漏乘 glTF 节点矩阵」这个老 bug 之后，静态 Sponza
+//    实测 0.087 -> 0.066 ms（P4-5 之前那个 0.204 ms 是在画一张被放大 125 倍、
+//    位置也错的地图，不能当基线）。地形 chunk / 体素 chunk / 蒙皮模型不在合并缓冲里，
+//    仍然逐模型提交 —— 两条路径并存。
 // 2) 深度图与采样器由本 Pass 自己管理（手工屏障），不进渲染图：
 //    图上一条纹理对应一个图层，3 层级联会让布局/屏障声明变复杂，
 //    而这块资源只有「本 Pass 写、Lighting 读」一条依赖。
@@ -30,6 +32,9 @@ class ShadowPass : public IRenderPass
 {
 public:
     static constexpr uint32_t kCascadeCount = 3;
+    // P2 的视图槽：0 = 主视图，1 = 平面反射，2/3/4 = 三个级联。级联视图不做 Hi-Z 遮挡
+    // 与屏幕空间误差剔除（前者是按主相机建的，后者阈值按主视图像素密度定）。
+    static constexpr uint32_t kShadowViewBase = 2u;
     // P4 第零步之后：基准从 2048 提到 4096，让「阴影 Pass 的 GPU 时间」从亚毫秒变成
     // 毫秒级，验收的比值才有分母。显存代价是每帧槽 3 x 4096^2 x 4B = 201 MiB（两个帧槽共 402 MiB）。
     static constexpr uint32_t kResolution = 4096;
@@ -105,7 +110,7 @@ private:
     void createPipeline();
 
     void recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint32_t frameInFlightIndex,
-                       FrameInfo& frameInfo);
+                       FrameInfo& frameInfo, bool gpuBatch);
     static bool cascadeVisible(const glm::mat4& lightViewProjection, const glm::vec3& minimum,
                                const glm::vec3& maximum);
 

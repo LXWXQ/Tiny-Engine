@@ -190,6 +190,29 @@ bool SceneGpuBatch::useGpuPath(const FrameInfo& frameInfo) const
     return stats.submitted >= frameInfo.settings.gpuSceneMinInstances;
 }
 
+bool SceneGpuBatch::isEntityBatched(const FrameInfo& frameInfo, entt::entity entity) const
+{
+    if (!isShadowBatchReady())
+        return false;
+    entt::registry& registry = frameInfo.registry;
+    const MeshComponent* mesh = registry.try_get<MeshComponent>(entity);
+    if (mesh == nullptr || !mesh->model || mesh->model->getIndexCount() == 0u)
+        return false;
+    const WorldTransformComponent* worldTransform =
+        registry.try_get<WorldTransformComponent>(entity);
+    if (worldTransform == nullptr || !worldTransform->valid)
+        return false;
+    // 蒙皮模型每帧改写顶点，没有烘焙进静态合并缓冲（buildInstances 同一条判据）。
+    if (mesh->model->isDynamic())
+        return false;
+    if (const RenderTagComponent* tag = registry.try_get<RenderTagComponent>(entity);
+        tag != nullptr && (tag->isSkybox || tag->isGrid || tag->isTerrain || tag->isSkyGeometry))
+        return false;
+    if (isArenaBackedVoxel(registry, entity))
+        return false;
+    return true;
+}
+
 void SceneGpuBatch::createBuffer(GpuBuffer& buffer, VkDeviceSize size,
                                  VkBufferUsageFlags usage, bool hostVisible)
 {
@@ -2160,7 +2183,7 @@ void SceneGpuBatch::prepareView(VkCommandBuffer commandBuffer, FrameInfo& frameI
     const HiZFrame& readHiZ = hiz[(frame + 1u) % kFramesInFlight];
     const bool hizUsable = frameInfo.settings.hizEnabled && hizReady &&
                            readHiZ.fullView != VK_NULL_HANDLE;
-    // 级联视图不做屏幕误差剔除：阈值是按主视图像素密度定的，阴影图 2048² 下没有意义。
+    // 级联视图不做屏幕误差剔除：阈值是按主视图像素密度定的，阴影图 4096² 下没有意义。
     frameData.screen = glm::vec4(screenSpaceTest ? frameInfo.settings.gpuSceneMinScreenPixels : 0.0f,
                                  static_cast<float>(hizExtent.height),
                                  frameInfo.projectionMatrix[1][1], 0.0f);

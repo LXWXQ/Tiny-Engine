@@ -36,6 +36,7 @@ const std::vector<UsageLine> kCatalog = {
     { "渲染", "--no-merged-buffers", "不合并静态网格缓冲" },
     { "渲染", "--no-hiz", "关掉 Hi-Z 遮挡剔除" },
     { "渲染", "--no-shadows", "关掉方向光级联阴影（排查 / 对比用）" },
+    { "渲染", "--no-shadow-batch", "阴影退回 CPU 逐模型提交，不复用合并网格的剔除结果（P4-5 回退 / A-B）" },
     { "渲染", "--no-terrain-batch", "关掉地形合批（逐 chunk 绘制）" },
     { "地形", "--terrain-test", "启动时创建持久地形，用于地形回归" },
     { "地形", "--streaming-world [r]", "流送世界，半径 r（1..24，默认 3）" },

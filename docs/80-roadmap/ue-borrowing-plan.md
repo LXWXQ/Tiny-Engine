@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1108 行
+size: ~1111 行
 updated: 2026-11-26
 ---
 
@@ -1107,3 +1107,6 @@ CSM 基线（Release，300 帧，三次重复一致）：静态 Sponza `total=0.
 两个读数会改变 P4 的排序：①「静态 −60%」在 0.1ms 的基数上只有 0.07ms 的绝对量，验收要先换一个更重的基准场景；②同场景 GPU 合并路径比逐模型 309 次 draw 快 2.5 倍而三角形数相同，说明基线的大头是提交/驱动开销 —— P4-5 的「阴影几何复用 `visibleIdList`」可能该在 P4-2 之前先评估。
 
 **P4-1（2026-11-26，4096 重基准与稀疏页分配器）**：先把「分母」做厚 —— 网上经典场景在本机拿不到（Crytek Sponza 包 404、Sun Temple 404，Bistro / San Miguel 是 0.4~3 GB 的 OBJ 包 + 手写场景 json），于是 `ShadowPass::kResolution` 2048 → 4096（每帧槽 201 MiB、两槽 402 MiB）。静态 Sponza 0.110 → 0.204 ms、`--cube-field 500` 0.076、`--cube-field 4000` 0.135、`--cube-field 20000` 0.381、动态（+`--cube-field-motion 2000`）0.442；像素数涨 4 倍而读数只涨 1.8 倍，说明基线大头仍是提交/驱动。然后写 P4 的第一块砖 `src/Render/SparsePageAllocator.{h,cpp}`：单图集、定长 128² 页、uint 环形空闲队列（O(1) FIFO 复用）、每页版本号、脏位图 + 去重列表，`selfTest()` 每次启动跑、`--page-alloc-selftest` 跑 20 万次随机分配/释放并与独立口径对账（Release 8.3 ns/op、peak=4096、exhausted=5996）。用户裁决（2026-11-26）：不与 P7 距离场共用该分配器；顺序改为 P4-1 → P4-5 → P4-2；P4-2 预期不产生读数变化（图集/页表/HZB 只是把页变成可采样的图）。
+
+**P4-5（2026-11-26，阴影几何复用可见实例表）**：把 `SceneGpuBatch` 的视图槽 2/3/4 真正接上 —— 每级联一次 `prepareView` + 一条 `drawMergedIndirect`，替掉原来「103 子网格 × 3 级联 = 309 次 CPU 提交、零剔除」。判据单独一条 `isShadowBatchReady()`，故意不吃 `gpuSceneMinInstances`（Sponza 只有 103 实例，主视图逐子网格更省，阴影却是每级联重画）。回退开关 `--no-shadow-batch`。
+过程中挖出一个 P4 之前就存在的老 bug：逐模型阴影路径漏乘 glTF 节点矩阵，Sponza 被放大 125 倍画到离光源相机 700 单位处、糊满整张 4096² —— 此前记的 0.204 ms 基线是画错地图的开销，真实基线 0.087 ms。修完实测 0.063~0.066 ms（−24~28%），`--terrain-test` −26%、`--voxel-world 1` −20%、`--light-stress 300` −28%、`--streaming-world 2` −2%（地形主导）。验收门槛②「静态 −60%」**未达成** —— 0.087 的基数上 0.063 只是 −28%，60% 要等 P4-3/P4-4 的页标记与未变页跳过。附带结论：`--no-shadow-batch` 不是等价开关（外部实例只有合并路径画得到），且默认 Sponza 场景的相机离模型 190 单位、级联阴影本来就为空，需另行收拾。

@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~530 行
+size: ~535 行
 updated: 2026-11-26
 ---
 
@@ -516,15 +516,20 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 
 **进度**：
 - [x] P4-1 稀疏页分配器：`src/Render/SparsePageAllocator.{h,cpp}` + 启动自检 + `--page-alloc-selftest`（20 万次随机操作对账，Release 8.3 ns/op、peak=4096）
-- [ ] P4-5 阴影几何复用 `visibleIdList`（`src/Render/ShadowPass.cpp` 的逐模型提交改成复用 `SceneGpuCull` 的可见实例表）
+- [x] P4-5 阴影几何复用 `visibleIdList`：`ShadowPass` 每级联一次 `prepareView(视图 2/3/4)` + 一条 `drawMergedIndirect`，替掉 103 子网格 × 3 级联 = 309 次 CPU 提交；判据 `SceneGpuBatch::isShadowBatchReady()` 故意不吃 `gpuSceneMinInstances`；回退 `--no-shadow-batch`。实测 −24~28%（0.087 → 0.063~0.066 ms），**门槛②的 60% 未达成**（见决策 79）
 - [ ] P4-2 图集 / 页表 / 每页 HZB（预期不产生读数变化：页分配在 P4-1 已完成，这一层只是把页变成可采样的图）
 - [ ] P4-3 clipmap 滚动 + P4-4 页标记（`markPages` 脏页位图，未标记页复用上帧内容；GPU 侧 `page_alloc.comp` 在这里落地）
 - [ ] P4-6 `shaders/lighting.frag` 页表采样 + `--no-vsm` 回退
 
 **待决（动 P4-2 之前要定）**：
 1. 页表放哪个描述符集：`lighting.frag` 的 set 0 binding 11 现在是 `sampler2DArray shadowMaps`，而页表要「SSBO + 图集采样器」两个绑定 —— 加进 set 0 会改全局布局（`DescriptorManager::createGlobalLayout()` 与反射头），加 set 1 会碰 bindless 材质数组。
-2. 每页一次 draw 的提交方式：多级间接 draw（每页一段命令区间）还是别的？要等 P4-5 做完才知道一页的命令有多小。
+2. 每页一次 draw 的提交方式：多级间接 draw（每页一段命令区间）还是别的？P4-5 给出了参照 —— 现在是「每级联一条 `drawMergedIndirect`、103 个组」，而 P4-3/P4-4 要的是「每页一段命令」，页数远比组数多，提交侧会重新变成大头，这一点在 P4-3 动手前必须先量一遍。
+3. `--no-shadow-batch` 与将来的 `--no-vsm` 要不要合并成一个「阴影走 CSM/走 VSM」的开关：前者只能退回 CPU 侧的实体，`setExternalInstances` 灌进来的外部实例（`--cube-field`、粒子、GPU 场景外部实例）只有合并路径画得到，所以它不是等价开关。
 
 **回退开关**：`--no-vsm`（P4-6 落地时加；CSM 路径保留到验收后 3 个版本）。
 
-**遗留**：P4 第零步的 Debug 首帧 `max=5.867ms` 是冷启动样本（首帧建资源），不进平均值；要稳态比较看 `min` 与每 60 帧的行。
+**遗留**：
+- P4 第零步的 Debug 首帧 `max=5.867ms`（P4-5 复测是 8.012ms）是冷启动样本（首帧建资源），不进平均值；要稳态比较看 `min` 与每 60 帧的行。
+- P4-5 修掉的老 bug：逐模型阴影路径漏乘 glTF 节点矩阵（`Model::getNodeWorldMatrix(subMesh.node)`）。任何新写的「逐子网格提交」路径都要问一句「这个 `mat4` 是实体空间还是节点空间」—— 漏了不会报错，只会静默画出一张位置和尺度都错的地图。
+- 默认 Sponza 场景的相机在 `(-182.5, 6.69, 52.63)`、模型世界中心在 `(-0.48, 5.21, -0.31)`，相距约 190 单位、远超 90 m 阴影距离 → 该场景的级联阴影本来就是空的。要么改场景默认相机，要么按场景尺度缩放 `kMaxShadowDistance`，这事与 P4 无关但会持续污染所有阴影相关 A/B。
+- `prepareView` 只在 `viewIndex == 0` 时上传实例表/组表，级联视图吃的是本帧上传之前的表（上一帧的结构）。结构变化的那一帧阴影可能用旧表，下一帧自愈；要消掉这个窗口得让首个级联也参与上传判定。

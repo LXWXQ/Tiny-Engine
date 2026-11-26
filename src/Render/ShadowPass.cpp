@@ -15,6 +15,10 @@
 #include "Render/TerrainMeshArena.h"
 #include "Scene/Components.h"
 
+// P4-5：三个级联各占一个视图槽（2/3/4），必须装得进 SceneGpuBatch 的槽位数。
+static_assert(ShadowPass::kShadowViewBase + ShadowPass::kCascadeCount <= SceneGpuBatch::kMaxViews,
+              "shadow cascades must fit the remaining SceneGpuBatch view slots");
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
@@ -427,18 +431,23 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         if (vegetationPass != nullptr)
             vegetationPass->prepareShadow(frameInfo, frameInfo.frameInFlightIndex);
 
-        // GPU 分批：三个级联各做一份剔除，全部在进入渲染通道之前派发。
-        const bool gpuBatch = sceneGpuBatch != nullptr && sceneGpuBatch->hasInstances() &&
-                              sceneGpuBatch->useGpuPath(frameInfo);
+        // P4-5：阴影不看 gpuSceneMinInstances 阈值（主视图对小场景逐子网格更省，阴影却要
+        // 每级联把全部子网格重画一遍）。三个级联各做一份剔除，全部在进渲染通道之前派发。
+        const bool gpuBatch = sceneGpuBatch != nullptr && frameInfo.settings.shadowGpuBatch &&
+                              sceneGpuBatch->isShadowBatchReady();
         if (gpuBatch)
         {
             for (uint32_t cascade = 0; cascade < kCascadeCount; ++cascade)
-                sceneGpuBatch->prepareView(cmd, frameInfo, 2u + cascade,
+                sceneGpuBatch->prepareView(cmd, frameInfo, kShadowViewBase + cascade,
                                            cascades[cascade].viewProjection, glm::mat4(1.0f), false);
             if (!reportedGpuBatch)
             {
                 reportedGpuBatch = true;
-                std::cout << "[Shadow] gpu batch | cascades=" << kCascadeCount << std::endl;
+                const SceneGpuBatch::Stats& batchStats = sceneGpuBatch->getStats();
+                std::cout << "[Shadow] gpu batch | cascades=" << kCascadeCount
+                          << " viewBase=" << kShadowViewBase
+                          << " instances=" << batchStats.submitted
+                          << " groups=" << batchStats.groups << std::endl;
             }
         }
 
@@ -451,7 +460,7 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
             if (timingThisFrame)
                 vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timingPool,
                                      timingBase + cascade * kTimingQueriesPerCascade);
-            recordCascade(cmd, cascade, frameInfo.frameInFlightIndex, frameInfo);
+            recordCascade(cmd, cascade, frameInfo.frameInFlightIndex, frameInfo, gpuBatch);
             if (timingThisFrame)
                 vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timingPool,
                                      timingBase + cascade * kTimingQueriesPerCascade + 1);
@@ -661,7 +670,7 @@ void ShadowPass::reportTimingSummary()
 }
 
 void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint32_t frameIndex,
-                               FrameInfo& frameInfo)
+                               FrameInfo& frameInfo, bool gpuBatch)
 {
     Frame& slot = frames[frameIndex];
     const Cascade& cascade = cascades[cascadeIndex];
@@ -703,8 +712,6 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     pipeline->bind(cmd);
 
-    const bool gpuBatch = sceneGpuBatch != nullptr &&
-                          sceneGpuBatch->hasInstances() && sceneGpuBatch->useGpuPath(frameInfo);
     if (gpuBatch && gpuPipeline != nullptr)
     {
         // 一条 indirect 覆盖合并网格里所有静态子网格；命令里的 firstInstance 已经是
@@ -712,7 +719,7 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
         gpuPipeline->bind(cmd);
         // 只有 GPU 管线的布局里存在 set 3；逐模型管线的布局是 0 个 set。
         VkDescriptorSet instanceSet =
-            sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex, 2u + cascadeIndex);
+            sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex, kShadowViewBase + cascadeIndex);
         if (instanceSet != VK_NULL_HANDLE)
         {
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gpuPipelineLayout, 3, 1,
@@ -721,7 +728,7 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
         GpuPushData push{ cascade.viewProjection };
         vkCmdPushConstants(cmd, gpuPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
                            sizeof(GpuPushData), &push);
-        sceneGpuBatch->drawMergedIndirect(cmd, frameInfo, 2u + cascadeIndex);
+        sceneGpuBatch->drawMergedIndirect(cmd, frameInfo, kShadowViewBase + cascadeIndex);
         stats.drawCalls += 1;
         // 后面的地形/体素/动态物体仍走逐模型管线。
         pipeline->bind(cmd);
@@ -789,9 +796,9 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
         const auto* voxel = registry.try_get<VoxelChunkComponent>(entity);
         const bool voxelArenaBacked = voxel != nullptr && arenaReady &&
             voxel->arenaIndexBase != 0xFFFFFFFFu;
-        // GPU 批量下静态网格已经在合并网格的那条 indirect 里，这里再画一遍会重复。
-        if (gpuBatch && !voxelArenaBacked && mesh.model->getIndexCount() > 0u &&
-            !mesh.model->isDynamic())
+        // GPU 批量下已经在那条 indirect 里：判据与 SceneGpuBatch 收集可批实体那段同源，
+        // 不再是「静态 + 非体素」的本地近似 —— 两边漂移会静默丢阴影。
+        if (gpuBatch && sceneGpuBatch->isEntityBatched(frameInfo, entity))
             continue;
         if (voxelArenaBacked)
         {
@@ -803,14 +810,20 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
         {
             mesh.model->bind(cmd);
         }
-        PushData push{ world->matrix, cascade.viewProjection };
-        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof(PushData), &push);
-
         for (const SubMesh& subMesh : mesh.model->getSubMeshes())
         {
             if (subMesh.indexCount == 0u)
                 continue;
+            // F4 的节点变换在这条路径上也要补：glTF 子网格的几何活在节点局部空间
+            // （Sponza 的节点带 0.008 缩放），实例表那条路径在 SceneGpuBatch 里乘过
+            // nodeMatrix，这条路径没有实例表，只能逐子网格推。漏了它就会把模型按
+            // 原始网格尺寸画到离光源相机几百单位的地方 —— 静默画出一张全错的地图。
+            const glm::mat4 instanceMatrix = (voxelArenaBacked || subMesh.node == kNoModelNode)
+                ? world->matrix
+                : world->matrix * mesh.model->getNodeWorldMatrix(subMesh.node);
+            PushData push{ instanceMatrix, cascade.viewProjection };
+            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(PushData), &push);
             if (voxelArenaBacked)
             {
                 vkCmdDrawIndexed(cmd, subMesh.indexCount, 1,

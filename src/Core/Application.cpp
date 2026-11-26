@@ -2147,6 +2147,11 @@ void FirstApp::setShadowsEnabled(bool enabled)
 	scene->getSettings().shadowEnabled = enabled;
 }
 
+void FirstApp::setShadowGpuBatchEnabled(bool enabled)
+{
+	scene->getSettings().shadowGpuBatch = enabled;
+}
+
 void FirstApp::setGpuSceneMinScreenPixels(float pixels)
 {
 	scene->getSettings().gpuSceneMinScreenPixels = pixels;

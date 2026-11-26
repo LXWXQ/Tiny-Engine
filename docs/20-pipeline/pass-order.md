@@ -13,7 +13,7 @@ updated: 2026-11-26
 ## 1. 顺序
 
 ```
-ShadowPass         F6：3 级 CSM 深度；零附件 pass，自己发屏障管布局；级联剔除在自己的命令里现录（prepareView 视图 2~4）
+ShadowPass         F6：3 级 CSM 深度；零附件 pass，自己发屏障管布局；级联剔除在自己的命令里现录（prepareView 视图 2~4），P4-5 起每级联只发一条合并的 drawMergedIndirect（--no-shadow-batch 退回逐子网格）
    |
 TerrainGpuSelection  B-03：无附件 pass；compute 选层/剔除，写 indirect command/count
    |
@@ -104,6 +104,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 | 开关 | 关闭时行为 |
 |---|---|
 | `--no-shadows` | Shadow Pass 仍注册并执行（布局转换照发），但 `settings.shadowEnabled = false` → `ubo.shadowParams.w = 0` → `lighting.frag` 的 `SampleShadow` 第一行 `if (ubo.shadowParams.w < 0.5) return 1.0`；CSM 图仍绑在 set 0 binding 11，所以每帧的布局转换不能省。此时 `--stats-shadow-timing` 打 `frames=0` |
+| `--no-shadow-batch` | Shadow Pass 仍执行，但每级联不画合并的 indirect，退回 CPU 逐子网格提交（103 子网格 × 3 级联 = 309 次 draw、零剔除），`[Shadow] first frame` 的 `drawCalls=309` 与它对齐。**不是等价开关**：`setExternalInstances` 灌进来的外部实例（`--cube-field`、粒子、GPU 场景外部实例）只有合并路径画得到，退回后这些实例没有阴影。用途是 A/B 与排障 |
 | `--no-ssao` | SSAO Pass 仍执行，但着色器最前面就 `enabled < 0.5 -> 输出 1.0`（连 G-Buffer 采样都省） |
 | `--no-bloom` | **真的跳过 7 个 Bloom pass**；Present 走 `present_no_bloom.frag` 单输入管线 |
 | `--no-taa` | TAA Pass 仍执行，但 `historyWeight = 0`、jitter = 0，着色器直接输出当前帧；窗口/渲染目标 resize 与重新开启时 `historyValid = false`，首帧不吃旧历史 |

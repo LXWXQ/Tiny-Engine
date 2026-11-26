@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~2406 行
+size: ~2465 行
 updated: 2026-11-26
 ---
 
@@ -2405,3 +2405,62 @@ P4 的验收有两条是时间比值：「静态场景阴影 Pass 的 GPU 时间
 - 不做 GPU 侧分配（`page_alloc.comp`）——推迟到 P4-4，那时才有真实消费者与可验证的屏障。
 - 不做多图集 / 多页尺寸：等 P7 真开始做距离场时再看要不要在它那边复制一份。
 - 不做碎片整理（compaction）：4096 页、128² 的粒度下，整理的搬迁成本远大于它省下的显存。
+
+## 决策 79：阴影几何复用合并网格的可见实例表（P4-5，2026-11-26）
+
+### 问题
+
+阴影 Pass 此前是 CPU 逐实体、逐子网格提交：Sponza 一个实体 103 个子网格，3 个级联 = 309 次 draw，而且**零剔除**（`recordCascade` 把整个实体列表原样跑三遍）。可是 P2 第六步已经把静态几何合并进一块大顶点/索引缓冲，每帧在 compute 里按视图剔除、把结果写成间接命令（`SceneGpuBatch`），视图槽 2/3/4 本来就是留给三个级联的。同一份剔除结果已经算好了，阴影却不用。
+
+难点在判据。`SceneGpuBatch::useGpuPath()` 里有一道 `gpuSceneMinInstances`（默认 256）阈值：Sponza 只有 103 个实例，主视图走逐子网格反而更省（一次剔除 + 一次提交换不来多少）。但阴影是**每级联重画一遍**，同一道门槛在这里不成立。
+
+### 做法
+
+- 新增 `FrameInfo::Settings::shadowGpuBatch`（默认 `true`），回退开关 `--no-shadow-batch`（`main.cpp` 解析、`src/Core/CliCatalog.cpp` 归到「渲染」组、`Application::setShadowGpuBatchEnabled`）。
+- 判据换成 `SceneGpuBatch::isShadowBatchReady()`：`available && mergedActive && mergedMesh.valid && !instanceScratch.empty()`，**故意不看** `gpuSceneMinInstances`。
+- `ShadowPass::recordCascade` 里每级联一次 `prepareView(cmd, frameInfo, kShadowViewBase + cascadeIndex, cascade.viewProjection, glm::mat4(1.0f), false)` → 绑 set 3 实例表 → push 64 字节 `GpuPushData{ lightViewProjection }` → 一条 `drawMergedIndirect`。`kShadowViewBase = 2u`，并用 `static_assert(ShadowPass::kShadowViewBase + ShadowPass::kCascadeCount <= SceneGpuBatch::kMaxViews)` 锁住视图槽（`kMaxViews = 5`）。
+- 逐模型路径的跳过判据从「静态 + 非体素 arena」改成 `SceneGpuBatch::isEntityBatched(frameInfo, entity)`，与 `buildInstances` 的 collectView 资格逐条同源。
+- 顺手修掉一个老 bug：逐模型阴影路径整轮只 push 一次 `world->matrix`，漏了 glTF 节点矩阵（`Model::getNodeWorldMatrix(subMesh.node)`）。见「踩到的坑」。
+
+### 为什么是复用它，而不是给阴影单独再剔一遍
+
+单独剔一遍的代价与收益都不对：每级联要多一次 compute dispatch + 一次回读，而 `SceneGpuBatch` 已经把「剔除 → 紧凑命令」做完了，视图槽也是现成的（2/3/4 一直空着）。真正需要拉的只有一道业务判据（要不要吃 `gpuSceneMinInstances` 的门槛），那是三行代码，不是另一套系统。
+
+### 为什么保留逐模型路径
+
+合并缓冲的资格是硬的：必须有 CPU 顶点/索引、必须非动态、`RenderTagComponent` 的 skybox/grid/terrain/sky-geometry 不进、体素 arena 背书的网格不进。地形 chunk 与体素块永远走逐模型；`--no-shadow-batch` 也还是它。所以两条路径都得留，且必须共用同一套「这一坨归谁画」的判据 —— 两边一旦漂移，就是静默丢阴影（`src/Render/SceneGpuBatch.cpp:924` 一带的注释早就写着这个警告，这次正好撞上）。
+
+### 验收（2026-11-26）
+
+| 一线 | 结果 |
+|---|---|
+| 静态 Sponza 阴影 Pass GPU 时间 | 0.087 → **0.063~0.066 ms**（−24~28%，Release 300 帧，三次重复一致；`--no-shadow-batch` 侧 0.080~0.093） |
+| `--terrain-test` | 0.183 → 0.135 ms（−26%） |
+| `--voxel-world 1` | 0.083 → 0.066 ms（−20%） |
+| `--light-stress 300` | 0.087 → 0.063 ms（−28%） |
+| `--streaming-world 2` | 0.249 → 0.244 ms（−2%，地形主导） |
+| 验收门槛②「静态 −60%」 | **未达成**：真实基数是 0.087 不是 0.204，0.063 只到 −28%。要拿 60% 得靠 P4-3/P4-4 的「页标记 + 未变页跳过」 |
+| 像素等价 | `--terrain-test --no-water --no-ssr --no-taa` 第 40 帧 A/B 差 162 像素、Sponza 差 233 像素，bbox 全是左上角 FPS 文字框 `(109,119)-(157,129)` → 3D 画面逐像素一致 |
+| Debug 验证组 | 七组（默认 / `--no-shadow-batch` / `--cube-field 10000 --cube-field-motion 500` / `--streaming-world 2 --gpu-scene-external 400` / `--voxel-world 1` / `--terrain-test` / `--no-shadows`）全部 `errors=0 warnings=0`、stderr 0 字节 |
+| 零开销守卫 | 不带开关时 Release 与 Debug 均 `PASS | queryPool=0 | screenshotBuffer=0 | shadowQueries=0` |
+| 全量回归 | 96 项 ALL PASS（build/validation/20261126-172338，日志 202 行，FAIL=0） |
+| DocCheck | PASS（documents=82 lines=19813） |
+
+### 代价与边界
+
+- 每级联多一次 compute dispatch（3 次/帧），换来 3 × 103 次 CPU 提交消失；小场景（<256 实例）主视图不吃这条路，只有阴影吃。
+- `prepareView` 只在 `viewIndex == 0` 时上传实例表/组表（`src/Render/SceneGpuBatch.cpp:2140` 的 `uploadStructure`）。级联视图用本帧上传之前的表，也就是上一帧的结构；结构变化的那一帧阴影可能用旧表，下一帧自愈。要消掉这个窗口得让首个级联也参与上传判定。
+- 剔除让阴影图内容与「不剔除的逐模型路径」不再逐像素等价（边界上的实例可能进/出一张深度图）。实测地形场景差异落在 FPS 文字框以外为 0，但这是**没有阴影硬边**这一前提下的巧合，不能当成永久等价保证。
+- `--no-shadow-batch` 只对「CPU 侧的实体」有效：`setExternalInstances` 灌进来的外部实例（`--cube-field`、粒子、GPU 场景外部实例）只有合并路径画得到，回退到逐模型路径时这些实例**没有阴影**。所以这个开关是 A/B 与排障工具，不是等价开关。
+
+### 踩到的坑
+
+- 第一轮把「批 vs 逐模型截图差 376 像素、bbox 是 FPS 文字框」当成「逐像素一致」——但同一场景用 `--no-shadows` 对比只差 188~335 像素，说明这版 Sponza 默认视角里阴影几乎不可见，截图根本不能当正确性证据。正确性证据必须落在**阴影图落盘对比**上（`TINY_SHADOW_DUMP` 那种）。
+- 落盘才发现逐模型路径画出一张「放大 125 倍、位置也错」的地图：`mean=0.795`、覆盖 9,023,488 个 texel、整片没有几何边缘的平滑渐变。原因是逐模型循环只 push 了一次 `world->matrix`，而 glTF 子网格的顶点活在**节点局部空间**（Sponza 节点带 0.008 缩放、原始网格坐标 449~541），所以它被按原始尺寸画到离光源相机约 700 单位处，正交投影糊满整张 4096²。合并示例表那条路径（`SceneGpuBatch.cpp:1266` `entityMatrix * nodeMatrix`）和主视图逐模型路径（`GeometrySystem.cpp:1241-1255` 的 F4）都乘过节点矩阵，只有 ShadowPass 漏了。这条 bug 在 P4 之前就在，也意味着此前记的「0.204 ms 基线」是在画一张错地图的开销，不能当 P4-5 的分母。
+- 「相机离场景 190 单位」也是一路追下来的：`[CascadeCamera] eye=(-182.5, 6.69, 52.63)`、`boxCenter=(-189.2, 7.69, 48.68)`，而 Sponza 世界中心是 `(-0.48, 5.21, -0.31)` —— 三个级联盒全部落在场景之外，级联剔除把 103 个实例全剔掉（`[CullDebug] visible=0/103`）是**正确行为**。修完节点矩阵后 Sponza 场景的级联图变得「全空」，这是场景默认视角与 90 m 阴影距离不匹配（历史遗留，与 P4-5 无关），以后要单独收拾。
+
+### 不引入的
+
+- 不扩 `SceneGpuBatch::kMaxViews`：5 个视图槽（主视图 + 平面反射 + 三级联）正好用满，加槽要同步改描述符池（`kSetCount = kFramesInFlight * kMaxViews`）。
+- 不给阴影单独维护一份实例表：那样就要在 `SceneGpuBatch` 外面复制剔除逻辑，正是这次撞上的「两边漂移」。
+- 不改 `gpuSceneMinInstances` 的默认值：主视图在小场景上逐子网格确实更省，问题只在「每级联重画」这一侧，用独立开关表达。

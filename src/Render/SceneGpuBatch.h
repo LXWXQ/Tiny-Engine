@@ -9,6 +9,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include <entt/entt.hpp>
+
 #include <glm/glm.hpp>
 
 #include "Core/FrameInFlight.h"
@@ -164,6 +166,19 @@ public:
 
     // 这一帧是否该走 GPU 批：可用 + 开关打开 + （强制 或 实例数达到阈值）。
     bool useGpuPath(const FrameInfo& frameInfo) const;
+
+    // P4-5：阴影（级联）能否直接复用合并网格那条 indirect。与 useGpuPath 的差别只有阈值：
+    // 主视图对小场景逐子网格更省，阴影每个级联都要把全部子网格重画一遍（没有剔除），
+    // 所以只要合并缓冲就绪就值得走 GPU。
+    bool isShadowBatchReady() const
+    {
+        return available && mergedActive && mergedMesh.valid && !instanceScratch.empty();
+    }
+
+    // P4-5：这个实体的几何是否已经被合并网格的 indirect 覆盖。
+    // 判据与 buildInstances 里「收集可批实体」那段逐条对齐（同一个 isArenaBackedVoxel、
+    // 同一组 tag 排除）；两边漂移会静默丢阴影，而不是报错。
+    bool isEntityBatched(const FrameInfo& frameInfo, entt::entity entity) const;
     const Stats& getStats() const { return stats; }
 
     // 视图槽：0 = 主视图，1 = 平面反射（A2）。视图之间只共享实例/组缓冲，
