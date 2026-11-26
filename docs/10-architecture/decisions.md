@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1805 行
+size: ~1813 行
 updated: 2026-11-26
 ---
 
@@ -1804,3 +1804,11 @@ TAA 的重投影是「上一帧的 UV → 本帧 UV」，直接相减即可；�
 2. 共用管线的通道必须同样多：反射的 G-Buffer 少一张就报 06179，且只在走反射的场景里出现（默认场景水面关着，看不出来）。
 
 **全量回归（2026-11-26，Debug）**：96 项 ALL PASS（`build/validation/20261126-114143`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=18906）。
+
+### 反射视图的帧级统计（2026-11-26 补）
+
+`readStats(frame, viewIndex = 0)` 现在对 view 1 也回读一次，只累加「组数 / 可见组 / 提交实例 / 实例可见率」到独立的 `CullTotals reflectionTotals`（不碰 `stats`、不参与摊平计时 —— 反射视图没有自己的摊平，实例与组表由主视图上传）。`logCullSummary()` 在 `instance history` 之前多打一行：
+
+`[SceneGpu] reflection summary | frames=37 visibleRatio=0.30 | groups/frame=103.0 visible=31.0 culled=72.0 | submit/frame=430.0 | gpuInst=0.85 (15910/18611)`
+
+同一帧里主视图是 `visibleRatio=0.23 / visible=24 / submit=423 / gpuInst=0.84` —— 镜像相机看到的东西不同，量级一致，说明两份剔除都在按自己的视图工作。

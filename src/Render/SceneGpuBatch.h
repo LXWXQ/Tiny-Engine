@@ -350,7 +350,7 @@ private:
     void buildInstances(FrameInfo& frameInfo);
     uint64_t computeStructureSignature(const FrameInfo& frameInfo) const;
     const std::vector<SubMeshBounds>& subMeshBoundsFor(const Model& model, uint64_t frameNumber);
-    void readStats(uint32_t frameInFlightIndex);
+    void readStats(uint32_t frameInFlightIndex, uint32_t viewIndex = 0u);
     void refreshDebugExternalInstances(FrameInfo& frameInfo);
 	void refreshCubeFieldInstances(FrameInfo& frameInfo);
 
@@ -411,6 +411,9 @@ private:
     bool mergedRebuiltThisCall = false;
     tiny::GpuScene gpuScene;   // T-08：持久原语/实例缓冲
     Stats stats;
+    // 反射视图（view 1）自己的帧级累计：它不回读 triangles/vertices，也不参与摊平计时，
+    // 只留「有多少组、提交了多少实例、实例可见率」这几项，用来判断多花的 dispatch 值不值。
+    CullTotals reflectionTotals;
     CullTotals cullTotals;
 
 

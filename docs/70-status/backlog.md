@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~452 行
+size: ~454 行
 updated: 2026-11-26
 ---
 
@@ -450,3 +450,5 @@ updated: 2026-11-26
 P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `GeometryPass` 每帧仍然 `buildHiZ`（`--no-hiz` 可关）。两种处理：接给 P6 meshlet 的遮挡输入，或者整条链拆掉。暂时保留，别在没量过代价前删。
 
 **P5-1 全量回归（2026-11-26）**：96 项 ALL PASS（`build/validation/20261126-114143`），stderr 全 0 字节。
+
+**反射视图的 stats 回读（2026-11-26 已做）**：`readStats(frame, viewIndex)` 对 view 1 累加到独立的 `reflectionTotals`，日志多一行 `[SceneGpu] reflection summary | …`；实测 `visibleRatio=0.30 / visible=31 culled=72 / submit/frame=430 / gpuInst=0.85`（同帧主视图 0.23 / 24 / 423 / 0.84）。

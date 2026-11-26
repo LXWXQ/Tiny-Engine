@@ -1495,18 +1495,32 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
     buckets.clear();
 }
 
-void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
+void SceneGpuBatch::readStats(uint32_t frameInFlightIndex, uint32_t viewIndex)
 {
     const FrameResources& res = frames[frameInFlightIndex];
-    if (res.views[0].stats.mapped == nullptr)
+    if (res.views[viewIndex].stats.mapped == nullptr)
         return;
     // 这个帧槽上一次使用早已 fence 完成；host 可见内存不保证一致，
     // 必须先 invalidate 才能读到 GPU 写进去的计数（否则永远是 0）。
-    vmaInvalidateAllocation(vulkanDevice.getVmaAllocator(), res.views[0].stats.allocation,
+    vmaInvalidateAllocation(vulkanDevice.getVmaAllocator(), res.views[viewIndex].stats.allocation,
                             0, VK_WHOLE_SIZE);
     // 按名字逐字读：主读前 10 个 GPU 字（stats[0] 的 4 个 + stats[1] 的 4 个 + stats[2] 的前 2 个），
     // 再加 words[12..13]（stats[3].xy）的实例级视锥统计；words[10..11]、words[14..15] 没有写入者。
-    const uint32_t* words = static_cast<const uint32_t*>(res.views[0].stats.mapped);
+    const uint32_t* words = static_cast<const uint32_t*>(res.views[viewIndex].stats.mapped);
+    if (viewIndex != 0u)
+    {
+        // 反射视图只留帧级代价：组数、可见/剔除组、提交实例数、实例可见率。
+        // 回读值滞后两帧，前两帧 words[1] + words[2] 可能还是 0，那不算样本。
+        if (words[1] + words[2] == 0u)
+            return;
+        reflectionTotals.frames += 1;
+        reflectionTotals.visibleGroups += words[1];
+        reflectionTotals.culledGroups += words[2];
+        reflectionTotals.visibleInstances += words[3];
+        reflectionTotals.instanceFrustumTested += words[12];
+        reflectionTotals.instanceFrustumVisible += words[13];
+        return;
+    }
     stats.submitted = words[0];
     stats.visibleGroups = words[1];
     stats.culledGroups = words[2];
@@ -1585,7 +1599,25 @@ void SceneGpuBatch::logCullSummary() const
     // 带 --cube-field-motion 时应接近实例总数（那时每帧都重建）。
     if (cullTotals.structureSamples > 0)
     {
-        std::cout << "[SceneGpu] instance history | instances=" << historyInstances
+        if (reflectionTotals.frames > 0u)
+    {
+        const double reflectionFrames = static_cast<double>(reflectionTotals.frames);
+        const double reflectionGroups = static_cast<double>(reflectionTotals.visibleGroups + reflectionTotals.culledGroups);
+        const double reflectionRatio = reflectionGroups > 0.0
+            ? static_cast<double>(reflectionTotals.visibleGroups) / reflectionGroups : 0.0;
+        const double reflectionInstRatio = reflectionTotals.instanceFrustumTested > 0u
+            ? static_cast<double>(reflectionTotals.instanceFrustumVisible) / static_cast<double>(reflectionTotals.instanceFrustumTested)
+            : 0.0;
+        std::cout << "[SceneGpu] reflection summary | frames=" << reflectionTotals.frames
+                  << " visibleRatio=" << std::fixed << std::setprecision(2) << reflectionRatio
+                  << " | groups/frame=" << std::setprecision(1) << (reflectionGroups / reflectionFrames)
+                  << " visible=" << (static_cast<double>(reflectionTotals.visibleGroups) / reflectionFrames)
+                  << " culled=" << (static_cast<double>(reflectionTotals.culledGroups) / reflectionFrames)
+                  << " | submit/frame=" << (static_cast<double>(reflectionTotals.visibleInstances) / reflectionFrames)
+                  << " | gpuInst=" << std::setprecision(2) << reflectionInstRatio
+                  << " (" << reflectionTotals.instanceFrustumVisible << "/" << reflectionTotals.instanceFrustumTested << ")\n";
+    }
+    std::cout << "[SceneGpu] instance history | instances=" << historyInstances
                   << " moved=" << historyMoved << " (last rebuild)\n";
     }
 
@@ -1980,6 +2012,8 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     // 同一槽位的统计是两帧前那次 dispatch 的结果（kFramesInFlight=2），GPU 早已完成；
     // 只用于日志与自检，不参与任何绘制决策。
     readStats(frame);
+    // 反射视图（view 1）每帧也跑四段 dispatch，但它的代价只有在帧级累计里才看得出来。
+    readStats(frame, 1u);
 
     // 稳定帧快速路径：结构签名没变就不重新摊平实例，也不重算每组的并集 AABB。
     // P2 度量：按需强制重建，用来取摊平的稳态样本（首帧那次含 buckets 扩容与合并网格构建）。

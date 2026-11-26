@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1774 行
+size: ~1775 行
 updated: 2026-11-26
 ---
 
@@ -1773,3 +1773,4 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 验收：Debug 三组 `errors=0 warnings=0`；补齐反射 G-Buffer 的第 5 张后，`VUID-vkCmdDrawIndexed-Indirect-colorAttachmentCount-06179` 归零。
 - 遗留：本步没有消费者，逐像素与「差分 < 0.5 像素」的判据留到 P5-2。
 - 全量回归 96 项 ALL PASS（`build/validation/20261126-114143`），stderr 全 0。
+- 反射视图的帧级统计：`readStats(frame, 1)` 累加到独立的 `reflectionTotals`，`logCullSummary()` 多打一行 `[SceneGpu] reflection summary | …`（实测 31/103 组、430 实例/帧、gpuInst 0.85）。
