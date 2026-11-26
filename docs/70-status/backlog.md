@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~454 行
+size: ~460 行
 updated: 2026-11-26
 ---
 
@@ -452,3 +452,9 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 **P5-1 全量回归（2026-11-26）**：96 项 ALL PASS（`build/validation/20261126-114143`），stderr 全 0 字节。
 
 **反射视图的 stats 回读（2026-11-26 已做）**：`readStats(frame, viewIndex)` 对 view 1 累加到独立的 `reflectionTotals`，日志多一行 `[SceneGpu] reflection summary | …`；实测 `visibleRatio=0.30 / visible=31 culled=72 / submit/frame=430 / gpuInst=0.85`（同帧主视图 0.23 / 24 / 423 / 0.84）。
+
+**P5-2（2026-11-26，决策 68）**：TAA 改读速度图重投影（速度为 0 时回退矩阵），3×3 邻域换成 YCoCg AABB ∩ `mean ± 1.25σ`；TAA 的 set 1 扩到 4 个采样器。读数：运动场景离 GT 更近（mean 4.831 → 4.775），静态两版互差 mean 0.572；Debug 两组干净。
+
+**待补**：`--velocity-probe`（把速度图拷回主机，与 CPU 端投影比对，判据 < 0.5 像素）与「静态区域时域方差 −30%」的自动化统计 —— 这两条是 roadmap 给 P5-2 定的量化验收，尚未实现。
+
+**P5-2 全量回归（2026-11-26）**：96 项 ALL PASS（`build/validation/20261126-122409`）；第一次跑到 `f2-streaming-world` 时 JobSystem 并行加速比判据没过（当时并发了别的活，CPU 被抢），单独重跑三次都是 5.65~6.66x PASS —— 那条判据对机器负载敏感。

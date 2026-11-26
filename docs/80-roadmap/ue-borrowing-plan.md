@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1071 行
+size: ~1073 行
 updated: 2026-11-26
 ---
 
@@ -1070,3 +1070,5 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P2 第十四步（2026-11-26，阴影视图自己的剔除）**：`SceneGpuBatch::kMaxViews` 从 2 扩到 5（主视图 / 平面反射 / 三个级联），`prepareView` 多一个 `screenSpaceTest` 形参（级联不做屏率剔除），合并网格的间接绘制抽成公开的 `drawMergedIndirect`；`ShadowPass` 新增 `shaders/shadow_gpu.vert`（set 3 的实例表 + remap，push 只留光空间矩阵）与第二条管线，三个级联在渲染通道之前各派发一次四段 dispatch，渲染里每级联一条 indirect，静态网格不再重复 CPU 提交，地形/体素/动态物体继续走逐模型路径。验收：Debug 四组干净；阴影 A/B 第 40 帧 77,254 像素不同、δ≥8 仅 2,681（0.13%，全在阴影边缘，属于 `lightViewProjection * model` 从 CPU 挪进顶点着色器的纹素级舍入）；全量回归 **96 项** ALL PASS（`build/validation/20261126-111338`）。**坑**：一条管线不能同时服务两条路径（`ShadowPass::init` 时拿不到实例布局 → `VUID-VkGraphicsPipelineCreateInfo-layout-07988`）；合并网格重建要按帧槽退役旧缓冲，否则同帧命令引用已销毁的 `VkBuffer`。**遗留**：阴影视图用上一帧的结构表，每帧重建的场景滞后一帧。
 **P5-1（2026-11-26，运动矢量进 G-Buffer）**：`GBufferFormat::Velocity`（RG16F）成为第 6 张 G-Buffer 附件，单位是 UV 增量；`mrt.vert` 用 `previousProjectionView × previousModel` 与当前投影各算一个裁剪位置，`mrt.frag` 相减后写 `location = 4`；天空盒、网格、几何天空、植被显式写 0（它们不产生屏幕空间运动）。`GeometrySystem` / `VegetationPass` 的管线扩到 5 个颜色附件，反射通道的 G-Buffer 同步补齐（共用管线，少一张就报 `VUID-vkCmdDrawIndexed-Indirect-colorAttachmentCount-06179`）。`GlobalUbo` 在 `mrt.vert` 里必须补 `numLights` / `exposure` 两个标量，否则 `previousProjectionView` 落在 128 而不是 C++ 的 144。Debug 三组干净；本步没有消费者，画面不变，`velocity` 与 CPU 投影的「< 0.5 像素」判据留到 P5-2（TAA 改读它）一并验。
 全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261126-114143`）；DocCheck PASS（documents=82 lines=18906）。
+
+**P5-2（2026-11-26，TAA 改读速度图）**：重投影从「上一帧矩阵 × 当前世界位置」改成优先读 G-Buffer 的速度图（`previousUv = uv - velocity + previousJitterUv`），速度为 0 的像素（天空盒/网格/几何天空/植被）回退到矩阵；历史的夹制从 3×3 RGB AABB 换成 YCoCg 里的 `AABB ∩ (mean ± 1.25σ)`。TAA 的 set 1 扩到 4 个采样器，`pass.read(gbVelocity)` 进图。验收：Debug 两组 `errors=0 warnings=0`；运动场景离 ground truth 更近（mean 4.831 → 4.775、>16 像素 6.77% → 6.61%），静态场景两版互差 mean 0.572（TAA 偏离单帧是它的本职）。roadmap 定的两条量化判据（velocity 与 CPU NDC 差分 < 0.5 像素、静态区域时域方差 −30%）还没自动化，见 backlog 的 P5 段。

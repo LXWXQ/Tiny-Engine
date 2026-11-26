@@ -11,6 +11,7 @@ namespace
 constexpr uint32_t kBindingCurrentColor = 0;
 constexpr uint32_t kBindingWorldPos = 1;
 constexpr uint32_t kBindingHistory = 2;
+constexpr uint32_t kBindingVelocity = 3;
 }
 
 TAAPass::TAAPass(Device& device, RenderGraph& graph, RenderResources& resources,
@@ -82,8 +83,8 @@ void TAAPass::init()
 
 void TAAPass::createDescriptorLayout()
 {
-    VkDescriptorSetLayoutBinding bindings[3]{};
-    for (uint32_t i = 0; i < 3; ++i)
+    VkDescriptorSetLayoutBinding bindings[4]{};
+    for (uint32_t i = 0; i < 4; ++i)
     {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -92,7 +93,7 @@ void TAAPass::createDescriptorLayout()
     }
 
     VkDescriptorSetLayoutCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    info.bindingCount = 3;
+    info.bindingCount = 4;
     info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.getDevice(), &info, nullptr, &setLayout) != VK_SUCCESS)
         throw std::runtime_error("TAAPass: descriptor set layout creation failed");
@@ -118,17 +119,19 @@ void TAAPass::updateDescriptors()
     {
         for (uint32_t readIndex = 0; readIndex < 2; ++readIndex)
         {
-            VkDescriptorImageInfo infos[3] = {
+            VkDescriptorImageInfo infos[4] = {
                 { sampler, renderGraph.getView(resources.hdrScene[frame]),
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
                 { sampler, renderGraph.getView(resources.gbPosition[frame]),
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
                 { sampler, renderGraph.getView(resources.taaHistory[readIndex]),
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+                { sampler, renderGraph.getView(resources.gbVelocity[frame]),
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
             };
 
-            VkWriteDescriptorSet writes[3]{};
-            for (uint32_t i = 0; i < 3; ++i)
+            VkWriteDescriptorSet writes[4]{};
+            for (uint32_t i = 0; i < 4; ++i)
             {
                 writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[i].dstSet = sets[frame * 2 + readIndex];
@@ -137,7 +140,7 @@ void TAAPass::updateDescriptors()
                 writes[i].descriptorCount = 1;
                 writes[i].pImageInfo = &infos[i];
             }
-            vkUpdateDescriptorSets(device.getDevice(), 3, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device.getDevice(), 4, writes, 0, nullptr);
         }
     }
 }
@@ -242,6 +245,7 @@ void TAAPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     auto& pass = graph.addGraphicsPass("TAA");
     pass.read(resources.hdrScene[frame]);
     pass.read(resources.gbPosition[frame]);
+    pass.read(resources.gbVelocity[frame]);
     pass.read(resources.taaHistory[readIndex]);
     pass.writeColor(resources.taaOutput[frame], VK_ATTACHMENT_LOAD_OP_DONT_CARE);
     pass.writeColor(resources.taaHistory[writeIndex], VK_ATTACHMENT_LOAD_OP_DONT_CARE);

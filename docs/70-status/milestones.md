@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1775 行
+size: ~1783 行
 updated: 2026-11-26
 ---
 
@@ -1774,3 +1774,11 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 遗留：本步没有消费者，逐像素与「差分 < 0.5 像素」的判据留到 P5-2。
 - 全量回归 96 项 ALL PASS（`build/validation/20261126-114143`），stderr 全 0。
 - 反射视图的帧级统计：`readStats(frame, 1)` 累加到独立的 `reflectionTotals`，`logCullSummary()` 多打一行 `[SceneGpu] reflection summary | …`（实测 31/103 组、430 实例/帧、gpuInst 0.85）。
+## P5-2：TAA 改读速度图 + YCoCg 方差夹制（2026-11-26）
+
+- 重投影改为优先读 `velocityTex`（`previousUv = uv - velocity + previousJitterUv`），速度为 0 的像素（天空盒/网格/几何天空/植被）回退到矩阵重投影。
+- 3×3 邻域在 YCoCg 里同时算 AABB 与 `mean ± 1.25σ`，两者取交集后夹历史；邻域同色时兜 1/255 最小宽度。
+- TAA 的 set 1 扩到 4 个采样器（`binding = 3` = 速度图），`pass.read(gbVelocity)` 进图。
+- 验收：Debug 两组 `errors=0 warnings=0`；运动场景离 GT 更近（mean 4.831 → 4.775，>16 像素 6.77% → 6.61%）；静态场景两版互差 mean 0.572。
+- 待补：`--velocity-probe`（velocity vs CPU NDC < 0.5 像素）与时域方差统计两条量化判据。
+- 全量回归 96 项 ALL PASS（`build/validation/20261126-122409`）。

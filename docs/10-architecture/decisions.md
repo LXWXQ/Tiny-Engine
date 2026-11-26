@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1813 行
+size: ~1855 行
 updated: 2026-11-26
 ---
 
@@ -1812,3 +1812,45 @@ TAA 的重投影是「上一帧的 UV → 本帧 UV」，直接相减即可；�
 `[SceneGpu] reflection summary | frames=37 visibleRatio=0.30 | groups/frame=103.0 visible=31.0 culled=72.0 | submit/frame=430.0 | gpuInst=0.85 (15910/18611)`
 
 同一帧里主视图是 `visibleRatio=0.23 / visible=24 / submit=423 / gpuInst=0.84` —— 镜像相机看到的东西不同，量级一致，说明两份剔除都在按自己的视图工作。
+
+## 决策 68：TAA 改读速度图重投影，并用 YCoCg 方差盒替换纯 AABB 夹制（P5-2，2026-11-26）
+
+### 问题
+
+P5-1 已经把逐像素速度写进 G-Buffer，但 TAA 还在用「上一帧矩阵 × 当前世界位置」反推上一帧 UV。静止几何这样算是对的；**运动的物体**算出来的仍是它当前的位置，历史颜色被拉到错的地方 —— 表现就是移动物体后面的拖影。同一段代码里，历史的夹制只有 3×3 RGB AABB：能挡住遮挡边缘，挡不住「颜色不同但亮度接近」的细节，细纹理会在一帧帧积累里被抹平。
+
+### 做法
+
+- 重投影：优先读 `velocityTex`（单位就是 UV 增量），`previousUv = uv - velocity + previousJitterUv`。速度接近 0 的像素（天空盒、网格、几何天空、植被写的是 `vec2(0)`）仍然回退到矩阵重投影 —— 否则相机动起来时天空会被抹开。两条路都保留 `reprojectable` 判据（`previousClip.w > 1e-4`）。
+- 夹制：3×3 邻域在 **YCoCg** 里同时算 AABB 与均值/标准差，`[mean - 1.25σ, mean + 1.25σ]` 与 AABB 取交集；交集为空（邻域完全同色）时兜一个 1/255 的最小宽度。YCoCg 的 Y 与色度解耦，亮度接近但色度不同的细节不会因为 AABB 太宽被放过。
+- 描述符：TAA 的 set 1 从 3 个采样器扩到 4 个（`binding = 3` = `velocityTex`），`pass.read(resources.gbVelocity[frame])` 进图；速度图不参与光照，`lighting` 的读取清单不变。
+
+### 验收（2026-11-26）
+
+Debug：`--selftest 40`（TAA 开）与 `--selftest 40 --cube-field 10000 --cube-field-motion 500` 都是 `[Validation] errors=0 warnings=0`、stderr 0 字节。
+
+逐像素（Release，1920×1080，第 35 帧；`--cube-field 6000 --cube-field-motion 500` 是运动场景，「ground truth」= 同一帧 `--no-taa` 的输出）：
+
+| 场景 | 旧 TAA vs GT | 新 TAA vs GT | 旧 vs 新 |
+|---|---|---|---|
+| 静态（默认场景） | mean 4.757 / >16 5.95% | mean 4.888 / >16 6.30% | mean 0.572 |
+| 运动（6000 立方体漂移） | mean 4.831 / >16 6.77% | **mean 4.775 / >16 6.61%** | mean 1.185 |
+
+静态场景里「离 GT 更远」是 TAA 的正常表现（它的工作就是偏离单帧），两版互相只差 mean 0.572，说明没有改变静态收敛行为；运动场景里新版离 GT 更近、大差值像素更少，方向正确但幅度不大（这个场景是整体平移，速度场本来就接近全局平移，老办法在该场景下误差有限）。
+
+### 代价与边界
+
+- 每个像素多一次速度图采样（RG16F，纹理缓存命中后基本免费）；YCoCg 变换只是几次点积。
+- 速度只覆盖不透明几何的顶点着色器路径：地形/体素合批的实例行 `previousModel` 还是 0 矩阵（见决策 67 的边界），它们的速度目前来自当前矩阵与上一帧矩阵的差 —— 对静止地形是 0，对运动的地形实例会偏。
+- 9 点邻域仍是固定核：P5-3 的「薄几何/去遮挡检测」要换成随几何自适应的核。
+
+### 不引入的
+
+- 不做邻域方差的自适应混合权重（例如按 σ 调 `historyWeight`）：先看固定权重下的稳定性，权重调度留给 P5-3 一起做。
+- 不做速度的降噪/钳制：速度是解析算出来的，没有随机噪声，钳制只会掩盖错误。
+
+### 待补的验收
+
+roadmap 给 P5-2 定的两条量化判据还没自动化：「velocity 与 CPU NDC 差分 < 0.5 像素」（需要 `--velocity-probe` 把速度图拷回主机，与 CPU 端投影比对）与「静态区域时域方差 −30%」（需要连续帧序列的方差统计）。这一版只做到「验证层干净 + 与 GT 的像素统计」，两条量化判据记在 backlog 的 P5 段里。
+
+**全量回归（2026-11-26，Debug）**：96 项 ALL PASS（`build/validation/20261126-122409`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=18976）。
