@@ -5,6 +5,7 @@
 #include "RHI/Pipeline.h"
 #include "RHI/RenderGraph.h"
 #include "Render/RenderResources.h"
+#include "Render/TemporalUpscaler.h"
 #include "Core/DescriptorManager.h"
 #include "Core/FrameInFlight.h"
 
@@ -25,7 +26,7 @@
 // 输出有两份：taaOutput[frame] 供 Bloom/Present 静态采样，taaHistory[frameNumber&1]
 // 作为下一帧的输入。历史图必须是 persistent（跨帧保留布局/内容）；输出图是
 // 瞬时资源，但即使 TAA 关闭也要照常写，否则下游会读到没人写的图。
-class TAAPass : public IRenderPass
+class TAAPass : public IRenderPass, public ITemporalUpscaler
 {
 public:
     TAAPass(Device& device, RenderGraph& graph, RenderResources& resources,
@@ -35,6 +36,15 @@ public:
     void init() override;
     void addToGraph(RenderGraph& graph, FrameInfo& frameInfo) override;
     void resize(VkExtent2D extent) override;
+
+    // ITemporalUpscaler：本轮唯一的实现。
+    const char* upscalerName() const override { return "taa"; }
+    bool isTemporal() const override { return true; }
+    TemporalUpscalerInputs getInputs() const override;
+    RenderGraph::TextureHandle getOutput(uint32_t frameInFlightIndex) const override
+    {
+        return resources.taaOutput[frameInFlightIndex];
+    }
 
     // A/B 与回退：强制回到「上一帧矩阵 × 当前世界位置」的重投影。
     void setMatrixReprojection(bool enable) { matrixReprojection = enable; }
@@ -47,7 +57,7 @@ public:
     // 在写 UBO 之前调用。返回本帧的抖动像素偏移（供 Application 抖相机投影）。
     // previousJitter 会在这里翻到上一帧，因此 addToGraph 能拿到正确的历史偏移。
     glm::vec2 prepareFrame(uint64_t frameNumber, VkExtent2D extent,
-                           bool enabled, float jitterScale);
+                           bool enabled, float jitterScale) override;
 
 private:
     struct Push

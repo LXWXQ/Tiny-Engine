@@ -365,6 +365,17 @@ void TAAPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     resetHistory = false;
 }
 
+TemporalUpscalerInputs TAAPass::getInputs() const
+{
+    TemporalUpscalerInputs inputs;
+    inputs.color = true;
+    inputs.worldPosition = true; // 重投影与 P5-3 的世界半径过滤都要它
+    inputs.history = true;
+    inputs.velocity = true;
+    inputs.depth = false;
+    return inputs;
+}
+
 void TAAPass::resize(VkExtent2D extent)
 {
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)

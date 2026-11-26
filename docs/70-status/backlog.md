@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~468 行
+size: ~474 行
 updated: 2026-11-26
 ---
 
@@ -466,3 +466,9 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 **P5-3（2026-11-26，决策 69）**：邻域换 5×5 十字并**按世界半径过滤抽头**，夹制盒只用有效抽头（σ 1.25 → 1.0），覆盖率把历史权重压到 0.45~1.0 倍；`--taa-classic-kernel` 回退。读数：植被薄几何 mean 1.339 → 1.300（−2.9%）、`>16` 1.64% → 1.44%（−12.2%）；静态/运动立方体 mean 略差 0.8%~1.1%、`>16` 略好 1.1%~3.0%。Debug 四组干净。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-131220`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19076）。
+
+**P5-5（2026-11-26，决策 70）**：新增 `src/Render/TemporalUpscaler.h`（`TemporalUpscalerInputs` + `ITemporalUpscaler`），`TAAPass` 多继承 `IRenderPass` 与它，`Application` 只认 `ITemporalUpscaler*`（`temporalUpscaler`），每帧抖动走接口。验收：改前/改后二进制同配置第 35 帧逐像素只差 155 个像素（全在 HUD 的 FPS 文字里，HUD 外 0 个）；Debug 三组 `errors=0 warnings=0`、stderr 0 字节。
+
+**回退开关**：无（`--no-taa` 关掉的是时域部分，接口本身没有开关意义）。
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-133227`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19133）。

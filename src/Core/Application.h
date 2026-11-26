@@ -35,6 +35,7 @@ class EditorOverlayPass;
 class SSAOPass;
 class ShadowPass;
 class TAAPass;
+class ITemporalUpscaler;
 class SubresourceProbePass;
 class GeometryPass;
 class ParticlePass;
@@ -151,6 +152,8 @@ private:
 	ShadowPass* shadowPassPtr = nullptr;
 	// TAA：Glass 之后、Bloom 之前，负责抖动重建与历史混合。
 	TAAPass* taaPassPtr = nullptr;
+	// P5-5 的接缝：所有时域上采样都从这个指针走，底下是 TAA。
+	ITemporalUpscaler* temporalUpscaler = nullptr;
 	// F6-06：太阳盘 + 镜头光晕，TAA 之后、Bloom 之前（只用于调试观察）。
 	SunFlarePass* sunFlarePassPtr = nullptr;
 	// C1：半分辨率平面反射（Lighting 之后、Glass/Water 之前）。

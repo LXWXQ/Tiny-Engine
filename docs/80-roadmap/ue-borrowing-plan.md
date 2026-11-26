@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1080 行
+size: ~1083 行
 updated: 2026-11-26
 ---
 
@@ -1079,3 +1079,6 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P5-3（2026-11-26，薄几何/去遮挡检测）**：TAA 的邻域从 3×3 全收换成 5×5 十字的 13 个抽头，每个抽头用 G-Buffer 的世界半径与中心比较、超出容差的直接丢弃；夹制盒只用有效抽头（σ 系数 1.25 → 1.0），并按覆盖率把历史权重压到 0.45 倍起。回退开关 `--taa-classic-kernel`；`Push` 的两个 pad 槽合并成 `uint taaFlags`。读数：植被薄几何 mean 1.339 → 1.300、`>16` 1.64% → 1.44%（−12.2%）；静态/运动立方体 mean 略差、`>16` 略好。Debug 四组干净。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-131220`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19076）。
+**P5-5（2026-11-26，`ITemporalUpscaler` 接口）**：新增 `src/Render/TemporalUpscaler.h`，只定义契约不实现算法 —— `TemporalUpscalerInputs` 声明需要哪些输入（颜色/世界位置/历史/速度/深度），`ITemporalUpscaler` 给出 `upscalerName` / `isTemporal` / `getInputs` / `prepareFrame`（返回本帧抖动）/ `getOutput` / `resize`。`TAAPass` 成为第一个实现（多继承 `IRenderPass`），`Application` 只认 `ITemporalUpscaler*` 并打一行 `[Temporal] upscaler=taa temporal=1 …`。验收：同配置、第 35 帧的改前/改后二进制逐像素对比只有 155 个像素不同（全在 HUD 的 FPS 文字上，HUD 外 0 个），Debug 三组干净。
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-133227`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19133）。

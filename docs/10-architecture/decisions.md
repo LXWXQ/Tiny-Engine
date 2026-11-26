@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1915 行
+size: ~1953 行
 updated: 2026-11-26
 ---
 
@@ -1914,3 +1914,41 @@ P5-2 的邻域是固定 3×3 全收：夹制盒把 9 个像素的颜色一视同
 - 不做权重的时域自适应（按历史长度调）：先看固定曲线，调度留给 P5-4 的运动模糊一起评估。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-131220`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19076）。
+## 决策 70：为时域上采样留一道接缝，TAA 是 `ITemporalUpscaler` 的第一个实现（P5-5，2026-11-26）
+
+### 问题
+
+P5 的成像链已经有 TAA，`Application` 里到处是 `taaPassPtr->...`。如果以后要换 FSR2、DLSS 或者自研的 TSR，改的不是一个类而是一串调用点；而「换实现」这件事现在没有成本压力，先把它做成接口，比事后拆便宜。
+
+### 做法
+
+- 新增 `src/Render/TemporalUpscaler.h`：`TemporalUpscalerInputs`（声明需要颜色 / 世界位置 / 历史 / 速度 / 深度中的哪些）+ `ITemporalUpscaler`（`upscalerName` / `isTemporal` / `getInputs` / `prepareFrame` / `getOutput` / `resize`）。
+- `TAAPass` 改成 `class TAAPass : public IRenderPass, public ITemporalUpscaler`：`upscalerName()` 返回 `"taa"`、`isTemporal()` 返回 `true`、`getInputs()` 声明 `color + worldPosition + history + velocity`、`getOutput(frame)` 返回 `resources.taaOutput[frame]`；`prepareFrame` / `resize` 本来就在，签名一致，加 `override` 同时满足两个基类。
+- `Application` 新增 `ITemporalUpscaler* temporalUpscaler`，在 `initAll()` 里指向 `taaPass.get()` 并打一行 `[Temporal] upscaler=taa temporal=1 inputs=color+worldPos+history+velocity`；每帧取抖动改走接口（`temporalUpscaler->prepareFrame(...)`），`taaPassPtr` 只留给 `setMatrixReprojection` / `setVelocityProbe` / `setClassicKernel` 这三个 A/B 开关。
+
+### 为什么用接口而不是继续直接调 `taaPassPtr`
+
+调用点只有一处（取抖动），但它是「谁决定本帧采样位置」这件事的唯一入口。把它收进接口后，替换实现只需要在 `initAll()` 换掉一行指针，渲染图里的其它 pass（Bloom/Present 读 `taaOutput`、MotionBlur 读 velocity）完全不需要知道底下是谁。
+
+### 为什么接口里只有这几条
+
+- 不描述资源创建：历史图、探针缓冲、管线都属于实现，硬塞进接口会逼着未来的实现接受 TAA 的形状。
+- 不描述分辨率缩放：当前 render == output（TAA 是抗锯齿不是上采样）；真要做 FSR 式放大，再加 `renderExtent / outputExtent` 与「输出图由实现持有」两条，现在加是空转。
+- 不把运动模糊并进来：P5-4 要读的是速度图，不是上采样输出。
+
+### 验收（2026-11-26）
+
+- 行为等价 A/B：`config/engine.json` 的 `taa.enabled` 临时改 `true`，同一机位、第 35 帧，`git stash` 掉改动的 HEAD 二进制 vs 新二进制 —— 1920×1080 只有 **155 个像素不同（0.0075%）**，包围盒 `(109,119)-(150,129)` 全在 HUD 的 FPS 文字上，**HUD 面板外 0 个像素**。
+- Debug 三组（默认 / `--no-taa` / `--cube-field 10000 --cube-field-motion 500`）`errors=0 warnings=0`、stderr 0 字节；三组都打出 `[Temporal] upscaler=taa temporal=1 ...`（`--no-taa` 也打，它记的是接缝而不是开关状态）。
+- 全量回归（Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-133227`），stderr 全 0 字节。
+
+### 代价与边界
+
+- 一个纯虚接口 + 一次指针间接，运行时零成本；`TAAPass` 多继承一个空基类（无数据成员，不影响布局）。
+- 接口只覆盖「时域上采样」，空间上采样（FSR1 式）与神经网络实现要补 `renderExtent/outputExtent` 与实现自持输出图，属于后续改动。
+
+### 不引入的
+
+- 不实现 FSR2 / DLSS / TSR：没有历史重投影的替代算法、没有神经网络、没有资源 bar 的自动插入。
+- 不做实现的运行时选择（CVar / 工厂注册表）：现在只有一个实现，选择器是空转；`--no-taa` 已经能关掉时域部分。
+

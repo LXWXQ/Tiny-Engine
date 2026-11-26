@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1803 行
+size: ~1813 行
 updated: 2026-11-26
 ---
 
@@ -1802,3 +1802,13 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - Debug 四组 `errors=0 warnings=0`、stderr 0 字节。
 
 - 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-131220`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19076）。
+## P5-5：`ITemporalUpscaler` 接口，TAA 接入（2026-11-26）
+
+- 新增 `src/Render/TemporalUpscaler.h`：`TemporalUpscalerInputs` 声明输入（颜色/世界位置/历史/速度/深度），`ITemporalUpscaler` 定义 `upscalerName` / `isTemporal` / `getInputs` / `prepareFrame` / `getOutput` / `resize`。
+- `TAAPass` 同时继承 `IRenderPass` 与 `ITemporalUpscaler`；`prepareFrame`、`resize` 签名本来就一致，加 `override` 即可，`getOutput` 返回 `resources.taaOutput[frame]`。
+- `Application` 新增 `ITemporalUpscaler* temporalUpscaler`，初始化时指向 TAA 并打一行 `[Temporal] upscaler=taa temporal=1 inputs=color+worldPos+history+velocity`；每帧取抖动改走接口。
+- A/B（`taa.enabled=true`，第 35 帧）：改前 HEAD 二进制 vs 新二进制，1920×1080 只有 155 个像素不同、全在 HUD 的 FPS 文字里，HUD 外 0 个像素。
+- Debug 三组（默认 / `--no-taa` / 运动立方体）`errors=0 warnings=0`、stderr 0 字节。
+
+- 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-133227`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19133）。
+

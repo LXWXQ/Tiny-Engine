@@ -972,6 +972,10 @@ streamingConfig.skirtsEnabled = false;
 	uiCompositePassPtr = uiComposite.get();
 	editorOverlayPassPtr = editorOverlay.get();
 	taaPassPtr = taaPass.get();
+	temporalUpscaler = taaPass.get();
+	std::cout << "[Temporal] upscaler=" << temporalUpscaler->upscalerName()
+	          << " temporal=" << (temporalUpscaler->isTemporal() ? 1 : 0)
+	          << " inputs=color+worldPos+history+velocity" << std::endl;
 	sunFlarePassPtr = sunFlarePass.get();
 	ssaoPassPtr = ssaoPass.get();
 	reflectionPassPtr = reflectionPass.get();
@@ -3035,9 +3039,9 @@ void FirstApp::render(float dt)
 		const glm::mat4 unjitteredProjection = scene->getCamera().getProjection();
 		glm::mat4 renderProjection = unjitteredProjection;
 		const VkExtent2D renderExtent = renderGraph->getExtent(renderResources->hdrScene[frameInFlight]);
-		if (taaPassPtr != nullptr)
+		if (temporalUpscaler != nullptr)
 		{
-			const glm::vec2 jitter = taaPassPtr->prepareFrame(renderer->getFrameNumber(),
+			const glm::vec2 jitter = temporalUpscaler->prepareFrame(renderer->getFrameNumber(),
 				renderExtent, settings.taaEnabled, settings.taaJitterScale);
 			if (settings.taaEnabled && renderExtent.width > 0 && renderExtent.height > 0)
 			{
