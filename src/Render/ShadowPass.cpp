@@ -1,4 +1,7 @@
 #include "Render/ShadowPass.h"
+
+#include "Render/SceneGpuBatch.h"
+
 #include "RHI/ResourceStats.h"
 
 #include "Render/VegetationPass.h"
@@ -22,6 +25,21 @@
 
 namespace
 {
+// 逐模型路径：模型矩阵 + 光空间矩阵。
+struct PushData
+{
+    glm::mat4 model;
+    glm::mat4 lightViewProjection;
+};
+static_assert(sizeof(PushData) == 128u, "ShadowPush 布局必须与 shadow.vert 一致");
+
+// GPU 批量路径：模型矩阵来自实例表，只推光空间矩阵。
+struct GpuPushData
+{
+    glm::mat4 lightViewProjection;
+};
+static_assert(sizeof(GpuPushData) == 64u, "ShadowGpuPush 布局必须与 shadow_gpu.vert 一致");
+
 // 级联划分：对数与线性各占一半。纯对数在近处过度精细、远处稀疏得能看见锯齿；
 // 纯线性则是反过来的问题。0.5 是工程上常用的折中。
 constexpr float kSplitLambda = 0.5f;
@@ -277,7 +295,7 @@ void ShadowPass::createPipeline()
     VkPushConstantRange range{};
     range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     range.offset = 0;
-    range.size = sizeof(glm::mat4) * 2;   // model + lightViewProjection
+    range.size = sizeof(PushData);   // model + lightViewProjection
 
     VkPipelineLayoutCreateInfo layoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     layoutInfo.setLayoutCount = 0;
@@ -385,6 +403,21 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         if (vegetationPass != nullptr)
             vegetationPass->prepareShadow(frameInfo, frameInfo.frameInFlightIndex);
 
+        // GPU 分批：三个级联各做一份剔除，全部在进入渲染通道之前派发。
+        const bool gpuBatch = sceneGpuBatch != nullptr && sceneGpuBatch->hasInstances() &&
+                              sceneGpuBatch->useGpuPath(frameInfo);
+        if (gpuBatch)
+        {
+            for (uint32_t cascade = 0; cascade < kCascadeCount; ++cascade)
+                sceneGpuBatch->prepareView(cmd, frameInfo, 2u + cascade,
+                                           cascades[cascade].viewProjection, glm::mat4(1.0f), false);
+            if (!reportedGpuBatch)
+            {
+                reportedGpuBatch = true;
+                std::cout << "[Shadow] gpu batch | cascades=" << kCascadeCount << std::endl;
+            }
+        }
+
         for (uint32_t cascade = 0; cascade < kCascadeCount; ++cascade)
             recordCascade(cmd, cascade, frameInfo.frameInFlightIndex, frameInfo);
 
@@ -397,6 +430,55 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
             reported = true;
         }
     });
+}
+
+void ShadowPass::setSceneGpuBatch(SceneGpuBatch* batch)
+{
+    if (batch == nullptr)
+        return;
+    sceneGpuBatch = batch;
+    const VkDescriptorSetLayout layout = batch->getInstanceSetLayout();
+    if (layout == sceneInstanceSetLayout)
+        return;
+    sceneInstanceSetLayout = layout;
+
+    // GPU 批量管线：set 3 = 实例表 + remap；0~2 号 set 用同一份布局占位（编号必须
+    // 连续，验证层只要求被静态使用的 set 已绑定）。
+    VkDescriptorSetLayout setLayouts[4]{};
+    for (uint32_t i = 0; i < 4u; ++i)
+        setLayouts[i] = sceneInstanceSetLayout;
+
+    VkPushConstantRange range{};
+    range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    range.offset = 0;
+    range.size = sizeof(GpuPushData);
+
+    VkPipelineLayoutCreateInfo layoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    layoutInfo.setLayoutCount = 4u;
+    layoutInfo.pSetLayouts = setLayouts;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(vulkanDevice.getDevice(), &layoutInfo, nullptr, &gpuPipelineLayout) != VK_SUCCESS)
+        throw std::runtime_error("ShadowPass: GPU 批量管线布局创建失败");
+
+    PipelineConfigInfo config{};
+    Pipeline::defaultPipelineConfigInfo(config, kResolution, kResolution);
+    config.pipelineLayout = gpuPipelineLayout;
+    config.colorAttachmentFormats.clear();
+    config.colorBlendAttachments.clear();
+    config.colorBlendInfo.attachmentCount = 0;
+    config.colorBlendInfo.pAttachments = nullptr;
+    config.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+    config.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    config.depthStencilInfo.depthWriteEnable = VK_TRUE;
+    config.rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+    config.bindingDescriptions.clear();
+    config.bindingDescriptions.push_back(Vertex::getBindingDescription());
+    config.attributeDescriptions.clear();
+    config.attributeDescriptions.push_back(VkVertexInputAttributeDescription{
+        0, 0, VK_FORMAT_R32G32B32_SFLOAT, static_cast<uint32_t>(offsetof(Vertex, position)) });
+    gpuPipeline = std::make_unique<Pipeline>(vulkanDevice,
+        TINY_SHADER_DIR "shadow_gpu.vert.spv", TINY_SHADER_DIR "shadow.frag.spv", config);
 }
 
 void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint32_t frameIndex,
@@ -442,8 +524,31 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     pipeline->bind(cmd);
 
+    const bool gpuBatch = sceneGpuBatch != nullptr &&
+                          sceneGpuBatch->hasInstances() && sceneGpuBatch->useGpuPath(frameInfo);
+    if (gpuBatch && gpuPipeline != nullptr)
+    {
+        // 一条 indirect 覆盖合并网格里所有静态子网格；命令里的 firstInstance 已经是
+        // 本级联紧凑区间的起点，模型矩阵由顶点着色器从实例表取。
+        gpuPipeline->bind(cmd);
+        // 只有 GPU 管线的布局里存在 set 3；逐模型管线的布局是 0 个 set。
+        VkDescriptorSet instanceSet =
+            sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex, 2u + cascadeIndex);
+        if (instanceSet != VK_NULL_HANDLE)
+        {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gpuPipelineLayout, 3, 1,
+                                    &instanceSet, 0, nullptr);
+        }
+        GpuPushData push{ cascade.viewProjection };
+        vkCmdPushConstants(cmd, gpuPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof(GpuPushData), &push);
+        sceneGpuBatch->drawMergedIndirect(cmd, frameInfo, 2u + cascadeIndex);
+        stats.drawCalls += 1;
+        // 后面的地形/体素/动态物体仍走逐模型管线。
+        pipeline->bind(cmd);
+    }
+
     entt::registry& registry = frameInfo.registry;
-    struct PushData { glm::mat4 model; glm::mat4 lightViewProjection; };
 
     // ---- 地形 chunk：几何在 arena 里，subMesh 的 firstIndex 是模型内偏移 ----
     const bool arenaReady = terrainMeshArena != nullptr &&
@@ -507,6 +612,10 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
         const auto* voxel = registry.try_get<VoxelChunkComponent>(entity);
         const bool voxelArenaBacked = voxel != nullptr && arenaReady &&
             voxel->arenaIndexBase != 0xFFFFFFFFu;
+        // GPU 批量下静态网格已经在合并网格的那条 indirect 里，这里再画一遍会重复。
+        if (gpuBatch && !voxelArenaBacked && mesh.model->getIndexCount() > 0u &&
+            !mesh.model->isDynamic())
+            continue;
         if (voxelArenaBacked)
         {
             VkBuffer vertexBuffers[] = { terrainMeshArena->getVertexBuffer() };

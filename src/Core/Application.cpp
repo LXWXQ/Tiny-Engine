@@ -1020,6 +1020,10 @@ geometryPassPtr->getSceneGpuBatch()->setForceRebuildEvery(diagnosticsOptions.reb
         geometryPassPtr->getSceneGpuBatch()->setCubeFieldMotion(diagnosticsOptions.cubeFieldMotion);
         // P2 第三步：实例级剔除默认开，--no-instance-cull 时走恒等 remap 的回退路径。
         geometryPassPtr->getSceneGpuBatch()->setInstanceCullEnabled(!diagnosticsOptions.noInstanceCull);
+        // P2 第十四步：阴影视图也吃 GPU 分批（每级联一份剔除 + 紧凑命令）。
+        // 必须放在 initAll 之后：管线布局要按 set 3 = 实例表重建一次。
+        if (shadowPassPtr != nullptr)
+            shadowPassPtr->setSceneGpuBatch(geometryPassPtr->getSceneGpuBatch());
 
 	// TM-17：交换链/渲染目标尺寸变化改成事件通知。必须在 initAll 之后订阅：
 	// Pass 的 resize 会重建附件与导入视图，早于 init 调等于拿半初始化的对象干活。

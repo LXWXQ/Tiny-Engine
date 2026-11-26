@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1703 行
+size: ~1759 行
 updated: 2026-11-26
 ---
 
@@ -1702,3 +1702,59 @@ Debug 六组全部 `errors=0 warnings=0`、stderr 0 字节：水面 + 外部实�
 ### 踩到的坑
 
 `config/engine.json` 会被运行中的引擎写回相机位姿。回归用例 `terrain-render`（`--selftest 20 --empty-scene --terrain-test`）沿用配置里的相机，相机一旦被前面的截图跑漂到水面以下（y=0.766 < `waterLevel = 2.0`），地形 chunk 全被剔掉，`[Terrain] GPU selection selfTest` 的 parity 记录为空，用例报 `missing stdout marker '[Terrain] GPU selection selfTest PASS'`。恢复 `config/engine.json` 后同一二进制立刻 PASS。规矩：跑回归、提交前先 `git checkout -- config/engine.json`；用例本身不该依赖配置里的相机，这一条留给后续清理。
+## 决策 66：阴影的每个级联各有一份剔除与紧凑命令，两条管线共存（P2 第十四步）
+
+### 问题
+
+到 P2 第十三步为止，主视图与平面反射都有自己的视图层（`kMaxViews = 2`）。阴影是最后一个还在 CPU 里逐子网格提交的通道：`ShadowPass::recordCascade` 每帧对 3 个级联各遍历一遍场景，每个静态子网格一条 `vkCmdDrawIndexed`（`[Shadow] first frame | cascades=3 entities=3 terrainChunks=0 drawCalls=309`）。类头注释原本写着取舍：「GPU 批量只为一个视图（主相机）生成命令，阴影要每级联一份……等体素/粒子真接进来再考虑」。视图层落地后这条前提不再成立。
+
+### 做法
+
+- `SceneGpuBatch::kMaxViews` 2 → **5**：0 主视图、1 平面反射、2/3/4 三个级联；每个视图一套 `ViewResources`（命令、帧数据、统计、组计数、remap），实例与组表只由主视图上传。
+- `prepareView(..., bool screenSpaceTest = true)`：级联传 `false`，`frameData.screen.x = 0` —— 阴影不看屏幕像素阈值，也不开 Hi-Z（`frameData.params.z` 只在视图 0 有效）。
+- 把「绑合并网格顶点/索引 + `vkCmdDrawIndexedIndirect`」抽成公开的 `drawMergedIndirect(cmd, frameInfo, viewIndex)`，阴影绑定自己的深度管线后直接调它。
+- 新着色器 `shaders/shadow_gpu.vert`：set 3 binding 0 = `InstanceRecord[]`、binding 1 = remap，push constant 只剩 `mat4 lightViewProjection`（64 字节），模型矩阵从实例缓冲取。
+- `ShadowPass` 并存两条管线：逐模型路径（`shadow.vert`，0 个描述符集、128 字节 push）与 GPU 批（`shadow_gpu.vert`，4 个 set、64 字节 push）。GPU 批在 `addToGraph` 里、进入渲染通道**之前**给三个级联各派发一次四段 `prepareView(cmd, frameInfo, 2 + cascade, cascade.viewProjection, glm::mat4(1.0f), false)`；`recordCascade` 里每个级联 `gpuPipeline->bind` → 绑 set 3 → 一条 `drawMergedIndirect` → 切回逐模型管线画地形/体素/动态物体。静态网格在 GPU 批生效时跳过（它们已经在合并网格里）。
+- 应用侧在 `Application::initAll()` 之后调 `shadowPass->setSceneGpuBatch(geometryPass->getSceneGpuBatch())`：`SceneGpuBatch` 在 `GeometryPass::init` 里才创建，阴影 Pass 的 `init` 阶段拿不到。
+
+### 为什么是两条管线，而不是一条
+
+`shadow.vert` 一个描述符集都不绑，这是它的优点（与材质/实例表完全解耦）。让两条路径共用一条管线、把 set 3 静态写进 `shadow.vert`，会同时坏两件事：
+
+1. `ShadowPass::init()` 时 `SceneGpuBatch` 还不存在，拿不到实例布局 —— 管线布局与 shader 的引用对不上，Debug 直接报 `VUID-VkGraphicsPipelineCreateInfo-layout-07988`（`Set 3 Binding 0 in shader ... uses descriptor slot ... but not declared in pipeline layout`）。要修就得把管线创建推迟到 `initAll` 之后，等于把初始化顺序的耦合换个地方放。
+2. 逐模型路径每条 draw 也得给 set 3 绑一份（哪怕内容不用），CPU 路径平白多一次绑定。
+
+两条管线各自一个 push range、互不干扰，代价只是一份 2048² 深度配置的重复创建。
+
+### 为什么级联不做屏幕误差剔除
+
+`--gpu-scene-min-px` 的语义是「在主视图上小于 N 像素的实例」，跟阴影图分辨率无关；级联里做这件事只会让远处物体在阴影里闪。级联只需要视锥剔除（Hi-Z 目前不启用）。
+
+### 验收（2026-11-26）
+
+- Debug 四组，全部 `[Validation] errors=0 warnings=0`、stderr 0 字节、exit=0：
+  - `--selftest 20 --streaming-world 2 --gpu-scene-external 400` → `[Shadow] gpu batch | cascades=3`
+  - 同上再加 `--no-instance-cull`
+  - `--selftest 30 --gpu-scene`
+  - `--selftest 20 --voxel-world 1` → 不强开 GPU 批，逐模型路径照常
+- 阴影 A/B（同二进制、临时环境变量探针退回 CPU 逐模型路径，`--no-taa --no-water`，第 40 帧 1920×1080）：总差异 77,254 像素，其中 δ≥8 只有 **2,681（0.13%）**，全部落在阴影边缘；裁图对比两版一致 —— 合并网格把 `lightViewProjection * model` 从 CPU 挪进顶点着色器，矩阵乘的顺序与舍入不同，阴影图纹素级抖动。（带 TAA/水时同对照 123,964 像素 —— TAA 会把亚像素差放大成整块。）
+- 主视图与反射不受影响：`gpuInst=0.91 (17480/19114) submit/frame=460`、`reflection view | groups=103 instances=503 cull=on`。
+- 全量回归 **96 项** ALL PASS（`build/validation/20261126-111338`）；DocCheck PASS（documents=82 lines=18838）。
+
+### 代价与边界
+
+- 每个级联多一次四段 dispatch；30k 实例场景的逐实例剔除 ×3，计入总帧时间后仍在噪声内。
+- 阴影视图的组/实例表来自**上一帧**的结构上传（视图 0 的 `prepare` 在几何 pass 里，晚于阴影 pass）；静止场景一致，`--cube-field-motion` 这类每帧重建的场景滞后一帧。
+- 合并网格重建时旧缓冲不能立刻销毁（同帧早先的阴影命令还引用它），改成按帧槽退役（`retiredMergedBuffers`）。
+- 地形、体素合批、动态物体仍走逐模型路径：前两者有自己的 arena/合批，后者需要每帧矩阵。
+
+### 不引入的
+
+- 不做「阴影复用主视图的可见表」：级联视锥与主视图不同，复用会漏投影。
+- 不把采样/过滤改动放进这一步；接触硬化阴影仍是 P7 的内容。
+
+### 踩到的坑
+
+1. `VUID-VkGraphicsPipelineCreateInfo-layout-07988`：一条管线同时服务两条路径时，`set 3` 在 shader 里静态引用、但管线布局创建时 `sceneInstanceSetLayout` 还是 `VK_NULL_HANDLE`。
+2. `UNASSIGNED-CoreValidation-DrawState-InvalidCommandBuffer-VkBuffer`（8 帧 220 条）：`ensureMergedMesh` 重建时立刻 `destroyBuffer`，而同帧的阴影视图已经把旧缓冲绑进了命令缓冲。改成「推进 `retiredMergedBuffers[currentFrameSlot]`，下一轮同槽的 fence 等到后再销毁」。
+3. `setSceneGpuBatch` 必须在 `Application::initAll()` 之后调，否则 `getSceneGpuBatch()` 还是空指针。

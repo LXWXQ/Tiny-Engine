@@ -168,20 +168,25 @@ public:
 
     // 视图槽：0 = 主视图，1 = 平面反射（A2）。视图之间只共享实例/组缓冲，
     // 命令、帧数据、统计、组紧凑计数、remap 全部各自一份。
-    static constexpr uint32_t kMaxViews = 2u;
+    static constexpr uint32_t kMaxViews = 5u;
 
     // 写实例记录 + 派发剔除。必须在几何 Pass 之前录制（无需附件）。
     void prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
 
     // A2：给指定视图做剔除。viewProjection / view 由调用方给（反射视图是镜像矩阵）。
     void prepareView(VkCommandBuffer commandBuffer, FrameInfo& frameInfo, uint32_t viewIndex,
-                     const glm::mat4& viewProjection, const glm::mat4& view);
+                     const glm::mat4& viewProjection, const glm::mat4& view,
+                     bool screenSpaceTest = true);
 
     // 绑定实例集合并提交 indirect 绘制。调用方需已绑定管线与 push constant。
     void recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
 
     // A2：按视图提交。viewIndex 选命令缓冲，非 0 视图不计入主视角 telemetry。
     void recordDrawView(VkCommandBuffer commandBuffer, FrameInfo& frameInfo, uint32_t viewIndex);
+
+    // 只绑合并网格的顶点/索引并发出该视图的 indirect 命令，供阴影这类自带管线的通道
+    // 复用（调用方负责绑管线、绑 set 3、push 常量）。
+    void drawMergedIndirect(VkCommandBuffer commandBuffer, FrameInfo& frameInfo, uint32_t viewIndex);
 
     // 每帧由引擎侧（粒子/体素系统）调用；传空表示本帧没有外部实例。
     void setExternalInstances(std::vector<ExternalInstance> instances)
@@ -437,6 +442,13 @@ float cubeFieldDistance = 26.0f;
     bool instanceCullEnabled = true;
     // A2：反射视图的剔除只打一次日志，说明它真的跑起来了。
     bool reportedReflectionView = false;
+
+    // 合并网格重建时不能立刻销毁旧缓冲：同一帧里阴影视图已经把它们绑进命令缓冲，
+    // 而几何视图的重建发生在那之后。旧缓冲按帧槽退役，等该槽的 fence 再次等到
+    // 时再销毁（此时引用它的命令缓冲早已完成）。
+    std::array<std::vector<GpuBuffer>, kFramesInFlight> retiredMergedBuffers;
+    uint32_t currentFrameSlot = 0;
+    void destroyRetiredMergedBuffers(uint32_t frameInFlightIndex);
 // 阵列中心在第一次构建时按传入帧的 view 矩阵反算：启动期相机还没刷过 view。
 uint32_t cubeFieldBuilt = 0;
     uint32_t debugExternalCount = 0;

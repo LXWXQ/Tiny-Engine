@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1068 行
+size: ~1069 行
 updated: 2026-11-26
 ---
 
@@ -1067,3 +1067,4 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P2 第十二步收尾补丁（2026-11-26）**：记录涨到 288 后，还有三处按 224 写死的消费者要一起改 —— `shaders/mrt.frag` 的 `InstanceRecord` 副本（片元取材质）、`kTerrainChunkInstanceStride`、`kVoxelBatchInstanceStride`。漏改的话验证层全绿、读数一位不变，但地形/体素合批除第 0 行外全部读错位（`--streaming-world 2` 合批地形截图修前/修后 59.4% 像素不同）。教训：改共享记录布局时，「谁复制了这份布局」比「谁 include 了它」更容易漏。补丁后 Debug 四组干净、全量回归 **96 项 ALL PASS**（`build/validation/20261126-094557`）、DocCheck PASS（documents=82 lines=18689）。
 
 **P2 第十三步（2026-11-26，反射视图自己的剔除）**：`SceneGpuBatch` 长出视图层 —— `kMaxViews = 2`（主视图 / 平面反射），`ViewResources` 各自一套命令、帧数据、统计、组计数与 remap，实例与组表两视图共享且只由主视图上传。`prepare` / `recordDraw` 变 view 0 的薄包装，新增 `prepareView` / `recordDrawView`；反射的 compute 剔除放在独立的无附件 pass（`PlanarReflection.Cull`），因为 compute dispatch 不能进动态渲染（塞进 G-Buffer pass 实测 12 帧 96 条 `VUID-vkCmdDispatch-renderpass` / `VUID-vkCmdPipelineBarrier-shaderTileImageColorReadAccess-08718`）。门槛沿用主视图的 `useGpuPath && hasInstances`，小场景反射继续 CPU 逐实体。读水：`reflection view | groups=103 instances=503 cull=on`；与 HEAD 的 CPU 反射逐像素对比 1920×1080 只差 347 像素（HUD 外 8 个、差值 1/255）。Debug 六组干净，全量回归 **96 项** ALL PASS（`build/validation/20261126-102435`）。**遗留**：阴影视图（A2 下半）未接；反射视图的统计不回读。**坑**：`config/engine.json` 会被写回相机，跑回归前要还原，否则 `terrain-render` 会因相机沉到水下缺 marker。
+**P2 第十四步（2026-11-26，阴影视图自己的剔除）**：`SceneGpuBatch::kMaxViews` 从 2 扩到 5（主视图 / 平面反射 / 三个级联），`prepareView` 多一个 `screenSpaceTest` 形参（级联不做屏率剔除），合并网格的间接绘制抽成公开的 `drawMergedIndirect`；`ShadowPass` 新增 `shaders/shadow_gpu.vert`（set 3 的实例表 + remap，push 只留光空间矩阵）与第二条管线，三个级联在渲染通道之前各派发一次四段 dispatch，渲染里每级联一条 indirect，静态网格不再重复 CPU 提交，地形/体素/动态物体继续走逐模型路径。验收：Debug 四组干净；阴影 A/B 第 40 帧 77,254 像素不同、δ≥8 仅 2,681（0.13%，全在阴影边缘，属于 `lightViewProjection * model` 从 CPU 挪进顶点着色器的纹素级舍入）；全量回归 **96 项** ALL PASS（`build/validation/20261126-111338`）。**坑**：一条管线不能同时服务两条路径（`ShadowPass::init` 时拿不到实例布局 → `VUID-VkGraphicsPipelineCreateInfo-layout-07988`）；合并网格重建要按帧槽退役旧缓冲，否则同帧命令引用已销毁的 `VkBuffer`。**遗留**：阴影视图用上一帧的结构表，每帧重建的场景滞后一帧。

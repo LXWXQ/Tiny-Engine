@@ -12,6 +12,7 @@ class RenderGraph;
 class TerrainMeshArena;
 class Pipeline;
 class VegetationPass;
+class SceneGpuBatch;
 
 // F6：方向光阴影（3 级联 CSM）。
 //
@@ -52,6 +53,12 @@ public:
 
     VkImageView getShadowView(uint32_t frameInFlightIndex) const;
     VkSampler getShadowSampler() const { return shadowSampler; }
+
+    // P2 第十四步：让阴影也能吃 GPU 分批（每级联一份剔除 + 紧凑命令）。
+    // 必须在 init() 之后调用 —— SceneGpuBatch 是在 GeometryPass::init 里创建的，
+    // 这时本类的管线布局要从「无描述符集」重建为「set 3 = 实例表」。
+    void setSceneGpuBatch(SceneGpuBatch* batch);
+    bool hasGpuBatch() const { return sceneGpuBatch != nullptr; }
 
     void setEnabled(bool value) { enabled = value; }
     bool isEnabled() const { return enabled; }
@@ -98,6 +105,13 @@ private:
     VkSampler shadowSampler = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     std::unique_ptr<Pipeline> pipeline;
+    // GPU 批量路径单独一条管线：它的像素着色器静态使用 set 3（实例表 + remap），
+    // 逐模型那条管线一个描述符集都不绑，两条不能共用布局。
+    VkPipelineLayout gpuPipelineLayout = VK_NULL_HANDLE;
+    std::unique_ptr<Pipeline> gpuPipeline;
+    SceneGpuBatch* sceneGpuBatch = nullptr;
+    VkDescriptorSetLayout sceneInstanceSetLayout = VK_NULL_HANDLE;
+    bool reportedGpuBatch = false;
     std::array<Frame, kFramesInFlight> frames{};
 
     std::array<Cascade, kCascadeCount> cascades{};

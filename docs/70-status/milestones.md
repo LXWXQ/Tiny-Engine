@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1756 行
+size: ~1765 行
 updated: 2026-11-26
 ---
 
@@ -1755,3 +1755,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - Debug 六组 `errors=0 warnings=0`、stderr 0；全量回归 **96 项** ALL PASS（`build/validation/20261126-102435`）。
 - 坑：`config/engine.json` 被写回相机，`terrain-render` 会因相机沉到水下而缺 `GPU selection selfTest PASS` marker；跑回归前先还原该文件。
 - 遗留：阴影视图未接（A2 下半）、反射视图的 stats 不回读。
+## P2 第十四步：阴影视图自己的剔除与紧凑命令（A2 下半，2026-11-26）
+
+- `SceneGpuBatch::kMaxViews` 2 → 5：0 主视图、1 平面反射、2/3/4 三个级联；`prepareView` 增加 `screenSpaceTest` 形参（级联关掉屏幕误差剔除），合并网格的间接绘制抽成公开的 `drawMergedIndirect`。
+- 新 `shaders/shadow_gpu.vert`：从 set 3 的实例表 + remap 取模型矩阵，push constant 只留 `mat4 lightViewProjection`（64 字节）。
+- `ShadowPass` 并存两条管线（逐模型 0 个描述符集 / GPU 批 set 3 + 64 字节 push），`Application::initAll()` 之后 `setSceneGpuBatch()` 注入。
+- 三个级联的 `prepareView` 在进入渲染通道之前派发；渲染里每个级联一条 indirect，随后切回逐模型管线画地形/体素/动态物体。
+- 验收：Debug 四组 `errors=0 warnings=0`、stderr 0；阴影 A/B 第 40 帧差 77,254 像素、δ≥8 仅 2,681（0.13%）且全在阴影边缘（纹素级舍入）；全量回归 **96 项** ALL PASS（`build/validation/20261126-111338`）。
+- 坑：一条管线不能同时服务两条路径（`VUID-VkGraphicsPipelineCreateInfo-layout-07988`）；合并网格重建要按帧槽退役旧缓冲（否则 `InvalidCommandBuffer-VkBuffer`）。
+- 边界：阴影视图用上一帧的组/实例表（视图 0 的 `prepare` 更晚），每帧重建的场景滞后一帧；地形/体素/动态物体仍走逐模型路径。

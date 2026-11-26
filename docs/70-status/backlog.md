@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~424 行
+size: ~435 行
 updated: 2026-11-26
 ---
 
@@ -422,3 +422,14 @@ updated: 2026-11-26
 **回退开关**：无独立开关；实例数低于 `gpuSceneMinInstances`（默认 256）时反射自动回到 CPU 逐实体，`--no-instance-cull` 时反射视图与主视图一起走恒等 remap。
 
 **遗留**：阴影视图（A2 下半）未接；反射视图的 `stats` 不回读（只有一次性 `reflection view` 行）；`config/engine.json` 的相机写回会让 `terrain-render` 缺 marker，跑回归前必须还原。
+## P2 待办：阴影视图自己的剔除与紧凑命令（A2 下半）
+
+**现状**：主视图与平面反射已有视图层（决策 65），阴影仍是 CPU 逐子网格提交 —— 每帧 3 个级联 × 所有静态网格，首帧 `drawCalls=309`。
+
+**已落地（2026-11-26，决策 66）**：`SceneGpuBatch::kMaxViews = 5`（0 主视图、1 反射、2/3/4 级联）；`prepareView(..., bool screenSpaceTest = true)` 与公开的 `drawMergedIndirect`；新 `shaders/shadow_gpu.vert`（set 3 实例表 + remap，push 只留光空间矩阵）；`ShadowPass` 并存两条管线，三个级联在渲染通道之前各派发一次四段 dispatch，渲染里每个级联一条 indirect；`Application::initAll()` 之后 `setSceneGpuBatch()`。
+
+**读数（2026-11-26）**：Debug 四组 `errors=0 warnings=0`（含 `--no-instance-cull`、`--voxel-world 1` 不强开的情形）；阴影 A/B 第 40 帧总差 77,254 像素、δ≥8 仅 2,681（0.13%）、全在阴影边缘；主视图 `gpuInst=0.91 (17480/19114) submit/frame=460`；全量回归 **96 项** ALL PASS（`build/validation/20261126-111338`）。
+
+**回退开关**：无独立开关；`useGpuPath && hasInstances` 不成立时（实例数低于 `gpuSceneMinInstances`，或持久化被关）阴影自动回到逐模型路径。
+
+**遗留**：阴影视图用上一帧的组/实例表（视图 0 的 `prepare` 在几何 pass 里，晚于阴影），每帧重建的场景滞后一帧；地形/体素/动态物体仍走逐模型路径。

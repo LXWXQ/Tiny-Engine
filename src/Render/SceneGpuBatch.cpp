@@ -671,6 +671,15 @@ void SceneGpuBatch::uploadDeviceLocal(GpuBuffer& destination, const void* data, 
     destroyBuffer(staging);
 }
 
+void SceneGpuBatch::destroyRetiredMergedBuffers(uint32_t frameInFlightIndex)
+{
+    if (frameInFlightIndex >= kFramesInFlight)
+        return;
+    for (GpuBuffer& buffer : retiredMergedBuffers[frameInFlightIndex])
+        destroyBuffer(buffer);
+    retiredMergedBuffers[frameInFlightIndex].clear();
+}
+
 void SceneGpuBatch::destroyMergedMesh()
 {
     destroyBuffer(mergedMesh.vertices);
@@ -743,8 +752,13 @@ bool SceneGpuBatch::ensureMergedMesh(const std::vector<const Model*>& models)
                        model->getCpuIndices().end());
     }
 
-    destroyBuffer(mergedMesh.vertices);
-    destroyBuffer(mergedMesh.indices);
+    // 别立刻销毁：本帧早些时候阴影视图已经把旧缓冲录进命令缓冲（见成员注释）。
+    if (mergedMesh.vertices.buffer != VK_NULL_HANDLE)
+        retiredMergedBuffers[currentFrameSlot].push_back(mergedMesh.vertices);
+    if (mergedMesh.indices.buffer != VK_NULL_HANDLE)
+        retiredMergedBuffers[currentFrameSlot].push_back(mergedMesh.indices);
+    mergedMesh.vertices = GpuBuffer{};
+    mergedMesh.indices = GpuBuffer{};
     createBuffer(mergedMesh.vertices, sizeof(Vertex) * vertices.size(),
                  VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, false);
     createBuffer(mergedMesh.indices, sizeof(uint32_t) * indices.size(),
@@ -1918,6 +1932,9 @@ void SceneGpuBatch::buildHiZ(VkCommandBuffer commandBuffer, const FrameInfo& fra
 
 void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 {
+    // 上一轮同一帧槽的命令缓冲这时候已经 fence 等过了，退役的合并网格可以销毁。
+    currentFrameSlot = frameInfo.frameInFlightIndex;
+    destroyRetiredMergedBuffers(currentFrameSlot);
     // T-08：持久场景按帧清脏范围（必须在 buildInstances 之前）。
     gpuScene.beginFrame();
     // 每 60 帧打一次剔除统计（回读值滞后两帧，只用于观测）。
@@ -2003,7 +2020,7 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
 void SceneGpuBatch::prepareView(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
                                 uint32_t viewIndex, const glm::mat4& viewProjection,
-                                const glm::mat4& view)
+                                const glm::mat4& view, bool screenSpaceTest)
 {
     if (!available || !frameInfo.settings.gpuSceneEnabled)
         return;
@@ -2066,7 +2083,8 @@ void SceneGpuBatch::prepareView(VkCommandBuffer commandBuffer, FrameInfo& frameI
     const HiZFrame& readHiZ = hiz[(frame + 1u) % kFramesInFlight];
     const bool hizUsable = frameInfo.settings.hizEnabled && hizReady &&
                            readHiZ.fullView != VK_NULL_HANDLE;
-    frameData.screen = glm::vec4(frameInfo.settings.gpuSceneMinScreenPixels,
+    // 级联视图不做屏幕误差剔除：阈值是按主视图像素密度定的，阴影图 2048² 下没有意义。
+    frameData.screen = glm::vec4(screenSpaceTest ? frameInfo.settings.gpuSceneMinScreenPixels : 0.0f,
                                  static_cast<float>(hizExtent.height),
                                  frameInfo.projectionMatrix[1][1], 0.0f);
     frameData.params = glm::uvec4(static_cast<uint32_t>(modelGroups.size()), 0u,
@@ -2212,4 +2230,18 @@ void SceneGpuBatch::recordDrawView(VkCommandBuffer commandBuffer, FrameInfo& fra
         }
         frameInfo.telemetry.vertices += stats.visibleVertices;
     }
+}
+
+void SceneGpuBatch::drawMergedIndirect(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
+                                       uint32_t viewIndex)
+{
+    if (!available || !mergedActive || !mergedMesh.valid || instanceScratch.empty())
+        return;
+    const ViewResources& view = frames[frameInfo.frameInFlightIndex].views[viewIndex];
+    const uint32_t groupCount = static_cast<uint32_t>(modelGroups.size());
+    const VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mergedMesh.vertices.buffer, &offset);
+    vkCmdBindIndexBuffer(commandBuffer, mergedMesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexedIndirect(commandBuffer, view.commands.buffer, 0, groupCount,
+                             kCommandWords * sizeof(uint32_t));
 }
