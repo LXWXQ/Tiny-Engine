@@ -40,6 +40,8 @@ public:
     void setMatrixReprojection(bool enable) { matrixReprojection = enable; }
     // 把「速度图重投影」与「矩阵重投影」的差值统计进一个只读缓冲，每 30 帧打一行。
     void setVelocityProbe(bool enable) { velocityProbe = enable; }
+    // P5-3 的回退：退回 3x3 全收的邻域（不做世界半径过滤、也不降权重）。
+    void setClassicKernel(bool enable) { classicKernel = enable; }
     std::string getName() const override { return "TAA"; }
 
     // 在写 UBO 之前调用。返回本帧的抖动像素偏移（供 Application 抖相机投影）。
@@ -54,8 +56,12 @@ private:
         glm::vec2 texelSize;
         float historyWeight;
         float historyValid;
-        float reprojectionMode;   // 0 = 速度图，1 = 上一帧矩阵（A/B 与回退）
-        float probeEnabled;
+        // 位标记（与 taa.frag 的 pc.taaFlags 一一对应）：
+        //   1 = 强制矩阵重投影（A/B 与回退）
+        //   2 = 速度探针
+        //   4 = 经典 3x3 邻域（P5-3 回退）
+        uint32_t taaFlags;
+        uint32_t padFlags;
     };
     static_assert(sizeof(Push) == 32, "TAA push constant must stay 32 bytes");
 
@@ -88,6 +94,7 @@ private:
     bool resetHistory = false;
     bool matrixReprojection = false;
     bool velocityProbe = false;
+    bool classicKernel = false;
 
     // 探针缓冲：x = 参与统计的像素数，y = |velocity - matrixVelocity| > 0.5px 的像素数，
     // z = 差值之和（1/1000 像素），w = 差值最大值（1/1000 像素）；host 可见，每 30 帧清零。

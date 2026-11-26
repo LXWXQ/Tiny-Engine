@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1076 行
+size: ~1080 行
 updated: 2026-11-26
 ---
 
@@ -1075,3 +1075,7 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P5-2 验收补实（2026-11-26）**：`--velocity-probe`（TAA 片元里按 8×8 抽格，把「速度图 vs 上一帧矩阵」的差以 1/32 像素累进 SSBO，CPU 每 30 帧读回）与 `--taa-matrix-reprojection`（回退开关）落地。静态场景 `maxDiff=0.487 px / >0.5px=0.00%` —— `< 0.5 像素` 判据达标，但 0.48 px 是 `R16G16_SFLOAT` 的量化下限；运动场景 `meanDiff=1.2 px / 76%~80%` 采样点超 0.5 px，离 GT 只改善 1.2%~2.4%（矩阵路径已在用 `previousModel`）。「静态区域时域方差 −30%」未达成（2.395 vs 2.370，被运动立方体主导），作为已知结论记在决策 68 与 backlog，不再阻塞 P5-2。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-125624`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19016）。
+
+**P5-3（2026-11-26，薄几何/去遮挡检测）**：TAA 的邻域从 3×3 全收换成 5×5 十字的 13 个抽头，每个抽头用 G-Buffer 的世界半径与中心比较、超出容差的直接丢弃；夹制盒只用有效抽头（σ 系数 1.25 → 1.0），并按覆盖率把历史权重压到 0.45 倍起。回退开关 `--taa-classic-kernel`；`Push` 的两个 pad 槽合并成 `uint taaFlags`。读数：植被薄几何 mean 1.339 → 1.300、`>16` 1.64% → 1.44%（−12.2%）；静态/运动立方体 mean 略差、`>16` 略好。Debug 四组干净。
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-131220`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19076）。

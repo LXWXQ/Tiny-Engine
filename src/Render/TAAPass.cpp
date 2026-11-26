@@ -341,8 +341,10 @@ void TAAPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         1.0f / static_cast<float>(extent.height));
     push.historyWeight = weight;
     push.historyValid = valid ? 1.0f : 0.0f;
-    push.reprojectionMode = matrixReprojection ? 1.0f : 0.0f;
-    push.probeEnabled = velocityProbe ? 1.0f : 0.0f;
+    push.taaFlags = (matrixReprojection ? 1u : 0u)
+                  | (velocityProbe ? 2u : 0u)
+                  | (classicKernel ? 4u : 0u);
+    push.padFlags = 0u;
     if (velocityProbe && frameInfo.frameNumber > 0ull && frameInfo.frameNumber % 30ull == 0ull)
         readProbe();
 

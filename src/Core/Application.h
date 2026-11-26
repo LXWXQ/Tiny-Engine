@@ -71,6 +71,7 @@ public:
 	void setTAAEnabled(bool enabled);
 	void setTAAMatrixReprojection(bool enabled);
 	void setVelocityProbe(bool enabled);
+	void setTAAClassicKernel(bool enabled);
 	void setWaterEnabled(bool enabled);
 	void setSSREnabled(bool enabled);
 	void setTerrainBatchEnabled(bool enabled);
@@ -210,6 +211,7 @@ private:
 	// P5-2 验收开关：TAAPass 在 initAll() 里创建，这里只记下来、创建后转发。
 	bool taaMatrixReprojection = false;
 	bool velocityProbe = false;
+	bool taaClassicKernel = false;
 	// P2-6：灯数只在与上一次打印不同时打一行，避免每帧刷屏。
 	uint32_t loggedAppliedLights = 0xFFFFFFFFu;
 	double updateMsAccum = 0.0;

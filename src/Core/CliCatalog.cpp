@@ -28,6 +28,7 @@ const std::vector<UsageLine> kCatalog = {
     { "渲染", "--no-bloom / --no-ssao / --no-taa / --no-water / --no-ssr", "关掉 Bloom / SSAO / TAA / 水面 / 水面 SSR（同 UI 复选框）" },
     { "渲染", "--taa-matrix-reprojection", "TAA 重投影改回「上一帧矩阵 × 当前世界位置」：A/B 与回退（P5-2）" },
     { "渲染", "--velocity-probe", "每 30 帧读回一次速度图与矩阵重投影的像素差（P5-2 验收）" },
+    { "渲染", "--taa-classic-kernel", "TAA 退回 3x3 全收邻域，不做薄几何/去遮挡过滤（P5-3 回退）" },
     { "渲染", "--gpu-scene / --no-gpu-scene", "强制开 / 关 GPU 驱动提交" },
     { "渲染", "--gpu-scene-min-px <px>", "GPU 提交的屏幕空间剔除阈值（像素）" },
     { "渲染", "--gpu-scene-external <n>", "外部实例数（粒子/体素共用的提交入口）" },

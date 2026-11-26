@@ -44,6 +44,8 @@ namespace diag
         bool taaMatrixReprojection = false;
         // --velocity-probe：每 30 帧读回一次两者的像素差（只在 TAA 开着时有意义）。
         bool velocityProbe = false;
+    // --taa-classic-kernel：退回 P5-3 之前的 3x3 全收邻域（A/B 与回退）。
+    bool taaClassicKernel = false;
 
         // 验证层
         bool validationBestPractices = false;

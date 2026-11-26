@@ -2082,6 +2082,14 @@ if (taaPassPtr != nullptr)
 taaPassPtr->setVelocityProbe(enabled);
 }
 
+void FirstApp::setTAAClassicKernel(bool enabled)
+{
+// P5-3 的回退开关：退回 3x3 全收的邻域（不做世界半径过滤、也不按覆盖率降权重）。
+taaClassicKernel = enabled;
+if (taaPassPtr != nullptr)
+taaPassPtr->setClassicKernel(enabled);
+}
+
 void FirstApp::setTAAEnabled(bool enabled)
 {
 	// 与 ImGui 面板共用同一条路径；关掉后 TAA Pass 仍会运行（输出当前帧），

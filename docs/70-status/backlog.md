@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~464 行
+size: ~468 行
 updated: 2026-11-26
 ---
 
@@ -462,3 +462,7 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 **P5-2 验收补实（2026-11-26，决策 68 补测）**：`--velocity-probe` 与 `--taa-matrix-reprojection` 落地。读数：静态 `meanDiff=0.475/0.484 px`、`maxDiff=0.487 px`、`>0.5px=0.00%`（`< 0.5 像素` 判据达标，下限由 `R16G16_SFLOAT` 决定）；运动 `meanDiff=1.195/1.285 px`、`>0.5px=76.10%/79.75%`。`静态区域时域方差 −30%` **未达成**（整帧时域差 2.395 vs 2.370），机理见决策 68。Debug 三组干净。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-125624`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19016）。
+
+**P5-3（2026-11-26，决策 69）**：邻域换 5×5 十字并**按世界半径过滤抽头**，夹制盒只用有效抽头（σ 1.25 → 1.0），覆盖率把历史权重压到 0.45~1.0 倍；`--taa-classic-kernel` 回退。读数：植被薄几何 mean 1.339 → 1.300（−2.9%）、`>16` 1.64% → 1.44%（−12.2%）；静态/运动立方体 mean 略差 0.8%~1.1%、`>16` 略好 1.1%~3.0%。Debug 四组干净。
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-131220`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19076）。

@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1793 行
+size: ~1803 行
 updated: 2026-11-26
 ---
 
@@ -1792,3 +1792,13 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - Debug 三组（静态 / 回退 / 运动 + 探针）`errors=0 warnings=0`、stderr 0 字节。
 
 - 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-125624`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19016）。
+
+## P5-3：薄几何/去遮挡检测（邻域按世界半径过滤，2026-11-26）
+
+- 邻域从 3×3 全收换成 5×5 十字 13 抽头；每抽头读 G-Buffer 世界位置，半径超出容差的抽头直接丢弃。
+- 只用有效抽头算 `AABB ∩ (mean ± 1.0σ)`（σ 系数从 1.25 收到 1.0）；覆盖率 `validTaps/taps` 线性地把历史权重压到 0.45~1.0 倍。
+- `--taa-classic-kernel` 是回退开关；`Push` 的两个 float 槽合并成 `uint taaFlags`（1 矩阵 / 2 探针 / 4 经典），结构体仍 32 字节。
+- 读数：植被薄几何 mean 1.339 → 1.300（−2.9%）、`>16` 1.64% → 1.44%（−12.2%）；静态与运动立方体 mean 略差 0.8%~1.1%、`>16` 略好 1.1%~3.0%。
+- Debug 四组 `errors=0 warnings=0`、stderr 0 字节。
+
+- 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-131220`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19076）。
