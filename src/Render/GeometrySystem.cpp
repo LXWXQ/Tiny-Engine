@@ -9,6 +9,63 @@
 #include "AssetPaths.h"
 #include "Render/SubMeshCulling.h"
 #include "Render/SceneGpuBatch.h"
+// P3-5：把几何 pass 的参数块交给构建期反射（TM-12 从 SSAO 扩到几何 pass）。
+// 下面这些常量由 tools/SpirvReflect.cpp 从 mrt.vert.spv / mrt.frag.spv 反射生成，
+// 是 GLSL 与 C++ 的唯一真值 —— 手写偏移一旦漂移就编译失败，而不是等画面错位。
+#include "mrt.frag.reflect.h"
+#include "mrt.vert.reflect.h"
+
+namespace geometryVertReflect = tiny::reflect::mrt_vert;
+namespace geometryFragReflect = tiny::reflect::mrt_frag;
+
+static_assert(sizeof(SimplePushConstantData) == geometryVertReflect::kPushBlockSize,
+              "SimplePushConstantData 与 mrt.vert 的 push block 大小不一致");
+static_assert(sizeof(SimplePushConstantData) == geometryFragReflect::kPushBlockSize,
+              "SimplePushConstantData 与 mrt.frag 的 push block 大小不一致");
+static_assert(offsetof(SimplePushConstantData, modelMatrix) == geometryVertReflect::kPushModelMatrixOffset,
+              "SimplePushConstantData.modelMatrix 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, normalMatrix) == geometryVertReflect::kPushNormalMatrixOffset,
+              "SimplePushConstantData.normalMatrix 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, materialId) == geometryVertReflect::kPushMaterialOffset,
+              "SimplePushConstantData.materialId 偏移漂移（GLSL 侧是 int32_t2 material）");
+static_assert(offsetof(SimplePushConstantData, alphaCutoff) == geometryVertReflect::kPushAlphaCutoffOffset,
+              "SimplePushConstantData.alphaCutoff 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, alphaMasked) == geometryVertReflect::kPushAlphaMaskedOffset,
+              "SimplePushConstantData.alphaMasked 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, albedoFallback) == geometryVertReflect::kPushAlbedoFallbackOffset,
+              "SimplePushConstantData.albedoFallback 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, checkerScale) == geometryVertReflect::kPushCheckerScaleOffset,
+              "SimplePushConstantData.checkerScale 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, checkerUvTransform) == geometryVertReflect::kPushCheckerUvTransformOffset,
+              "SimplePushConstantData.checkerUvTransform 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainMode) == geometryVertReflect::kPushTerrainModeOffset,
+              "SimplePushConstantData.terrainMode 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainMinY) == geometryVertReflect::kPushTerrainMinYOffset,
+              "SimplePushConstantData.terrainMinY 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainHeightRange) == geometryVertReflect::kPushTerrainHeightRangeOffset,
+              "SimplePushConstantData.terrainHeightRange 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainDetailStrength) == geometryVertReflect::kPushTerrainDetailStrengthOffset,
+              "SimplePushConstantData.terrainDetailStrength 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainUvTiling) == geometryVertReflect::kPushTerrainUvTilingOffset,
+              "SimplePushConstantData.terrainUvTiling 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainMaterialStyle) == geometryVertReflect::kPushTerrainMaterialStyleOffset,
+              "SimplePushConstantData.terrainMaterialStyle 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainLodBlend) == geometryVertReflect::kPushTerrainLodBlendOffset,
+              "SimplePushConstantData.terrainLodBlend 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainLodBlendMode) == geometryVertReflect::kPushTerrainLodBlendModeOffset,
+              "SimplePushConstantData.terrainLodBlendMode 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, gpuScene) == geometryVertReflect::kPushGpuSceneOffset,
+              "SimplePushConstantData.gpuScene 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, terrainBatched) == geometryVertReflect::kPushTerrainBatchedOffset,
+              "SimplePushConstantData.terrainBatched 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, clipY) == geometryVertReflect::kPushClipYOffset,
+              "SimplePushConstantData.clipY 偏移漂移");
+static_assert(offsetof(SimplePushConstantData, clipMode) == geometryVertReflect::kPushClipModeOffset,
+              "SimplePushConstantData.clipMode 偏移漂移");
+// mrt.vert 的 GlobalUbo 只声明到 previousProjectionView（208 字节），
+// 这里锁住共享前缀的最后一个成员；完整 GlobalUbo 的锁在 DescriptorManager.cpp。
+static_assert(offsetof(GlobalUbo, previousProjectionView) == geometryVertReflect::kUboPreviousProjectionViewOffset,
+              "GlobalUbo.previousProjectionView 偏移漂移（mrt.vert 视角）");
 #include "Scene/RenderInterpolation.h"
 #include "Scene/SkyCamera.h"
 #include <iostream>
@@ -504,7 +561,7 @@ void GeometrySystem::createPipelineLayout(VkDescriptorSetLayout globalSetLayout,
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(SimplePushConstantData);
+    pushConstantRange.size = geometryVertReflect::kPushBlockSize;
 
     std::vector<VkDescriptorSetLayout> descriptorSetLayouts{ globalSetLayout, materialSetLayout, terrainSetLayout };
     // F1：set 3 = 实例缓冲。没有 GPU 批时也照常建布局（复用 set 0 的布局占位），
@@ -1248,7 +1305,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             }
             vkCmdPushConstants(commandBuffer, pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(SimplePushConstantData), &push);
+                0, geometryVertReflect::kPushBlockSize, &push);
 
             if (arenaBacked)
             {
@@ -1287,7 +1344,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             push.alphaMasked = 0u;
             vkCmdPushConstants(commandBuffer, pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(SimplePushConstantData), &push);
+                0, geometryVertReflect::kPushBlockSize, &push);
 
             const VkDeviceSize commandOffset =
                 static_cast<VkDeviceSize>(terrainGpuSlot) *
@@ -1313,7 +1370,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             push.alphaMasked = 0u;
             vkCmdPushConstants(commandBuffer, pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(SimplePushConstantData), &push);
+                0, geometryVertReflect::kPushBlockSize, &push);
 
             vkCmdDrawIndexedIndirect(
                 commandBuffer, indirectBuffer.buffer,
@@ -1357,7 +1414,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         frameInfo.telemetry.descriptorBinds += 1u;
         vkCmdPushConstants(commandBuffer, pipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(SimplePushConstantData), &batchTerrainPush);
+            0, geometryVertReflect::kPushBlockSize, &batchTerrainPush);
         vkCmdDrawIndexedIndirect(
             commandBuffer, indirectBuffer.buffer, 0,
             kTerrainGpuMaxEntities * kTerrainGpuCommandsPerEntity,
@@ -1391,7 +1448,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         }
         vkCmdPushConstants(commandBuffer, pipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(SimplePushConstantData), &batchPush);
+            0, geometryVertReflect::kPushBlockSize, &batchPush);
         geometryPipeline->bind(commandBuffer);
         // 地形合批会把 set 3 换成 chunk 实例表，这里必须换回场景实例表，
         // 否则实例矩阵取到地形行，网格会被画到错误位置。
@@ -1428,7 +1485,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         frameInfo.telemetry.descriptorBinds += 1u;
         vkCmdPushConstants(commandBuffer, pipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(SimplePushConstantData), &batchVoxelPush);
+            0, geometryVertReflect::kPushBlockSize, &batchVoxelPush);
         vkCmdDrawIndexedIndirect(
             commandBuffer, voxelIndirectBuffers[frameInfo.frameInFlightIndex].buffer, 0,
             voxelBatchCommands, sizeof(VkDrawIndexedIndirectCommand));

@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~502 行
+size: ~507 行
 updated: 2026-11-26
 ---
 
@@ -496,6 +496,11 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 
 **下一步候选**（按收益/成本排序）：
 1. TM-12 的着色器参数块从 SSAO 推广到几何/光照 pass（P3-5，纯收益项）。
+**P3-5 已落地（2026-11-26，决策 74）**：几何 pass 的 push 参数块与光照 pass 的 set 0（`GlobalUbo` + 绑定号）
+改由 `mrt.vert.reflect.h` / `mrt.frag.reflect.h` / `lighting.frag.reflect.h` 当唯一真值，
+共 3 条块大小 + 35 条成员偏移 + 3 条连续性断言。代价是反射头成了编译前置（换生成器后要先编译一次）；
+描述符类型与数量仍手写，留给下一步。**回退开关：无**（只加编译期断言，运行期行为逐位不变）。
+
 2. 阴影 pass 的地形 arena 索引绑定也接进缓存（当前只接了顶点绑定）。
 3. `MeshDrawCommandList` + 桶排序：只有在上面两件事之后仍有明显跨 pass 冗余时才值得做。
 

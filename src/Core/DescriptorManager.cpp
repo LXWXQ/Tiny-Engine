@@ -1,6 +1,50 @@
 #include "DescriptorManager.h"
 #include "Material.h"
 #include "FrameInfo.h"
+// P3-5：set 0 的绑定号与 GlobalUbo 的每个偏移都只认构建期反射（TM-12 扩到光照 pass）。
+// 之前这一层是手写常量：GLSL 改了 binding 而 C++ 没跟，验证层要到运行时才报。
+#include "lighting.frag.reflect.h"
+#include "mrt.frag.reflect.h"
+
+namespace lightingReflect = tiny::reflect::lighting_frag;
+namespace surfaceReflect = tiny::reflect::mrt_frag;
+
+static_assert(sizeof(GlobalUbo) == lightingReflect::kUboBlockSize,
+              "GlobalUbo 与 lighting.frag 的 UBO 块大小不一致");
+static_assert(offsetof(GlobalUbo, projectionView) == lightingReflect::kUboProjectionViewOffset,
+              "GlobalUbo.projectionView 偏移漂移");
+static_assert(offsetof(GlobalUbo, ambientLightColor) == lightingReflect::kUboAmbientLightColorOffset,
+              "GlobalUbo.ambientLightColor 偏移漂移");
+static_assert(offsetof(GlobalUbo, lightDirection) == lightingReflect::kUboLightDirectionOffset,
+              "GlobalUbo.lightDirection 偏移漂移");
+static_assert(offsetof(GlobalUbo, lightColor) == lightingReflect::kUboLightColorOffset,
+              "GlobalUbo.lightColor 偏移漂移");
+static_assert(offsetof(GlobalUbo, cameraPos) == lightingReflect::kUboCameraPosOffset,
+              "GlobalUbo.cameraPos 偏移漂移");
+static_assert(offsetof(GlobalUbo, numLights) == lightingReflect::kUboNumLightsOffset,
+              "GlobalUbo.numLights 偏移漂移");
+static_assert(offsetof(GlobalUbo, exposure) == lightingReflect::kUboExposureOffset,
+              "GlobalUbo.exposure 偏移漂移");
+static_assert(offsetof(GlobalUbo, previousProjectionView) == lightingReflect::kUboPreviousProjectionViewOffset,
+              "GlobalUbo.previousProjectionView 偏移漂移");
+static_assert(offsetof(GlobalUbo, shadowMatrices) == lightingReflect::kUboShadowMatricesOffset,
+              "GlobalUbo.shadowMatrices 偏移漂移");
+static_assert(offsetof(GlobalUbo, shadowCascadeSplits) == lightingReflect::kUboShadowCascadeSplitsOffset,
+              "GlobalUbo.shadowCascadeSplits 偏移漂移");
+static_assert(offsetof(GlobalUbo, shadowParams) == lightingReflect::kUboShadowParamsOffset,
+              "GlobalUbo.shadowParams 偏移漂移");
+static_assert(offsetof(GlobalUbo, fogParams) == lightingReflect::kUboFogParamsOffset,
+              "GlobalUbo.fogParams 偏移漂移");
+static_assert(offsetof(GlobalUbo, shadowFilterParams) == lightingReflect::kUboShadowFilterParamsOffset,
+              "GlobalUbo.shadowFilterParams 偏移漂移");
+static_assert(offsetof(GlobalUbo, clusterParams) == lightingReflect::kUboClusterParamsOffset,
+              "GlobalUbo.clusterParams 偏移漂移");
+
+// 贴图 1~9 是连续的一段；15~18（聚簇）也是一段连续的四张。
+static_assert(lightingReflect::kIrradianceMapBinding == lightingReflect::kEnvironmentMapBinding + 6,
+              "贴图绑定 1~9 的连续性变了，DescriptorManager 的循环要跟着改");
+static_assert(lightingReflect::kBinding18Binding == lightingReflect::kClusterParamsBinding + 3,
+              "聚簇绑定 15~18 的连续性变了，DescriptorManager 的循环要跟着改");
 #include <stdexcept>
 #include <iostream>
 #include <string>
@@ -192,18 +236,18 @@ void DescriptorManager::createGlobalLayout()
 	// P2-6：binding 19 = 点光源数组（storage buffer，容量 kMaxPointLights）。
 	std::vector<VkDescriptorSetLayoutBinding> bindings(20);
 
-	bindings[0].binding = 0;
+	bindings[0].binding = lightingReflect::kUboBinding;
 	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	bindings[0].descriptorCount = 1;
 	bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	// E3: binding 10 = 材质 factor 表（SSBO，按材质槽位索引）。
-	bindings[10].binding = 10;
+	bindings[10].binding = surfaceReflect::kMaterialFactorsBinding;
 	bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[10].descriptorCount = 1;
 	bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-	bindings[11].binding = 11;
+	bindings[11].binding = lightingReflect::kShadowMapsBinding;
 	bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	bindings[11].descriptorCount = 1;
 	bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -224,7 +268,8 @@ void DescriptorManager::createGlobalLayout()
 	bindings[14].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	// TM-13：15 参数（mat4 + vec4 + uvec4）、16 簇区间、17 灯索引、18 灯数组。
-	for (uint32_t i = 15; i <= 18; ++i)
+	// P3-5 起起点与连续性和 lighting.frag 的声明绑在一起（见文件头的 static_assert）。
+	for (uint32_t i = lightingReflect::kClusterParamsBinding; i <= lightingReflect::kBinding18Binding; ++i)
 	{
 		bindings[i].binding = i;
 		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -234,12 +279,14 @@ void DescriptorManager::createGlobalLayout()
 	}
 
 	// P2-6：19 = 点光源数组。灯数上限从此由缓冲容量决定，不再是 UBO 数组长度。
-	bindings[19].binding = 19;
+	bindings[19].binding = lightingReflect::kBinding19Binding;
 	bindings[19].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[19].descriptorCount = 1;
 	bindings[19].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-	for (uint32_t i = 1; i <= 9; i++)
+	// P3-5：1~9 是 lighting.frag 里连续的一段贴图，起点取自反射，终点是 irradiance + 2。
+	for (uint32_t i = lightingReflect::kEnvironmentMapBinding;
+	     i <= lightingReflect::kIrradianceMapBinding + 2u; i++)
 	{
 		bindings[i].binding = i;
 		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;

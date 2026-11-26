@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~2103 行
+size: ~2174 行
 updated: 2026-11-26
 ---
 
@@ -2102,3 +2102,74 @@ void bindIndexBuffer(VkCommandBuffer, VkBuffer, VkDeviceSize offset, VkIndexType
 ### 踩到的坑
 
 `Model::bind()` 在 `isSkinned()` 时会换绑动态顶点缓冲。缓存按 `(VkBuffer, offset)` 记账，换绑自然触发一次真正的绑定 —— 但要保证「动态缓冲每帧被写」这件事不依赖绑定的重复与否，所以蒙皮路径的 `dynamicVertexBufferIndex` 仍然每帧推进。
+
+## 决策 74：几何与光照 pass 的参数块改认构建期反射当唯一真值（P3-5，2026-11-26）
+
+### 问题
+
+TM-12 已经有一条成熟的路：`tools/SpirvReflect.cpp` 从 `.spv` 反射出 `build/shaders/<name>.reflect.h`，
+里面是 `kPushBlockSize`、`kUbo<Member>Offset`、`k<Name>Binding` 这些 `inline constexpr`。
+但这条路只走到了 SSAO 一个 pass —— 剩下手写的第二份真值一直在那里：
+
+- 几何 pass 的 `SimplePushConstantData`（224 字节）在 `src/Core/FrameInfo.h` 里手写，
+  `mrt.vert` 与 `mrt.frag` 各自声明同一份 push block，两侧谁也不检查谁。
+- set 0 的 20 个绑定号在 `src/Core/DescriptorManager.cpp` 的 `createGlobalLayout()` 里手写，
+  `lighting.frag` 才是这些绑定的真正使用者。
+- `GlobalUbo`（480 字节，P2-6 之后尾部还有 `clusterParams`）的偏移在 `FrameInfo.h` 里手写成一串
+  `static_assert(offsetof(...) == N)`，那个 `N` 是从 GLSL 手抄过来的。
+
+这三处都是「改了不报错、只在画面上错位或者等验证层 08114/07988 才炸」的位置。
+
+### 做法
+
+把两处参数块交给反射常量，C++ 里不再出现手写的偏移或绑定号：
+
+- `src/Render/GeometrySystem.cpp`（几何 pass）：`#include "mrt.vert.reflect.h"` 与 `"mrt.frag.reflect.h"`，
+  断言 `sizeof(SimplePushConstantData)` 与两侧 `kPushBlockSize` 相等（侧面证明 vert/frag 的 push block 也是同一份），
+  再逐成员断言 `offsetof(...) == kPush<Member>Offset`（21 条：模型/法线矩阵、材质、alpha、棋盘格、
+  地形六项、实例化开关、裁剪）。
+  管线布局的 `pushConstantRange.size` 与 6 处 `vkCmdPushConstants` 的 `size` 直接用 `kPushBlockSize`，
+  所以「结构体多大」这件事只在 GLSL 里写一次。
+- `src/Core/DescriptorManager.cpp`（光照 pass 的 set 0）：`#include "lighting.frag.reflect.h"` 与 `"mrt.frag.reflect.h"`，
+  断言 `sizeof(GlobalUbo) == kUboBlockSize`（480）与 14 个成员偏移，
+  再把 `bindings[0]`、`bindings[10]`、`bindings[11]`、`bindings[19]` 的绑定号换成 `kUboBinding` /
+  `kMaterialFactorsBinding` / `kShadowMapsBinding` / `kBinding19Binding`；
+  两段连续绑定（贴图 1~9、聚簇 15~18）用「起点取自反射 + 连续性断言」驱动循环边界。
+
+### 为什么只改这两处，而不是给每个 Pass 都来一遍
+
+set 0 的布局全引擎只有 `DescriptorManager` 一份，`GlobalUbo` 也只有一份；几何 pass 的 push constant
+结构体也只有一个。逐 Pass 复制断言会产生十几份同名检查，改一次 shader 要改十几处 ——
+那正是「手写第二份真值」这个问题的另一种形状。
+
+### 为什么是 static_assert，而不是启动期校验
+
+布局漂移是编译期就能知道的事，写在 `static_assert` 里最便宜：不用等窗口打开、不用等验证层、
+也不占运行期分支。反射常量本身是 `inline constexpr`，进断言的成本是零。
+
+### 验收（2026-11-26）
+
+| 项 | 结果 |
+| --- | --- |
+| 编译期断言 | 3 条块大小（push 224 ×2、UBO 480）+ 21 条 push 成员偏移 + 14 条 UBO 成员偏移 + 3 条连续性，全绿 |
+| Debug 验证 | `--streaming-world 2 --gpu-scene-external 400`、`--cube-field 10000 --cube-field-motion 500`、`--voxel-world 1`、`--light-stress 300` 四组，全部 `errors=0 warnings=0`、stderr 0 字节 |
+| 读数不变 | `pipelineBinds/frame=18.5 redundant=6.5 (35.1%)`、`vertexBinds 5.0 → 3.0 (40.0%)`、`indexBinds 5.0 → 3.0 (40.0%)` 与 P3 第二步逐位一致 |
+| 全量回归 | 96 项 ALL PASS（`build/validation/20261126-144332`） |
+| DocCheck | PASS（documents=82 lines=19441） |
+
+### 代价与边界
+
+- 只覆盖「结构体布局」与「绑定号」两类漂移。描述符**类型与数量**（`STORAGE_BUFFER` 还是
+  `COMBINED_IMAGE_SAMPLER`、`descriptorCount`）仍在各自 `createLayout` 里手写 ——
+  反射头其实也给了 `k<Name>Count`，但那是下一步的事。
+- 四个无名绑定仍叫 `kBinding16`~`kBinding19`。名字不加语义，但它照样能锁住「绑定号是多少」。
+- `mrt.vert` 的 `GlobalUbo` 只声明到 `previousProjectionView`，所以几何侧只断言共享前缀的最后一个成员；
+  完整 480 字节的锁在 `DescriptorManager.cpp`（以 `lighting.frag` 为准）。
+- 反射头是构建产物：`tools/build.ps1 -Reconfigure` 或换生成器之后要先跑一次编译，否则新加的
+  `#include` 找不到头文件 —— 这与 SSAO 现有做法一致。
+
+### 不引入的
+
+不做运行期反射校验（启动时解析 SPIR-V 太慢，而且能编译期发现）；不做材质变体键
+（`ShaderVariantKey = (passId, featureMask)` 是 §2.12 的第二级，需要先有「用到的键」清单）。
+

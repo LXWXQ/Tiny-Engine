@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1841 行
+size: ~1850 行
 updated: 2026-11-26
 ---
 
@@ -1840,3 +1840,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 画面：默认 vs `--no-pipeline-cache` 第 60 帧 1920×1080 只差 274 像素，全在 HUD 的 FPS 文字上，面板外 0。
 - 验证：Debug 五组 `errors=0 warnings=0`、stderr 0 字节；全量回归 96 项 ALL PASS（`build/validation/20261126-142524`）；DocCheck PASS（documents=82 lines=19346）。
 - 未接入：`ShadowPass` 的地形 arena 索引绑定（收益小，留给需要时）。
+
+## P3 第五步：参数块与绑定号交给构建期反射（P3-5，2026-11-26）
+
+- 几何 pass 的 `SimplePushConstantData`（224 字节）改由 `mrt.vert.reflect.h` / `mrt.frag.reflect.h` 锁：3 条块大小 + 21 条成员偏移；管线布局与 6 处 `vkCmdPushConstants` 的大小直接用 `kPushBlockSize`。
+- 光照 pass 的 set 0 改由 `lighting.frag.reflect.h` 锁：`sizeof(GlobalUbo) == 480` + 14 条成员偏移；`bindings[0]/[10]/[11]/[19]` 取 `kUboBinding` / `kMaterialFactorsBinding` / `kShadowMapsBinding` / `kBinding19Binding`，贴图 1~9 与聚簇 15~18 用「起点 + 连续性断言」驱动循环。
+- 只改这两处：set 0 布局与 `GlobalUbo` 全引擎各一份，几何 push 结构体也只有一个 —— 逐 Pass 复制断言只会把「手写第二份真值」换个形状。
+- 验收：编译期全绿；Debug 四组（流式 / 运动立方体 / 体素 / 300 盏灯）`errors=0 warnings=0`、stderr 0；读数与 P3 第二步逐位一致（`pipelineBinds 18.5 / redundant 35.1%`、顶点与索引各 40.0% 命中）；全量回归 96 项 ALL PASS；DocCheck PASS（documents=82 lines=19441）。
+- 边界：描述符类型/数量仍手写（反射头有 `k<Name>Count`，留给下一步）；`kBinding16`~`kBinding19` 是无名绑定，只锁数字不加语义。
+
