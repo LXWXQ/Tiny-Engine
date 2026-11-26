@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1645 行
+size: ~1658 行
 updated: 2026-11-26
 ---
 
@@ -1644,3 +1644,16 @@ Debug 五组（default / cf10k / motion / `--no-instance-cull` / `--voxel-world 
 - 不做双缓冲历史（现在的按帧槽缓冲天然就是三份历史）。
 - 不在 shader 里读 `previousModel`（本步零消费者，读它只会让「读数不变」这条验收失去意义）。
 
+### 收尾补丁：谁还按 224 假设（2026-11-26）
+
+第一版只改了 `src/Render/SceneGpuBatch.h` / 两个 shader 的 `InstanceRecord`，漏了三处按 224 字节写死的消费者：
+
+1. `shaders/mrt.frag` 也声明了一份 `InstanceRecord`（片元阶段用它取材质），第一版没加 `previousModel` → 片元侧 stride 仍是 224，从第 1 个实例开始材质参数读错位。验证层看不出这个问题，因为越界的只是「读到的值不对」，不是越界访问。
+2. `src/Render/GeometrySystem.h:187` 的 `kTerrainChunkInstanceStride = 224u` —— 地形合批把每个 chunk 写成一行 `InstanceRecord`（`src/Render/GeometrySystemGpu.cpp:371-400` 按 `row[0..43]` 逐字段写），行距仍是 224，而 `shaders/mrt.vert` 按 288 索引 → 除第 0 个 chunk 外，地形全部读到错位的世界矩阵。
+3. `src/Render/GeometrySystem.h:206` 的 `kVoxelBatchInstanceStride = 224u` 同理（体素合批的 chunk 行）。
+
+修法：两个 stride 常量改成 288 并注明来源是 `sizeof(SceneGpuBatch::InstanceRecord)`；`shaders/mrt.frag` 的 `InstanceRecord` 补 `mat4 previousModel`；`shaders/scene_cull.comp` 里「224 字节记录」的注释改 288。行内布局没动（`row[38] = misc.z` 这类偏移都还在 224 字节之内），所以写行代码一行没改，多出来的 64 字节保持 0。
+
+怎么发现的：A1 的验收靠「三档读数与 P2-5 逐位相同」——但读数只走 `scene_cull.comp` 与 `mrt.vert`，碰不到 `mrt.frag` 与地形/体素行距，所以「读数不变」证明不了 stride 全对齐。补做的检查是「全仓搜 224 与 `InstanceRecord` 的镜像声明」，再用 `--streaming-world 2` 的合批地形截图 A/B：修前地形沉在水面以下（行距错位把世界矩阵读花），修后地形正常覆盖近景，两张图 1920×1080 有 1,230,977 个像素不同（59.4%）。这类「只有像素能抓到」的回归要记进 P5 的验收清单。
+
+补丁后复验：Debug 四组（`--streaming-world 2` 合批地形 130 帧、`--no-terrain-batch` 60 帧、`--voxel-world 1` 40 帧、默认 40 帧）全部 `errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项 ALL PASS**（`build/validation/20261126-094557`）；DocCheck PASS（documents=82 lines=18689）。

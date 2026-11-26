@@ -105,6 +105,7 @@ struct InstanceRecord
     vec4 boundsMin;
     vec4 boundsMax;
     uvec4 draw;
+    mat4 previousModel; // 上一次结构上传时的世界矩阵；片元阶段不读，只是让 stride 与顶点缓冲一致
 };
 layout(set = 3, binding = 0) readonly buffer InstanceBuffer { InstanceRecord instances[]; };
 

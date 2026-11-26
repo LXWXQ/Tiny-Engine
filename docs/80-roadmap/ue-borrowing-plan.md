@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1065 行
+size: ~1066 行
 updated: 2026-11-26
 ---
 
@@ -1064,3 +1064,4 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 
 **P2 第十二步（2026-11-26，上一帧世界矩阵）**：`InstanceRecord` 224 → 288 字节，尾部加 `previousModel`；`GpuScene::Instance` 144 → 208，加 `previousTransform`；两个 shader 的镜像结构同步加字段（本步不读）。填值全部来自现成状态：实体用 `worldTransform.previousMatrix * nodeMatrix`（渲染插值本来就在用），外部缓存命中用 `external.transform`、未命中但同绑定用 `cache.transform`。新增 `[SceneGpu] instance history | instances=… moved=…` 读数：default `103/0`、10k `10103/0`、30k `30103/0`、motion `10103/10000`，三档 `gpuInst` 与 P2-5 逐位相同（0.58 / 0.6747 / 0.3726），证明 shader 侧 stride 对齐。Debug 五组 `errors=0`、全量回归 **96 项** ALL PASS（`build/validation/20261126-092708`）、DocCheck PASS（documents=81 lines=18673）。**边界**：本步零消费者，P5-1 才读；`--rebuild-structure n` 时「上一帧」退化成「上次重建」。这一刀把 P5-1 的前置条件补齐了，P5 那条线可以随时开工。
 
+**P2 第十二步收尾补丁（2026-11-26）**：记录涨到 288 后，还有三处按 224 写死的消费者要一起改 —— `shaders/mrt.frag` 的 `InstanceRecord` 副本（片元取材质）、`kTerrainChunkInstanceStride`、`kVoxelBatchInstanceStride`。漏改的话验证层全绿、读数一位不变，但地形/体素合批除第 0 行外全部读错位（`--streaming-world 2` 合批地形截图修前/修后 59.4% 像素不同）。教训：改共享记录布局时，「谁复制了这份布局」比「谁 include 了它」更容易漏。补丁后 Debug 四组干净、全量回归 **96 项 ALL PASS**（`build/validation/20261126-094557`）、DocCheck PASS（documents=82 lines=18689）。

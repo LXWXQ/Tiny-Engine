@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~411 行
+size: ~412 行
 updated: 2026-11-26
 ---
 
@@ -409,3 +409,4 @@ updated: 2026-11-26
 
 **遗留**：P5-1 的 velocity 消费者未接（这一刀只铺数据）；`--rebuild-structure n` 时「上一帧」退化成「上次重建」，P5-1 落地时要重新确认；A2（阴影/反射各一份剔除与紧凑可见表）尚未开工。
 
+**收尾补丁（2026-11-26）**：`shaders/mrt.frag` 补 `previousModel`、`kTerrainChunkInstanceStride` / `kVoxelBatchInstanceStride` 改 288；漏改会让片元材质与地形/体素合批读错位（验证层与读数都查不出，靠像素 A/B 才发现）。补丁后回归 96 项 ALL PASS（`build/validation/20261126-094557`）。

@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1742 行
+size: ~1743 行
 updated: 2026-11-26
 ---
 
@@ -1741,3 +1741,4 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 坑：shader 少声明 `previousModel` 不报错、只把第 1 个之后的实例读成错位数据（靠读数逐位不变才证明 stride 对齐）；`tools/Validate.ps1` 的 configure 写死 `-G "Visual Studio 17 2022"`，不能指到 `build-ninja`（报 `generator ... Does not match the generator used previously`）；运行引擎会改 `config/engine.json` 的相机位姿，提交前要 `git checkout --`。
 - 边界：本步没有消费者（P5-1 的 velocity 才读它）；`--rebuild-structure n` 时「上一帧」退化成「上次重建」，velocity 会算成 n 帧位移；30k 场景实例缓冲 20.2 → 26.0 MB。
 
+> 收尾补丁（2026-11-26）：`shaders/mrt.frag` 的 `InstanceRecord` 补 `previousModel`；`kTerrainChunkInstanceStride` / `kVoxelBatchInstanceStride` 从 224 改 288（行内布局不变，多出的 64 字节保持 0）。漏改的后果是片元侧材质与地形/体素合批除第 0 行外全部读错位 —— 验证层抓不到，只能靠像素 A/B（`--streaming-world 2` 合批地形修前/修后 59.4% 像素不同）。补丁后 Debug 四组 `errors=0`、全量回归 **96 项 ALL PASS**（`build/validation/20261126-094557`）。

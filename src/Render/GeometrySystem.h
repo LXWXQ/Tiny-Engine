@@ -184,7 +184,7 @@ private:
 
     // F2-b: terrain chunk meshes copied into one arena so a single indirect draw
     // covers every chunk; per-chunk transforms come from a set 3 instance table.
-    static constexpr uint32_t kTerrainChunkInstanceStride = 224u; // SceneGpuBatch::InstanceRecord
+    static constexpr uint32_t kTerrainChunkInstanceStride = 288u; // sizeof(SceneGpuBatch::InstanceRecord)：model+normal+flags+misc+uv+boundsMin+boundsMax+draw+previousModel
     // F2-f：arena 由 Scene 持有并负责把几何拷进去，这里只借用指针绘制。
     TerrainMeshArena* terrainMeshArena = nullptr;
     std::array<TerrainGpuBuffer, kFramesInFlight> terrainChunkInstances{};
@@ -203,7 +203,7 @@ private:
     // -----------------------------------------------------------------------
     static constexpr uint32_t kVoxelBatchMaxChunks = 1024;
     static constexpr uint32_t kVoxelBatchMaxCommands = 2048;
-    static constexpr uint32_t kVoxelBatchInstanceStride = 224u; // SceneGpuBatch::InstanceRecord
+    static constexpr uint32_t kVoxelBatchInstanceStride = 288u; // sizeof(SceneGpuBatch::InstanceRecord)：与地形共用同一份记录布局
     std::array<TerrainGpuBuffer, kFramesInFlight> voxelChunkInstances{};
     std::array<VkDescriptorSet, kFramesInFlight> voxelChunkInstanceSets{};
     VkDescriptorPool voxelChunkInstancePool = VK_NULL_HANDLE;

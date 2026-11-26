@@ -50,7 +50,7 @@ layout(set = 0, binding = 3) buffer StatsBuffer
     uvec4 stats[4];
 } statsBuffer;
 
-// 实例缓冲：和 C++ 的 SceneGpuBatch::InstanceRecord 是同一份 224 字节记录（mrt.vert 读的是同一个
+// 实例缓冲：和 C++ 的 SceneGpuBatch::InstanceRecord 是同一份 288 字节记录（mrt.vert 读的是同一个
 // 缓冲，只是绑在图形 set 上）。这里只读它做实例级视锥统计，不写。
 struct InstanceRecord
 {
