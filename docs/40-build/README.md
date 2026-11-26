@@ -4,8 +4,8 @@ title: 构建层索引
 type: build
 scope: CMakeLists.txt, cmake/, tools/SetupDependencies.ps1, 3rdParty/
 read-when: 每次构建；或构建失败、换机器、加依赖
-size: ~45 行
-updated: 2026-10-31
+size: ~47 行
+updated: 2026-11-26
 ---
 
 # 40-build 构建与环境
@@ -14,6 +14,7 @@ updated: 2026-10-31
 |---|---|
 | [dependencies](dependencies.md) | 有哪些第三方依赖？固定哪个版本？目录什么结构？ |
 | [build](build.md) | 怎么构建？有哪几条隐形规则？ |
+| [compile-speed](compile-speed.md) | 编译为什么慢？开了哪些开关？改 pch.h 会怎样？ |
 | [troubleshooting](troubleshooting.md) | 编不过 / 跑不起来怎么查？ |
 | [git-workflow](git-workflow.md) | 怎么提交并推送到远程？推失败怎么办？ |
 

@@ -4,8 +4,8 @@ title: 构建流程与隐形规则
 type: build
 scope: CMakeLists.txt, cmake/AssetPaths.h.in, tools/SpirvReflect.cpp
 read-when: 每次构建；或新增源文件、改 CMake 选项
-size: ~149 行
-updated: 2026-11-20
+size: ~190 行
+updated: 2026-11-26
 ---
 
 # 构建流程与隐形规则
@@ -23,6 +23,37 @@ cmake --build build --config Debug
 # 运行
 .\\build\\Debug\\TinyEngine.exe
 ```
+
+## 1.2 Ninja 构建（推荐：全量与增量都更快）
+
+VS 生成器把 130+ 个 `.cpp` 全塞进 `tiny_core` 一个项目，MSBuild 只能逐文件串行
+（`CMakeLists.txt` 里的 `/MP` 让 cl 在项目内部并行，只是缓解）。Ninja 对每条编译命令
+建一个边，调度没有工程级开销，增量与无改动构建都快得多。
+
+```powershell
+# 一键：configure + /showIncludes 前缀自检 + 构建（默认 Debug）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1 -Config Release
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1 -Target TinyEditor
+
+# 手动等价（CMakePresets.json 提供 ninja / vs2022 两套预设）
+cmake --preset ninja
+cmake --build --preset ninja-debug
+```
+
+产物在 `build-ninja/Debug/`（`TinyEngine.exe` / `TinyEditor.exe`），运行方式不变。
+VS 生成器的 `build/` 继续可用，两者互不干扰；`build-*/` 已在 `.gitignore`。
+Ninja 预设还开了 `CMAKE_EXPORT_COMPILE_COMMANDS`，`build-ninja/compile_commands.json`
+可给 clangd / clang-tidy 用。
+
+各生成器、各开关的实测数据（全量 / 无改动 / 改核心头 / shader）统一记在 [compile-speed](compile-speed.md)，这里不再重复。
+PCH 默认开启（`src/pch.h`，`-DTINY_PCH=OFF` 关闭）。
+
+**中文区域设置（CP936）下的坑**：cl 的 `/showIncludes` 输出是 UTF-8 的
+「注意: 包含文件: 」，CMake 3.31 探测该前缀时按控制台代码页解码，在 CP936 控制台里
+会写成乱码进 `rules.ninja`，Ninja 便一条依赖都匹配不上 —— 症状是**改头文件后不重编**、
+`ninja -C build-ninja -t deps` 里全是 `#deps 0`。`CMakeLists.txt` 的配置阶段已自行
+探测并修正（见第 3 节第 5 条），`tools/build.ps1` 每次构建前还会再校验一次。
 
 ## 1.5 两个构建产物
 
@@ -59,7 +90,7 @@ cmake --build build --config Debug --target TinyEditor
 5. **全局编译选项**：`/utf-8`（源码与执行字符集都是 UTF-8）、
    `TINYGLTF_NO_STB_IMAGE` / `TINYGLTF_NO_STB_IMAGE_WRITE`。
 
-## 3. 四条隐形规则（都会导致"看起来莫名其妙的错误"）
+## 3. 五条隐形规则（都会导致"看起来莫名其妙的错误"）
 
 ### 3.1 新增 `src/*.cpp` 必须重新 configure
 
@@ -102,7 +133,17 @@ cmake --build build --config Debug --clean-first
 ```
 
 改过 `src/RHI/Device.h` / `src/RHI/VmaConfig.h`（VMA 配置相关）之后无条件走这条。
-## 3.5 换目录与热重载（都不需要重新 configure）
+### 3.5 Ninja 下改头文件却不重编（`/showIncludes` 前缀被代码页弄坏）
+
+判据：改了一个头文件，构建 0.1s 就结束、没有任何重编；`ninja -C build-ninja -t deps`
+里所有 `.obj` 都是 `#deps 0`。此时二进制是旧的，但日志显示"成功"。
+
+原因与修法见 1.2 节末尾：CMake 在 CP936 控制台里把 cl 的 UTF-8「注意: 包含文件: 」
+按错误代码页解码后写进 `rules.ninja`。`CMakeLists.txt` 现在在 configure 阶段自己探测
+真实字节再写入，`tools/build.ps1` 每次构建前还会核对一次；两者都没生效时，删掉
+`build-ninja/` 重新 configure 即可恢复。
+
+### 3.6 换目录与热重载（都不需要重新 configure）
 
 `AssetPaths.h` 里的绝对路径仍然是**第一优先**：文件在，行为和以前完全一样。
 只有在它不存在时，`tiny::assetpath::resolve()` 才按 `/shaders/`、`/Resources/`、
@@ -125,6 +166,7 @@ cmake --build build --config Debug --clean-first
 | `TINY_ENABLE_SCREENSHOT` | ON | 编译入 `--screenshot` |
 | `TINY_ENABLE_TRACY` | **OFF** | 编译入 Tracy（需 `3rdParty/tracy`） |
 | `TINY_ENABLE_RENDERDOC` | **OFF** | 编译入 RenderDoc 抓帧（需 `renderdoc_app.h`） |
+| `TINY_PCH` | **ON** | 预编译 `src/pch.h`（std + glm + vulkan），压全量与改核心头的重编；`-DTINY_PCH=OFF` 关闭 |
 
 重量级 / 带外部依赖的能力默认 OFF，缺失时 CMake 只 warning 并自动禁用，不影响默认构建。
 

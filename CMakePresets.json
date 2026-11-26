@@ -1,0 +1,30 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "ninja",
+      "displayName": "Ninja Multi-Config (fast, recommended)",
+      "description": "全量 Debug 约 16s；无改动 0.06s；增量只编受影响的 TU。",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build-ninja",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "vs2022",
+      "displayName": "Visual Studio 2022 (IDE, /MP)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build"
+    }
+  ],
+  "buildPresets": [
+    { "name": "ninja-debug", "displayName": "Ninja Debug", "configurePreset": "ninja", "configuration": "Debug" },
+    { "name": "ninja-release", "displayName": "Ninja Release", "configurePreset": "ninja", "configuration": "Release" },
+    { "name": "vs2022-debug", "displayName": "VS 2022 Debug", "configurePreset": "vs2022", "configuration": "Debug" },
+    { "name": "vs2022-release", "displayName": "VS 2022 Release", "configurePreset": "vs2022", "configuration": "Release" }
+  ]
+}

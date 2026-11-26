@@ -215,6 +215,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/Validate.ps1 -VulkanSd
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/Validate.ps1 -Incremental -SkipSetup -Frames 20
 ```
 
+### Ninja 增量构建：tools/build.ps1
+
+`Validate.ps1` 走的是"删 `build/` + VS 生成器全量"的验收路径，日常开发用这个更快：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1            # Debug
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1 -Config Release
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1 -Target TinyEditor
+```
+
+首次运行会 configure（`Ninja Multi-Config`，产物在 `build-ninja/<Config>/`），之后只增量。
+全量 Debug 约 16s（VS 生成器 + `/MP` 约 26s，串行 103s），无改动 0.06s。
+
+脚本还多做两件事：把控制台切到 UTF-8；核对 `rules.ninja` 里的 `/showIncludes` 前缀与
+编译器真实输出字节一致（CP936 控制台里 CMake 会写错，症状是改头文件后不重编）。
+参数：`-BuildDir`、`-Config`、`-Target`、`-Jobs`、`-Reconfigure`、`-Clean`。
+等价手动命令与预设见 `CMakePresets.json`（`ninja` / `vs2022` 两套）。
+
 ## 固定依赖版本
 
 TD-03 的动态分辨率也可以在运行时通过 ImGui 的 `Render Scale` 滑杆调整，
@@ -241,5 +259,8 @@ TD-03 的动态分辨率也可以在运行时通过 ImGui 的 `Render Scale` 滑
 - `SOURCES` 使用 `CONFIGURE_DEPENDS`，新增 `src/*.cpp` 后不再需要手动重新 configure。
 - 所有必需头文件在 configure 阶段检查，缺依赖时会直接提示运行本工具。
 - Shader 仍由 Vulkan SDK 的 `glslangValidator` 在构建前编译。
+- `/MP` 只在非 Ninja 生成器下启用：Ninja 已按编译命令并行，再叠 `/MP` 是线程超订。
+- `src/pch.h` 默认预编译（`TINY_PCH=ON`）：只放 std / glm / vulkan 这类公共头；改它会全量重编。`-DTINY_PCH=OFF` 可关闭。
+- `CMakePresets.json` 提供 `ninja` / `vs2022` 两套 configure + build 预设；`tools/build.ps1` 是 ninja 路径的一键封装。
 
 > **脚本约定**：`tools/*.ps1` 一律纯 ASCII。Windows PowerShell 5.1 读无 BOM 的 .ps1 时按 ANSI 解码，中文注释会吞掉下一行代码（本项目已踩过两次）。

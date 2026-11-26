@@ -5,6 +5,62 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
+# 并行编译（仅 VS 生成器需要）。
+#
+# VS 生成器把 130+ 个 .cpp 塞进同一个 tiny_core 项目，MSBuild 默认逐个串行编译。
+# /MP 让 cl 一次接收多个源文件并按物理核并行；CMake 会把它翻译成
+# <MultiProcessorCompilation>true</MultiProcessorCompilation>。实测全量 Debug：93s -> 14s。
+#
+# Ninja 生成器本来就按「一个源文件一条编译边」并行（靠 -j 控制并发），
+# 再叠 /MP 会让每个 cl 各自再开一池线程，属于超订，因此只在非 Ninja 下加。
+if(MSVC AND NOT CMAKE_GENERATOR MATCHES "Ninja")
+    add_compile_options(/MP)
+endif()
+
+# ---------------------------------------------------------------------------
+# Ninja + MSVC + 中文区域设置（CP936）的已知坑。
+#
+# cl 的 /showIncludes 输出是 UTF-8 的「注意: 包含文件: 」，而 CMake 探测该前缀时按当前
+# 控制台代码页解码。在 CP936 控制台里探测出的前缀会变成乱码写进 rules.ninja，Ninja 于是
+# 一条依赖行都认不出来 —— 症状是改头文件后不重编（增量构建静默漏编），
+# `ninja -t deps` 里所有 .obj 都是 "#deps 0"。这是 CMake 侧的编码问题，和工程本身无关，
+# 但一旦踩到就是"改了头文件却跑的是旧二进制"，所以这里在配置阶段自行修正。
+#
+# 做法：让 cl 经 cmd 重定向把 /showIncludes 输出落盘（cmd 写盘的是编译器原始字节，
+# 不经 CMake 的代码页解码），再用 file(READ) 按 UTF-8 读回（正好还原出正确字符），
+# 切出「盘符路径之前」的那段作为前缀。CMake 写 rules.ninja 时按 UTF-8 编码，
+# 于是 Ninja 能按字节匹配上 cl 的输出行。这样在任何控制台代码页下结果都一样。
+# ---------------------------------------------------------------------------
+if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja")
+    set(_tiny_inc_dir "${CMAKE_BINARY_DIR}/CMakeFiles/tiny_showinc_probe")
+    file(MAKE_DIRECTORY "${_tiny_inc_dir}")
+    file(WRITE "${_tiny_inc_dir}/probe.cpp" "#include <cstddef>\n")
+    file(WRITE "${_tiny_inc_dir}/probe.bat"
+        "@echo off\r\n\"${CMAKE_CXX_COMPILER}\" /nologo /c /showIncludes probe.cpp > out.txt 2>&1\r\n")
+    if(EXISTS "${_tiny_inc_dir}/out.txt")
+        file(REMOVE "${_tiny_inc_dir}/out.txt")
+    endif()
+    execute_process(
+        COMMAND cmd /c probe.bat
+        WORKING_DIRECTORY "${_tiny_inc_dir}"
+        RESULT_VARIABLE _tiny_inc_rc
+    )
+    set(_tiny_inc_prefix "")
+    if(EXISTS "${_tiny_inc_dir}/out.txt")
+        # out.txt 首行是源文件名，之后才是「<前缀>  C:\Program Files\...」这种行。
+        file(READ "${_tiny_inc_dir}/out.txt" _tiny_inc_out)
+        if(_tiny_inc_out MATCHES "([^\r\n]*:[ \t]*)[A-Za-z]:[/\\\\]")
+            set(_tiny_inc_prefix "${CMAKE_MATCH_1}")
+        endif()
+    endif()
+    if(_tiny_inc_prefix)
+        set(CMAKE_CL_SHOWINCLUDES_PREFIX "${_tiny_inc_prefix}")
+    else()
+        message(WARNING "探测 cl 的 /showIncludes 前缀失败（rc=${_tiny_inc_rc}）：Ninja 的头文件依赖可能失效，改头文件后不会重新编译。可用 tools/build.ps1 重建构建目录。")
+    endif()
+endif()
+# ---------------------------------------------------------------------------
+
 # Vulkan SDK 通过 find_package 定位，不把某一台机器的安装路径写死。
 # 如果 CMake 找不到，可设置环境变量 VULKAN_SDK，或传 -DVulkan_ROOT=<SDK 根目录>。
 find_package(Vulkan REQUIRED)
@@ -106,6 +162,27 @@ target_include_directories(tiny_core PUBLIC
     "${VMA_DIR}"
     "src"
 )
+
+# ---------------------------------------------------------------------------
+# 预编译头（PCH）
+#
+# 140 个 TU 里 <vector> 被 95 个包含、glm 52 个、<vulkan/vulkan.h> 36 个。这些头每次
+# 都要重新解析几万到十几万行，正是"每个 TU 固定 0.6s"的来源。src/pch.h 把它们收在
+# 一起只编译一次。全量 Debug 从 16.5s 降到 13~14s，改头文件的增量也一样受益。
+#
+# 关掉：-DTINY_PCH=OFF。排查"某个头必须在别的头之前包含"这类问题时用得上，
+# 或者想看真实 include 树时（PCH 会把 include 链条遮住）。
+# 需要 CMake >= 3.16；更老的 CMake 自动跳过并给出提示。详见 docs/40-build/compile-speed.md。
+# ---------------------------------------------------------------------------
+option(TINY_PCH "预编译头：把 std / glm / vulkan 头预编译一次，加速全量构建" ON)
+if(TINY_PCH)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.16)
+        target_precompile_headers(tiny_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/pch.h")
+        message(STATUS "PCH: src/pch.h（关掉用 -DTINY_PCH=OFF）")
+    else()
+        message(WARNING "CMake ${CMAKE_VERSION} 不支持 target_precompile_headers，已跳过 PCH（需要 3.16+）。")
+    endif()
+endif()
 
 # ---------------------------------------------------------------------------
 # 资源路径注入：在配置阶段把绝对路径写进生成的 AssetPaths.h，
