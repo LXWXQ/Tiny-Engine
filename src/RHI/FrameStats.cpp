@@ -41,6 +41,53 @@ namespace tiny::framestats
 
         FrameTimes g_frameTimes;
 
+        // P3 验收里的「首帧 hitch」判据：连续 kHitchWindow 帧算一个窗口，
+        // 窗内「最长帧 / 中位帧」超过 kHitchRatioLimit 记一次违规。
+        // 均值与 p95 都会把一次 3 倍 hitch 摊薄，只有这个比值能直接回答
+        // 「这 60 帧里有没有卡一下」。窗口互不重叠，帧数不够时窗口数记 0。
+        constexpr size_t kHitchWindow = 60;
+        constexpr double kHitchRatioLimit = 3.0;
+
+        struct HitchWindows
+        {
+            double times[kHitchWindow] = {};
+            size_t fill = 0;
+            uint64_t windows = 0;
+            uint64_t violations = 0;
+            double worstRatio = 0.0;
+            double worstWindowMaxMs = 0.0;
+            double worstWindowMedianMs = 0.0;
+        };
+
+        HitchWindows g_hitch;
+
+        void evaluateHitchWindow()
+        {
+            double sorted[kHitchWindow];
+            for (size_t i = 0; i < kHitchWindow; ++i) sorted[i] = g_hitch.times[i];
+            // 60 个元素，插入排序足够；每个窗口只算一次（一秒一次）。
+            for (size_t i = 1; i < kHitchWindow; ++i)
+            {
+                const double value = sorted[i];
+                size_t j = i;
+                while (j > 0 && sorted[j - 1] > value) { sorted[j] = sorted[j - 1]; --j; }
+                sorted[j] = value;
+            }
+            const double median = 0.5 * (sorted[kHitchWindow / 2 - 1] + sorted[kHitchWindow / 2]);
+            const double worst = sorted[kHitchWindow - 1];
+            if (!(median > 0.0)) return;
+            const double ratio = worst / median;
+            ++g_hitch.windows;
+            if (ratio > kHitchRatioLimit) ++g_hitch.violations;
+            if (ratio > g_hitch.worstRatio)
+            {
+                g_hitch.worstRatio = ratio;
+                g_hitch.worstWindowMaxMs = worst;
+                g_hitch.worstWindowMedianMs = median;
+            }
+            g_hitch.fill = 0;
+        }
+
         double percentile(const FrameTimes& times, double q)
         {
             if (times.samples == 0) return 0.0;
@@ -138,6 +185,9 @@ namespace tiny::framestats
         size_t index = static_cast<size_t>(milliseconds / kFrameTimeBucketMs);
         if (index > kFrameTimeBuckets) index = kFrameTimeBuckets;
         ++times.buckets[index];
+
+        g_hitch.times[g_hitch.fill++] = milliseconds;
+        if (g_hitch.fill == kHitchWindow) evaluateHitchWindow();
     }
 
     void setEnabled(bool value) { g_enabled = value; }
@@ -178,6 +228,20 @@ namespace tiny::framestats
                 u64(g_frameTimes.samples), percentile(g_frameTimes, 0.5),
                 percentile(g_frameTimes, 0.95), g_frameTimes.maxMs);
         }
+
+        // P3 验收：60 帧窗口里最长帧不得超过中位帧的 3 倍。
+        if (g_hitch.windows > 0)
+        {
+            std::printf("[FrameTime] hitch | window=%llu limit=%.2fx windows=%llu violations=%llu worst=%.2fx (max=%.2fms median=%.2fms)\n",
+                u64(static_cast<uint64_t>(kHitchWindow)), kHitchRatioLimit,
+                u64(g_hitch.windows), u64(g_hitch.violations), g_hitch.worstRatio,
+                g_hitch.worstWindowMaxMs, g_hitch.worstWindowMedianMs);
+        }
+        else
+        {
+            std::printf("[FrameTime] hitch | window=%llu limit=%.2fx windows=0 (帧数不足一个窗口)\n",
+                u64(static_cast<uint64_t>(kHitchWindow)), kHitchRatioLimit);
+        }
     }
 
     bool selfTest()
@@ -190,6 +254,7 @@ namespace tiny::framestats
         const VkPipeline savedGraphics = g_lastGraphics;
         const VkPipeline savedCompute = g_lastCompute;
         const FrameTimes savedTimes = g_frameTimes;
+        const HitchWindows savedHitch = g_hitch;
 
         beginFrame();
 
@@ -227,12 +292,24 @@ namespace tiny::framestats
         ok = ok && p95 >= 95.0 && p95 <= 96.0;
         ok = ok && g_frameTimes.maxMs >= 100.0;
 
+        // hitch 窗口：60 帧里第 40 帧慢 4 倍，应该计一个窗口、一次违规。
+        g_hitch = HitchWindows{};
+        g_frameTimes = FrameTimes{};
+        for (int i = 0; i < 60; ++i) recordFrameTime(i == 39 ? 40.0 : 10.0);
+        ok = ok && g_hitch.windows == 1 && g_hitch.violations == 1;
+        ok = ok && g_hitch.worstRatio >= 3.9 && g_hitch.worstRatio <= 4.1;
+        // 第二个窗口全是 10 ms：不新增违规，最差比值保持第一个窗口的值。
+        for (int i = 0; i < 60; ++i) recordFrameTime(10.0);
+        ok = ok && g_hitch.windows == 2 && g_hitch.violations == 1;
+        ok = ok && g_hitch.worstRatio >= 3.9 && g_hitch.worstRatio <= 4.1;
+
         g_frame = savedFrame;
         g_total = savedTotal;
         g_frames = savedFrames;
         g_lastGraphics = savedGraphics;
         g_lastCompute = savedCompute;
         g_frameTimes = savedTimes;
+        g_hitch = savedHitch;
         return ok;
     }
 }

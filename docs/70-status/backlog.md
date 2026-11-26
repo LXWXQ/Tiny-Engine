@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~482 行
+size: ~500 行
 updated: 2026-11-26
 ---
 
@@ -480,3 +480,21 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 **遗留**：P5-5 的 `ITemporalUpscaler` 只覆盖时域上采样，运动模糊仍是 Present 里的一段代码，不参与接口。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-135254`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19198）。
+
+## P3 待办：绘制命令与 PSO（P3-1 ~ P3-5）
+
+**现状**：P3 的第二条验收（首帧 hitch）在 2026-11-26 立起尺子，基线 `windows=4 violations=0 worst=2.54x`，已达标。
+
+**已落地（尺子）**：`src/RHI/FrameStats.cpp` 的 60 帧 hitch 窗口 + `[FrameTime] hitch` 行 + 两个窗口的 `selfTest`。
+
+**测量结论**：
+- 「状态切换下降 ≥ 40%」：`[StateCache] saved=34.5%`（T-09 已吃掉），`pipelineBinds/frame=27.5 redundant=9.5`。
+- 剩余冗余两处：跨 pass 重复绑同一条管线、`vkCmdBindVertexBuffers` / `vkCmdBindIndexBuffer` 每实体重复发。
+- P3-4 的「PSO 首用即建」不成立：所有管线都在 `initAll()` 里创建，预热只能省启动时间。
+
+**下一步候选**（按收益/成本排序）：
+1. 顶点/索引缓冲绑定的去重（几何 pass 内按 `(VkBuffer, offset)` 记账，收益可直接用 `--stats-frame` 量）。
+2. TM-12 的着色器参数块从 SSAO 推广到几何/光照 pass（P3-5，纯收益项）。
+3. `MeshDrawCommandList` + 桶排序：只有在上面两件事之后仍有明显跨 pass 冗余时才值得做。
+
+**回退开关**：`--no-draw-command-list`、`--no-pso-precache`（这两个开关尚未实现，等对应的机制落地时一起加）。

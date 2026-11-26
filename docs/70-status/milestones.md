@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1823 行
+size: ~1831 行
 updated: 2026-11-26
 ---
 
@@ -1822,3 +1822,11 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 
 - 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-135254`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19198）。
 
+## P3 第零步：hitch 尺子与 P3 基线（2026-11-26）
+
+- `src/RHI/FrameStats.cpp` 增加 60 帧 hitch 窗口：「最长 / 中位」超过 3 倍记一次违规；`report()` 多打 `[FrameTime] hitch | window=60 limit=3.00x windows= violations= worst= (max= median=)`。
+- `selfTest()` 覆盖两个窗口：第 40 帧慢 4 倍 → 1 窗 1 违规、worst∈[3.9,4.1]；第二窗全等 → 窗口数 2、违规仍 1、最差不被覆盖。
+- 基线（Release，`--cube-field 10000`，240 帧）：`pipelineBinds/frame=27.5 redundant=9.5 (34.5%)`、`[StateCache] saved=34.5%`、`barriers 37.1 calls / 27.0 entries`、median 6.62 ms / p95 8.38 / max 19.80、**hitch windows=4 violations=0 worst=2.54x**。
+- 结论：P3 第二条验收现在就达标；第一条「状态切换 −40%」的 34.5% 已被 T-09 的 `StateCache` 吃掉，剩余冗余是跨 pass 与顶点/索引缓冲两类，排序消不掉。
+- 结论：P3-4 的「首用即建」不成立 —— 管线都在 `initAll()` 建好，PSO 预热只影响启动时间。
+- Debug 同场景 `hitch violations=1 worst=12.32x (max=112.18ms)`，是首帧冷启动，判据只在 Release 上用。

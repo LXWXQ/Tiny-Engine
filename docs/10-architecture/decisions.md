@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1997 行
+size: ~2048 行
 updated: 2026-11-26
 ---
 
@@ -1995,4 +1995,55 @@ P5-4 之前运动模糊是「全屏相机速度」：`present.frag` 用每个像
 ### 踩到的坑
 
 - `CliCatalog` 有一份启动自检：同一 flag 在表里出现两次会直接抛 `CliCatalog selfTest failed`，连窗口都不开。加开关时括号里的行被脚本重复插入了一份，症状是「Release 构建成功、一跑就写 startup-error.log 并退出 1」。
+
+
+## 决策 72：先给 P3 立一把「60 帧窗口最长帧 ≤ 中位帧 3 倍」的尺子（P3 第零步）
+
+### 问题
+
+`docs/80-roadmap/ue-borrowing-plan.md` 的 P3 验收有三条，其中第二条是「首帧 hitch：连续 60 帧内，最长帧不超过中位帧的 3 倍」，文档自己也注明「现在没有这个指标，P0 建立」。
+
+当时的 `[FrameTime]` 只有 median / p95 / max 三个数：max 是整段运行的最大值，p95 是整段的 95 分位，两者都回答不了「这 60 帧里卡了一下没有」。一次 20 ms 的 hitch 放进 240 帧里，均值只抬 0.08 ms，p95 甚至看不出来。
+
+### 做法
+
+`src/RHI/FrameStats.cpp` 增加 hitch 窗口：`recordFrameTime()` 除了喂直方图，还把毫秒值写进一个 60 格的环形窗口；窗口填满时立刻算一次「最长 / 中位」（60 个元素插入排序，一秒只算一次），比值超过 3.0 记一次违规，同时保留历史最差比值与那一窗的 max / median。窗口互不重叠，帧数不足一窗时窗口数记 0。
+
+`report()` 多打一行：
+
+```
+[FrameTime] hitch | window=60 limit=3.00x windows=4 violations=0 worst=2.54x (max=19.80ms median=7.80ms)
+```
+
+`selfTest()` 加两个窗口的用例：第一窗第 40 帧慢 4 倍 → 1 窗 1 违规、最差比值落在 3.9~4.1；第二窗全 10 ms → 窗口数变 2、违规仍是 1、最差比值不被覆盖。
+
+### 基线读数（2026-11-26，Release，`--cube-field 10000`，240 帧）
+
+| 指标 | 值 |
+|---|---|
+| `passes/frame` | 16.0 |
+| `barriers/frame` | 37.1 calls / 27.0 entries，sameState skipped 19.9 |
+| `pipelineBinds/frame` | 27.5，其中 redundant 9.5（34.5%） |
+| `[StateCache]` | bindCalls 27.4 / issued 17.9 / skipped 9.5 / **saved=34.5%** |
+| `FrameTime` | median 6.62 ms、p95 8.38 ms、max 19.80 ms |
+| **hitch** | **windows=4、violations=0、worst=2.54x**（该窗 max 19.80 / median 7.80） |
+
+Debug 同一场景 90 帧：hitch `windows=1 violations=1 worst=12.32x (max=112.18ms)`。这个 112 ms 是 Debug 首帧的冷启动（验证层 + 首次资源创建），不代表稳态；hitch 判据只在 Release 上看。
+
+### 为什么 P3-1/P3-2 的头寸比计划里小
+
+T-09 的 `StateCache` 已经在 `Pipeline::bind` 里做「同一条命令缓冲连续绑同一条管线就跳过」，`[StateCache] saved=34.5%` 与 `[FrameStats] redundant=34.5%` 是同一笔账。也就是说计划里「状态切换下降 ≥ 40%」的大部分头寸已经被吃掉了。
+
+剩下的两份冗余是结构性的，不是排序能消掉的：
+
+- **跨 pass**：同一条 `geometryPipeline` 在几何 pass 与阴影视图各绑一次，中间隔着别的管线。要消掉得改 pass 顺序或让两条 pass 共用命令缓冲，收益不抵风险。
+- **顶点/索引缓冲**：`model->bind()` 每次都要发两条 `vkCmdBindVertexBuffers` / `vkCmdBindIndexBuffer`，`StateCache` 不管这一类。
+
+另外 P3-4 的前提在本引擎里不成立：所有管线都在 `initAll()` 里建好（`createPipelines()`），不存在「首用即建」的 PSO 抖动。PSO 预热能省的只有「启动时间」，不是帧时间 —— 真要做得先证明启动时间值得优化。
+
+### 不引入的
+
+- 不为凑「−40%」去改 pass 顺序或合并命令缓冲。
+- 不把 hitch 判据套在 Debug 上（首帧 112 ms 是验证层与冷启动，不是渲染回路）。
+- 窗口不做滑动（滑窗每秒要算 60 次排序，而不重叠窗口在同一批帧上给出的结论一样）。
 

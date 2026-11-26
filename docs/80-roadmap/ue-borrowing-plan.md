@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1086 行
+size: ~1088 行
 updated: 2026-11-26
 ---
 
@@ -1085,3 +1085,5 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P5-4（2026-11-26，运动模糊改读速度图）**：运动模糊的方向与长度从「全屏相机速度」改成逐像素速度图（P5-1 的 `RG16F` 附件），速度为 0 的像素（天空盒/网格/几何天空/植被）回退到「上一帧 VP × 世界位置」的相机重投影；回退开关 `--motion-blur-matrix`。`PresentPass` 的 bloom / no-bloom 两条路径各加一个最近邻速度图采样器（binding 3 / 2）并 `pass.read(gbVelocity)`。验收：静态场景两条路径逐像素一致（HUD 外 0 个像素），运动立方体场景 13.029% 像素不同、差异集中在旋转物体轮廓与细栏杆（放大裁图确认是沿速度方向的拖影）；Debug 四组干净。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-135254`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19198）。
+
+**P3 第零步（2026-11-26，hitch 尺子与基线）**：`FrameStats` 加了 60 帧窗口的「最长帧 / 中位帧」比值（超 3 倍记违规），`--stats-frame` 多打一行 `[FrameTime] hitch`。基线（Release，cube-field 10000，240 帧）`pipelineBinds/frame=27.5 redundant=9.5（34.5%）`、hitch `windows=4 violations=0 worst=2.54x`。三个结论：P3 的 hitch 判据现在就达标；「状态切换 −40%」的头寸已被 T-09 的 `StateCache` 吃掉 34.5%，剩下的是跨 pass 与顶点/索引缓冲两处，排序消不掉；P3-4 的「首用即建」在本引擎不成立（管线都在 `initAll()` 里建好），PSO 预热只能省启动时间。
