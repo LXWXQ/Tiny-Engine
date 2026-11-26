@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1859 行
+size: ~1868 行
 updated: 2026-11-26
 ---
 
@@ -1858,3 +1858,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 断言网：set 0 的 8 条 `kDescriptorType<…Kind> == VK_DESCRIPTOR_TYPE_*` + 5 条数量；计算侧 7 条类型 + 编号断言（0/1/2/3/5/6/7，4 号留给已退役的 Hi-Z）；set 3 的 2 条类型 + 2 条数量 + `kBinding0Binding == 0 && kBinding1Binding == 1`。
 - 验证：Release 2.1 s / Debug 2.6 s 构建通过；Debug 5 组（流式、运动立方体、体素、300 盏灯、300 盏灯 + 聚簇）全部 `errors=0 warnings=0`、stderr 0 字节；Release 读数与 P3 第二步逐位一致（管线 18.5/35.1%、顶点与索引各 40.0%）；全量回归 96 项 ALL PASS（`build/validation/20261126-151226`）。
 - 留下的唯一手写量：set 1 的 4 个 bindless 材质数组按运行期 `capacity` 申请（反射侧 `Count = 0`，因为 shader 声明的是运行期数组）。
+
+## P4 第零步：给阴影 Pass 立一把「每级联 GPU 时间」的尺子（P4，2026-11-26）
+
+- P4 的验收有两条是时间比值（静态「阴影 Pass 的 GPU 时间下降 ≥ 60%」、动态「≤ CSM 的 1.5 倍」），但引擎现成的 `GpuTimer` 只按 pass 打一对时间戳，一整条 Shadow pass 只给一个总数 —— 三级联里某一级塌了会被平均掉。因此 `src/Render/ShadowPass.{h,cpp}` 自带最小计时：每帧槽 3 级联 × 2 个 `VK_QUERY_TYPE_TIMESTAMP`（池 `kFramesInFlight × 6 = 12`），`kTimingReportInterval = 60`。
+- 落点：进 `VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT`、出 `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT`；读回放在**下一轮同帧槽**的开头（先 `vkGetQueryPoolResults(… 64_BIT | WAIT_BIT)` 再 `vkCmdResetQueryPool`，顺序反了读数恒为 0）。每 60 帧一行 `[Shadow] timing | cascade0=…ms cascade1=…ms cascade2=…ms total=…ms | avg(60 frames)`；退出时 `reportTimingSummary()` 先 `vkDeviceWaitIdle` 再打 `[Shadow] timing summary | frames=N | … | min=… max=…`。
+- 开关 `--stats-shadow-timing`（`src/Core/Diagnostics.h` 的 `Options::statsShadowTiming` + `main.cpp` 解析 + `src/Core/CliCatalog.cpp` 一条「剖析」），沿用 `TINY_ENABLE_GPU_TIMING` 编译期门控；不开时不建池，`timingQueryCount()` 计进 P0-6 的零开销守卫，`[Diag] zero-overhead guard` 多一列 `shadowQueries=`。
+- CSM 基线（Release，`--selftest 300 --stats-shadow-timing --hidden`，三次重复逐位一致）：静态 Sponza（逐模型路径 309 draw）`0.041 / 0.029 / 0.040 → total=0.110ms`（min 0.098 / max 0.129）；`--cube-field 500`（GPU 合并间接）`0.014 / 0.018 / 0.011 → 0.043ms`；`--cube-field 500 --cube-field-motion 2000` `0.015 / 0.019 / 0.012 → 0.045ms`；标定 `--cube-field 4000` → `0.077ms`。整帧 4.29ms（233 FPS）。
+- 读数带来三个结论：阴影只占整帧约 2.5%（「−60%」在 0.1ms 的基数上是 0.07ms 绝对量，验收需要更重的基准场景）；同一场景 GPU 合并路径比逐模型 309 draw 快 2.5 倍而三角形数相同（基线大头是提交/驱动开销，不是像素带宽）；动态与静态立方体同值（CSM 每帧全量重画，与「场景静态」这个标签无关）。
+- 验证：Debug 六组（默认 / `--cube-field 10000 --cube-field-motion 500` / `--streaming-world 2 --gpu-scene-external 400` / `--voxel-world 1` / `--light-stress 300` / `--streaming-world 2 --streaming-fly 60`）全部 `errors=0 warnings=0`、stderr 0 字节；`--no-shadows` 降级为 `frames=0`；守卫关时 `PASS | shadowQueries=0`、开时 `SKIP | shadowQueries=12`。全量回归 96 项 ALL PASS；DocCheck PASS。

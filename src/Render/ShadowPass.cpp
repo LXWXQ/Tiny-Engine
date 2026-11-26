@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -185,6 +186,7 @@ ShadowPass::~ShadowPass()
     // "Some allocations were not freed before destruction of this memory block!"。
     pipeline.reset();
     destroyResources();
+    destroyTimingResources();
     if (shadowSampler != VK_NULL_HANDLE)
     {
         vkDestroySampler(vulkanDevice.getDevice(), shadowSampler, nullptr);
@@ -201,10 +203,18 @@ void ShadowPass::init()
 {
     createResources();
     createPipeline();
+    // P4 第零步：不开 --stats-shadow-timing 时这一段什么都不建（queryPool 计数为 0）。
+    createTimingResources();
 
     std::cout << "[Shadow] ready | cascades=" << kCascadeCount
               << " resolution=" << kResolution << "x" << kResolution
               << " (CPU built geometry, manual barriers)" << std::endl;
+    if (timingEnabled)
+    {
+        std::cout << "[Shadow] timing on | cascades=" << kCascadeCount
+                  << " queries=" << timingPoolSize
+                  << " (per-cascade timestamps, 60-frame window)" << std::endl;
+    }
 }
 
 void ShadowPass::createResources()
@@ -364,6 +374,19 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     {
         stats = Stats{};
 
+        // P4 第零步：先读回「上一轮用同一个帧槽」的时间戳（那次提交早已过 timeline
+        // 等待点），再把本槽的 query 重置 —— 顺序反了会读到未定义值。
+        if (timingEnabled)
+        {
+            collectTiming(frameInfo.frameInFlightIndex);
+            if (enabled && pipeline != nullptr)
+            {
+                const uint32_t timingBase = frameInfo.frameInFlightIndex * kTimingQueriesPerFrame;
+                vkCmdResetQueryPool(cmd, timingPool, timingBase, kTimingQueriesPerFrame);
+                timingPending[frameInfo.frameInFlightIndex] = true;
+            }
+        }
+
         if (!layoutReady)
         {
             // 一次性：把每个帧槽位的 3 层都从 UNDEFINED 转到 SHADER_READ_ONLY。
@@ -419,8 +442,20 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
             }
         }
 
+        // 每个级联一对时间戳：进用 TOP_OF_PIPE（等前面所有命令做完才落点，
+        // 空隙不会被算进本级联），出用 ALL_COMMANDS（本级联的命令全做完）。
+        const uint32_t timingBase = frameInfo.frameInFlightIndex * kTimingQueriesPerFrame;
+        const bool timingThisFrame = timingEnabled && timingPending[frameInfo.frameInFlightIndex];
         for (uint32_t cascade = 0; cascade < kCascadeCount; ++cascade)
+        {
+            if (timingThisFrame)
+                vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timingPool,
+                                     timingBase + cascade * kTimingQueriesPerCascade);
             recordCascade(cmd, cascade, frameInfo.frameInFlightIndex, frameInfo);
+            if (timingThisFrame)
+                vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timingPool,
+                                     timingBase + cascade * kTimingQueriesPerCascade + 1);
+        }
 
         if (!reported)
         {
@@ -480,6 +515,149 @@ void ShadowPass::setSceneGpuBatch(SceneGpuBatch* batch)
         0, 0, VK_FORMAT_R32G32B32_SFLOAT, static_cast<uint32_t>(offsetof(Vertex, position)) });
     gpuPipeline = std::make_unique<Pipeline>(vulkanDevice,
         TINY_SHADER_DIR "shadow_gpu.vert.spv", TINY_SHADER_DIR "shadow.frag.spv", config);
+}
+
+void ShadowPass::createTimingResources()
+{
+    if (!timingRequested || timingPool != VK_NULL_HANDLE)
+        return;
+
+#ifndef TINY_ENABLE_GPU_TIMING
+    // 与 GpuTimer 同一套开关模型：编译期关掉时运行期给了参数也不生效。
+    std::cout << "[Shadow] --stats-shadow-timing not compiled in (TINY_ENABLE_GPU_TIMING=OFF)\n";
+    return;
+#else
+    const auto families = vulkanDevice.findPhysicalQueueFamilies();
+    if (!families.graphicsFamily.has_value())
+        return;
+    const uint32_t family = families.graphicsFamily.value();
+
+    // 时间戳是按队列族单独支持的：timestampValidBits == 0 表示这条队列写不了。
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(vulkanDevice.getPhysicalDevice(), &familyCount, nullptr);
+    if (family >= familyCount)
+        return;
+    std::vector<VkQueueFamilyProperties> familyProps(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(vulkanDevice.getPhysicalDevice(), &familyCount,
+                                             familyProps.data());
+    if (familyProps[family].timestampValidBits == 0)
+    {
+        std::cout << "[Shadow] graphics queue family 不支持 timestamp，--stats-shadow-timing 关闭\n";
+        return;
+    }
+
+    VkPhysicalDeviceProperties deviceProps{};
+    vkGetPhysicalDeviceProperties(vulkanDevice.getPhysicalDevice(), &deviceProps);
+    timestampPeriodNs = deviceProps.limits.timestampPeriod;
+
+    timingPoolSize = kFramesInFlight * kTimingQueriesPerFrame;
+    VkQueryPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+    poolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    poolInfo.queryCount = timingPoolSize;
+    if (vkCreateQueryPool(vulkanDevice.getDevice(), &poolInfo, nullptr, &timingPool) != VK_SUCCESS)
+    {
+        timingPool = VK_NULL_HANDLE;
+        timingPoolSize = 0;
+        std::cout << "[Shadow] 创建 timestamp query pool 失败，--stats-shadow-timing 关闭\n";
+        return;
+    }
+
+    totalMsMin = std::numeric_limits<double>::max();
+    timingEnabled = true;
+#endif
+}
+
+void ShadowPass::destroyTimingResources()
+{
+    if (timingPool != VK_NULL_HANDLE)
+    {
+        vkDestroyQueryPool(vulkanDevice.getDevice(), timingPool, nullptr);
+        timingPool = VK_NULL_HANDLE;
+    }
+    timingPoolSize = 0;
+    timingEnabled = false;
+    timingPending.fill(false);
+}
+
+void ShadowPass::collectTiming(uint32_t frameInFlightIndex)
+{
+    if (!timingEnabled || frameInFlightIndex >= kFramesInFlight)
+        return;
+    if (!timingPending[frameInFlightIndex])
+        return;
+    timingPending[frameInFlightIndex] = false;
+
+    std::array<uint64_t, kTimingQueriesPerFrame> ticks{};
+    const uint32_t base = frameInFlightIndex * kTimingQueriesPerFrame;
+    // WAIT_BIT 在这里是安全的：这个帧槽的上一轮提交早就过了 timeline 等待点，
+    // 结果本来就绪；它只是省掉「没就绪先跳过」的分支。
+    const VkResult result = vkGetQueryPoolResults(vulkanDevice.getDevice(), timingPool, base,
+                                                  kTimingQueriesPerFrame, sizeof(ticks), ticks.data(),
+                                                  sizeof(uint64_t),
+                                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    if (result != VK_SUCCESS)
+        return;
+
+    double total = 0.0;
+    for (uint32_t cascade = 0; cascade < kCascadeCount; ++cascade)
+    {
+        const uint64_t begin = ticks[cascade * kTimingQueriesPerCascade];
+        const uint64_t end = ticks[cascade * kTimingQueriesPerCascade + 1];
+        if (end <= begin)
+            continue;
+        const double ms = static_cast<double>(end - begin) *
+                          static_cast<double>(timestampPeriodNs) / 1.0e6;
+        lastCascadeMs[cascade] = ms;
+        cascadeMsSum[cascade] += ms;
+        windowCascadeSum[cascade] += ms;
+        total += ms;
+    }
+
+    lastTotalMs = total;
+    totalMsSum += total;
+    windowTotalSum += total;
+    ++timingFrameCount;
+    ++windowFrames;
+    if (timingFrameCount == 1 || total < totalMsMin)
+        totalMsMin = total;
+    if (timingFrameCount == 1 || total > totalMsMax)
+        totalMsMax = total;
+
+    if (windowFrames >= kTimingReportInterval)
+    {
+        const double inv = 1.0 / static_cast<double>(windowFrames);
+        std::printf("[Shadow] timing | cascade0=%.3fms cascade1=%.3fms cascade2=%.3fms "
+                    "total=%.3fms | avg(%u frames)\n",
+                    windowCascadeSum[0] * inv, windowCascadeSum[1] * inv, windowCascadeSum[2] * inv,
+                    windowTotalSum * inv, windowFrames);
+        windowCascadeSum.fill(0.0);
+        windowTotalSum = 0.0;
+        windowFrames = 0;
+    }
+}
+
+void ShadowPass::reportTimingSummary()
+{
+    if (!timingEnabled)
+        return;
+
+    // 最后几帧的样本还没轮到「下一轮同槽」去收集，先等 GPU 停下再读干净。
+    vkDeviceWaitIdle(vulkanDevice.getDevice());
+    for (uint32_t slot = 0; slot < kFramesInFlight; ++slot)
+        collectTiming(slot);
+
+    if (timingFrameCount == 0)
+    {
+        std::printf("[Shadow] timing summary | frames=0（没有样本：阴影被关掉了？）\n");
+        return;
+    }
+
+    const double inv = 1.0 / static_cast<double>(timingFrameCount);
+    std::printf("[Shadow] timing summary | frames=%llu | cascade0=%.3fms cascade1=%.3fms "
+                "cascade2=%.3fms total=%.3fms | min=%.3fms max=%.3fms\n",
+                static_cast<unsigned long long>(timingFrameCount),
+                cascadeMsSum[0] * inv, cascadeMsSum[1] * inv, cascadeMsSum[2] * inv,
+                totalMsSum * inv, totalMsMin, totalMsMax);
 }
 
 void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint32_t frameIndex,

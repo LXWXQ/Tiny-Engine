@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~2222 行
+size: ~2286 行
 updated: 2026-11-26
 ---
 
@@ -2221,3 +2221,67 @@ set 0 的布局全引擎只有 `DescriptorManager` 一份，`GlobalUbo` 也只�
 - 不自动生成 `createGlobalLayout()` 本身：set 的组成（哪几个绑定成一组、池里每种类型要几个）是运行期策略，不是 shader 事实。
 
 DocCheck PASS（documents=82 lines=19501）。
+
+## 决策 76：先给 P4 立一把「阴影 Pass 每级联 GPU 时间」的尺子（P4 第零步，2026-11-26）
+
+### 问题
+
+`docs/80-roadmap/ue-borrowing-plan.md` §3 的 P4 验收有两条是时间比值：静态场景阴影 Pass 的 GPU 时间「下降 ≥ 60%」、动态场景「≤ CSM 的 1.5 倍」。但引擎里现成的 GPU 计时只有一个 `GpuTimer`（P0-4）：它按 **pass** 打一对时间戳，一整条 Shadow pass 只给一个总时长，而且要 `--gpu-timing` 才开、结果落进 CSV，池子按 32 pass × 2 申请。
+
+P4 要改的恰恰是「三个级联各自画多少」：VSM 的页表按级联分层（每级一张 32x32 页表），如果只有一级塌了、另两级没变，`total` 上的信号会被平均掉。没有分级联的读数，P4-2 之后所有「省了多少」都只能靠猜。
+
+### 做法
+
+1. `src/Render/ShadowPass.{h,cpp}` 自带一套最小计时：`kTimingQueriesPerCascade = 2`、`kTimingQueriesPerFrame = 3 × 2 = 6`、池子 `kFramesInFlight × 6 = 12` 个 `VK_QUERY_TYPE_TIMESTAMP`，只管本 pass。
+2. 落点：进 `vkCmdWriteTimestamp2(..., VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ...)`（前面所有命令做完才落点，级联之间的空隙不算进下一级），出 `VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT`（本级联的命令全做完）。
+3. 读回时机与 `GpuTimer` 一致：**下一个**用同一帧槽的帧开头读回 —— 那时上次提交早过了 timeline 等待点，`VK_QUERY_RESULT_WAIT_BIT` 不会真等。读回必须排在 `vkCmdResetQueryPool` **之前**，顺序反了读到的是未定义值。
+4. 输出两层：每 60 帧一行 `[Shadow] timing | cascade0=…ms cascade1=…ms cascade2=…ms total=…ms | avg(60 frames)`；退出时 `[Shadow] timing summary | frames=N | cascade0=…ms … total=…ms | min=… max=…`（先 `vkDeviceWaitIdle`，再把还没轮到收集的帧槽读干净）。
+5. 开关 `--stats-shadow-timing`：`src/Core/Diagnostics.h` 的 `Options::statsShadowTiming`、`main.cpp` 一处解析、`src/Core/CliCatalog.cpp` 一条「剖析」，`Application` 在 `ShadowPass` 构造后 `setTimingEnabled(...)`（必须在 `init()` 之前，池是在 `init()` 里建的）。
+6. 零开销：不开时不建池（`timingQueryCount() == 0`），并且把 `shadowQueries` 计进 P0-6 的 `[Diag] zero-overhead guard`（打印多一列）；开了就按「调试能力开启」判 SKIP。
+7. 编译期门控沿用 `TINY_ENABLE_GPU_TIMING`（关闭时只打一行 `--stats-shadow-timing not compiled in`）。
+
+### 为什么自己写而不是把 GpuTimer 拆成级联
+
+`GpuTimer` 的粒度就是 pass，`beginPass/endPass` 的 `passIndex` 是渲染图分配的顺序号。要在它里面表达「一条 pass 内的三段」，得让 ShadowPass 向渲染图申请三个子编号 —— 而渲染图并不知道子编号的存在，`[GpuTiming]` 报表里就会凭空多出两条无名的 pass。ShadowPass 本来就有自己的命令录制与帧槽结构，12 个时间戳 + 三个函数更便宜，也不会污染别人的读数。
+
+### 验收（2026-11-26）
+
+基线全部是 Release、`--selftest 300 --stats-shadow-timing --hidden`，每个场景重复三次，读数逐位一致。
+
+| 项 | 结果 |
+| --- | --- |
+| Release 构建 | `[build] Release ok in 18.7s` |
+| 静态基线（Sponza，逐模型路径 309 draw call） | cascade0=0.041ms cascade1=0.029ms cascade2=0.040ms **total=0.110ms**（min 0.098 / max 0.129） |
+| 立方体基线（`--cube-field 500`，GPU 合并间接，打 `[Shadow] gpu batch`） | 0.014 / 0.018 / 0.011 **total=0.043ms**（min 0.040 / max 0.098） |
+| 动态基线（`--cube-field 500 --cube-field-motion 2000`） | 0.015 / 0.019 / 0.012 **total=0.045ms** |
+| 标定（`--cube-field 4000`） | 0.030 / 0.029 / 0.018 **total=0.077ms**（随负载增长，尺子有分辨率） |
+| 降级（`--no-shadows --stats-shadow-timing`） | `[Shadow] timing summary | frames=0（没有样本：阴影被关掉了？）`，不崩 |
+| 零开销守卫 | 关：`PASS | queryPool=0 | shadowQueries=0`；开：`SKIP (debug capability on) | shadowQueries=12` |
+| Debug 验证（六组） | 默认 / `--cube-field 10000 --cube-field-motion 500` / `--streaming-world 2 --gpu-scene-external 400` / `--voxel-world 1` / `--light-stress 300` / `--streaming-world 2 --streaming-fly 60` —— 全部 `errors=0 warnings=0`、stderr 0 字节 |
+| 全量回归 | 96 项 ALL PASS（build/validation/20261126-153717，日志 201 行，FAIL=0） |
+| DocCheck | PASS（documents=82 lines=19595） |
+
+### 基线读数说明了什么
+
+- **阴影 Pass 只占整帧约 2.5%**：整帧 1.2857s / 300 帧 = 4.29ms（233 FPS），阴影 0.043~0.110ms。「静态场景下降 ≥ 60%」在 0.110ms 的基数上是 0.07ms 的绝对量 —— 门槛本身在一个 4.29ms 的帧里看不出来，需要一个更重的基准场景才谈得上「验收」。
+- **同一份场景，GPU 合并间接（0.043ms）比逐模型 309 次 draw（0.110ms）快 2.5 倍**，而三角形数一样。说明当前基线里很大一块是提交/驱动侧开销，不是像素带宽。VSM 省下的是「重画」的提交与光栅化两份，但「−60%」这个数在逐模型路径上最容易达成，而那恰恰不是 VSM 的目标场景。
+- **动态与静态立方体几乎同值**（0.045 vs 0.043）：CSM 每帧全量重画，动与不动不改变 GPU 时间。VSM 的收益只能从「页复用」来，这也反过来验证了必须靠页标记，而不是靠「场景静态」这个标签。
+
+### 代价与边界
+
+- 时间戳需要图形队列族支持（`timestampValidBits == 0` 时打一行提示并关闭 `--stats-shadow-timing`）。
+- `TOP_OF_PIPE` 起点在硬件允许流水线重叠时会把「前一条命令的尾巴」算进本级联，量级在微秒级，对两个数量级的比较没有影响；要更严格的边界得等到 `VK_KHR_synchronization2` 的 stage mask 细化那一步。
+- 只测图形队列，异步 compute 队列不进读数；也只测 GPU，不含 CPU 侧提交（逐模型路径的 CPU 时间看 `--stats-frame` 的 pass 录制耗时）。
+- 每 60 帧一行 stdout，长测重定向到文件会多几百行。
+
+### 踩到的坑
+
+- `vkCmdResetQueryPool` 必须在 `vkGetQueryPoolResults` 之后。先 reset 再读会拿到 0 或未定义值，症状是读数恒为 0.000ms 而画面正常。
+- 采集点必须留在 `vkCmdBeginRendering` 之前（本 pass 是零附件 pass，`execute` 开头正好）。
+- `src/Core/CliCatalog.cpp` 这批条目的行首缩进不统一（`--stats-frame` 那行没有缩进），按「整行文本」做锚点会匹配不到；改成「找到含 `--stats-frame` 的行再插一行」才稳。
+
+### 不引入的
+
+- 不把时间戳写进 `gpu_timing.csv`：P4 的读数只要 stdout，多一列会让现有的 CSV 解析失效。
+- 不做滑动窗口平滑：60 帧不重叠窗口与滑窗在稳态下给同一结论，而不重叠窗口的代码只有几行。
+- 不把「首帧冷启动」样本剔掉：summary 的 `max` 保留它（Debug 首帧 5.867ms），要稳态比较看 `min` 与每 60 帧的行。

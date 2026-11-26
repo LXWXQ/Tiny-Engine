@@ -4,8 +4,8 @@ title: Pass 顺序与原因
 type: pipeline
 scope: src/Core/Application.cpp, src/Render/*.cpp
 read-when: 调整 Pass 顺序、新增 Pass、排查"某张图为什么是黑的"
-size: ~209 行
-updated: 2026-11-25
+size: ~214 行
+updated: 2026-11-26
 ---
 
 # Pass 顺序与原因
@@ -13,6 +13,8 @@ updated: 2026-11-25
 ## 1. 顺序
 
 ```
+ShadowPass         F6：3 级 CSM 深度；零附件 pass，自己发屏障管布局；级联剔除在自己的命令里现录（prepareView 视图 2~4）
+   |
 TerrainGpuSelection  B-03：无附件 pass；compute 选层/剔除，写 indirect command/count
    |
 SceneGpuCull        F1：无附件 pass；摊平实例 + 逐实例视锥/屏率剔除，写每组的紧凑 indirect command（P2-5 起不再按组剔除）
@@ -60,7 +62,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 体素 chunk 走同一份 arena VBO/IBO，但实例表与命令由 `GeometrySystem` 每帧按可见集合写进专用 host-visible 缓冲，整批一条 `vkCmdDrawIndexedIndirect`；这条路径不经过 `SceneGpuCull`，反射视图也不复用它，而是逐块 arena draw。
 `HiZBuild` 必须排在 `Geometry` **之后**：金字塔要包含本帧刚画出的几何；它写的是 `(frameInFlight + 1) % kFramesInFlight` 槽，供下一帧 `SceneGpuCull` 读（错帧一帧，第一帧 `params.z = 0` 关闭遮挡）。
 渲染图里注册的 pass 名依次是：
-`TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `Vegetation`, `SSAO`, `SSAOBlur`, `Lighting`, `Cloud`, `FogVolume`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `SSR`, `Glass`, `Water`, `Particle`, `TAA`, `SunFlare`,
+`Shadow`, `TerrainGpuSelection`, `SceneGpuCull`, `Geometry`, `HiZBuild`, `Vegetation`, `SSAO`, `SSAOBlur`, `Lighting`, `Cloud`, `FogVolume`, `PlanarReflection.GBuffer`, `PlanarReflection.Lighting`, `SSR`, `Glass`, `Water`, `Particle`, `TAA`, `SunFlare`,
 `Bloom.Bright`, `Bloom.Down0/1/2`, `Bloom.Up2/1/0`, `Present`,
 `PresentTransition`。
 
@@ -81,6 +83,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 
 | 约束 | 原因 |
 |---|---|
+| Shadow **最前**、TerrainGpuSelection/SceneGpuCull **之前** | 3 级 CSM 深度图是本帧光照的输入，必须早于 `Lighting`，但不必晚于任何 Pass：级联剔除是它在自己命令缓冲里用 `SceneGpuBatch::prepareView(视图 2/3/4)` 现录的，实例表与组表来自上一帧的结构上传，所以不依赖本帧 `SceneGpuCull` 的输出；排在最前只是 `addPass` 顺序（`src/Core/Application.cpp:990` 在 `GeometryPass` 之前）。深度图跑完立刻转 `SHADER_READ_ONLY`，由 `Lighting` 的 set 0 binding 11（`sampler2DArray`）采样；本 pass 零附件、自管屏障，不进渲染图的资源表 |
 | Vegetation 在 Geometry/HiZBuild **之后**、SSAO **之前** | 植被写 G-Buffer 的四张颜色 + 深度（`LOAD`、`LESS_OR_EQUAL`、depthWrite ON），必须排在 SSAO/Lighting 之前，草和树才能接收 SSAO、级联阴影与延迟光照。草叶在片元里 alpha-test `discard`，不按透明物体排序；不透明深度由植被自己写，后面的 SSAO/Lighting 只看到最近表面。植被不参与 `SceneGpuCull`/Hi-Z（实例由 CPU 按地形放置）；树由 `VegetationPass::recordShadow()` 投入 CSM，草不投影，二者都不进 PlanarReflection，所以水倒影里没有植被 |
 | SSAO 在 Lighting **之前** | SSAO 调制环境光项（`ambient *= ssao`），是光照的输入 |
 | Cloud 在 Lighting **之后**、PlanarReflection/SSR/Glass/Water **之前** | 云是叠在已着色 HDR 上的大气层，必须读 Lighting 的输出；放在反射/透明之前，水面、玻璃和 SSR 读到的 HDR 才带云。读 G-Buffer.Position 把射线截到最近不透明表面（天空位置在 10000 处，自然不截断），用预乘 alpha（`src=ONE`、`dst=ONE_MINUS_SRC_ALPHA`）保留 HDR alpha；无深度附件、不写深度，只由 `scene.clouds` 组件启用。PlanarReflection 内部的第二套 Lighting 不跑云，因此倒影里没有云，作为已知边界 |
@@ -100,6 +103,7 @@ PresentTransition 只发一个布局转换到 PRESENT_SRC_KHR
 
 | 开关 | 关闭时行为 |
 |---|---|
+| `--no-shadows` | Shadow Pass 仍注册并执行（布局转换照发），但 `settings.shadowEnabled = false` → `ubo.shadowParams.w = 0` → `lighting.frag` 的 `SampleShadow` 第一行 `if (ubo.shadowParams.w < 0.5) return 1.0`；CSM 图仍绑在 set 0 binding 11，所以每帧的布局转换不能省。此时 `--stats-shadow-timing` 打 `frames=0` |
 | `--no-ssao` | SSAO Pass 仍执行，但着色器最前面就 `enabled < 0.5 -> 输出 1.0`（连 G-Buffer 采样都省） |
 | `--no-bloom` | **真的跳过 7 个 Bloom pass**；Present 走 `present_no_bloom.frag` 单输入管线 |
 | `--no-taa` | TAA Pass 仍执行，但 `historyWeight = 0`、jitter = 0，着色器直接输出当前帧；窗口/渲染目标 resize 与重新开启时 `historyValid = false`，首帧不吃旧历史 |

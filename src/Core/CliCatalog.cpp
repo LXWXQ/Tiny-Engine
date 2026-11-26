@@ -91,6 +91,7 @@ const std::vector<UsageLine> kCatalog = {
 { "剖析", "--parallel-prepare", "Pass 的准备阶段（访问去重 + 校验 + 组装附件描述）交给作业系统并行（TM-10）" },
 { "剖析", "--stats-rendergraph", "退出时打印 Pass 准备 / 录制各自的每帧耗时（TM-10）" },
 { "剖析", "--stats-frame", "退出时打印屏障 / 绑定 / 帧时间分布 / 资源创建 / 显存 / 剔除汇总（T-10）" },
+        { "剖析", "--stats-shadow-timing", "阴影 Pass 每级联 GPU 计时（P4 第零步尺子；每 60 帧一行，退出打平均）" },
     { "剖析", "--no-pipeline-cache", "关掉管线绑定缓存（T-09 的整体回退；关掉后每次绑定都照发）" },
         { "剖析", "--pass-cull", "打开 Pass 剔除（T-05）。默认关：本引擎的 Pass 在关闭时就不进图，实测没有「输出无人读」的 Pass" },
     { "剖析", "--no-pass-cull", "关掉 Pass 剔除（T-05 的整体回退；关掉后没人读输出的 Pass 也照跑）" },

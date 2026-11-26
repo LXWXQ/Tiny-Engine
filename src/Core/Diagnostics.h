@@ -77,6 +77,10 @@ namespace diag
         // --stats-frame：退出时打印每帧屏障条数与管线绑定 / 冗余绑定（T-10）。
         // 这是 P0 度量基线的一半：屏障条数证明 T-03 能省多少，冗余绑定率是 T-09 的上限。
         bool statsFrame = false;
+
+        // P4 第零步：阴影 Pass 每级联 GPU 时间戳（CSM 基线尺子）。关闭时不建
+        // query pool，零开销守卫会核对 queryCount == 0。
+        bool statsShadowTiming = false;
     // T-09 的整体回退：关掉管线绑定缓存，每次绑定都照发。
     bool noPipelineCache = false;
     // T-05：Pass 剔除默认关（本引擎暂无「输出无人读」的 Pass）；--pass-cull 打开，

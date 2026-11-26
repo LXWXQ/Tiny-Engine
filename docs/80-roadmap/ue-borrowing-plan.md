@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1102 行
+size: ~1106 行
 updated: 2026-11-26
 ---
 
@@ -1101,3 +1101,7 @@ DocCheck PASS（documents=82 lines=19441）。
 
 
 **P3 第六步（2026-11-26，描述符类型与数量交给反射）**：决策 74 只把「参数块布局 + 绑定号」变成了反射事实，本次把另一半也交出去。`tools/SpirvReflect.cpp` 为每个描述符多生成 `k<Id>Kind`（整数种类），新头 `src/RHI/DescriptorReflect.h` 提供 `kDescriptorType<Kind>` 的编译期映射，`DescriptorManager::createGlobalLayout()` 与 `SceneGpuBatch` 的两套布局全部改成「类型 + 数量取自反射」，并配 20 条 `static_assert`。`kKindUnmapped = 0` 故意映射到 `VK_DESCRIPTOR_TYPE_MAX_ENUM`：shader 改了种类而映射表没跟上，会在编译期炸而不是运行期。验证：Debug 5 组验证层干净，Release 读数与上一步逐位一致，全量回归 96 项 ALL PASS，DocCheck PASS。
+
+**P4 第零步（2026-11-26，阴影 Pass 的 GPU 时间尺子）**：`ShadowPass` 自带每级联时间戳（3 × 2 / 帧槽、池 12 个，`TOP_OF_PIPE` 进、`ALL_COMMANDS` 出，下一轮同帧槽读回），开关 `--stats-shadow-timing` 归在「剖析」组，沿用 `TINY_ENABLE_GPU_TIMING` 编译期门控并计入零开销守卫（`shadowQueries=`）。
+CSM 基线（Release，300 帧，三次重复一致）：静态 Sponza `total=0.110ms`（0.041 / 0.029 / 0.040）、`--cube-field 500` `0.043ms`、动态立方体 `0.045ms`、`--cube-field 4000` `0.077ms`；整帧 4.29ms（233 FPS），阴影只占约 2.5%。
+两个读数会改变 P4 的排序：①「静态 −60%」在 0.1ms 的基数上只有 0.07ms 的绝对量，验收要先换一个更重的基准场景；②同场景 GPU 合并路径比逐模型 309 次 draw 快 2.5 倍而三角形数相同，说明基线的大头是提交/驱动开销 —— P4-5 的「阴影几何复用 `visibleIdList`」可能该在 P4-2 之前先评估。

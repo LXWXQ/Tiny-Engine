@@ -872,6 +872,8 @@ streamingConfig.skirtsEnabled = false;
 	// F6：级联阴影。必须在 GeometryPass 之前注册 —— 它写阴影图，Lighting 读，
 	// 而渲染图按注册顺序执行。
 	auto shadowPass = std::make_unique<ShadowPass>(*vulkanDevice, *renderGraph, scene->getTerrainMeshArena());
+	// P4 第零步：CSM 基线尺子。只做运行期门控：不开 --stats-shadow-timing 时连 query pool 都不建。
+	shadowPass->setTimingEnabled(diagnosticsOptions.statsShadowTiming);
 
 	auto geoPass = std::make_unique<GeometryPass>(*vulkanDevice, gBufferPtrs, *renderGraph, *renderResources,
 		descriptorManager->getGlobalSetLayout(), descriptorManager->getMaterialSetLayout(),
@@ -3556,13 +3558,19 @@ geometryPassPtr->getSceneGpuBatch()->getGpuScene().report();
 
     diag::printValidationSummary();
 
+    // P4 第零步：CSM 基线。先等 GPU 停下把最后几帧的时间戳读干净，再打平均。
+    if (shadowPassPtr != nullptr)
+        shadowPassPtr->reportTimingSummary();
+
     // P0-6 零开销守卫：关闭时不应有任何调试用 GPU 资源 / 额外文件。
-    const bool anyDebugEnabled = gpuTimingWasEnabled || screenshotWasEnabled;
-    const bool guardOk = (gpuTimingQueries == 0 && screenshotBytes == 0);
+    const uint32_t shadowTimingQueries = (shadowPassPtr != nullptr) ? shadowPassPtr->timingQueryCount() : 0u;
+    const bool anyDebugEnabled = gpuTimingWasEnabled || screenshotWasEnabled || shadowTimingQueries > 0;
+    const bool guardOk = (gpuTimingQueries == 0 && screenshotBytes == 0 && shadowTimingQueries == 0);
     std::cout << "[Diag] zero-overhead guard "
               << (anyDebugEnabled ? "SKIP (debug capability on)" : (guardOk ? "PASS" : "FAIL"))
               << " | queryPool=" << gpuTimingQueries
               << " | screenshotBuffer=" << screenshotBytes
+              << " | shadowQueries=" << shadowTimingQueries
               << " | validationJsonl=" << (diagnosticsOptions.validationJsonlPath.empty() ? "off" : "on")
               << "\n";
 }
