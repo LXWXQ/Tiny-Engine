@@ -744,7 +744,7 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
             if (world == nullptr || !world->valid || !mesh.model)
                 continue;
             // 阴影投射者不能按相机视锥裁剪：视野外的高处物体同样会把阴影投进画面。
-            // 所以这里不做剔除，靠深度测试和 2048² 分辨率兜住开销。
+            // 所以这里不做剔除，靠深度测试和 4096² 分辨率兜住开销。
             if (!buffersBound)
             {
                 tiny::statecache::bindVertexBuffer(cmd, terrainMeshArena->getVertexBuffer(), 0);
@@ -759,7 +759,7 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
 
             for (const SubMesh& subMesh : mesh.model->getSubMeshes())
             {
-                // 地形有 LOD 链；阴影只画 LOD 0（2048² 下细节差不出来，且省一半三角形）。
+                // 地形有 LOD 链；阴影只画 LOD 0（4096² 下细节差不出来，且省一半三角形）。
                 if (!subMesh.isTerrainChunk || subMesh.terrainLod != 0u || subMesh.indexCount == 0u)
                     continue;
                 vkCmdDrawIndexed(cmd, subMesh.indexCount, 1,

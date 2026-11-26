@@ -19,6 +19,7 @@
 #include "RHI/PipelineStats.h"
 #include "RHI/FrameStats.h"
 #include "Render/GpuScene.h"
+#include "Render/SparsePageAllocator.h"
 #include "RHI/RenderGraphBlackboard.h"
 #include "Render/FramePayloads.h"
 #include "RHI/StateCache.h"
@@ -2279,6 +2280,13 @@ int FirstApp::runHeadlessSelfTest(int frames)
 	if (!renderGraphSwitchboardSelfTest())
 		throw std::runtime_error("RenderGraph setPassEnabled selfTest failed");
 
+	// P4-1：稀疏页分配器的纯逻辑自检 —— 线性分配 / FIFO 复用 / 版本号 / 脏页去重 / 无泄漏。
+	if (!tiny::SparsePageAllocator::selfTest())
+		throw std::runtime_error("SparsePageAllocator selfTest failed");
+	// --page-alloc-selftest：压力自检（随机 20 万次分配/释放，与独立口径逐项对账）。
+	if (diagnosticsOptions.pageAllocSelftest &&
+		!tiny::SparsePageAllocator::stressTest(200000u, tiny::SparsePageAllocator::kDefaultPageCount, true))
+		throw std::runtime_error("SparsePageAllocator stressTest failed");
 	// F6：级联阴影的数学自检（split 递增、角点落在裁剪体内、远处被剔除）。
 	if (!ShadowPass::selfTest())
 		throw std::runtime_error("ShadowPass selfTest failed");

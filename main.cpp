@@ -410,6 +410,7 @@ bool audioSpatialTest = false;
         else if (arg == "--stats-rendergraph") diagOptions.statsRenderGraph = true;
         else if (arg == "--stats-frame") diagOptions.statsFrame = true;
         else if (arg == "--stats-shadow-timing") diagOptions.statsShadowTiming = true;
+        else if (arg == "--page-alloc-selftest") diagOptions.pageAllocSelftest = true;
         else if (arg == "--no-pipeline-cache") diagOptions.noPipelineCache = true;
         else if (arg == "--pass-cull") diagOptions.passCull = true;
         else if (arg == "--no-pass-cull") diagOptions.noPassCull = true;

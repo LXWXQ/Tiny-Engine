@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1868 行
+size: ~1877 行
 updated: 2026-11-26
 ---
 
@@ -1867,3 +1867,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - CSM 基线（Release，`--selftest 300 --stats-shadow-timing --hidden`，三次重复逐位一致）：静态 Sponza（逐模型路径 309 draw）`0.041 / 0.029 / 0.040 → total=0.110ms`（min 0.098 / max 0.129）；`--cube-field 500`（GPU 合并间接）`0.014 / 0.018 / 0.011 → 0.043ms`；`--cube-field 500 --cube-field-motion 2000` `0.015 / 0.019 / 0.012 → 0.045ms`；标定 `--cube-field 4000` → `0.077ms`。整帧 4.29ms（233 FPS）。
 - 读数带来三个结论：阴影只占整帧约 2.5%（「−60%」在 0.1ms 的基数上是 0.07ms 绝对量，验收需要更重的基准场景）；同一场景 GPU 合并路径比逐模型 309 draw 快 2.5 倍而三角形数相同（基线大头是提交/驱动开销，不是像素带宽）；动态与静态立方体同值（CSM 每帧全量重画，与「场景静态」这个标签无关）。
 - 验证：Debug 六组（默认 / `--cube-field 10000 --cube-field-motion 500` / `--streaming-world 2 --gpu-scene-external 400` / `--voxel-world 1` / `--light-stress 300` / `--streaming-world 2 --streaming-fly 60`）全部 `errors=0 warnings=0`、stderr 0 字节；`--no-shadows` 降级为 `frames=0`；守卫关时 `PASS | shadowQueries=0`、开时 `SKIP | shadowQueries=12`。全量回归 96 项 ALL PASS；DocCheck PASS。
+
+## P4-1：CSM 提到 4096 重立基线 + 稀疏页分配器（P4-1，2026-11-26）
+
+- 第零步把验收架在 0.043~0.110 ms 的基数上（整帧 4.29 ms 的 2.5%），「−60%」只有 0.03~0.07 ms 的绝对量。用户裁决（2026-11-26）：先试网上的重型场景，拿不到就把 CSM 分辨率 2048 → 4096。实测 curl 能出网但候选全落空（Crytek Sponza 包与 Sun Temple 都 404，Khronos 新仓库里唯一的重型场景就是引擎已内置的 Sponza），Bistro / San Miguel 是 0.4~3 GB 的 OBJ 包还要手写场景 json → 走 4096（决策 77）。
+- 4096 基线（Release，`--stats-shadow-timing`，每场景三次重复逐位一致）：静态 Sponza `0.058 / 0.063 / 0.083 → 0.204 ms`（min 0.190 / max 0.242）、`--cube-field 500` 0.076、`--cube-field 4000` 0.135、`--cube-field 20000` 0.381、动态 `--cube-field 20000 --cube-field-motion 2000` 0.442。像素数涨 4 倍、读数只涨 1.8 倍 —— 与第零步第二个结论一致（大头是提交/驱动，不是像素带宽）。
+- P4-1 本体：新增 `src/Render/SparsePageAllocator.{h,cpp}`（101 + 386 行）。单图集、定长 128² 页、页号即物理索引、uint 环形空闲队列（FIFO 复用、O(1) 不扫描）、每页版本号（0 = 从未分发，复用时自增，页表靠它判内容失效）、脏位图 + 标记顺序列表（去重）、`validate()` 校验全部不变式（队列长度 + 活跃页数 = 总页数、队列无重复、活跃页不出现在队列里、位图与计数一致）。
+- 两套自检：`selfTest()` 每次启动跑（64 页、线性分配 / FIFO 复用 / 版本号 / 双重释放 / 脏页去重 / 无泄漏六个确定性场景）；`stressTest()` 由 `--page-alloc-selftest` 触发（20 万次随机操作，释放概率 = 当前占用率让活跃页数在容量一半附近无界游走，再压一段「几乎全满 + 每 97 次释放一个」；与一份独立数组口径逐项对账，收尾先全释放再全分配，证明无泄漏、无重叠）。
+- 读数：Release `ops=200000 pages=4096 alloc+free=8.3 ns/op`、`peak=4096`、`reuse=99050`、`exhausted=5996`；Debug 43.2~47.5 ns/op。4096 页全量重分配约 34 µs，所以 CPU 侧分配够用，GPU 侧 `page_alloc.comp` 推迟到 P4-4（那时才有消费者，现在写就是无法验证的死代码）。
+- 验证：Debug 六组（默认 / `--page-alloc-selftest` / `--cube-field 4000` / `--streaming-world 2` / `--voxel-world 1` / `--no-shadows`）全部 `errors=0 warnings=0`、stderr 0 字节、exit=0；不带开关时启动自检静默通过。全量回归 96 项 ALL PASS（build/validation/20261126-161321，日志 201 行，FAIL=0）；DocCheck PASS。

@@ -19,7 +19,7 @@ class SceneGpuBatch;
 // 设计取舍说明：
 // 1) 阴影几何走 CPU 逐实体提交，而不是复用 GPU 驱动的间接提交。
 //    GPU 批量只为一个视图（主相机）生成命令，阴影要每个级联一份；把剔除拆成
-//    「每级联一次 dispatch」的工作量远大于收益 —— 阴影图只有 2048x2048、
+//    「每级联一次 dispatch」的工作量远大于收益 —— 阴影图一张只有 4096x4096、
 //    而场景静态网格只有 103 个子网格。等体素/粒子真接进来（F3/F6 后续）再考虑。
 // 2) 深度图与采样器由本 Pass 自己管理（手工屏障），不进渲染图：
 //    图上一条纹理对应一个图层，3 层级联会让布局/屏障声明变复杂，
@@ -30,7 +30,9 @@ class ShadowPass : public IRenderPass
 {
 public:
     static constexpr uint32_t kCascadeCount = 3;
-    static constexpr uint32_t kResolution = 2048;
+    // P4 第零步之后：基准从 2048 提到 4096，让「阴影 Pass 的 GPU 时间」从亚毫秒变成
+    // 毫秒级，验收的比值才有分母。显存代价是每帧槽 3 x 4096^2 x 4B = 201 MiB（两个帧槽共 402 MiB）。
+    static constexpr uint32_t kResolution = 4096;
 
     struct Cascade
     {

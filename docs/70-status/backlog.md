@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~521 行
+size: ~530 行
 updated: 2026-11-26
 ---
 
@@ -507,15 +507,24 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 
 **回退开关**：`--no-draw-command-list`、`--no-pso-precache`（这两个开关尚未实现，等对应的机制落地时一起加）。
 
-## P4 待办：虚拟阴影图（P4-1 ~ P4-6）
+## P4 待办：虚拟阴影图（P4-1 → P4-5 → P4-2 → P4-3/4 → P4-6）
 
-**现状（2026-11-26）**：第零步的尺子已落地（`--stats-shadow-timing`，决策 76）。基线（Release，300 帧，三次重复一致）：静态 Sponza `total=0.110ms`（0.041 / 0.029 / 0.040）、`--cube-field 500` `0.043ms`、动态立方体 `0.045ms`、`--cube-field 4000` `0.077ms`；整帧 4.29ms（233 FPS），阴影只占约 2.5%。
+**已定（2026-11-26 用户裁决，见决策 77 / 78）**：
+1. 验收基准：CSM 分辨率 2048 → 4096。三档固定基准 —— 静态 Sponza 0.204 ms、静态 `--cube-field 20000` 0.381 ms、动态 `--cube-field 20000 --cube-field-motion 2000` 0.442 ms。不再去找网上的重型场景：Crytek Sponza 包与 Sun Temple 都 404，Bistro / San Miguel 是 0.4~3 GB 的 OBJ 包 + 手写场景 json。
+2. 顺序：P4-1 → P4-5 → P4-2 → P4-3/P4-4 → P4-6。P4-5（阴影几何复用 `visibleIdList`）提前，因为第零步读数显示逐模型 309 draw 比 GPU 合并路径慢 2.5 倍，提交开销是基线大头。
+3. `SparsePageAllocator` 不与 P7 距离场共用：保持单图集、定长 128² 页、uint 环形队列的最小形状。
 
-**待决问题（动 P4-1 之前必须先定）**：
-1. 验收基准场景未定：「静态场景 −60%」在 0.043~0.110ms 的基数上只有 0.03~0.07ms 的绝对量，需要一个更重的场景才有工程意义。候选：`--cube-field 4000`（0.077ms）、`--streaming-world 2 --gpu-scene-external 400`（Debug 0.198ms），或先把 CSM 分辨率从 2048 提到 4096 让基线变重。
-2. P4-5 是否提前：静态基线里逐模型路径（309 draw）比 GPU 合并路径慢 2.5 倍而三角形数相同 —— 提交/驱动开销占大头，先换掉阴影几何的提交方式可能比先做页表更划算。
-3. `SparsePageAllocator` 的接口形状取决于「是否与 P7 距离场共用」：共用要支持两种页尺寸与两套图集句柄；不共用则应保持最小（单图集、定长 128² 页）。
+**进度**：
+- [x] P4-1 稀疏页分配器：`src/Render/SparsePageAllocator.{h,cpp}` + 启动自检 + `--page-alloc-selftest`（20 万次随机操作对账，Release 8.3 ns/op、peak=4096）
+- [ ] P4-5 阴影几何复用 `visibleIdList`（`src/Render/ShadowPass.cpp` 的逐模型提交改成复用 `SceneGpuCull` 的可见实例表）
+- [ ] P4-2 图集 / 页表 / 每页 HZB（预期不产生读数变化：页分配在 P4-1 已完成，这一层只是把页变成可采样的图）
+- [ ] P4-3 clipmap 滚动 + P4-4 页标记（`markPages` 脏页位图，未标记页复用上帧内容；GPU 侧 `page_alloc.comp` 在这里落地）
+- [ ] P4-6 `shaders/lighting.frag` 页表采样 + `--no-vsm` 回退
+
+**待决（动 P4-2 之前要定）**：
+1. 页表放哪个描述符集：`lighting.frag` 的 set 0 binding 11 现在是 `sampler2DArray shadowMaps`，而页表要「SSBO + 图集采样器」两个绑定 —— 加进 set 0 会改全局布局（`DescriptorManager::createGlobalLayout()` 与反射头），加 set 1 会碰 bindless 材质数组。
+2. 每页一次 draw 的提交方式：多级间接 draw（每页一段命令区间）还是别的？要等 P4-5 做完才知道一页的命令有多小。
 
 **回退开关**：`--no-vsm`（P4-6 落地时加；CSM 路径保留到验收后 3 个版本）。
 
-**遗留**：Debug 首帧 `max=5.867ms` 是冷启动样本（首帧建资源），不进平均值；要稳态比较看 `min` 与每 60 帧的行。
+**遗留**：P4 第零步的 Debug 首帧 `max=5.867ms` 是冷启动样本（首帧建资源），不进平均值；要稳态比较看 `min` 与每 60 帧的行。

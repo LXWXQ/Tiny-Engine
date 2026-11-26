@@ -81,6 +81,9 @@ namespace diag
         // P4 第零步：阴影 Pass 每级联 GPU 时间戳（CSM 基线尺子）。关闭时不建
         // query pool，零开销守卫会核对 queryCount == 0。
         bool statsShadowTiming = false;
+        // P4-1：稀疏页分配器的压力自检（随机分配/释放 + 独立口径对账）。
+        // 不进帧循环、不建 GPU 资源；只在启动阶段跑一次然后正常开局。
+        bool pageAllocSelftest = false;
     // T-09 的整体回退：关掉管线绑定缓存，每次绑定都照发。
     bool noPipelineCache = false;
     // T-05：Pass 剔除默认关（本引擎暂无「输出无人读」的 Pass）；--pass-cull 打开，

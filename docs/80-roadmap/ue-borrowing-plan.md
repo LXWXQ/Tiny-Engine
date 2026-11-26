@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1106 行
+size: ~1108 行
 updated: 2026-11-26
 ---
 
@@ -1105,3 +1105,5 @@ DocCheck PASS（documents=82 lines=19441）。
 **P4 第零步（2026-11-26，阴影 Pass 的 GPU 时间尺子）**：`ShadowPass` 自带每级联时间戳（3 × 2 / 帧槽、池 12 个，`TOP_OF_PIPE` 进、`ALL_COMMANDS` 出，下一轮同帧槽读回），开关 `--stats-shadow-timing` 归在「剖析」组，沿用 `TINY_ENABLE_GPU_TIMING` 编译期门控并计入零开销守卫（`shadowQueries=`）。
 CSM 基线（Release，300 帧，三次重复一致）：静态 Sponza `total=0.110ms`（0.041 / 0.029 / 0.040）、`--cube-field 500` `0.043ms`、动态立方体 `0.045ms`、`--cube-field 4000` `0.077ms`；整帧 4.29ms（233 FPS），阴影只占约 2.5%。
 两个读数会改变 P4 的排序：①「静态 −60%」在 0.1ms 的基数上只有 0.07ms 的绝对量，验收要先换一个更重的基准场景；②同场景 GPU 合并路径比逐模型 309 次 draw 快 2.5 倍而三角形数相同，说明基线的大头是提交/驱动开销 —— P4-5 的「阴影几何复用 `visibleIdList`」可能该在 P4-2 之前先评估。
+
+**P4-1（2026-11-26，4096 重基准与稀疏页分配器）**：先把「分母」做厚 —— 网上经典场景在本机拿不到（Crytek Sponza 包 404、Sun Temple 404，Bistro / San Miguel 是 0.4~3 GB 的 OBJ 包 + 手写场景 json），于是 `ShadowPass::kResolution` 2048 → 4096（每帧槽 201 MiB、两槽 402 MiB）。静态 Sponza 0.110 → 0.204 ms、`--cube-field 500` 0.076、`--cube-field 4000` 0.135、`--cube-field 20000` 0.381、动态（+`--cube-field-motion 2000`）0.442；像素数涨 4 倍而读数只涨 1.8 倍，说明基线大头仍是提交/驱动。然后写 P4 的第一块砖 `src/Render/SparsePageAllocator.{h,cpp}`：单图集、定长 128² 页、uint 环形空闲队列（O(1) FIFO 复用）、每页版本号、脏位图 + 去重列表，`selfTest()` 每次启动跑、`--page-alloc-selftest` 跑 20 万次随机分配/释放并与独立口径对账（Release 8.3 ns/op、peak=4096、exhausted=5996）。用户裁决（2026-11-26）：不与 P7 距离场共用该分配器；顺序改为 P4-1 → P4-5 → P4-2；P4-2 预期不产生读数变化（图集/页表/HZB 只是把页变成可采样的图）。
