@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~460 行
+size: ~464 行
 updated: 2026-11-26
 ---
 
@@ -458,3 +458,7 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 **待补**：`--velocity-probe`（把速度图拷回主机，与 CPU 端投影比对，判据 < 0.5 像素）与「静态区域时域方差 −30%」的自动化统计 —— 这两条是 roadmap 给 P5-2 定的量化验收，尚未实现。
 
 **P5-2 全量回归（2026-11-26）**：96 项 ALL PASS（`build/validation/20261126-122409`）；第一次跑到 `f2-streaming-world` 时 JobSystem 并行加速比判据没过（当时并发了别的活，CPU 被抢），单独重跑三次都是 5.65~6.66x PASS —— 那条判据对机器负载敏感。
+
+**P5-2 验收补实（2026-11-26，决策 68 补测）**：`--velocity-probe` 与 `--taa-matrix-reprojection` 落地。读数：静态 `meanDiff=0.475/0.484 px`、`maxDiff=0.487 px`、`>0.5px=0.00%`（`< 0.5 像素` 判据达标，下限由 `R16G16_SFLOAT` 决定）；运动 `meanDiff=1.195/1.285 px`、`>0.5px=76.10%/79.75%`。`静态区域时域方差 −30%` **未达成**（整帧时域差 2.395 vs 2.370），机理见决策 68。Debug 三组干净。
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-125624`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19016）。

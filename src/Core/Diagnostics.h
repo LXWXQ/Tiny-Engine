@@ -39,6 +39,12 @@ namespace diag
     {
         bool printBuildInfo = false;
 
+        // P5-2 验收工具：对比「速度图重投影」与「上一帧矩阵重投影」。
+        // --taa-matrix-reprojection：强制走矩阵（A/B 与回退）。
+        bool taaMatrixReprojection = false;
+        // --velocity-probe：每 30 帧读回一次两者的像素差（只在 TAA 开着时有意义）。
+        bool velocityProbe = false;
+
         // 验证层
         bool validationBestPractices = false;
         bool validationSync = false;

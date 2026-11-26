@@ -21,13 +21,21 @@ layout(set = 1, binding = 1) uniform sampler2D worldPosTex;
 layout(set = 1, binding = 2) uniform sampler2D historyColor;
 layout(set = 1, binding = 3) uniform sampler2D velocityTex;
 
+// 探针：把「速度图重投影」与「上一帧矩阵重投影」的差值攒起来，CPU 每 30 帧读一次。
+layout(set = 1, binding = 4) buffer ProbeBuffer {
+    uint probePixelCount;
+    uint probeBigCount;
+    uint probeSumUnits;   // 1/32 像素为单位
+    uint probeMaxMilli;
+} probe;
+
 layout(push_constant) uniform Push {
     vec2 previousJitterUv;
     vec2 texelSize;
     float historyWeight;
     float historyValid;
-    float pad0;
-    float pad1;
+    float reprojectionMode;   // 0 = 速度图，1 = 上一帧矩阵（A/B 与回退）
+    float probeEnabled;       // 1 = 把两种重投影的像素差攒进 probe 缓冲
 } pc;
 
 vec3 rgbToYCoCg(vec3 c)
@@ -60,7 +68,7 @@ void main()
         // 天空盒/网格/植被的速度是 0（它们不产生屏幕空间运动），这时仍走矩阵，
         // 否则相机动起来天空会被抹开。
         vec2 velocity = texture(velocityTex, uv).xy;
-        bool hasVelocity = dot(velocity, velocity) > 1e-12;
+        bool hasVelocity = pc.reprojectionMode < 0.5 && dot(velocity, velocity) > 1e-12;
         vec2 previousUv;
         bool reprojectable = true;
         if (hasVelocity)
@@ -124,6 +132,26 @@ void main()
                              clamp(pc.historyWeight, 0.0, 0.98));
             }
         }
+    }
+
+    // 探针按 8x8 抽一格：整屏 60M 像素的定点和会溢出 32 位，
+    // 抽样后约 1M 个点，每点以 1/32 像素为单位累加也不会溢出。
+    if (pc.probeEnabled > 0.5 && (int(gl_FragCoord.x) & 7) == 0 && (int(gl_FragCoord.y) & 7) == 0)
+    {
+        vec2 velocity = texture(velocityTex, uv).xy;
+        vec4 currClip = ubo.projectionView * vec4(worldPos, 1.0);
+        vec4 prevClip = ubo.previousProjectionView * vec4(worldPos, 1.0);
+        vec2 matrixVelocity = (currClip.w > 1e-4 && prevClip.w > 1e-4)
+            ? (currClip.xy / currClip.w - prevClip.xy / prevClip.w) * 0.5
+            : vec2(0.0);
+        vec2 diffPx = abs(velocity - matrixVelocity) * vec2(size);
+        uint units = uint(min((diffPx.x + diffPx.y) * 32.0, 65000.0));
+        uint milliMax = uint(min(max(diffPx.x, diffPx.y) * 1000.0, 65000.0));
+        atomicAdd(probe.probePixelCount, 1u);
+        if (max(diffPx.x, diffPx.y) > 0.5)
+            atomicAdd(probe.probeBigCount, 1u);
+        atomicAdd(probe.probeSumUnits, units);
+        atomicMax(probe.probeMaxMilli, milliMax);
     }
 
     outColor = vec4(result, worldRadius);

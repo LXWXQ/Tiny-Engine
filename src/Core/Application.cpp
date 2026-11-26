@@ -2066,6 +2066,22 @@ void FirstApp::setSSAOEnabled(bool enabled)
 	scene->getSettings().ssaoEnabled = enabled;
 }
 
+void FirstApp::setTAAMatrixReprojection(bool enabled)
+{
+// P5-2 的回退开关：把重投影来源从「速度图」切回「上一帧矩阵 × 当前世界位置」。
+// TAAPass 在 initAll() 里才创建，所以先记字段，创建后再转发。
+taaMatrixReprojection = enabled;
+if (taaPassPtr != nullptr)
+taaPassPtr->setMatrixReprojection(enabled);
+}
+
+void FirstApp::setVelocityProbe(bool enabled)
+{
+velocityProbe = enabled;
+if (taaPassPtr != nullptr)
+taaPassPtr->setVelocityProbe(enabled);
+}
+
 void FirstApp::setTAAEnabled(bool enabled)
 {
 	// 与 ImGui 面板共用同一条路径；关掉后 TAA Pass 仍会运行（输出当前帧），

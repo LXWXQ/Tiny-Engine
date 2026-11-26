@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <cstring>
+#include <iomanip>
 #include <stdexcept>
 
 namespace
@@ -12,6 +14,7 @@ constexpr uint32_t kBindingCurrentColor = 0;
 constexpr uint32_t kBindingWorldPos = 1;
 constexpr uint32_t kBindingHistory = 2;
 constexpr uint32_t kBindingVelocity = 3;
+constexpr uint32_t kBindingProbe = 4;
 }
 
 TAAPass::TAAPass(Device& device, RenderGraph& graph, RenderResources& resources,
@@ -28,6 +31,21 @@ TAAPass::~TAAPass()
         vkDestroyPipelineLayout(device.getDevice(), pipelineLayout, nullptr);
     if (setLayout != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device.getDevice(), setLayout, nullptr);
+    if (probeMapped != nullptr)
+    {
+        vkUnmapMemory(device.getDevice(), probeMemory);
+        probeMapped = nullptr;
+    }
+    if (probeBuffer != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(device.getDevice(), probeBuffer, nullptr);
+        probeBuffer = VK_NULL_HANDLE;
+    }
+    if (probeMemory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(device.getDevice(), probeMemory, nullptr);
+        probeMemory = VK_NULL_HANDLE;
+    }
     if (sampler != VK_NULL_HANDLE)
         vkDestroySampler(device.getDevice(), sampler, nullptr);
 }
@@ -74,6 +92,7 @@ void TAAPass::init()
             sets[frame * 2 + readIndex] = descriptorManager->allocateSet(setLayout);
     }
 
+    createProbeBuffer();
     updateDescriptors();
     createPipeline();
 
@@ -83,7 +102,7 @@ void TAAPass::init()
 
 void TAAPass::createDescriptorLayout()
 {
-    VkDescriptorSetLayoutBinding bindings[4]{};
+    VkDescriptorSetLayoutBinding bindings[5]{};
     for (uint32_t i = 0; i < 4; ++i)
     {
         bindings[i].binding = i;
@@ -91,12 +110,69 @@ void TAAPass::createDescriptorLayout()
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
+    bindings[4].binding = kBindingProbe;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    info.bindingCount = 4;
+    info.bindingCount = 5;
     info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device.getDevice(), &info, nullptr, &setLayout) != VK_SUCCESS)
         throw std::runtime_error("TAAPass: descriptor set layout creation failed");
+}
+
+void TAAPass::createProbeBuffer()
+{
+    VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+    info.size = 4u * sizeof(uint32_t);
+    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device.getDevice(), &info, nullptr, &probeBuffer) != VK_SUCCESS)
+        throw std::runtime_error("TAAPass: probe buffer creation failed");
+
+    VkMemoryRequirements requirements{};
+    vkGetBufferMemoryRequirements(device.getDevice(), probeBuffer, &requirements);
+
+    VkMemoryAllocateInfo alloc{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    alloc.allocationSize = requirements.size;
+    alloc.memoryTypeIndex = device.findMemoryType(requirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device.getDevice(), &alloc, nullptr, &probeMemory) != VK_SUCCESS)
+        throw std::runtime_error("TAAPass: probe memory allocation failed");
+    if (vkBindBufferMemory(device.getDevice(), probeBuffer, probeMemory, 0) != VK_SUCCESS)
+        throw std::runtime_error("TAAPass: probe buffer bind failed");
+    if (vkMapMemory(device.getDevice(), probeMemory, 0, info.size, 0, &probeMapped) != VK_SUCCESS)
+        throw std::runtime_error("TAAPass: probe buffer map failed");
+
+    resetProbe();
+    probeInfo.buffer = probeBuffer;
+    probeInfo.offset = 0;
+    probeInfo.range = info.size;
+}
+
+void TAAPass::resetProbe()
+{
+    if (probeMapped != nullptr)
+        std::memset(probeMapped, 0, 4u * sizeof(uint32_t));
+}
+
+void TAAPass::readProbe()
+{
+    if (probeMapped == nullptr)
+        return;
+    const uint32_t* words = static_cast<const uint32_t*>(probeMapped);
+    const uint32_t pixels = words[0];
+    if (pixels == 0u)
+        return;
+    const double meanPx = static_cast<double>(words[2]) / (32.0 * static_cast<double>(pixels));
+    const double maxPx = static_cast<double>(words[3]) / 1000.0;
+    const double bigPct = 100.0 * static_cast<double>(words[1]) / static_cast<double>(pixels);
+    std::cout << "[Velocity] probe | pixels=" << pixels
+              << " meanDiff=" << std::fixed << std::setprecision(3) << meanPx << "px"
+              << " maxDiff=" << maxPx << "px"
+              << " | sampled=1/64 >0.5px=" << std::setprecision(2) << bigPct << "%\n";
+    resetProbe();
 }
 
 void TAAPass::createSampler()
@@ -130,7 +206,7 @@ void TAAPass::updateDescriptors()
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
             };
 
-            VkWriteDescriptorSet writes[4]{};
+            VkWriteDescriptorSet writes[5]{};
             for (uint32_t i = 0; i < 4; ++i)
             {
                 writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -140,7 +216,13 @@ void TAAPass::updateDescriptors()
                 writes[i].descriptorCount = 1;
                 writes[i].pImageInfo = &infos[i];
             }
-            vkUpdateDescriptorSets(device.getDevice(), 4, writes, 0, nullptr);
+            writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[4].dstSet = sets[frame * 2 + readIndex];
+            writes[4].dstBinding = kBindingProbe;
+            writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[4].descriptorCount = 1;
+            writes[4].pBufferInfo = &probeInfo;
+            vkUpdateDescriptorSets(device.getDevice(), 5, writes, 0, nullptr);
         }
     }
 }
@@ -259,6 +341,10 @@ void TAAPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         1.0f / static_cast<float>(extent.height));
     push.historyWeight = weight;
     push.historyValid = valid ? 1.0f : 0.0f;
+    push.reprojectionMode = matrixReprojection ? 1.0f : 0.0f;
+    push.probeEnabled = velocityProbe ? 1.0f : 0.0f;
+    if (velocityProbe && frameInfo.frameNumber > 0ull && frameInfo.frameNumber % 30ull == 0ull)
+        readProbe();
 
     const VkDescriptorSet globalSet = frameInfo.descriptorManager->getGlobalSet(frame);
     const VkDescriptorSet taaSet = sets[frame * 2 + readIndex];

@@ -35,6 +35,11 @@ public:
     void init() override;
     void addToGraph(RenderGraph& graph, FrameInfo& frameInfo) override;
     void resize(VkExtent2D extent) override;
+
+    // A/B 与回退：强制回到「上一帧矩阵 × 当前世界位置」的重投影。
+    void setMatrixReprojection(bool enable) { matrixReprojection = enable; }
+    // 把「速度图重投影」与「矩阵重投影」的差值统计进一个只读缓冲，每 30 帧打一行。
+    void setVelocityProbe(bool enable) { velocityProbe = enable; }
     std::string getName() const override { return "TAA"; }
 
     // 在写 UBO 之前调用。返回本帧的抖动像素偏移（供 Application 抖相机投影）。
@@ -49,14 +54,17 @@ private:
         glm::vec2 texelSize;
         float historyWeight;
         float historyValid;
-        float pad0;
-        float pad1;
+        float reprojectionMode;   // 0 = 速度图，1 = 上一帧矩阵（A/B 与回退）
+        float probeEnabled;
     };
     static_assert(sizeof(Push) == 32, "TAA push constant must stay 32 bytes");
 
     void createDescriptorLayout();
     void createSampler();
     void createPipeline();
+    void createProbeBuffer();
+    void readProbe();
+    void resetProbe();
     void updateDescriptors();
     static float halton(uint32_t index, uint32_t base);
 
@@ -78,6 +86,16 @@ private:
     glm::vec2 previousJitterPixels{ 0.0f };
     bool historyValid = false;
     bool resetHistory = false;
+    bool matrixReprojection = false;
+    bool velocityProbe = false;
+
+    // 探针缓冲：x = 参与统计的像素数，y = |velocity - matrixVelocity| > 0.5px 的像素数，
+    // z = 差值之和（1/1000 像素），w = 差值最大值（1/1000 像素）；host 可见，每 30 帧清零。
+    VkBuffer probeBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory probeMemory = VK_NULL_HANDLE;
+    void* probeMapped = nullptr;
+    VkDescriptorBufferInfo probeInfo{};
+
     bool lastEnabled = true;
     float lastJitterScale = 1.0f;
 };

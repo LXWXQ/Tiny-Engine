@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1783 行
+size: ~1793 行
 updated: 2026-11-26
 ---
 
@@ -1782,3 +1782,13 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 验收：Debug 两组 `errors=0 warnings=0`；运动场景离 GT 更近（mean 4.831 → 4.775，>16 像素 6.77% → 6.61%）；静态场景两版互差 mean 0.572。
 - 待补：`--velocity-probe`（velocity vs CPU NDC < 0.5 像素）与时域方差统计两条量化判据。
 - 全量回归 96 项 ALL PASS（`build/validation/20261126-122409`）。
+## P5-2 验收补实：速度探针与两个开关（2026-11-26）
+
+- `--velocity-probe`：TAA 片元阶段按 8×8 抽一格，把「速度图 vs 上一帧矩阵」的差以 1/32 像素累积进 16 字节 SSBO，CPU 每 30 帧读回并打印 `[Velocity] probe | pixels= meanDiff= maxDiff= | sampled=1/64 >0.5px=`。
+- `--taa-matrix-reprojection`：强制回到矩阵重投影，兼作 A/B 与回退开关；`Push` 的两个 pad 槽因此变成 `reprojectionMode` / `probeEnabled`（结构体仍 32 字节）。
+- 静态场景 maxDiff 0.487 px、`>0.5 px` 0.00% —— 判据达标，且这 0.48 px 是 `R16G16_SFLOAT` 的量化下限（半精度 × 1920 宽）。
+- 运动场景 meanDiff 1.2 px、76%~80% 采样点 > 0.5 px；但离 GT 只改善 1.2% / 2.4%，因为矩阵路径已经在用 `previousModel`。
+- 「静态区域时域方差 −30%」**未达成**：第 40/44 帧整帧时域差 2.395（速度）vs 2.370（矩阵），被运动立方体主导；机理记在决策 68 的补测段。
+- Debug 三组（静态 / 回退 / 运动 + 探针）`errors=0 warnings=0`、stderr 0 字节。
+
+- 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-125624`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19016）。

@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1855 行
+size: ~1873 行
 updated: 2026-11-26
 ---
 
@@ -1854,3 +1854,21 @@ Debug：`--selftest 40`（TAA 开）与 `--selftest 40 --cube-field 10000 --cube
 roadmap 给 P5-2 定的两条量化判据还没自动化：「velocity 与 CPU NDC 差分 < 0.5 像素」（需要 `--velocity-probe` 把速度图拷回主机，与 CPU 端投影比对）与「静态区域时域方差 −30%」（需要连续帧序列的方差统计）。这一版只做到「验证层干净 + 与 GT 的像素统计」，两条量化判据记在 backlog 的 P5 段里。
 
 **全量回归（2026-11-26，Debug）**：96 项 ALL PASS（`build/validation/20261126-122409`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=18976）。
+### 补测：速度探针、两个开关与判据的结论（2026-11-26）
+
+`--velocity-probe` 把「速度图重投影」与「上一帧矩阵 × 当前世界位置」的差攒进一块 16 字节的 SSBO：按 8×8 抽一格（整屏 6000 万像素的定点和会溢出 32 位），每个采样点以 1/32 像素为单位累加，同时记 `>0.5 px` 的个数与最大值；CPU 每 30 帧读一次，打印 `[Velocity] probe | pixels= meanDiff= maxDiff= | sampled=1/64 >0.5px=`。`--taa-matrix-reprojection` 强制回到矩阵路径，兼作 A/B 与回退开关 —— `Push` 里原来的 `pad0/pad1` 因此变成了有名字的 `reprojectionMode` / `probeEnabled`（结构体仍是 32 字节）。
+
+读数（Release，1920×1080，TAA 开，每次采样约 94~97 万个点）：
+
+| 场景 | meanDiff | maxDiff | >0.5 px |
+| --- | --- | --- | --- |
+| 默认静态场景 | 0.475 / 0.484 px | 0.487 px | 0.00% |
+| `--cube-field 6000 --cube-field-motion 500` | 1.195 / 1.285 px | 2.417 / 2.572 px | 76.10% / 79.75% |
+
+- **「velocity 与 CPU NDC 差分 < 0.5 像素」达标**（静态 max 0.487 px）。但这 0.48 px 几乎就是**格式下限**：速度附件是 `R16G16_SFLOAT`，半精度尾数 10 位，UV 增量在 0.5 量级时量化步长约 2.4e-4，乘 1920 宽 ≈ 0.47 px。判据的天花板由格式而不是数学决定；要压到 0.1 px 得换 `R32G32_SFLOAT`（显存翻倍），本步不做。
+- 运动场景 76%~80% 的采样点差 > 0.5 px、均值 1.2 px：两个来源在运动物体上确实不是一回事。但离 ground truth 的差距只改善了 1.2%（mean 4.831 → 4.775）与 2.4%（>16 像素 6.77% → 6.61%）—— 因为矩阵路径已经在用 `previousModel`（决策 64），静态几何上两者等价，真正的差别只在「速度写 0 的那些绘制」（天空盒/网格/几何天空/植被）与结构重建的首帧。
+- **「静态区域时域方差 −30%」未达成**：运动场景第 40 / 44 帧的整帧时域差，速度图路径 2.395、矩阵路径 2.370（速度路径反而大 1%），差异被 6000 个运动立方体主导。机理同上：静态像素上两条路径等价，这条判据在「矩阵路径已经把上一帧位置算对」之后就没有 30% 的空间了。它记在 backlog 里，不再作为 P5-2 的阻塞项。
+- 回退开关：`--taa-matrix-reprojection`；Debug 三组（静态 / 回退 / 运动 + 探针）`errors=0 warnings=0`、stderr 0 字节。
+
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-125624`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19016）。

@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1073 行
+size: ~1076 行
 updated: 2026-11-26
 ---
 
@@ -1072,3 +1072,6 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261126-114143`）；DocCheck PASS（documents=82 lines=18906）。
 
 **P5-2（2026-11-26，TAA 改读速度图）**：重投影从「上一帧矩阵 × 当前世界位置」改成优先读 G-Buffer 的速度图（`previousUv = uv - velocity + previousJitterUv`），速度为 0 的像素（天空盒/网格/几何天空/植被）回退到矩阵；历史的夹制从 3×3 RGB AABB 换成 YCoCg 里的 `AABB ∩ (mean ± 1.25σ)`。TAA 的 set 1 扩到 4 个采样器，`pass.read(gbVelocity)` 进图。验收：Debug 两组 `errors=0 warnings=0`；运动场景离 ground truth 更近（mean 4.831 → 4.775、>16 像素 6.77% → 6.61%），静态场景两版互差 mean 0.572（TAA 偏离单帧是它的本职）。roadmap 定的两条量化判据（velocity 与 CPU NDC 差分 < 0.5 像素、静态区域时域方差 −30%）还没自动化，见 backlog 的 P5 段。
+**P5-2 验收补实（2026-11-26）**：`--velocity-probe`（TAA 片元里按 8×8 抽格，把「速度图 vs 上一帧矩阵」的差以 1/32 像素累进 SSBO，CPU 每 30 帧读回）与 `--taa-matrix-reprojection`（回退开关）落地。静态场景 `maxDiff=0.487 px / >0.5px=0.00%` —— `< 0.5 像素` 判据达标，但 0.48 px 是 `R16G16_SFLOAT` 的量化下限；运动场景 `meanDiff=1.2 px / 76%~80%` 采样点超 0.5 px，离 GT 只改善 1.2%~2.4%（矩阵路径已在用 `previousModel`）。「静态区域时域方差 −30%」未达成（2.395 vs 2.370，被运动立方体主导），作为已知结论记在决策 68 与 backlog，不再阻塞 P5-2。
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/20261126-125624`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19016）。

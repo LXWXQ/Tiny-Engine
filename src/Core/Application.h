@@ -69,6 +69,8 @@ public:
 	void setShadowsEnabled(bool enabled);
 	// TAA：无人值守自检里对比开关效果。
 	void setTAAEnabled(bool enabled);
+	void setTAAMatrixReprojection(bool enabled);
+	void setVelocityProbe(bool enabled);
 	void setWaterEnabled(bool enabled);
 	void setSSREnabled(bool enabled);
 	void setTerrainBatchEnabled(bool enabled);
@@ -205,6 +207,9 @@ private:
 	std::chrono::high_resolution_clock::time_point currentTime;
 	std::chrono::high_resolution_clock::time_point lastPerfLog;
 	uint32_t framesSincePerfLog = 0;
+	// P5-2 验收开关：TAAPass 在 initAll() 里创建，这里只记下来、创建后转发。
+	bool taaMatrixReprojection = false;
+	bool velocityProbe = false;
 	// P2-6：灯数只在与上一次打印不同时打一行，避免每帧刷屏。
 	uint32_t loggedAppliedLights = 0xFFFFFFFFu;
 	double updateMsAccum = 0.0;
