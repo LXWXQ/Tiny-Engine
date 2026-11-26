@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~2174 行
+size: ~2222 行
 updated: 2026-11-26
 ---
 
@@ -2173,3 +2173,51 @@ set 0 的布局全引擎只有 `DescriptorManager` 一份，`GlobalUbo` 也只�
 不做运行期反射校验（启动时解析 SPIR-V 太慢，而且能编译期发现）；不做材质变体键
 （`ShaderVariantKey = (passId, featureMask)` 是 §2.12 的第二级，需要先有「用到的键」清单）。
 
+
+## 决策 75：描述符类型与数量也交给构建期反射（P3-5 第二步，2026-11-26）
+
+### 问题
+
+决策 74 把参数块与绑定号交给了反射，但 `vkCreateDescriptorSetLayout` 的另一半仍然是手写：类型（`VK_DESCRIPTOR_TYPE_*`）与数量（`descriptorCount`）。它们散在三处 —— `src/Core/DescriptorManager.cpp` 的 `createGlobalLayout()`（set 0 的 20 个槽、set 1 的 4 个 bindless 材质数组、set 2 的 16 个地形槽）、`src/Render/SceneGpuBatch.cpp` 的计算布局（binding 0~3、5、6~7）与 set 3 的实例布局（binding 0/1）。
+
+这半边漂移是**静默**的：shader 把一个 binding 从 `storage buffer` 改成 `uniform buffer`，C++ 侧照样编译、照样 `vkCreateDescriptorSetLayout` 成功，直到运行期绑定时验证层报 `VUID-VkDescriptorSetLayoutBinding-descriptorType`。数量同理 —— `desc.size` 与 `descriptorCount` 对不上只在写描述符时才炸。
+
+### 做法
+
+1. `tools/SpirvReflect.cpp`：`struct Descriptor` 加 `uint32_t kindCode`，新增 `descriptorKindCode()`，把已有的字符串种类（`sampler` / `combinedImageSampler` / `storageOrSampledImage` / `uniformBuffer` / `storageBuffer` / `other`）映成整数；生成时在每个 `k<Id>Count` 之后多写一行 `inline constexpr uint32_t k<Id>Kind = <n>;`。
+2. 新增 `src/RHI/DescriptorReflect.h`：定义这 7 个整数常量（`kKindUnmapped = 0` … `kKindUnknownKind = 6`）、`constexpr VkDescriptorType descriptorTypeOf(uint32_t)` 与 `template <uint32_t Kind> inline constexpr VkDescriptorType kDescriptorType = descriptorTypeOf(Kind);`。
+3. 三个调用点把类型与数量换成反射常量，并配 `static_assert`：期望的 `VkDescriptorType`、期望的 `descriptorCount`、以及「编号布局没变」的断言（`kGroupBufferBinding == 0` … `kScratchBufferBinding == 7`、`kBinding0Binding == 0 && kBinding1Binding == 1`）。
+
+### 为什么是「整数 + 编译期映射」，而不是让反射直接输出 VkDescriptorType
+
+反射头是被所有 shader 消费者 include 的纯文本产物，加 `#include <vulkan/vulkan.h>` 会把「生成物」变成「需要 Vulkan 头才能编译」的东西；而反射程序自己也不应该链接 Vulkan。整数的第二个好处是**未映射有哨兵**：`kKindUnmapped = 0` 映射到 `VK_DESCRIPTOR_TYPE_MAX_ENUM`，任何没被 `descriptorKindCode()` 认识的种类都会在 `static_assert` 处报错，而不是悄悄落成 `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER`（Vulkan 的 0 恰好是它）。这就是为什么采样器从 1 开始编号。
+
+### 验收（2026-11-26）
+
+| 项 | 结果 |
+| --- | --- |
+| Release 构建 | `[build] Release ok in 2.1s`（反射头随 shader 步重新生成） |
+| Debug 构建 | `[build] Debug ok in 2.6s` |
+| Debug 验证（5 组） | 流式 + `--gpu-scene-external 400`、运动立方体、`--voxel-world 1`、`--light-stress 300`、`--light-stress 300 --clustered-lighting` —— 全部 `errors=0 warnings=0`、stderr 0 字节 |
+| Release 读数 | `pipelineBinds/frame=18.5 redundant=6.5 (35.1%)`、顶点/索引各 `5.0 → 3.0 (40.0%)`，与 P3 第二步逐位一致 |
+| 全量回归 | 96 项 ALL PASS（`build/validation/20261126-151226`，日志 201 行，FAIL=0） |
+| DocCheck | PASS |
+| 新增断言 | set 0：8 条类型 + 5 条数量；计算：7 条类型 + 1 条编号 + 1 条数量；set 3：2 条类型 + 2 条数量 + 1 条编号 |
+
+### 代价与边界
+
+- 每个描述符在反射头里多一行（本项目约 35 行），可读性反而更好：种类写在注释里（`// storageBuffer`）。
+- `k<Name>Kind` 的编号是**跨语言的契约**：`tools/SpirvReflect.cpp` 的 `descriptorKindCode()` 与 `src/RHI/DescriptorReflect.h` 的常量必须同步。两处都写了注释，但没有自动检查 —— 真要防，得让反射程序把自己的编号表打出来再和头文件比对，这一步没做。
+- bindless 材质数组（set 1 的 4 个）的 `descriptorCount` 仍取运行期的 `capacity`：shader 侧声明的是运行期数组，反射给出的 `Count` 是 0，布局必须按容量申请。这是刻意保留的唯一手写量，已在代码与本文里写明。
+- `kKindImage`（3）目前没有 shader 用到，留着是为了以后 `sampler2D` 单独声明（分离采样器）时不必再改编号。
+
+### 踩到的坑
+
+**反射头只在 `.spv` 变化时才重新生成。** `CMakeLists.txt` 里反射头是独立的一条 `add_custom_command`，`DEPENDS` 只写了 `${SHADER_OUTPUT}`。改了 `tools/SpirvReflect.cpp`（多生成 `k<Id>Kind`）却没动 GLSL 时，`tiny_core` 会立刻重编并拿到**旧反射头** —— MSBuild 增量树先红（`error C2039: "kBinding1Kind": 不是 "tiny::reflect::mrt_vert" 的成员`），Ninja 树因为恰好重刷过所以是绿的。修法：把反射程序自己也写进 `DEPENDS ${SHADER_OUTPUT} $<TARGET_FILE:SpirvReflect>`。教训：**生成器的源码是生成物的依赖**，漏在增量构建里迟早会以「同一份代码两种结果」的形式出现。
+
+### 不引入的
+
+- 不让反射头依赖 Vulkan 头（保持生成物可读、可 diff）。
+- 不自动生成 `createGlobalLayout()` 本身：set 的组成（哪几个绑定成一组、池里每种类型要几个）是运行期策略，不是 shader 事实。
+
+DocCheck PASS（documents=82 lines=19501）。

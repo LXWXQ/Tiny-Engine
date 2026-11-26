@@ -5,6 +5,7 @@
 // 之前这一层是手写常量：GLSL 改了 binding 而 C++ 没跟，验证层要到运行时才报。
 #include "lighting.frag.reflect.h"
 #include "mrt.frag.reflect.h"
+#include "RHI/DescriptorReflect.h"
 
 namespace lightingReflect = tiny::reflect::lighting_frag;
 namespace surfaceReflect = tiny::reflect::mrt_frag;
@@ -45,6 +46,33 @@ static_assert(lightingReflect::kIrradianceMapBinding == lightingReflect::kEnviro
               "贴图绑定 1~9 的连续性变了，DescriptorManager 的循环要跟着改");
 static_assert(lightingReflect::kBinding18Binding == lightingReflect::kClusterParamsBinding + 3,
               "聚簇绑定 15~18 的连续性变了，DescriptorManager 的循环要跟着改");
+
+// P3-5 第二步：类型也从反射取。下面每条断言把「C++ 期望的类型」钉在编译期，
+// 赋值本身用 kDescriptorType<...>（来自 GLSL 声明）—— 两边不一致就编译不过。
+static_assert(tiny::reflect::kDescriptorType<lightingReflect::kUboKind> == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+              "set 0 binding 0 在 lighting.frag 里不再是 uniform buffer");
+static_assert(tiny::reflect::kDescriptorType<surfaceReflect::kMaterialFactorsKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "set 0 binding 10 在 mrt.frag 里不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<lightingReflect::kShadowMapsKind> == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+              "set 0 binding 11 在 lighting.frag 里不再是 combined image sampler");
+static_assert(tiny::reflect::kDescriptorType<lightingReflect::kEnvironmentMapKind> == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+              "set 0 的贴图段在 lighting.frag 里不再是 combined image sampler");
+static_assert(tiny::reflect::kDescriptorType<lightingReflect::kClusterParamsKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "set 0 的聚簇段在 lighting.frag 里不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<lightingReflect::kBinding19Kind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "set 0 binding 19（灯数组）在 lighting.frag 里不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<surfaceReflect::kAlbedoMapsKind> == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+              "set 1 的材质数组在 mrt.frag 里不再是 combined image sampler");
+static_assert(tiny::reflect::kDescriptorType<surfaceReflect::kTerrainAlbedoSandKind> == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+              "set 2 的地形贴图在 mrt.frag 里不再是 combined image sampler");
+// 数量：非 0 就是编译器给的数组长度；0 表示运行期数组（bindless），由容量决定。
+static_assert(lightingReflect::kUboCount == 1, "UBO 是单个描述符");
+static_assert(lightingReflect::kShadowMapsCount == 1, "阴影图是单个描述符");
+static_assert(lightingReflect::kBinding19Count == 1, "灯数组是单个 SSBO 描述符（数组在块里）");
+static_assert(surfaceReflect::kAlbedoMapsCount == 0 && surfaceReflect::kNormalMapsCount == 0 &&
+              surfaceReflect::kMetallicMapsCount == 0 && surfaceReflect::kRoughnessMapsCount == 0,
+              "四个材质数组都必须是运行期数组（count = 0），长度才由 capacity 决定");
+static_assert(surfaceReflect::kTerrainAlbedoSandCount == 1, "地形贴图是单个描述符");
 #include <stdexcept>
 #include <iostream>
 #include <string>
@@ -237,19 +265,19 @@ void DescriptorManager::createGlobalLayout()
 	std::vector<VkDescriptorSetLayoutBinding> bindings(20);
 
 	bindings[0].binding = lightingReflect::kUboBinding;
-	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	bindings[0].descriptorCount = 1;
+	bindings[0].descriptorType = tiny::reflect::kDescriptorType<lightingReflect::kUboKind>;
+	bindings[0].descriptorCount = lightingReflect::kUboCount;
 	bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	// E3: binding 10 = 材质 factor 表（SSBO，按材质槽位索引）。
 	bindings[10].binding = surfaceReflect::kMaterialFactorsBinding;
-	bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindings[10].descriptorCount = 1;
+	bindings[10].descriptorType = tiny::reflect::kDescriptorType<surfaceReflect::kMaterialFactorsKind>;
+	bindings[10].descriptorCount = surfaceReflect::kMaterialFactorsCount;
 	bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	bindings[11].binding = lightingReflect::kShadowMapsBinding;
-	bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	bindings[11].descriptorCount = 1;
+	bindings[11].descriptorType = tiny::reflect::kDescriptorType<lightingReflect::kShadowMapsKind>;
+	bindings[11].descriptorCount = lightingReflect::kShadowMapsCount;
 	bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	bindings[12].binding = 12;
@@ -272,25 +300,26 @@ void DescriptorManager::createGlobalLayout()
 	for (uint32_t i = lightingReflect::kClusterParamsBinding; i <= lightingReflect::kBinding18Binding; ++i)
 	{
 		bindings[i].binding = i;
-		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		bindings[i].descriptorCount = 1;
+		bindings[i].descriptorType = tiny::reflect::kDescriptorType<lightingReflect::kClusterParamsKind>;
+		bindings[i].descriptorCount = lightingReflect::kClusterParamsCount;
 		// TM-13 第二步：GPU 侧建簇的 compute 着色器也读/写这四张表。
 		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	}
 
 	// P2-6：19 = 点光源数组。灯数上限从此由缓冲容量决定，不再是 UBO 数组长度。
 	bindings[19].binding = lightingReflect::kBinding19Binding;
-	bindings[19].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-	bindings[19].descriptorCount = 1;
+	bindings[19].descriptorType = tiny::reflect::kDescriptorType<lightingReflect::kBinding19Kind>;
+	bindings[19].descriptorCount = lightingReflect::kBinding19Count;
 	bindings[19].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	// P3-5：1~9 是 lighting.frag 里连续的一段贴图，起点取自反射，终点是 irradiance + 2。
+	// 类型与数量同样取反射（每条都是单个 combined image sampler）。
 	for (uint32_t i = lightingReflect::kEnvironmentMapBinding;
 	     i <= lightingReflect::kIrradianceMapBinding + 2u; i++)
 	{
 		bindings[i].binding = i;
-		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		bindings[i].descriptorCount = 1;
+		bindings[i].descriptorType = tiny::reflect::kDescriptorType<lightingReflect::kEnvironmentMapKind>;
+		bindings[i].descriptorCount = lightingReflect::kEnvironmentMapCount;
 		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	}
 
@@ -338,10 +367,12 @@ void DescriptorManager::createMaterialLayout(uint32_t capacity)
 	// 分配时再用 VkDescriptorSetVariableDescriptorCountAllocateInfo 指定实际长度，
 	// 而规范要求"实际长度 <= 布局里声明的值"（VUID-...-pSetLayouts-03046）。
 	// 所以上限就写 capacity —— 反正描述符池已经按它开好了。
+	// P3-5 第二步：类型取自 mrt.frag 的反射；数量仍是 capacity ——
+	// 四个数组在 GLSL 里都是运行期数组（k<Name>Count == 0，见文件头的 static_assert）。
 	for (uint32_t i = 0; i < 4; i++)
 	{
 		bindings[i].binding = i;
-		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		bindings[i].descriptorType = tiny::reflect::kDescriptorType<surfaceReflect::kAlbedoMapsKind>;
 		bindings[i].descriptorCount = capacity;
 		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	}
@@ -369,12 +400,14 @@ void DescriptorManager::createTerrainLayout()
 	// UPDATE_AFTER_BIND 方式创建（binding flag + layout flag + pool flag 三者
 	// 缺一不可），否则 vkUpdateDescriptorSets 违反
 	// VUID-vkUpdateDescriptorSets-None-03047。
+	// P3-5 第二步：类型与数量都取自 mrt.frag（12 个具名 binding 各 1 张图）。
+	// 12~15 在 GLSL 里没有声明，保持「备用槽」—— 布局比着色器声明多几个 binding 是合法的。
 	std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
 	for (uint32_t i = 0; i < bindings.size(); ++i)
 	{
 		bindings[i].binding = i;
-		bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		bindings[i].descriptorCount = 1;
+		bindings[i].descriptorType = tiny::reflect::kDescriptorType<surfaceReflect::kTerrainAlbedoSandKind>;
+		bindings[i].descriptorCount = surfaceReflect::kTerrainAlbedoSandCount;
 		bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	}
 

@@ -466,8 +466,23 @@ struct Descriptor
     uint32_t count = 1;
     std::string name;
     std::string kind;
+    uint32_t kindCode = 0;
     uint32_t typeId = 0;
 };
+
+// 描述符类型的稳定编号：写进 reflect.h 的 k<Name>Kind，C++ 侧用
+// src/RHI/DescriptorReflect.h 的 descriptorTypeOf() 换成 VkDescriptorType。
+// 两边的编号必须同步 —— 改这里就改那里。
+uint32_t descriptorKindCode(const std::string& kind)
+{
+    if (kind == "sampler") return 1;
+    if (kind == "combinedImageSampler") return 2;
+    if (kind == "storageOrSampledImage") return 3;
+    if (kind == "uniformBuffer") return 4;
+    if (kind == "storageBuffer") return 5;
+    if (kind == "other" || kind == "buffer" || kind == "unknown") return 0;
+    return 6;
+}
 
 uint32_t descriptorCount(const Module& m, uint32_t typeId)
 {
@@ -655,6 +670,7 @@ bool emit(const Module& m, const std::string& outputPath, const std::string& ns,
                 d.kind = "storageBuffer";
             else
                 d.kind = descriptorKind(m, v.typeId);
+            d.kindCode = descriptorKindCode(d.kind);
             descriptors.push_back(d);
         }
         // 关键：带 binding 的 buffer 有两个身份 —— 描述符（set / binding）与块（大小 / 偏移）。
@@ -706,6 +722,8 @@ bool emit(const Module& m, const std::string& outputPath, const std::string& ns,
         out << "inline constexpr uint32_t k" << id << "Set = " << d.set << ";\n";
         out << "inline constexpr uint32_t k" << id << "Binding = " << d.binding << ";\n";
         out << "inline constexpr uint32_t k" << id << "Count = " << d.count << ";\n";
+        out << "inline constexpr uint32_t k" << id << "Kind = " << d.kindCode << ";  // " << d.kind
+            << "（0 = 未映射，见 src/RHI/DescriptorReflect.h）\n";
     }
 
     for (const Variable* v : buffers)

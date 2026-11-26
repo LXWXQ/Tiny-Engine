@@ -15,6 +15,8 @@
 // 生成的反射头（build/shaders，CMake 在编译前生成）：布局断言直接引用 SPIR-V 里的事实，
 // 改 shader 忘了改 C++ 会在编译期炸，而不是运行期写越界。
 #include "scene_cull.comp.reflect.h"
+#include "mrt.vert.reflect.h"
+#include "RHI/DescriptorReflect.h"
 
 #include "Core/FrameInfo.h"
 #include "Scene/Components.h"
@@ -83,6 +85,44 @@ static_assert(tiny::reflect::scene_cull_comp::kInstanceBufferBinding == 5u,
 // P2 第三步：binding 6 = 每组紧凑区间，binding 7 = remap + 名次。
 static_assert(tiny::reflect::scene_cull_comp::kCullGroupBufferBinding == 6u,
               "每组紧凑区间在 scene_cull.comp 里必须是 binding 6");
+
+// P3-5 第二步：计算侧与图形侧描述符的类型/数量也取自反射（几何 pass 的两套 set）。
+namespace cullReflect = tiny::reflect::scene_cull_comp;
+namespace surfaceVertReflect = tiny::reflect::mrt_vert;
+
+static_assert(tiny::reflect::kDescriptorType<cullReflect::kGroupBufferKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "scene_cull.comp 的组缓冲不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<cullReflect::kCommandBufferKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "scene_cull.comp 的命令缓冲不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<cullReflect::kFrameKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "scene_cull.comp 的帧数据不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<cullReflect::kStatsBufferKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "scene_cull.comp 的统计缓冲不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<cullReflect::kInstanceBufferKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "scene_cull.comp 的实例缓冲不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<cullReflect::kCullGroupBufferKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "scene_cull.comp 的组紧凑计数不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<cullReflect::kScratchBufferKind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "scene_cull.comp 的 scratch 不再是 storage buffer");
+// 7 个具名 binding 的编号必须是 0,1,2,3,5,6,7：E3 set 3 与 compute 布局都按这些编号写死数组下标，
+// 其中 4 号留给已退役的 Hi-Z 金字塔（shader 不再声明，布局仍留槽）。
+static_assert(cullReflect::kGroupBufferBinding == 0u && cullReflect::kCommandBufferBinding == 1u &&
+              cullReflect::kFrameBinding == 2u && cullReflect::kStatsBufferBinding == 3u &&
+              cullReflect::kInstanceBufferBinding == 5u && cullReflect::kCullGroupBufferBinding == 6u &&
+              cullReflect::kScratchBufferBinding == 7u,
+              "scene_cull.comp 的 binding 编号布局变了");
+static_assert(cullReflect::kGroupBufferCount == 1 && cullReflect::kInstanceBufferCount == 1,
+              "计算侧每个缓冲都必须是单个描述符（数组在块里）");
+
+// 图形侧 set 3：binding 0 = 实例缓冲、binding 1 = 实例 remap（mrt.vert）。
+static_assert(surfaceVertReflect::kBinding0Binding == 0u && surfaceVertReflect::kBinding1Binding == 1u,
+              "mrt.vert 的 set 3 绑定号变了（SceneGpuBatch 按 0/1 写死数组下标）");
+static_assert(tiny::reflect::kDescriptorType<surfaceVertReflect::kBinding0Kind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "mrt.vert 的实例缓冲不再是 storage buffer");
+static_assert(tiny::reflect::kDescriptorType<surfaceVertReflect::kBinding1Kind> == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+              "mrt.vert 的实例 remap 不再是 storage buffer");
+static_assert(surfaceVertReflect::kBinding0Count == 1 && surfaceVertReflect::kBinding1Count == 1,
+              "set 3 的两个绑定都是单个描述符");
 static_assert(tiny::reflect::scene_cull_comp::kScratchBufferBinding == 7u,
               "remap/名次缓冲在 scene_cull.comp 里必须是 binding 7");
 
@@ -186,12 +226,13 @@ void SceneGpuBatch::destroyBuffer(GpuBuffer& buffer)
 void SceneGpuBatch::createLayoutsAndPipeline()
 {
     // compute：组记录 / 命令 / 帧数据 / 统计
+    // P3-5 第二步：类型/数量取自 scene_cull.comp 的反射（编号仍按上面的断言固定）。
     VkDescriptorSetLayoutBinding computeBindings[8]{};
     for (uint32_t i = 0; i < 4u; ++i)
     {
         computeBindings[i].binding = i;
-        computeBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        computeBindings[i].descriptorCount = 1;
+        computeBindings[i].descriptorType = tiny::reflect::kDescriptorType<cullReflect::kGroupBufferKind>;
+        computeBindings[i].descriptorCount = cullReflect::kGroupBufferCount;
         computeBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     // binding 4 = Hi-Z 金字塔（遮挡剔除用；图像还没建时描述符先空着）。
@@ -200,9 +241,9 @@ void SceneGpuBatch::createLayoutsAndPipeline()
     computeBindings[4].descriptorCount = 1;
     computeBindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     // binding 5 = 实例缓冲（只读）：实例级剔除要按实例取局部 AABB 与世界矩阵。
-    computeBindings[5].binding = 5;
-    computeBindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    computeBindings[5].descriptorCount = 1;
+    computeBindings[5].binding = cullReflect::kInstanceBufferBinding;
+    computeBindings[5].descriptorType = tiny::reflect::kDescriptorType<cullReflect::kInstanceBufferKind>;
+    computeBindings[5].descriptorCount = cullReflect::kInstanceBufferCount;
     computeBindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     // binding 6 = 每组紧凑区间（可见实例数 + remap 起点），binding 7 = remap + 名次。
     // 7 与 6 分开挂是为了让「实例 → 组」和「组 → 起点」两次改写各走各的缓冲：
@@ -210,8 +251,8 @@ void SceneGpuBatch::createLayoutsAndPipeline()
     for (uint32_t i = 6; i < 8u; ++i)
     {
         computeBindings[i].binding = i;
-        computeBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        computeBindings[i].descriptorCount = 1;
+        computeBindings[i].descriptorType = tiny::reflect::kDescriptorType<cullReflect::kCullGroupBufferKind>;
+        computeBindings[i].descriptorCount = cullReflect::kCullGroupBufferCount;
         computeBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo computeLayoutInfo{};
@@ -224,15 +265,15 @@ void SceneGpuBatch::createLayoutsAndPipeline()
 
     // 图形：set 3 binding 0 = 实例缓冲（顶点/片元都读），binding 1 = 实例 remap（顶点读）。
     VkDescriptorSetLayoutBinding instanceBindings[2]{};
-    instanceBindings[0].binding = 0;
-    instanceBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    instanceBindings[0].descriptorCount = 1;
+    instanceBindings[0].binding = surfaceVertReflect::kBinding0Binding;
+    instanceBindings[0].descriptorType = tiny::reflect::kDescriptorType<surfaceVertReflect::kBinding0Kind>;
+    instanceBindings[0].descriptorCount = surfaceVertReflect::kBinding0Count;
     instanceBindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     // 地形批处理的实例表不走 remap，但同一个管线布局要能绑它的 set，所以这个 binding 必须存在；
     // GeometrySystem 会往它里面写一份有效的存储缓冲（内容不会被读）。
-    instanceBindings[1].binding = 1;
-    instanceBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    instanceBindings[1].descriptorCount = 1;
+    instanceBindings[1].binding = surfaceVertReflect::kBinding1Binding;
+    instanceBindings[1].descriptorType = tiny::reflect::kDescriptorType<surfaceVertReflect::kBinding1Kind>;
+    instanceBindings[1].descriptorCount = surfaceVertReflect::kBinding1Count;
     instanceBindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     VkDescriptorSetLayoutCreateInfo instanceLayoutInfo{};
     instanceLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -506,8 +547,8 @@ void SceneGpuBatch::writeDescriptors()
             instanceWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             instanceWrites[i].dstSet = view.instanceSet;
             instanceWrites[i].dstBinding = i;
-            instanceWrites[i].descriptorCount = 1;
-            instanceWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            instanceWrites[i].descriptorCount = surfaceVertReflect::kBinding0Count;
+            instanceWrites[i].descriptorType = tiny::reflect::kDescriptorType<surfaceVertReflect::kBinding0Kind>;
             instanceWrites[i].pBufferInfo = &instanceInfos[i];
         }
         vkUpdateDescriptorSets(vulkanDevice.getDevice(), 2, instanceWrites, 0, nullptr);

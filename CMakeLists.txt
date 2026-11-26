@@ -361,7 +361,9 @@ foreach(SHADER_FILE ${SHADER_FILES})
     add_custom_command(
         OUTPUT "${REFLECT_OUTPUT}"
         COMMAND $<TARGET_FILE:SpirvReflect> "${SHADER_OUTPUT}" "${REFLECT_OUTPUT}" "${FILE_NAME}"
-        DEPENDS "${SHADER_OUTPUT}"
+        # 反射程序本身也是依赖：改了 SpirvReflect.cpp（比如多生成一批常量）而 GLSL 没动时，
+        # 头文件必须重写，否则会留下「旧反射头 + 新 C++ 断言」这种只在 MSBuild 增量树里出现的编译错。
+        DEPENDS "${SHADER_OUTPUT}" $<TARGET_FILE:SpirvReflect>
         COMMENT "反射 Shader: ${FILE_NAME} -> ${FILE_NAME}.reflect.h"
         VERBATIM
     )

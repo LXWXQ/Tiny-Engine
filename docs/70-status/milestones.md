@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1850 行
+size: ~1859 行
 updated: 2026-11-26
 ---
 
@@ -1849,3 +1849,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 验收：编译期全绿；Debug 四组（流式 / 运动立方体 / 体素 / 300 盏灯）`errors=0 warnings=0`、stderr 0；读数与 P3 第二步逐位一致（`pipelineBinds 18.5 / redundant 35.1%`、顶点与索引各 40.0% 命中）；全量回归 96 项 ALL PASS；DocCheck PASS（documents=82 lines=19441）。
 - 边界：描述符类型/数量仍手写（反射头有 `k<Name>Count`，留给下一步）；`kBinding16`~`kBinding19` 是无名绑定，只锁数字不加语义。
 
+
+## P3 第六步：描述符类型与数量交给反射（P3-5 第二步，2026-11-26）
+
+- `tools/SpirvReflect.cpp` 在每个 `k<Id>Count` 之后多生成一行 `k<Id>Kind`，把描述符种类编码成整数（`sampler 1 / combinedImageSampler 2 / image 3 / uniformBuffer 4 / storageBuffer 5 / unknown 6`，`0` 是「未映射」哨兵）。
+- 新增 `src/RHI/DescriptorReflect.h`：`kKind*` 常量 + `constexpr VkDescriptorType descriptorTypeOf(uint32_t)` + `template <uint32_t Kind> kDescriptorType`。未映射映射到 `VK_DESCRIPTOR_TYPE_MAX_ENUM`，所以认不出的种类不会悄悄变成 `UNIFORM_BUFFER`。
+- 三处调用点改成「类型 + 数量都取自反射」：`DescriptorManager::createGlobalLayout()`（set 0/1/2）、`SceneGpuBatch` 的计算布局（binding 0~3、5、6~7）与 set 3 实例布局（binding 0/1）。
+- 断言网：set 0 的 8 条 `kDescriptorType<…Kind> == VK_DESCRIPTOR_TYPE_*` + 5 条数量；计算侧 7 条类型 + 编号断言（0/1/2/3/5/6/7，4 号留给已退役的 Hi-Z）；set 3 的 2 条类型 + 2 条数量 + `kBinding0Binding == 0 && kBinding1Binding == 1`。
+- 验证：Release 2.1 s / Debug 2.6 s 构建通过；Debug 5 组（流式、运动立方体、体素、300 盏灯、300 盏灯 + 聚簇）全部 `errors=0 warnings=0`、stderr 0 字节；Release 读数与 P3 第二步逐位一致（管线 18.5/35.1%、顶点与索引各 40.0%）；全量回归 96 项 ALL PASS（`build/validation/20261126-151226`）。
+- 留下的唯一手写量：set 1 的 4 个 bindless 材质数组按运行期 `capacity` 申请（反射侧 `Count = 0`，因为 shader 声明的是运行期数组）。
