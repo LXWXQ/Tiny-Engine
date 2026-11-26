@@ -568,6 +568,8 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
 {
     DescriptorManager& descMgr = *frameInfo.descriptorManager;
     const bool reflection = viewOverride != nullptr && viewOverride->reflection;
+    // A2：视图槽位 —— 主视图 0，平面反射 1。两套命令/统计/remap 互不干扰。
+    const uint32_t viewIndex = reflection ? 1u : 0u;
     const VkDescriptorSet globalSet =
         (viewOverride != nullptr && viewOverride->globalSet != VK_NULL_HANDLE)
             ? viewOverride->globalSet
@@ -589,7 +591,8 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
     // 否则地形/天空盒这些仍走旧路径的绘制会因为 set 3 未绑而通不过验证层。
     if (sceneGpuBatch != nullptr && sceneGpuBatch->isAvailable())
     {
-        VkDescriptorSet instanceSet = sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex);
+        VkDescriptorSet instanceSet =
+            sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex, viewIndex);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             pipelineLayout, 3, 1, &instanceSet, 0, nullptr);
         frameInfo.telemetry.descriptorBinds += 1;
@@ -842,7 +845,8 @@ void GeometrySystem::render(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
 
         // F1：普通网格交给 SceneGpuBatch 的 GPU 驱动提交（实例缓冲 + compute 剔除 +
         // indirect draw）。天空盒、网格辅助线、地形仍然留在下面的 CPU 路径。
-        if (!reflection && sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
+        if (sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
+            sceneGpuBatch->hasInstances() &&
             !isSkybox && !isGrid && !isTerrain && !isSkyGeometry && !voxelArenaBacked &&
             !mesh->model->isDynamic() &&
             mesh->model->getIndexCount() > 0)
@@ -1373,10 +1377,17 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
     // 绑一次顶点/索引缓冲再提交；实例缓冲走 set 3。
     // 反射不复用主视角 compute 生成的间接命令：那批命令只包含主相机可见集合，
     // 反射相机看到的对岸/山体可能在其外。普通网格在上面已走 CPU 路径。
-    if (!reflection && sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo))
+    if (sceneGpuBatch != nullptr && sceneGpuBatch->useGpuPath(frameInfo) &&
+        sceneGpuBatch->hasInstances())
     {
         SimplePushConstantData batchPush{};
         batchPush.gpuScene = 1u;
+        // 反射视图沿用 C1 的水面裁剪：片元世界里 y < clipY 的部分丢掉。
+        if (reflection)
+        {
+            batchPush.clipY = viewOverride->clipY;
+            batchPush.clipMode = viewOverride->clipMode;
+        }
         vkCmdPushConstants(commandBuffer, pipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(SimplePushConstantData), &batchPush);
@@ -1384,11 +1395,11 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         // 地形合批会把 set 3 换成 chunk 实例表，这里必须换回场景实例表，
         // 否则实例矩阵取到地形行，网格会被画到错误位置。
         VkDescriptorSet sceneSets[] =
-            { sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex) };
+            { sceneGpuBatch->getInstanceSet(frameInfo.frameInFlightIndex, viewIndex) };
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipelineLayout, 3, 1, sceneSets, 0, nullptr);
         frameInfo.telemetry.descriptorBinds += 1u;
-        sceneGpuBatch->recordDraw(commandBuffer, frameInfo);
+        sceneGpuBatch->recordDrawView(commandBuffer, frameInfo, viewIndex);
     }
 
     // V-04：体素 chunk 合批。实例矩阵/材质在 set 3 的专用实例表里，

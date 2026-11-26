@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1066 行
+size: ~1068 行
 updated: 2026-11-26
 ---
 
@@ -1065,3 +1065,5 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P2 第十二步（2026-11-26，上一帧世界矩阵）**：`InstanceRecord` 224 → 288 字节，尾部加 `previousModel`；`GpuScene::Instance` 144 → 208，加 `previousTransform`；两个 shader 的镜像结构同步加字段（本步不读）。填值全部来自现成状态：实体用 `worldTransform.previousMatrix * nodeMatrix`（渲染插值本来就在用），外部缓存命中用 `external.transform`、未命中但同绑定用 `cache.transform`。新增 `[SceneGpu] instance history | instances=… moved=…` 读数：default `103/0`、10k `10103/0`、30k `30103/0`、motion `10103/10000`，三档 `gpuInst` 与 P2-5 逐位相同（0.58 / 0.6747 / 0.3726），证明 shader 侧 stride 对齐。Debug 五组 `errors=0`、全量回归 **96 项** ALL PASS（`build/validation/20261126-092708`）、DocCheck PASS（documents=81 lines=18673）。**边界**：本步零消费者，P5-1 才读；`--rebuild-structure n` 时「上一帧」退化成「上次重建」。这一刀把 P5-1 的前置条件补齐了，P5 那条线可以随时开工。
 
 **P2 第十二步收尾补丁（2026-11-26）**：记录涨到 288 后，还有三处按 224 写死的消费者要一起改 —— `shaders/mrt.frag` 的 `InstanceRecord` 副本（片元取材质）、`kTerrainChunkInstanceStride`、`kVoxelBatchInstanceStride`。漏改的话验证层全绿、读数一位不变，但地形/体素合批除第 0 行外全部读错位（`--streaming-world 2` 合批地形截图修前/修后 59.4% 像素不同）。教训：改共享记录布局时，「谁复制了这份布局」比「谁 include 了它」更容易漏。补丁后 Debug 四组干净、全量回归 **96 项 ALL PASS**（`build/validation/20261126-094557`）、DocCheck PASS（documents=82 lines=18689）。
+
+**P2 第十三步（2026-11-26，反射视图自己的剔除）**：`SceneGpuBatch` 长出视图层 —— `kMaxViews = 2`（主视图 / 平面反射），`ViewResources` 各自一套命令、帧数据、统计、组计数与 remap，实例与组表两视图共享且只由主视图上传。`prepare` / `recordDraw` 变 view 0 的薄包装，新增 `prepareView` / `recordDrawView`；反射的 compute 剔除放在独立的无附件 pass（`PlanarReflection.Cull`），因为 compute dispatch 不能进动态渲染（塞进 G-Buffer pass 实测 12 帧 96 条 `VUID-vkCmdDispatch-renderpass` / `VUID-vkCmdPipelineBarrier-shaderTileImageColorReadAccess-08718`）。门槛沿用主视图的 `useGpuPath && hasInstances`，小场景反射继续 CPU 逐实体。读水：`reflection view | groups=103 instances=503 cull=on`；与 HEAD 的 CPU 反射逐像素对比 1920×1080 只差 347 像素（HUD 外 8 个、差值 1/255）。Debug 六组干净，全量回归 **96 项** ALL PASS（`build/validation/20261126-102435`）。**遗留**：阴影视图（A2 下半）未接；反射视图的统计不回读。**坑**：`config/engine.json` 会被写回相机，跑回归前要还原，否则 `terrain-render` 会因相机沉到水下缺 marker。

@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1658 行
+size: ~1703 行
 updated: 2026-11-26
 ---
 
@@ -1657,3 +1657,48 @@ Debug 五组（default / cf10k / motion / `--no-instance-cull` / `--voxel-world 
 怎么发现的：A1 的验收靠「三档读数与 P2-5 逐位相同」——但读数只走 `scene_cull.comp` 与 `mrt.vert`，碰不到 `mrt.frag` 与地形/体素行距，所以「读数不变」证明不了 stride 全对齐。补做的检查是「全仓搜 224 与 `InstanceRecord` 的镜像声明」，再用 `--streaming-world 2` 的合批地形截图 A/B：修前地形沉在水面以下（行距错位把世界矩阵读花），修后地形正常覆盖近景，两张图 1920×1080 有 1,230,977 个像素不同（59.4%）。这类「只有像素能抓到」的回归要记进 P5 的验收清单。
 
 补丁后复验：Debug 四组（`--streaming-world 2` 合批地形 130 帧、`--no-terrain-batch` 60 帧、`--voxel-world 1` 40 帧、默认 40 帧）全部 `errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项 ALL PASS**（`build/validation/20261126-094557`）；DocCheck PASS（documents=82 lines=18689）。
+
+## 决策 65：反射视图有自己的剔除与紧凑命令，实例与组表只上传一次（P2 第十三步）
+
+### 问题
+
+平面反射通道一直走 CPU 逐实体提交：`GeometrySystem::render(cmd, frameInfo, &viewOverride)` 里每个 GPU 批分支都带 `!reflection`。P2-5 之后组级剔除退役，间接命令完全由 compute 按「逐实例可见性」每帧重写，命令里的 `firstInstance` / `instanceCount` 是主视锥下的紧凑区间 —— 反射视图换个视锥，这段区间就不成立，所以它不能复用主视图的命令。
+
+### 做法
+
+- `SceneGpuBatch` 拆出 `ViewResources`：`commands` / `frameData` / `stats` / `cullGroups` / `instanceRemap` 加 `computeSet` / `instanceSet`，`kMaxViews = 2`（0 = 主视图，1 = 平面反射）。`FrameResources` 只留两个视图共享的 `instances` 与 `groups`。
+- `prepare()` / `recordDraw()` 变成 view 0 的薄包装，新增 `prepareView(cmd, frameInfo, viewIndex, viewProjection, view)` 与 `recordDrawView(cmd, frameInfo, viewIndex)`。
+- 结构上传只由主视图做：`uploadStructure = viewIndex == 0u && (签名或容量变了)`。反射视图读同一份实例/组表，不重复搬 30k 条记录。
+- 描述符池按 `kFramesInFlight * kMaxViews` 扩，`writeDescriptors()` 按视图各写一套；graphics set 的 binding 0 都指向同一份实例缓冲，binding 1 各指自己的 remap 表。
+- 反射的剔除在 RenderGraph 里单独加一个不带附件的 pass（`PlanarReflection.Cull`），排在 `PlanarReflection.GBuffer` 之前；`GeometrySystem::render` 按 `viewIndex` 选 instanceSet、push `clipY` / `clipMode`，末尾调 `recordDrawView`。
+- 门槛与主视图一致：`useGpuPath(frameInfo) && hasInstances()`。实例数低于 `gpuSceneMinInstances`（默认 256）时，反射继续走 CPU 逐实体 —— 小场景逐实体反而更省，这条判据不该按视图分叉。
+
+### 为什么反射的剔除要放进独立的空 pass
+
+compute dispatch 与 `vkCmdPipelineBarrier` 不能出现在动态渲染里。第一版把 `prepareView` 直接写在反射的 G-Buffer pass 里，Debug 12 帧就报 96 条验证错误：`VUID-vkCmdDispatch-renderpass`（48 条，`vkCmdDispatch: It is invalid to issue this call inside an active VkRenderPass`）与 `VUID-vkCmdPipelineBarrier-shaderTileImageColorReadAccess-08718`（48 条）。挪到独立 pass 后归零。
+
+### 验收（2026-11-26）
+
+场景 `--selftest 60 --streaming-world 2 --gpu-scene-external 400 --camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`：
+
+| 项 | 读数 |
+| --- | --- |
+| 反射视图 | `[SceneGpu] reflection view | groups=103 instances=503 cull=on` |
+| 主视图 | `visibleRatio=0.58`、`gpuInst=0.91 (26680/29174)`、`submit/frame=460` |
+| 与 HEAD（反射走 CPU 逐实体）逐像素 | 1920×1080 差异 347 像素（0.0167%），HUD 面板外 8 个像素，差值均为 1/255（水面合成舍入） |
+
+Debug 六组全部 `errors=0 warnings=0`、stderr 0 字节：水面 + 外部实例 40 帧、水面无外部实例 40 帧、`--no-instance-cull` 40 帧（反射视图也走恒等 remap，日志 `cull=off`）、`--no-hiz` 40 帧、`--voxel-world 1` 30 帧、默认 40 帧。
+
+全量回归 **96 项** ALL PASS（`build/validation/20261126-102435`）。
+
+### 代价与边界
+
+- 每视图多 5 块缓冲：`commands`（组数 × 20 B）、`frameData`（256 B）、`stats`（64 B）、`cullGroups`（组数 × 16 B）、`instanceRemap`（2 × 实例容量 × 4 B）；描述符集数量翻倍（3 帧 × 2 视图）。
+- 反射视图每帧多一遍四段 dispatch。水面场景实例数少（503），这一遍的摊平时间在 4~5 ms 量级，与主视图同数量级。
+- 反射视图的 `stats` 不读回来（`readStats` 仍只读 view 0），所以只有一次性 `reflection view` 行，没有反射视图的逐帧可见/提交量；要拿这个读数得再开一条通路。
+- 阴影视图仍未接（A2 的另一半）：`src/Render/ShadowPass.cpp` 还没绑 set 3，也没有自己的实例集。
+- 反射不能复用主视图命令，这是有意的：两张视锥 + 不同 `clipY`，共用一段紧凑区间必然对不上。
+
+### 踩到的坑
+
+`config/engine.json` 会被运行中的引擎写回相机位姿。回归用例 `terrain-render`（`--selftest 20 --empty-scene --terrain-test`）沿用配置里的相机，相机一旦被前面的截图跑漂到水面以下（y=0.766 < `waterLevel = 2.0`），地形 chunk 全被剔掉，`[Terrain] GPU selection selfTest` 的 parity 记录为空，用例报 `missing stdout marker '[Terrain] GPU selection selfTest PASS'`。恢复 `config/engine.json` 后同一二进制立刻 PASS。规矩：跑回归、提交前先 `git checkout -- config/engine.json`；用例本身不该依赖配置里的相机，这一条留给后续清理。

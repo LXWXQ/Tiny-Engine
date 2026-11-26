@@ -2,6 +2,7 @@
 
 #include "Core/DescriptorManager.h"
 #include "Render/GeometrySystem.h"
+#include "Render/SceneGpuBatch.h"
 #include "Render/LightingSystem.h"
 #include "Scene/Components.h"
 
@@ -352,6 +353,27 @@ void ReflectionPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     const glm::vec3 mainCamera(frameUbo.cameraPos);
     const glm::vec3 reflectionCamera(mainCamera.x, 2.0f * waterLevel - mainCamera.y, mainCamera.z);
 
+    // A2：反射视图自己的剔除。compute dispatch 不能出现在渲染通道里，所以单独加一个
+    // 不带附件的 pass，在主视图的安全点之后、反射的 G-Buffer 之前跑。
+    if (geometrySystem != nullptr)
+    {
+        SceneGpuBatch* cullBatch = geometrySystem->getSceneGpuBatch();
+        if (cullBatch != nullptr && cullBatch->useGpuPath(frameInfo) && cullBatch->hasInstances())
+        {
+            auto& cullPass = graph.addGraphicsPass("PlanarReflection.Cull");
+            cullPass.execute([this, &frameInfo, reflectionProjectionView,
+                              reflectionView](VkCommandBuffer cmd)
+            {
+                SceneGpuBatch* batch = geometrySystem != nullptr
+                    ? geometrySystem->getSceneGpuBatch() : nullptr;
+                if (batch != nullptr)
+                {
+                    batch->prepareView(cmd, frameInfo, 1u, reflectionProjectionView, reflectionView);
+                }
+            });
+        }
+    }
+
     auto& gbufferPass = graph.addGraphicsPass("PlanarReflection.GBuffer");
     for (uint32_t i = 0; i < 4; ++i)
         gbufferPass.writeColor(gbufferTextures[frame][i], VK_ATTACHMENT_LOAD_OP_CLEAR);
@@ -360,7 +382,7 @@ void ReflectionPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     gbufferPass.writeDepth(depthTextures[frame], VK_ATTACHMENT_LOAD_OP_CLEAR,
                            depthClear, VK_ATTACHMENT_STORE_OP_STORE);
     gbufferPass.setExtent(currentExtent);
-    gbufferPass.execute([this, &frameInfo, frame, reflectionProjectionView,
+    gbufferPass.execute([this, &frameInfo, frame, reflectionProjectionView, reflectionView,
                          reflectionCamera](VkCommandBuffer cmd)
     {
         GlobalUbo reflectionUbo = frameUbo;
@@ -378,6 +400,7 @@ void ReflectionPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
         GeometrySystem::GeometryViewOverride viewOverride{};
         viewOverride.globalSet = reflectionSets[frame];
         viewOverride.viewProjection = reflectionProjectionView;
+        viewOverride.viewMatrix = reflectionView;
         viewOverride.cameraPosition = reflectionCamera;
         viewOverride.clipY = waterLevel;
         viewOverride.clipMode = 1;

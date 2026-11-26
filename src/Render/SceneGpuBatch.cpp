@@ -241,12 +241,14 @@ void SceneGpuBatch::createLayoutsAndPipeline()
         throw std::runtime_error("SceneGpuBatch: instance descriptor layout failed");
     VkDescriptorPoolSize computePoolSizes[2]{};
     computePoolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    computePoolSizes[0].descriptorCount = 7u * kFramesInFlight;
+    // A2：每个帧槽位要给「主视图 + 反射视图」各一个计算集，池按视图数放大。
+    constexpr uint32_t kSetCount = kFramesInFlight * kMaxViews;
+    computePoolSizes[0].descriptorCount = 7u * kSetCount;
     computePoolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    computePoolSizes[1].descriptorCount = kFramesInFlight;
+    computePoolSizes[1].descriptorCount = kSetCount;
     VkDescriptorPoolCreateInfo computePoolInfo{};
     computePoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    computePoolInfo.maxSets = kFramesInFlight;
+    computePoolInfo.maxSets = kSetCount;
     computePoolInfo.poolSizeCount = 2;
     computePoolInfo.pPoolSizes = computePoolSizes;
     if (vkCreateDescriptorPool(vulkanDevice.getDevice(), &computePoolInfo, nullptr,
@@ -255,10 +257,10 @@ void SceneGpuBatch::createLayoutsAndPipeline()
 
     VkDescriptorPoolSize graphicsPoolSize{};
     graphicsPoolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    graphicsPoolSize.descriptorCount = 2u * kFramesInFlight;
+    graphicsPoolSize.descriptorCount = 2u * kSetCount;
     VkDescriptorPoolCreateInfo graphicsPoolInfo{};
     graphicsPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    graphicsPoolInfo.maxSets = kFramesInFlight;
+    graphicsPoolInfo.maxSets = kSetCount;
     graphicsPoolInfo.poolSizeCount = 1;
     graphicsPoolInfo.pPoolSizes = &graphicsPoolSize;
     if (vkCreateDescriptorPool(vulkanDevice.getDevice(), &graphicsPoolInfo, nullptr,
@@ -376,28 +378,30 @@ void SceneGpuBatch::ensureCapacity(uint32_t instanceNeed, uint32_t groupNeed)
 
 void SceneGpuBatch::createFrameBuffers()
 {
+    // 每个帧槽位 × 每个视图各一个计算集与实例集（A2）。
+    constexpr uint32_t kSetCount = kFramesInFlight * kMaxViews;
     // 容量增长时旧描述符集还挂在池上：先整体重置，否则分配会失败（池里的 set 未归还）。
     vkResetDescriptorPool(vulkanDevice.getDevice(), computePool, 0);
     vkResetDescriptorPool(vulkanDevice.getDevice(), graphicsPool, 0);
-    std::array<VkDescriptorSetLayout, kFramesInFlight> computeLayouts{};
+    std::array<VkDescriptorSetLayout, kSetCount> computeLayouts{};
     computeLayouts.fill(computeSetLayout);
     VkDescriptorSetAllocateInfo computeAlloc{};
     computeAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     computeAlloc.descriptorPool = computePool;
-    computeAlloc.descriptorSetCount = kFramesInFlight;
+    computeAlloc.descriptorSetCount = kSetCount;
     computeAlloc.pSetLayouts = computeLayouts.data();
-    std::array<VkDescriptorSet, kFramesInFlight> computeSets{};
+    std::array<VkDescriptorSet, kSetCount> computeSets{};
     if (vkAllocateDescriptorSets(vulkanDevice.getDevice(), &computeAlloc, computeSets.data()) != VK_SUCCESS)
         throw std::runtime_error("SceneGpuBatch: compute descriptor allocation failed");
 
-    std::array<VkDescriptorSetLayout, kFramesInFlight> graphicsLayouts{};
+    std::array<VkDescriptorSetLayout, kSetCount> graphicsLayouts{};
     graphicsLayouts.fill(instanceSetLayout);
     VkDescriptorSetAllocateInfo graphicsAlloc{};
     graphicsAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     graphicsAlloc.descriptorPool = graphicsPool;
-    graphicsAlloc.descriptorSetCount = kFramesInFlight;
+    graphicsAlloc.descriptorSetCount = kSetCount;
     graphicsAlloc.pSetLayouts = graphicsLayouts.data();
-    std::array<VkDescriptorSet, kFramesInFlight> graphicsSets{};
+    std::array<VkDescriptorSet, kSetCount> graphicsSets{};
     if (vkAllocateDescriptorSets(vulkanDevice.getDevice(), &graphicsAlloc, graphicsSets.data()) != VK_SUCCESS)
         throw std::runtime_error("SceneGpuBatch: instance descriptor allocation failed");
 
@@ -407,32 +411,36 @@ void SceneGpuBatch::createFrameBuffers()
         createBuffer(res.instances,
                      static_cast<VkDeviceSize>(instanceCapacity) * sizeof(InstanceRecord),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        createBuffer(res.commands,
-                     static_cast<VkDeviceSize>(groupCapacity) * kCommandWords * sizeof(uint32_t),
-                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, false);
         createBuffer(res.groups,
                      static_cast<VkDeviceSize>(groupCapacity) * sizeof(GroupRecord),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        createBuffer(res.frameData, sizeof(FrameData),
-                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        // 统计缓冲 = 4 个 uvec4（shader 的 stats[4]）。尺寸从 Stats 取，size 由
-        // 头文件的 static_assert 锁在 64 字节，扩槽只需改这一处布局来源。
-        createBuffer(res.stats, sizeof(Stats),
-                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        std::memset(res.stats.mapped, 0, static_cast<size_t>(res.stats.size));
-        vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation, 0, VK_WHOLE_SIZE);
-        // 每组紧凑区间：一个组一个 uvec4（可见实例数 / remap 起点）。每帧由 CPU 清零。
-        createBuffer(res.cullGroups,
-                     static_cast<VkDeviceSize>(groupCapacity) * sizeof(glm::uvec4),
-                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        std::memset(res.cullGroups.mapped, 0, static_cast<size_t>(res.cullGroups.size));
-        vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.cullGroups.allocation, 0, VK_WHOLE_SIZE);
-        // remap + 名次：前一半（容量个 uint）是紧凑索引，后一半是本帧每个实例的名次。
-        createBuffer(res.instanceRemap,
-                     static_cast<VkDeviceSize>(instanceCapacity) * 2u * sizeof(uint32_t),
-                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        res.computeSet = computeSets[frame];
-        res.graphicsSet = graphicsSets[frame];
+        for (uint32_t v = 0; v < kMaxViews; ++v)
+        {
+            ViewResources& view = res.views[v];
+            createBuffer(view.commands,
+                         static_cast<VkDeviceSize>(groupCapacity) * kCommandWords * sizeof(uint32_t),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, false);
+            createBuffer(view.frameData, sizeof(FrameData),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            // 统计缓冲 = 4 个 uvec4（shader 的 stats[4]）。尺寸从 Stats 取，size 由
+            // 头文件的 static_assert 锁在 64 字节，扩槽只需改这一处布局来源。
+            createBuffer(view.stats, sizeof(Stats),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            std::memset(view.stats.mapped, 0, static_cast<size_t>(view.stats.size));
+            vmaFlushAllocation(vulkanDevice.getVmaAllocator(), view.stats.allocation, 0, VK_WHOLE_SIZE);
+            // 每组紧凑区间：一个组一个 uvec4（可见实例数 / remap 起点）。每帧由 CPU 清零。
+            createBuffer(view.cullGroups,
+                         static_cast<VkDeviceSize>(groupCapacity) * sizeof(glm::uvec4),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            std::memset(view.cullGroups.mapped, 0, static_cast<size_t>(view.cullGroups.size));
+            vmaFlushAllocation(vulkanDevice.getVmaAllocator(), view.cullGroups.allocation, 0, VK_WHOLE_SIZE);
+            // remap + 名次：前一半（容量个 uint）是紧凑索引，后一半是本帧每个实例的名次。
+            createBuffer(view.instanceRemap,
+                         static_cast<VkDeviceSize>(instanceCapacity) * 2u * sizeof(uint32_t),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            view.computeSet = computeSets[frame * kMaxViews + v];
+            view.instanceSet = graphicsSets[frame * kMaxViews + v];
+        }
     }
 }
 
@@ -441,24 +449,27 @@ void SceneGpuBatch::writeDescriptors()
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
         FrameResources& res = frames[frame];
+        for (uint32_t v = 0; v < kMaxViews; ++v)
+        {
+        ViewResources& view = res.views[v];
         // 存储缓冲的 binding 是 0 / 1 / 2 / 3 / 5 / 6 / 7（binding 4 是 Hi-Z 采样器）。
         // 写成「binding 表 + 信息表」两张平行数组：加一个槽位只改这两行，不会漏掉某个下标。
         constexpr uint32_t kStorageBindingCount = 7u;
         constexpr uint32_t kStorageBindings[kStorageBindingCount] = { 0u, 1u, 2u, 3u, 5u, 6u, 7u };
         VkDescriptorBufferInfo infos[kStorageBindingCount]{};
         infos[0] = { res.groups.buffer, 0, VK_WHOLE_SIZE };
-        infos[1] = { res.commands.buffer, 0, VK_WHOLE_SIZE };
-        infos[2] = { res.frameData.buffer, 0, VK_WHOLE_SIZE };
-        infos[3] = { res.stats.buffer, 0, VK_WHOLE_SIZE };
+        infos[1] = { view.commands.buffer, 0, VK_WHOLE_SIZE };
+        infos[2] = { view.frameData.buffer, 0, VK_WHOLE_SIZE };
+        infos[3] = { view.stats.buffer, 0, VK_WHOLE_SIZE };
         infos[4] = { res.instances.buffer, 0, VK_WHOLE_SIZE };
-        infos[5] = { res.cullGroups.buffer, 0, VK_WHOLE_SIZE };
-        infos[6] = { res.instanceRemap.buffer, 0, VK_WHOLE_SIZE };
+        infos[5] = { view.cullGroups.buffer, 0, VK_WHOLE_SIZE };
+        infos[6] = { view.instanceRemap.buffer, 0, VK_WHOLE_SIZE };
 
         VkWriteDescriptorSet writes[kStorageBindingCount]{};
         for (uint32_t i = 0; i < kStorageBindingCount; ++i)
         {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = res.computeSet;
+            writes[i].dstSet = view.computeSet;
             writes[i].dstBinding = kStorageBindings[i];
             writes[i].descriptorCount = 1;
             writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -475,7 +486,7 @@ void SceneGpuBatch::writeDescriptors()
             hizInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             VkWriteDescriptorSet hizWrite{};
             hizWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            hizWrite.dstSet = res.computeSet;
+            hizWrite.dstSet = view.computeSet;
             hizWrite.dstBinding = 4;
             hizWrite.descriptorCount = 1;
             hizWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -485,19 +496,20 @@ void SceneGpuBatch::writeDescriptors()
 
         VkDescriptorBufferInfo instanceInfos[2] = {
             { res.instances.buffer, 0, VK_WHOLE_SIZE },
-            { res.instanceRemap.buffer, 0, VK_WHOLE_SIZE },
+            { view.instanceRemap.buffer, 0, VK_WHOLE_SIZE },
         };
         VkWriteDescriptorSet instanceWrites[2]{};
         for (uint32_t i = 0; i < 2u; ++i)
         {
             instanceWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            instanceWrites[i].dstSet = res.graphicsSet;
+            instanceWrites[i].dstSet = view.instanceSet;
             instanceWrites[i].dstBinding = i;
             instanceWrites[i].descriptorCount = 1;
             instanceWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             instanceWrites[i].pBufferInfo = &instanceInfos[i];
         }
         vkUpdateDescriptorSets(vulkanDevice.getDevice(), 2, instanceWrites, 0, nullptr);
+        }
     }
 }
 
@@ -506,14 +518,17 @@ void SceneGpuBatch::destroyFrameBuffers()
     for (FrameResources& res : frames)
     {
         destroyBuffer(res.instances);
-        destroyBuffer(res.commands);
+        for (uint32_t v = 0; v < kMaxViews; ++v)
+        {
+            destroyBuffer(res.views[v].commands);
+            destroyBuffer(res.views[v].frameData);
+            destroyBuffer(res.views[v].stats);
+            destroyBuffer(res.views[v].cullGroups);
+            destroyBuffer(res.views[v].instanceRemap);
+            res.views[v].computeSet = VK_NULL_HANDLE;
+            res.views[v].instanceSet = VK_NULL_HANDLE;
+        }
         destroyBuffer(res.groups);
-        destroyBuffer(res.frameData);
-        destroyBuffer(res.stats);
-        destroyBuffer(res.cullGroups);
-        destroyBuffer(res.instanceRemap);
-        res.computeSet = VK_NULL_HANDLE;
-        res.graphicsSet = VK_NULL_HANDLE;
     }
 }
 
@@ -1469,15 +1484,15 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
 void SceneGpuBatch::readStats(uint32_t frameInFlightIndex)
 {
     const FrameResources& res = frames[frameInFlightIndex];
-    if (res.stats.mapped == nullptr)
+    if (res.views[0].stats.mapped == nullptr)
         return;
     // 这个帧槽上一次使用早已 fence 完成；host 可见内存不保证一致，
     // 必须先 invalidate 才能读到 GPU 写进去的计数（否则永远是 0）。
-    vmaInvalidateAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation,
+    vmaInvalidateAllocation(vulkanDevice.getVmaAllocator(), res.views[0].stats.allocation,
                             0, VK_WHOLE_SIZE);
     // 按名字逐字读：主读前 10 个 GPU 字（stats[0] 的 4 个 + stats[1] 的 4 个 + stats[2] 的前 2 个），
     // 再加 words[12..13]（stats[3].xy）的实例级视锥统计；words[10..11]、words[14..15] 没有写入者。
-    const uint32_t* words = static_cast<const uint32_t*>(res.stats.mapped);
+    const uint32_t* words = static_cast<const uint32_t*>(res.views[0].stats.mapped);
     stats.submitted = words[0];
     stats.visibleGroups = words[1];
     stats.culledGroups = words[2];
@@ -1981,14 +1996,32 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
     if (instanceScratch.empty() || modelGroups.empty())
         return;
 
+    // 主视图：投影 * 视图。反射视图由 GeometrySystem 显式调 prepareView。
+    prepareView(commandBuffer, frameInfo, 0u,
+                frameInfo.projectionMatrix * frameInfo.viewMatrix, frameInfo.viewMatrix);
+}
+
+void SceneGpuBatch::prepareView(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
+                                uint32_t viewIndex, const glm::mat4& viewProjection,
+                                const glm::mat4& view)
+{
+    if (!available || !frameInfo.settings.gpuSceneEnabled)
+        return;
+    if (instanceScratch.empty() || modelGroups.empty())
+        return;
+
+    const uint32_t frame = frameInfo.frameInFlightIndex;
+    ViewResources& resources = frames[frame].views[viewIndex];
+
     ensureCapacity(static_cast<uint32_t>(instanceScratch.size()),
                    static_cast<uint32_t>(modelGroups.size()));
     FrameResources& res = frames[frame];
     // 结构没变、容量没变、这个槽位的缓冲已经装过同一批数据：跳过 instances/groups 上传。
     // 命令缓冲由 compute 每帧整组重写（模式 0 写基线、模式 2 改紧凑区间或清零），
     // 所以不需要清理旧命令。
-    const bool uploadStructure =
-        slotSignatures[frame] != signature || slotGenerations[frame] != capacityGeneration;
+    // 实例缓冲与组表由两个视图共享：只让主视图上传，避免反射视图重复搬 30k 条记录。
+    const bool uploadStructure = viewIndex == 0u &&
+        (slotSignatures[frame] != structureSignature || slotGenerations[frame] != capacityGeneration);
     if (uploadStructure)
     {
         std::memcpy(res.instances.mapped, instanceScratch.data(),
@@ -2011,13 +2044,13 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                                        group.merged ? 1u : 0u, 0u);
         }
         vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.groups.allocation, 0, VK_WHOLE_SIZE);
-        slotSignatures[frame] = signature;
+        slotSignatures[frame] = structureSignature;
         slotGenerations[frame] = capacityGeneration;
     }
 
     FrameData frameData{};
-    frameData.viewProjection = frameInfo.projectionMatrix * frameInfo.viewMatrix;
-    frameData.view = frameInfo.viewMatrix;
+    frameData.viewProjection = viewProjection;
+    frameData.view = view;
     const glm::mat4& vp = frameData.viewProjection;
     const glm::vec4 row0(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
     const glm::vec4 row1(vp[0][1], vp[1][1], vp[2][1], vp[3][1]);
@@ -2037,23 +2070,23 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                                  static_cast<float>(hizExtent.height),
                                  frameInfo.projectionMatrix[1][1], 0.0f);
     frameData.params = glm::uvec4(static_cast<uint32_t>(modelGroups.size()), 0u,
-                                  hizUsable ? 1u : 0u, 0u);
-    std::memcpy(res.frameData.mapped, &frameData, sizeof(FrameData));
-    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.frameData.allocation, 0, VK_WHOLE_SIZE);
+                                  (viewIndex == 0u && hizUsable) ? 1u : 0u, 0u);
+    std::memcpy(resources.frameData.mapped, &frameData, sizeof(FrameData));
+    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), resources.frameData.allocation, 0, VK_WHOLE_SIZE);
 
-    std::memset(res.stats.mapped, 0, static_cast<size_t>(res.stats.size));
-    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.stats.allocation, 0, VK_WHOLE_SIZE);
+    std::memset(resources.stats.mapped, 0, static_cast<size_t>(resources.stats.size));
+    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), resources.stats.allocation, 0, VK_WHOLE_SIZE);
     // 每组可见实例数靠 atomicAdd 领号，必须每帧从 0 开始。它和 stats 一样是「本帧独有」的
     // 累积器，槽位缓冲由帧栅栏保证没有被在飞的帧读着。
-    std::memset(res.cullGroups.mapped, 0, static_cast<size_t>(res.cullGroups.size));
-    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), res.cullGroups.allocation, 0, VK_WHOLE_SIZE);
+    std::memset(resources.cullGroups.mapped, 0, static_cast<size_t>(resources.cullGroups.size));
+    vmaFlushAllocation(vulkanDevice.getVmaAllocator(), resources.cullGroups.allocation, 0, VK_WHOLE_SIZE);
 
     // T-08：把本帧脏区间搬进持久缓冲。骨架阶段没有任何消费者，只统计上传量。
     gpuScene.flush(commandBuffer);
     gpuScene.endFrame();
     cullPipeline->bind(commandBuffer);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
-                            0, 1, &res.computeSet, 0, nullptr);
+                            0, 1, &resources.computeSet, 0, nullptr);
 
     CullPushConstants push{};
     push.params = glm::uvec4(static_cast<uint32_t>(modelGroups.size()),
@@ -2086,6 +2119,14 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &computeToCompute,
                              0, nullptr, 0, nullptr);
     };
+
+    if (viewIndex != 0u && !reportedReflectionView)
+    {
+        reportedReflectionView = true;
+        std::cout << "[SceneGpu] reflection view | groups=" << modelGroups.size()
+                  << " instances=" << instanceScratch.size()
+                  << " cull=" << (instanceCull ? "on" : "off") << std::endl;
+    }
 
     // 第一遍：一个组一个 invocation。组数远小于实例数，剔除本身几乎不花时间。
     dispatchStage(0u, static_cast<uint32_t>(modelGroups.size()),
@@ -2131,6 +2172,12 @@ void SceneGpuBatch::prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 
 void SceneGpuBatch::recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameInfo)
 {
+    recordDrawView(commandBuffer, frameInfo, 0u);
+}
+
+void SceneGpuBatch::recordDrawView(VkCommandBuffer commandBuffer, FrameInfo& frameInfo,
+                                   uint32_t viewIndex)
+{
     if (!reportedFirstBatch && stats.submitted > 0u)
     {
         reportedFirstBatch = true;
@@ -2145,19 +2192,24 @@ void SceneGpuBatch::recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameIn
         return;
 
     const FrameResources& res = frames[frameInfo.frameInFlightIndex];
+    const ViewResources& view = res.views[viewIndex];
     const uint32_t groupCount = static_cast<uint32_t>(modelGroups.size());
     {
         const VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mergedMesh.vertices.buffer, &offset);
         vkCmdBindIndexBuffer(commandBuffer, mergedMesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
         // 一条 multidraw：命令里的 firstInstance 决定每个组件实例从哪条实例记录取变换。
-        vkCmdDrawIndexedIndirect(commandBuffer, res.commands.buffer, 0, groupCount,
+        vkCmdDrawIndexedIndirect(commandBuffer, view.commands.buffer, 0, groupCount,
                                  kCommandWords * sizeof(uint32_t));
-        stats.drawCalls += 1;
-        // 与三角形/顶点同源（两帧前的回读）：这一帧真的提交了可见几何才算一次绘制。
-        if (stats.visibleGroups > 0u)
-            frameInfo.telemetry.drawCalls += 1;
-        frameInfo.telemetry.triangles += stats.visibleTriangles;
+        // 反射视图只进 GPU 队列，不进主视角 telemetry（Validate 的 draw call 判据）。
+        if (viewIndex == 0u)
+        {
+            stats.drawCalls += 1;
+            // 与三角形/顶点同源（两帧前的回读）：这一帧真的提交了可见几何才算一次绘制。
+            if (stats.visibleGroups > 0u)
+                frameInfo.telemetry.drawCalls += 1;
+            frameInfo.telemetry.triangles += stats.visibleTriangles;
+        }
         frameInfo.telemetry.vertices += stats.visibleVertices;
     }
 }

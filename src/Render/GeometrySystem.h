@@ -37,6 +37,8 @@ public:
     {
         VkDescriptorSet globalSet = VK_NULL_HANDLE;
         glm::mat4 viewProjection{ 1.0f };
+        // A2：反射视图要自己的剔除，prepareView 需要 view 矩阵算眼点与平面。
+        glm::mat4 viewMatrix{ 1.0f };
         glm::vec3 cameraPosition{ 0.0f };
         float clipY = 0.0f;
         uint32_t clipMode = 0;
@@ -47,6 +49,8 @@ public:
                 const GeometryViewOverride* viewOverride);
 
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
+    // A2：反射通道要自己的剔除，它得拿到 SceneGpuBatch 在渲染通道之外先跑一遍 compute。
+    SceneGpuBatch* getSceneGpuBatch() const { return sceneGpuBatch; }
 
 private:
     void createPipelineLayout(VkDescriptorSetLayout globalSetLayout,

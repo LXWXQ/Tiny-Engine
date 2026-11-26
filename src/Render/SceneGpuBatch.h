@@ -152,22 +152,36 @@ public:
 
     // 绘制管线需要把实例缓冲当 set 3 绑定；没有可用实现时返回 VK_NULL_HANDLE。
     VkDescriptorSetLayout getInstanceSetLayout() const { return instanceSetLayout; }
-    VkDescriptorSet getInstanceSet(uint32_t frameInFlightIndex) const
+    // A2：每个视图（主视图 / 平面反射）各有一份实例集合 —— binding 1 的 remap 表是视图私有的。
+    VkDescriptorSet getInstanceSet(uint32_t frameInFlightIndex, uint32_t viewIndex = 0u) const
     {
-        return frames[frameInFlightIndex].graphicsSet;
+        return frames[frameInFlightIndex].views[viewIndex].instanceSet;
     }
 
     bool isAvailable() const { return available; }
+    // 结构已经摊平过至少一次（合并网格也就绪）：反射视图可以安全地跑自己的剔除了。
+    bool hasInstances() const { return mergedActive && !instanceScratch.empty(); }
 
     // 这一帧是否该走 GPU 批：可用 + 开关打开 + （强制 或 实例数达到阈值）。
     bool useGpuPath(const FrameInfo& frameInfo) const;
     const Stats& getStats() const { return stats; }
 
+    // 视图槽：0 = 主视图，1 = 平面反射（A2）。视图之间只共享实例/组缓冲，
+    // 命令、帧数据、统计、组紧凑计数、remap 全部各自一份。
+    static constexpr uint32_t kMaxViews = 2u;
+
     // 写实例记录 + 派发剔除。必须在几何 Pass 之前录制（无需附件）。
     void prepare(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
 
+    // A2：给指定视图做剔除。viewProjection / view 由调用方给（反射视图是镜像矩阵）。
+    void prepareView(VkCommandBuffer commandBuffer, FrameInfo& frameInfo, uint32_t viewIndex,
+                     const glm::mat4& viewProjection, const glm::mat4& view);
+
     // 绑定实例集合并提交 indirect 绘制。调用方需已绑定管线与 push constant。
     void recordDraw(VkCommandBuffer commandBuffer, FrameInfo& frameInfo);
+
+    // A2：按视图提交。viewIndex 选命令缓冲，非 0 视图不计入主视角 telemetry。
+    void recordDrawView(VkCommandBuffer commandBuffer, FrameInfo& frameInfo, uint32_t viewIndex);
 
     // 每帧由引擎侧（粒子/体素系统）调用；传空表示本帧没有外部实例。
     void setExternalInstances(std::vector<ExternalInstance> instances)
@@ -287,11 +301,10 @@ private:
         uint32_t mipLevels = 0;
     };
 
-    struct FrameResources
+    // 一个视图独占的每帧资源。两个视图共享实例缓冲与组表，剔除结果互不干扰。
+    struct ViewResources
     {
-        GpuBuffer instances;
         GpuBuffer commands;
-        GpuBuffer groups;
         GpuBuffer frameData;
         GpuBuffer stats;
         // P2 实例级剔除：每组一个 uvec4（x = 可见实例数, y = remap 起点），CPU 每帧清零。
@@ -300,7 +313,14 @@ private:
         // 顶点着色器按前半取 InstanceRecord，所以图形 set 也绑这一份。
         GpuBuffer instanceRemap;
         VkDescriptorSet computeSet = VK_NULL_HANDLE;
-        VkDescriptorSet graphicsSet = VK_NULL_HANDLE;
+        VkDescriptorSet instanceSet = VK_NULL_HANDLE;
+    };
+
+    struct FrameResources
+    {
+        GpuBuffer instances;
+        GpuBuffer groups;
+        ViewResources views[kMaxViews];
     };
 
     void createLayoutsAndPipeline();
@@ -415,6 +435,8 @@ float cubeFieldDistance = 26.0f;
     // P2 实例级剔除：开着时命令的实例区间换成紧凑区间，顶点着色器经 remap 取记录；
     // 关掉是整体回退（--no-instance-cull），画面应与开着时逐像素一致。
     bool instanceCullEnabled = true;
+    // A2：反射视图的剔除只打一次日志，说明它真的跑起来了。
+    bool reportedReflectionView = false;
 // 阵列中心在第一次构建时按传入帧的 view 矩阵反算：启动期相机还没刷过 view。
 uint32_t cubeFieldBuilt = 0;
     uint32_t debugExternalCount = 0;

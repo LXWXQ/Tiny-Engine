@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1743 行
+size: ~1756 行
 updated: 2026-11-26
 ---
 
@@ -1742,3 +1742,16 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 边界：本步没有消费者（P5-1 的 velocity 才读它）；`--rebuild-structure n` 时「上一帧」退化成「上次重建」，velocity 会算成 n 帧位移；30k 场景实例缓冲 20.2 → 26.0 MB。
 
 > 收尾补丁（2026-11-26）：`shaders/mrt.frag` 的 `InstanceRecord` 补 `previousModel`；`kTerrainChunkInstanceStride` / `kVoxelBatchInstanceStride` 从 224 改 288（行内布局不变，多出的 64 字节保持 0）。漏改的后果是片元侧材质与地形/体素合批除第 0 行外全部读错位 —— 验证层抓不到，只能靠像素 A/B（`--streaming-world 2` 合批地形修前/修后 59.4% 像素不同）。补丁后 Debug 四组 `errors=0`、全量回归 **96 项 ALL PASS**（`build/validation/20261126-094557`）。
+
+## P2 第十三步：反射视图自己的剔除与紧凑命令（A2 上半，2026-11-26）
+
+- `SceneGpuBatch` 新增视图层：`kMaxViews = 2`、`ViewResources`（命令 / 帧数据 / 统计 / 组计数 / remap + 两个描述符集），`FrameResources` 只留两视图共享的实例与组表。
+- `prepare` / `recordDraw` 变 view 0 薄包装，新增 `prepareView` / `recordDrawView`；结构上传只由 view 0 做（`uploadStructure = viewIndex == 0u && …`），反射只读同一份。
+- 描述符池与写入按 `kFramesInFlight * kMaxViews` 扩；graphics set 的 binding 0 共享实例缓冲，binding 1 各指自己的 remap。
+- 反射的 compute 剔除放进独立的无附件 pass `PlanarReflection.Cull`：塞进 G-Buffer pass 会报 `VUID-vkCmdDispatch-renderpass` 与 `VUID-vkCmdPipelineBarrier-shaderTileImageColorReadAccess-08718`（12 帧 96 条）。
+- 门槛与主视图同一判据 `useGpuPath && hasInstances`；小场景反射继续走 CPU 逐实体。
+- 读水：`[SceneGpu] reflection view | groups=103 instances=503 cull=on`；主视图 `gpuInst=0.91 (26680/29174)`、`submit/frame=460`。
+- 逐像素：与 HEAD（反射走 CPU）比 1920×1080 差异 347 像素，HUD 外 8 个像素、差值 1/255。
+- Debug 六组 `errors=0 warnings=0`、stderr 0；全量回归 **96 项** ALL PASS（`build/validation/20261126-102435`）。
+- 坑：`config/engine.json` 被写回相机，`terrain-render` 会因相机沉到水下而缺 `GPU selection selfTest PASS` marker；跑回归前先还原该文件。
+- 遗留：阴影视图未接（A2 下半）、反射视图的 stats 不回读。

@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~412 行
+size: ~424 行
 updated: 2026-11-26
 ---
 
@@ -410,3 +410,15 @@ updated: 2026-11-26
 **遗留**：P5-1 的 velocity 消费者未接（这一刀只铺数据）；`--rebuild-structure n` 时「上一帧」退化成「上次重建」，P5-1 落地时要重新确认；A2（阴影/反射各一份剔除与紧凑可见表）尚未开工。
 
 **收尾补丁（2026-11-26）**：`shaders/mrt.frag` 补 `previousModel`、`kTerrainChunkInstanceStride` / `kVoxelBatchInstanceStride` 改 288；漏改会让片元材质与地形/体素合批读错位（验证层与读数都查不出，靠像素 A/B 才发现）。补丁后回归 96 项 ALL PASS（`build/validation/20261126-094557`）。
+
+## P2 待办：反射视图自己的剔除与紧凑命令（A2 上半）
+
+**现状**：反射通道走 CPU 逐实体（`GeometrySystem::render(cmd, frameInfo, &viewOverride)` 的每个 GPU 批分支都带 `!reflection`）；主视图的命令按主视锥算，反射不能复用。
+
+**已落地（2026-11-26，决策 65）**：`SceneGpuBatch` 加视图层（`kMaxViews = 2`、`ViewResources`），`prepareView` / `recordDrawView` 按视图跑四段 dispatch 与间接 draw；实例与组表只由主视图上传；描述符池与写入按 `kFramesInFlight * kMaxViews` 扩；反射的 compute 剔除放进独立的无参数 pass；门槛沿用 `useGpuPath && hasInstances`。
+
+**读数（2026-11-26）**：水面 + 400 外部实例场景 `reflection view | groups=103 instances=503 cull=on`；主视图 `gpuInst=0.91 (26680/29174)`、`submit/frame=460`；与 HEAD 的 CPU 反射逐像素对比 1920×1080 差 347 像素（HUD 外 8 个、差值 1/255）；Debug 六组 `errors=0`；全量回归 96 项 ALL PASS（`build/validation/20261126-102435`）。
+
+**回退开关**：无独立开关；实例数低于 `gpuSceneMinInstances`（默认 256）时反射自动回到 CPU 逐实体，`--no-instance-cull` 时反射视图与主视图一起走恒等 remap。
+
+**遗留**：阴影视图（A2 下半）未接；反射视图的 `stats` 不回读（只有一次性 `reflection view` 行）；`config/engine.json` 的相机写回会让 `terrain-render` 缺 marker，跑回归前必须还原。
