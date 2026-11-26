@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1896 行
+size: ~1910 行
 updated: 2026-11-26
 ---
 
@@ -1895,3 +1895,17 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 为什么横排不进 mip 链：VSM 的 HZB 按页重算（脏页粒度是页），必须让一页的七级落在同一块连续 texel 里；mip 链既多 8/7 的显存，又没法独立寻址 128² 瓦片。
 - 两个坑：①带开关跑完进程以 `0xC0000005` 收场 —— `Application::run()` 在 `:1450` 就 `vulkanDevice.reset()`，成员的析构晚于它，得在 `vulkanDevice.reset()` 之前显式 `virtualShadowMap->destroy()`；②`main.cpp(531): fatal error C1061: 编译器限制: 块嵌套太深` —— 参数解析那条 `else if` 链已顶到 MSVC 上限，启动型开关要写成链前的早退块。
 - 验证：Debug 六组（默认 / `--dump-vsm-resources` / `--page-alloc-selftest` / `--cube-field 4000` / `--terrain-test` / `--no-shadows`）全部 `errors=0 warnings=0`、stderr 0 字节；全量回归 96 项 ALL PASS（build/validation/20261126-175133，日志 202 行，FAIL=0）；DocCheck PASS（documents=82 lines=19893）。读数不变（本步不进帧循环）。
+
+## P4-3：三级 clipmap 与页对齐滚动（P4-3，2026-11-26）
+
+- **尺度**：级比 4，三级覆盖 4.8 / 19.2 / 76.8 米，每级 32 x 32 页 = 4096 texel。
+  第 0 级 853.3 texel/m，对 CSM 的 103.3 texel/m 是 **8.26 倍**，正好压住验收①的 8 倍门槛。
+- **页网格**：每页 128 texel，所以 pageWorldSize = 0.150 / 0.60 / 2.40 m。相机位置拆到光空间
+  两条直角轴上分别吸附到 pageWorldSize 整数倍（`snapToPageGrid()`），级中心只会整页跳。
+- **矩阵**：`computeClipmapLevel()` 手写正交投影，深度 `z_ndc = (-z_view - r) / (2r)`，
+  与 `ShadowPass::buildCascade()` 同一套约定；r 取外接球半径，斜着看也不裁。
+- **证据**：静态 130 帧 `scrolls=0 aligned=1`；`--streaming-fly 60` 的 200 帧里每 60 帧
+  `scrolls` 增 180（三级 x 60 帧，每帧都跨页）且始终 `aligned=1` —— 位移严格是页边长的整数倍。
+- **零开销**：只有 `--dump-vsm-resources`（真的建了图集）才算 clipmap；默认路径输出与 P4-2 一致，
+  守卫仍是 `vsm=0B`。
+- **读数**：不变（`total=0.065ms`，改前 0.064）。这一步不画任何东西，与预期一致。

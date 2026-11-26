@@ -3323,6 +3323,16 @@ if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
 			shadowPassPtr->updateCascades(scene->getCamera().getView(),
 				scene->getCamera().getProjection(), settings.directionalLightDir);
 
+			// P4-3：虚拟阴影图的三级 clipmap 跟着同一台相机滚动（中心吸附到页网格）。
+			// 只有真的建了图集（--dump-vsm-resources）才算：没有采样方之前，默认路径不该为它花
+			// 一帧的 CPU，也不该多打一行输出。
+			if (virtualShadowMap && virtualShadowMap->isAllocated())
+			{
+			    const glm::mat4 vsmCameraView = scene->getCamera().getView();
+			    const glm::vec3 vsmCameraPosition = glm::vec3(glm::inverse(vsmCameraView)[3]);
+			    virtualShadowMap->updateClipmaps(vsmCameraPosition, settings.directionalLightDir);
+			}
+
 			const auto& cascades = shadowPassPtr->getCascades();
 			for (uint32_t cascade = 0; cascade < ShadowPass::kCascadeCount; ++cascade)
 				ubo.shadowMatrices[cascade] = cascades[cascade].viewProjection;

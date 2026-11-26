@@ -3,9 +3,13 @@
 #include "Render/SparsePageAllocator.h"
 #include "RHI/ResourceStats.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 namespace
@@ -21,6 +25,23 @@ namespace
     }
 
     double mib(uint64_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); }
+
+    // 光空间的两条直角轴（与 ShadowPass::buildCascade 同一套取法：光方向 + 世界上方
+    // 叉乘出 right / lightUp，方向几乎与上方平行时换一个参考轴避免退化）。
+    void lightBasis(const glm::vec3& lightDirection, glm::vec3& direction, glm::vec3& right,
+                    glm::vec3& lightUp)
+    {
+        direction = lightDirection;
+        if (glm::dot(direction, direction) < 1.0e-8f)
+            direction = glm::vec3(0.0f, -1.0f, 0.0f);
+        direction = glm::normalize(direction);
+
+        glm::vec3 up(0.0f, 1.0f, 0.0f);
+        if (std::abs(glm::dot(direction, up)) > 0.99f)
+            up = glm::vec3(0.0f, 0.0f, 1.0f);
+        right = glm::normalize(glm::cross(direction, up));
+        lightUp = glm::cross(right, direction);
+    }
 }
 
 VirtualShadowMap::VirtualShadowMap(Device& device)
@@ -222,6 +243,123 @@ void VirtualShadowMap::resetPageTable()
     }
 }
 
+glm::vec3 VirtualShadowMap::snapToPageGrid(const glm::vec3& position, const glm::vec3& lightDirection,
+                                            float pageWorldSize)
+{
+    if (pageWorldSize <= 0.0f)
+        return position;
+
+    glm::vec3 direction(0.0f);
+    glm::vec3 right(0.0f);
+    glm::vec3 lightUp(0.0f);
+    lightBasis(lightDirection, direction, right, lightUp);
+
+    // 沿光空间的两条轴各自吸附到页网格：页面在光空间里是轴对齐的方块，
+    // 所以只有在这两条轴上取整，页面边界才会和 texel 边界对齐。
+    const float alongRight = std::round(glm::dot(right, position) / pageWorldSize) * pageWorldSize;
+    const float alongUp = std::round(glm::dot(lightUp, position) / pageWorldSize) * pageWorldSize;
+    const float alongDirection = glm::dot(direction, position);
+
+    return right * alongRight + lightUp * alongUp + direction * alongDirection;
+}
+
+VirtualShadowMap::ClipmapLevel VirtualShadowMap::computeClipmapLevel(uint32_t level,
+                                                                    const glm::vec3& cameraPosition,
+                                                                    const glm::vec3& lightDirection)
+{
+    ClipmapLevel out{};
+    out.worldExtent = kClipmapLevel0Extent * std::pow(kClipmapLevelRatio, static_cast<float>(level));
+    out.texelWorldSize = out.worldExtent / static_cast<float>(kClipmapTexelsPerAxis);
+    out.pageWorldSize = out.texelWorldSize * static_cast<float>(kPageSize);
+    out.center = snapToPageGrid(cameraPosition, lightDirection, out.pageWorldSize);
+
+    glm::vec3 direction(0.0f);
+    glm::vec3 right(0.0f);
+    glm::vec3 lightUp(0.0f);
+    lightBasis(lightDirection, direction, right, lightUp);
+
+    // 正交光相机放在这一级中心的后方 2r 处，深度方向覆盖「距相机 r .. 3r」这段；
+    // r 取这一级正方形外接球半径（边长 x sqrt(3) / 2），保证斜着看也不裁。
+    const float halfExtent = out.worldExtent * 0.5f;
+    const float radius = halfExtent * 1.7320508f;
+    const glm::vec3 eye = out.center - direction * (radius * 2.0f);
+    const glm::mat4 lightView = glm::lookAt(eye, out.center, lightUp);
+
+    // 手写正交投影（与 ShadowPass::buildCascade 同一套约定）：x/y 按这一级的半边归一化，
+    // 深度 z_ndc = (-z_view - r) / (2r)，正好落在 [0,1] 上。
+    glm::mat4 lightProjection(1.0f);
+    lightProjection[0][0] = 1.0f / halfExtent;
+    lightProjection[1][1] = 1.0f / halfExtent;
+    lightProjection[2][2] = -1.0f / (2.0f * radius);
+    lightProjection[3][2] = -0.5f;
+
+    out.lightViewProjection = lightProjection * lightView;
+    return out;
+}
+
+void VirtualShadowMap::updateClipmaps(const glm::vec3& cameraPosition, const glm::vec3& lightDirection)
+{
+    if (clipmaps.size() != kClipmapLevels)
+    {
+        clipmaps.resize(kClipmapLevels);
+        // 第一帧不是滚动，直接把旧中心标成「无效」的哨兵。
+        for (ClipmapLevel& level : clipmaps)
+            level.center = glm::vec3(std::numeric_limits<float>::max());
+    }
+
+    glm::vec3 direction(0.0f);
+    glm::vec3 right(0.0f);
+    glm::vec3 lightUp(0.0f);
+    lightBasis(lightDirection, direction, right, lightUp);
+
+    for (uint32_t index = 0; index < kClipmapLevels; ++index)
+    {
+        const ClipmapLevel previous = clipmaps[index];
+        ClipmapLevel level = computeClipmapLevel(index, cameraPosition, lightDirection);
+
+        // 滚动只能整页跳：把位移拆到光空间两条轴上，每个分量都得是 pageWorldSize 的整数倍。
+        if (previous.worldExtent > 0.0f)
+        {
+            const glm::vec3 delta = level.center - previous.center;
+            if (glm::length(delta) > 1.0e-5f)
+            {
+                ++clipmapScrolls;
+                const float alongRight = glm::dot(right, delta);
+                const float alongUp = glm::dot(lightUp, delta);
+                const float stepsRight = alongRight / level.pageWorldSize;
+                const float stepsUp = alongUp / level.pageWorldSize;
+                if (std::abs(stepsRight - std::round(stepsRight)) > 1.0e-3f ||
+                    std::abs(stepsUp - std::round(stepsUp)) > 1.0e-3f)
+                {
+                    clipmapAligned = false;
+                }
+            }
+        }
+
+        clipmaps[index] = level;
+    }
+
+    ++clipmapFrame;
+    // 每 60 帧一行（只有 --dump-vsm-resources 时才会调到这里）。
+    if (clipmapFrame % 60ull == 1ull)
+    {
+        clipmapReported = true;
+        std::printf("[VSM] clipmap | frame=%llu scrolls=%llu aligned=%d | "
+                    "level0 extent=%.2fm texel=%.3fmm page=%.3f m | "
+                    "level1 extent=%.2fm page=%.2f m | level2 extent=%.2fm page=%.2f m | "
+                    "density=%.1f texel/m (CSM %.1f, ratio %.2fx) | center0=(%.3f, %.3f, %.3f)\n",
+                    static_cast<unsigned long long>(clipmapFrame),
+                    static_cast<unsigned long long>(clipmapScrolls), clipmapAligned ? 1 : 0,
+                    clipmaps[0].worldExtent, clipmaps[0].texelWorldSize * 1000.0f,
+                    clipmaps[0].pageWorldSize, clipmaps[1].worldExtent,
+                    clipmaps[1].pageWorldSize, clipmaps[2].worldExtent, clipmaps[2].pageWorldSize,
+                    1.0f / clipmaps[0].texelWorldSize,
+                    static_cast<float>(kClipmapTexelsPerAxis) / 39.6632f,
+                    39.6632f / clipmaps[0].worldExtent,
+                    clipmaps[0].center.x, clipmaps[0].center.y, clipmaps[0].center.z);
+    }
+}
+
 void VirtualShadowMap::reportResources() const
 {
     std::printf("[VSM] resources | pages=%u pageSize=%u atlas=%ux%u depth=%.1fMiB(%s) "
@@ -316,6 +454,59 @@ bool VirtualShadowMap::selfTest()
         return false;
     const uint64_t stride = static_cast<uint64_t>(kClipmapLevels) * kPageTableEntries * sizeof(uint32_t);
     if (stride != 12ull * 1024ull)
+        return false;
+
+    // 6) P4-3：一级的 texel 数 = 32 页 x 128 texel，三级页表装得进物理页。
+    if (kClipmapTexelsPerAxis != kPageTableAxis * kPageSize)
+        return false;
+    if (kClipmapLevels * kPageTableEntries > kPageCount)
+        return false;
+
+    // 7) 级比 4：4.8 / 19.2 / 76.8 米；每级 texel 尺寸 = 边长 / 4096；页边长 = 128 texel。
+    const glm::vec3 lightDirection(0.3f, -0.8f, 0.5f);
+    const glm::vec3 cameraPosition(12.3456f, 3.21f, -7.77f);
+    const ClipmapLevel level0 = computeClipmapLevel(0u, cameraPosition, lightDirection);
+    const ClipmapLevel level1 = computeClipmapLevel(1u, cameraPosition, lightDirection);
+    const ClipmapLevel level2 = computeClipmapLevel(2u, cameraPosition, lightDirection);
+    if (std::abs(level0.worldExtent - 4.8f) > 1.0e-4f)
+        return false;
+    if (std::abs(level1.worldExtent - 19.2f) > 1.0e-3f)
+        return false;
+    if (std::abs(level2.worldExtent - 76.8f) > 1.0e-2f)
+        return false;
+    const ClipmapLevel levels[3] = { level0, level1, level2 };
+    for (const ClipmapLevel& level : levels)
+    {
+        if (std::abs(level.texelWorldSize * static_cast<float>(kClipmapTexelsPerAxis) - level.worldExtent) > 1.0e-4f)
+            return false;
+        if (std::abs(level.pageWorldSize - level.texelWorldSize * static_cast<float>(kPageSize)) > 1.0e-9f)
+            return false;
+        // 吸附幂等：已经在页网格上的中心再吸一次不该动。
+        const glm::vec3 again = snapToPageGrid(level.center, lightDirection, level.pageWorldSize);
+        if (glm::length(again - level.center) > 1.0e-3f)
+            return false;
+        // 吸附的位移不超过一页（两条轴上各不超过半页）。
+        if (glm::length(level.center - cameraPosition) > level.pageWorldSize * 1.5f)
+            return false;
+        // 级比严格为 4。
+    }
+    if (std::abs(level1.worldExtent / level0.worldExtent - kClipmapLevelRatio) > 1.0e-4f)
+        return false;
+    if (std::abs(level2.worldExtent / level1.worldExtent - kClipmapLevelRatio) > 1.0e-4f)
+        return false;
+
+    // 8) 验收①的分母：第 0 级的 texel 密度必须 >= CSM 的 8 倍。
+    //    CSM 是 4096 texel 铺 2 x 19.8316 = 39.6632 米。
+    const float csmTexelPerMeter = static_cast<float>(kClipmapTexelsPerAxis) / 39.6632f;
+    const float vsmTexelPerMeter = 1.0f / level0.texelWorldSize;
+    if (vsmTexelPerMeter < csmTexelPerMeter * 8.0f)
+        return false;
+
+    // 9) 光空间矩阵：相机所在点必须在第 0 级的 [0,1]^3 里（x/y 在框内，深度在近远之间）。
+    const glm::vec4 clip = level0.lightViewProjection * glm::vec4(level0.center, 1.0f);
+    if (clip.x < -1.0f || clip.x > 1.0f || clip.y < -1.0f || clip.y > 1.0f)
+        return false;
+    if (clip.z < 0.0f || clip.z > 1.0f)
         return false;
 
     return true;

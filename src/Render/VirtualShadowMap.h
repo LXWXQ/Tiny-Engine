@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
+
+#include <glm/glm.hpp>
 
 class Device;
 namespace tiny { class SparsePageAllocator; }
@@ -75,6 +78,27 @@ public:
     // 页表项在「一级 clipmap 的 32x32 页表」里的下标。
     static uint32_t pageTableIndex(uint32_t x, uint32_t y) { return y * kPageTableAxis + x; }
 
+    // P4-3：三级 clipmap 的世界尺度。级比固定 4：4.8 / 19.2 / 76.8 米。
+    // 第 0 级 4096 texel 铺 4.8 米 = 853 texel/m，而 CSM 的 4096 texel 铺
+    // 2 x 19.83 = 39.66 米 = 103 texel/m，正好是 8.3 倍 —— 这就是验收①
+    // 「同显存下近处 texel 密度 >= CSM 8 倍」的那个分母。
+    static constexpr float kClipmapLevel0Extent = 4.8f;
+    static constexpr float kClipmapLevelRatio = 4.0f;
+    // 一级的边长（texel）：32 页 x 128 texel。
+    static constexpr uint32_t kClipmapTexelsPerAxis = kPageTableAxis * kPageSize;
+
+    // 一级 clipmap 的几何：一级就是一个在光空间里轴对齐的正方形，边长 worldExtent 米，
+    // 用 4096 texel 画完；它的中心吸附到页网格上（pageWorldSize 的整数倍），
+    // 所以相机连续移动时页面不会逐帧抖动，只在跨页时整页滚动。
+    struct ClipmapLevel
+    {
+        float worldExtent = 0.0f;      // 覆盖的世界边长（米）
+        float texelWorldSize = 0.0f;   // 一个 texel 多宽（米）
+        float pageWorldSize = 0.0f;    // 一页的世界边长 = kPageSize * texelWorldSize
+        glm::vec3 center{ 0.0f };      // 吸附之后的中心（世界坐标）
+        glm::mat4 lightViewProjection{ 1.0f };  // 世界 -> 该级的 [0,1]^3
+    };
+
     explicit VirtualShadowMap(Device& device);
     ~VirtualShadowMap();
 
@@ -94,6 +118,24 @@ public:
     VkImageView getHzbView() const { return hzbView; }
     const VkBuffer* getPageTableBuffers() const { return pageTableBuffers; }
     uint64_t getPageTableStride() const { return pageTableStride; }
+
+    // P4-3：按相机位置与光方向重算三级 clipmap（中心吸附到页网格）。
+    void updateClipmaps(const glm::vec3& cameraPosition, const glm::vec3& lightDirection);
+    const ClipmapLevel& getClipmap(uint32_t level) const { return clipmaps[level]; }
+    const std::vector<ClipmapLevel>& getClipmaps() const { return clipmaps; }
+
+    // 滚动统计（P4-3 的证据）：相机移动时每级中心只会整页跳，所以每次变化的位移
+    // 必须是 pageWorldSize 的整数倍；aligned 一旦为 false 就说明吸附算错了。
+    uint64_t getClipmapScrolls() const { return clipmapScrolls; }
+    bool isClipmapAligned() const { return clipmapAligned; }
+
+    // 吸附到页网格：把世界坐标沿光空间的两条轴分别取整到 pageWorldSize 的整数倍。
+    // 拆成静态函数是为了让自检不依赖设备。
+    static glm::vec3 snapToPageGrid(const glm::vec3& position, const glm::vec3& lightDirection,
+                                    float pageWorldSize);
+    // 单级 clipmap 的纯计算版本（自检用；updateClipmaps 逐级调它）。
+    static ClipmapLevel computeClipmapLevel(uint32_t level, const glm::vec3& cameraPosition,
+                                           const glm::vec3& lightDirection);
 
     // 页表镜像的 CPU 侧重置（每级每项写 kInvalidPage）。
     void resetPageTable();
@@ -118,6 +160,12 @@ private:
     VkImage hzbAtlas = VK_NULL_HANDLE;
     VmaAllocation hzbAllocation = VK_NULL_HANDLE;
     VkImageView hzbView = VK_NULL_HANDLE;
+
+    std::vector<ClipmapLevel> clipmaps;
+    bool clipmapReported = false;
+    uint64_t clipmapFrame = 0;
+    uint64_t clipmapScrolls = 0;
+    bool clipmapAligned = true;
 
     std::unique_ptr<tiny::SparsePageAllocator> allocator;
     VkBuffer pageTableBuffers[kFramesInFlight] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
