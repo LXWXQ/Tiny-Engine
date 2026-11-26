@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1083 行
+size: ~1086 行
 updated: 2026-11-26
 ---
 
@@ -1082,3 +1082,6 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P5-5（2026-11-26，`ITemporalUpscaler` 接口）**：新增 `src/Render/TemporalUpscaler.h`，只定义契约不实现算法 —— `TemporalUpscalerInputs` 声明需要哪些输入（颜色/世界位置/历史/速度/深度），`ITemporalUpscaler` 给出 `upscalerName` / `isTemporal` / `getInputs` / `prepareFrame`（返回本帧抖动）/ `getOutput` / `resize`。`TAAPass` 成为第一个实现（多继承 `IRenderPass`），`Application` 只认 `ITemporalUpscaler*` 并打一行 `[Temporal] upscaler=taa temporal=1 …`。验收：同配置、第 35 帧的改前/改后二进制逐像素对比只有 155 个像素不同（全在 HUD 的 FPS 文字上，HUD 外 0 个），Debug 三组干净。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-133227`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19133）。
+**P5-4（2026-11-26，运动模糊改读速度图）**：运动模糊的方向与长度从「全屏相机速度」改成逐像素速度图（P5-1 的 `RG16F` 附件），速度为 0 的像素（天空盒/网格/几何天空/植被）回退到「上一帧 VP × 世界位置」的相机重投影；回退开关 `--motion-blur-matrix`。`PresentPass` 的 bloom / no-bloom 两条路径各加一个最近邻速度图采样器（binding 3 / 2）并 `pass.read(gbVelocity)`。验收：静态场景两条路径逐像素一致（HUD 外 0 个像素），运动立方体场景 13.029% 像素不同、差异集中在旋转物体轮廓与细栏杆（放大裁图确认是沿速度方向的拖影）；Debug 四组干净。
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-135254`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19198）。

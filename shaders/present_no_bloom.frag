@@ -18,6 +18,7 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
 
 layout(set = 1, binding = 0) uniform sampler2D hdrScene;
 layout(set = 1, binding = 1) uniform sampler2D worldPosTex;
+layout(set = 1, binding = 2) uniform sampler2D velocityTex;
 
 layout(push_constant) uniform Push {
     float exposure;
@@ -27,7 +28,7 @@ layout(push_constant) uniform Push {
     float motionBlurStrength;
     float motionBlurMaxRadius;
     float motionBlurFrame;
-    float pad;
+    float motionBlurMatrix; // > 0.5 = 退回全屏相机速度（--motion-blur-matrix）
 } pc;
 
 const int MOTION_BLUR_SAMPLES = 32;
@@ -37,8 +38,20 @@ vec3 SampleScene(vec2 uv)
     return texture(hdrScene, uv).rgb;
 }
 
-vec2 CameraMotionVector(vec2 uv)
+// 逐像素运动矢量（P5-4）：优先读 G-Buffer 的速度图，它同时包含相机与物体运动；
+// 速度写成 0 的像素（天空盒/网格/几何天空/植被）没有逐顶点速度，回退到
+// 「当前世界位置 × 上一帧 VP」的相机重投影 —— 相机转动时天空才不会被拽歪。
+// `pc.motionBlurMatrix > 0.5`（`--motion-blur-matrix`）是回退开关，退回 P5-4 之前的
+// 全屏相机速度。
+vec2 MotionVector(vec2 uv)
 {
+    if (pc.motionBlurMatrix < 0.5)
+    {
+        vec2 perPixel = texture(velocityTex, uv).xy;
+        if (dot(perPixel, perPixel) > 1e-12)
+            return perPixel;
+    }
+
     vec3 worldPos = texture(worldPosTex, uv).xyz;
     vec4 previousClip = ubo.previousProjectionView * vec4(worldPos, 1.0);
     if (previousClip.w <= 0.0001)
@@ -70,7 +83,7 @@ void main()
     vec3 hdr;
     if (pc.motionBlurEnabled > 0.5)
     {
-        vec2 velocity = CameraMotionVector(inUV) * pc.motionBlurStrength;
+        vec2 velocity = MotionVector(inUV) * pc.motionBlurStrength;
         float velocityLength = length(velocity);
 
         if (velocityLength > 0.00001)

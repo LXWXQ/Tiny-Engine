@@ -73,6 +73,8 @@ public:
 	void setTAAMatrixReprojection(bool enabled);
 	void setVelocityProbe(bool enabled);
 	void setTAAClassicKernel(bool enabled);
+	// P5-4 的回退开关：运动模糊退回全屏相机速度。
+	void setMotionBlurMatrix(bool enabled);
 	void setWaterEnabled(bool enabled);
 	void setSSREnabled(bool enabled);
 	void setTerrainBatchEnabled(bool enabled);

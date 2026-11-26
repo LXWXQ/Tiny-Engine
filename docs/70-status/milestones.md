@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1813 行
+size: ~1823 行
 updated: 2026-11-26
 ---
 
@@ -1811,4 +1811,14 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - Debug 三组（默认 / `--no-taa` / 运动立方体）`errors=0 warnings=0`、stderr 0 字节。
 
 - 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-133227`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19133）。
+
+## P5-4：运动模糊改读速度图（2026-11-26）
+
+- `PresentPass` 的 bloom / no-bloom 两个 set 1 布局各加一个速度图采样器（binding 3 / 2，最近邻），并 `pass.read(resources.gbVelocity[frame])` 进图。
+- `present.frag` / `present_no_bloom.frag` 的 `CameraMotionVector` 换成 `MotionVector`：速度图非零就用它，为零的像素（天空盒/网格/几何天空/植被）回退到上一帧 VP 的相机重投影。
+- 回退开关 `--motion-blur-matrix`（`Push.pad` 改名 `motionBlurMatrix`）退回 P5-4 之前的全屏相机速度。
+- 读数：静态场景两条路径逐像素一致（HUD 外 0 个像素差异）；运动立方体场景 270,179 像素不同（13.029%）、δ≥8 的 2.261%，差异集中在旋转立方体轮廓与塔楼细栏杆上。
+- Debug 四组（默认 / 运动 / 运动 + 回退 / `--no-bloom`）`errors=0 warnings=0`、stderr 0 字节。
+
+- 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-135254`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19198）。
 

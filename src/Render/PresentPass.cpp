@@ -66,14 +66,16 @@ void PresentPass::init()
 
 void PresentPass::updateBloomDescriptor(uint32_t frame)
 {
-    VkDescriptorImageInfo infos[3] = {
+    VkDescriptorImageInfo infos[4] = {
         { sampler, renderGraph.getView(resources.taaOutput[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { sampler, renderGraph.getView(resources.bloomResult[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { positionSampler, renderGraph.getView(resources.gbPosition[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        // 速度图用最近邻取样：线性过滤会把两片不同深度的速度混在一起，拖影会「黏」在轮廓上。
+        { positionSampler, renderGraph.getView(resources.gbVelocity[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
     };
 
-    VkWriteDescriptorSet writes[3]{};
-    for (uint32_t i = 0; i < 3; ++i)
+    VkWriteDescriptorSet writes[4]{};
+    for (uint32_t i = 0; i < 4; ++i)
     {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = sets[frame];
@@ -82,18 +84,19 @@ void PresentPass::updateBloomDescriptor(uint32_t frame)
         writes[i].descriptorCount = 1;
         writes[i].pImageInfo = &infos[i];
     }
-    vkUpdateDescriptorSets(device.getDevice(), 3, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device.getDevice(), 4, writes, 0, nullptr);
 }
 
 void PresentPass::updateNoBloomDescriptor(uint32_t frame)
 {
-    VkDescriptorImageInfo infos[2] = {
+    VkDescriptorImageInfo infos[3] = {
         { sampler, renderGraph.getView(resources.taaOutput[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { positionSampler, renderGraph.getView(resources.gbPosition[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { positionSampler, renderGraph.getView(resources.gbVelocity[frame]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
     };
 
-    VkWriteDescriptorSet writes[2]{};
-    for (uint32_t i = 0; i < 2; ++i)
+    VkWriteDescriptorSet writes[3]{};
+    for (uint32_t i = 0; i < 3; ++i)
     {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = noBloomSets[frame];
@@ -102,13 +105,13 @@ void PresentPass::updateNoBloomDescriptor(uint32_t frame)
         writes[i].descriptorCount = 1;
         writes[i].pImageInfo = &infos[i];
     }
-    vkUpdateDescriptorSets(device.getDevice(), 2, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device.getDevice(), 3, writes, 0, nullptr);
 }
 
 void PresentPass::createDescriptorLayout()
 {
-    VkDescriptorSetLayoutBinding bloomBindings[3]{};
-    for (uint32_t i = 0; i < 3; ++i)
+    VkDescriptorSetLayoutBinding bloomBindings[4]{};
+    for (uint32_t i = 0; i < 4; ++i)
     {
         bloomBindings[i].binding = i;
         bloomBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -117,13 +120,13 @@ void PresentPass::createDescriptorLayout()
     }
 
     VkDescriptorSetLayoutCreateInfo bloomInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    bloomInfo.bindingCount = 3;
+    bloomInfo.bindingCount = 4;
     bloomInfo.pBindings = bloomBindings;
     if (vkCreateDescriptorSetLayout(device.getDevice(), &bloomInfo, nullptr, &setLayout) != VK_SUCCESS)
         throw std::runtime_error("PresentPass: bloom descriptor layout creation failed");
 
-    VkDescriptorSetLayoutBinding noBloomBindings[2]{};
-    for (uint32_t i = 0; i < 2; ++i)
+    VkDescriptorSetLayoutBinding noBloomBindings[3]{};
+    for (uint32_t i = 0; i < 3; ++i)
     {
         noBloomBindings[i].binding = i;
         noBloomBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -132,7 +135,7 @@ void PresentPass::createDescriptorLayout()
     }
 
     VkDescriptorSetLayoutCreateInfo noBloomInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    noBloomInfo.bindingCount = 2;
+    noBloomInfo.bindingCount = 3;
     noBloomInfo.pBindings = noBloomBindings;
     if (vkCreateDescriptorSetLayout(device.getDevice(), &noBloomInfo, nullptr, &noBloomSetLayout) != VK_SUCCESS)
         throw std::runtime_error("PresentPass: no-bloom descriptor layout creation failed");
@@ -220,6 +223,7 @@ void PresentPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     if (bloomEnabled)
         pass.read(resources.bloomResult[frame]);
     pass.read(resources.gbPosition[frame]);
+    pass.read(resources.gbVelocity[frame]);   // P5-4：运动模糊读逐像素速度
 
     // 输出目标二选一：编辑器离屏视口 or 交换链。
     // 视口纹理按 frame slot 各一张 —— 用 frameInfo.frameInFlightIndex 索引，
@@ -245,6 +249,7 @@ void PresentPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     push.motionBlurStrength = frameInfo.settings.motionBlurStrength;
     push.motionBlurMaxRadius = frameInfo.settings.motionBlurMaxRadius;
     push.motionBlurFrame = static_cast<float>(frameInfo.frameNumber % 4096u);
+    push.motionBlurMatrix = motionBlurMatrix ? 1.0f : 0.0f;
 
     const VkDescriptorSet globalSet = frameInfo.descriptorManager->getGlobalSet(frame);
     pass.execute([this, push, frame, bloomEnabled, globalSet](VkCommandBuffer cmd)

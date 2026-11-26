@@ -35,6 +35,8 @@ public:
     // 离屏模式下 ImGui 由 UiCompositePass 绘制，这里必须关掉，
     // 否则同一帧会有两份 ImGui 绘制列表提交到不同的渲染目标上。
     void setRenderImGui(bool value) { renderImGui = value; }
+    // P5-4 的回退开关：强制用「上一帧矩阵」重投影，忽略速度图（A/B 与回退）。
+    void setMotionBlurMatrix(bool enable) { motionBlurMatrix = enable; }
 
 private:
     struct PresentPush
@@ -46,7 +48,7 @@ private:
         float motionBlurStrength;
         float motionBlurMaxRadius;
         float motionBlurFrame;
-        float pad;
+        float motionBlurMatrix; // P5-4 回退：> 0.5 时退回全屏相机速度
     };
     static_assert(sizeof(PresentPush) == 32,
         "PresentPush must match present.frag/present_no_bloom.frag");
@@ -79,4 +81,5 @@ private:
 
     // 编辑器模式下 ImGui 由 UiCompositePass 绘制。
     bool renderImGui = true;
+    bool motionBlurMatrix = false;
 };

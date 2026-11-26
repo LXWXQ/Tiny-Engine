@@ -46,6 +46,8 @@ namespace diag
         bool velocityProbe = false;
     // --taa-classic-kernel：退回 P5-3 之前的 3x3 全收邻域（A/B 与回退）。
     bool taaClassicKernel = false;
+    // --motion-blur-matrix：运动模糊退回全屏相机速度（P5-4 的回退与 A/B）。
+    bool motionBlurMatrix = false;
 
         // 验证层
         bool validationBestPractices = false;

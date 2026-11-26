@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~474 行
+size: ~482 行
 updated: 2026-11-26
 ---
 
@@ -472,3 +472,11 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 **回退开关**：无（`--no-taa` 关掉的是时域部分，接口本身没有开关意义）。
 
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-133227`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19133）。
+
+**P5-4（2026-11-26，决策 71）**：运动模糊改读逐像素速度图（`PresentPass` 两条路径各加一个最近邻速度图采样器，binding 3 / 2），速度为 0 的像素回退到上一帧 VP 的相机重投影；回退开关 `--motion-blur-matrix`。读数：静态场景两条路径逐像素一致（HUD 外 0 个像素），运动立方体场景 270,179 像素不同（13.029%）、δ≥8 的 2.261%，差异集中在物体轮廓与细栏杆。Debug 四组干净。
+
+**回退开关**：`--motion-blur-matrix`（忽略速度图，退回全屏相机速度）。
+
+**遗留**：P5-5 的 `ITemporalUpscaler` 只覆盖时域上采样，运动模糊仍是 Present 里的一段代码，不参与接口。
+
+全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-135254`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19198）。

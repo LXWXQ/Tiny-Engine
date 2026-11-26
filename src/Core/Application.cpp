@@ -2094,6 +2094,13 @@ if (taaPassPtr != nullptr)
 taaPassPtr->setClassicKernel(enabled);
 }
 
+void FirstApp::setMotionBlurMatrix(bool enabled)
+{
+	// P5-4 的回退开关：PresentPass 在 initAll() 里创建，这里只记下来、创建后转发。
+	if (presentPassPtr != nullptr)
+		presentPassPtr->setMotionBlurMatrix(enabled);
+}
+
 void FirstApp::setTAAEnabled(bool enabled)
 {
 	// 与 ImGui 面板共用同一条路径；关掉后 TAA Pass 仍会运行（输出当前帧），
