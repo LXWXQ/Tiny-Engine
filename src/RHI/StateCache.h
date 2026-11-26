@@ -35,6 +35,12 @@ void invalidateAll();
 void bindGraphics(VkCommandBuffer commandBuffer, VkPipeline pipeline);
 void bindCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline);
 
+// P3-2：顶点/索引缓冲的重复绑定同样可以省。引擎里所有"绑 0 号绑定、偏移 0"的
+// 单缓冲调用都走这里；一次绑多个绑定的调用（编辑器叠加层）不要走，缓存只记一条。
+void bindVertexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset);
+void bindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                     VkIndexType indexType);
+
 struct Stats
 {
     uint64_t bindCalls = 0;  // 调用方请求绑定几次
@@ -43,6 +49,14 @@ struct Stats
     // 未受管命令缓冲（地形构建 / 纹理上传 / 回读）上的绑定：每次都必须发。
     // 记下来是为了让 bindCalls = 受管部分 + 未受管部分能对上账。
     uint64_t unmanaged = 0;
+
+    // P3-2：顶点/索引缓冲的账（和管线分开算，管线的 bindCalls 里不含它们）。
+    uint64_t vertexBindCalls = 0;
+    uint64_t vertexIssued = 0;
+    uint64_t vertexSkipped = 0;
+    uint64_t indexBindCalls = 0;
+    uint64_t indexIssued = 0;
+    uint64_t indexSkipped = 0;
 };
 
 const Stats& frameStats();

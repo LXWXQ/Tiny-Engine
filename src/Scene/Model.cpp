@@ -2,6 +2,8 @@
 #include <sstream>
 #include "Model.h"
 
+#include "RHI/StateCache.h"
+
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -517,13 +519,13 @@ void Model::bind(VkCommandBuffer commandBuffer) const
     if (boundVertexBuffer == VK_NULL_HANDLE)
         return;
 
-    VkBuffer buffers[] = { boundVertexBuffer };
-    VkDeviceSize offsets[] = { 0 };
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
+    // P3-2：连续画同一个模型（以及 arena 里同一块缓冲）时，这两条绑定是重复的。
+    // 交给 StateCache 判断，省掉的是 vkCmdBindVertexBuffers / vkCmdBindIndexBuffer 本身。
+    tiny::statecache::bindVertexBuffer(commandBuffer, boundVertexBuffer, 0);
 
     if (hasIndexBuffer)
     {
-        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        tiny::statecache::bindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
     }
 }
 

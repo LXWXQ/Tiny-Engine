@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~2048 行
+size: ~2103 行
 updated: 2026-11-26
 ---
 
@@ -2047,3 +2047,58 @@ T-09 的 `StateCache` 已经在 `Pipeline::bind` 里做「同一条命令缓冲�
 - 不把 hitch 判据套在 Debug 上（首帧 112 ms 是验证层与冷启动，不是渲染回路）。
 - 窗口不做滑动（滑窗每秒要算 60 次排序，而不重叠窗口在同一批帧上给出的结论一样）。
 
+## 决策 73：StateCache 也管顶点/索引缓冲，省掉「每换一个模型就重发两条绑定」（P3 第二步）
+
+### 问题
+
+T-09 的 `StateCache` 只缓存管线绑定，顶点/索引缓冲是另一类状态：`Model::bind()` 每画一个实体就要发 `vkCmdBindVertexBuffers` + `vkCmdBindIndexBuffer`，而 `VkCommandBuffer` 本来会一直记住这两个绑定。同一块 arena 缓冲连着画几十个地形 chunk、同一个模型连着画多个实体时，这两条指令是纯重复。
+
+P0-3 的计数里看不到这笔账：`[StateCache] bindCalls/frame` 只数管线。所以这一刀之前，没人知道有多少次是白发的。
+
+### 做法
+
+`src/RHI/StateCache.{h,cpp}` 的 `Slot` 增加 `vertexBuffer / vertexOffset / vertexValid` 与 `indexBuffer / indexOffset / indexType / indexValid`（和管线一样按命令缓冲记账、每帧 `beginFrame` 清空）。新增两个入口：
+
+```cpp
+void bindVertexBuffer(VkCommandBuffer, VkBuffer, VkDeviceSize offset);
+void bindIndexBuffer(VkCommandBuffer, VkBuffer, VkDeviceSize offset, VkIndexType);
+```
+
+规则与管线一致：未登记过的命令缓冲（地形构建 / 纹理上传这类一次性缓冲）一律照发，不猜；`--no-pipeline-cache` 关掉缓存时两者都退化成直发。多绑定的调用（编辑器叠加层一次绑多个顶点缓冲）不走这里。
+
+`Stats` 增加六个计数（vertex/index 各自的 calls / issued / skipped），`report()` 多打一行：
+
+```
+[StateCache] buffers | vertexBinds/frame=31.5 issued=12.9 skipped=18.6 (59.0%) | indexBinds/frame=28.5 issued=8.0 skipped=20.6 (72.1%)
+```
+
+接入点（四处热路径）：`src/Scene/Model.cpp` 的 `Model::bind()`（几何 pass 的逐模型路径、阴影 pass 的 CPU 路径、玻璃/粒子/水面/视图模型都走它）、`src/Render/GeometrySystem.cpp` 的 arena 绑定（3 处）、`src/Render/SceneGpuBatch.cpp` 的合并网格绑定（2 处）、`src/Render/ShadowPass.cpp` 的地形 arena 顶点绑定（2 处，索引绑定暂未接入）。
+
+### 验收（2026-11-26，Release，`--stats-frame`，固定机位）
+
+| 场景 | 管线 binds → issued（省） | 顶点 binds → issued（省） | 索引 binds → issued（省） |
+|---|---|---|---|
+| `--cube-field 10000`，240 帧 | 27.5 → 18.0（9.5） | 5.0 → 3.0（**40.0%**） | 5.0 → 3.0（**40.0%**） |
+| 默认场景，180 帧 | 18.5 → 12.0（6.5） | 5.0 → 3.0（**40.0%**） | 5.0 → 3.0（**40.0%**） |
+| `--streaming-world 2`，120 帧 | 46.3 → 20.3（**56.2%**） | 31.5 → 12.9（**59.0%**） | 28.5 → 8.0（**72.1%**） |
+
+地形流式场景是受益最大的一档：每个 chunk 都从同一块 arena 绑缓冲，且相邻 chunk 常共用同一条地形模型。
+
+画面不变：同一份二进制跑 `--streaming-world 2`，默认与 `--no-pipeline-cache`（整条缓存关掉、逐次照发）在第 60 帧各截一张 1920×1080：274 个像素不同，**全部落在左上角 HUD 面板内的 FPS 文字上，面板外 0 个**。
+
+验证层：Debug 五组（默认 / `--streaming-world 2` / `--voxel-world 1` / `--cube-field 10000 --cube-field-motion 500` / `--no-pipeline-cache`）全部 `errors=0 warnings=0`、stderr 0 字节。
+
+### 代价与边界
+
+- 每次绑定多一次 `slotFor()` 线性查找（最多 8 个槽）：相对一条 `vkCmdBind*` 可以忽略，且真正的收益是省掉指令本身。
+- 缓存只在受管命令缓冲上生效；引擎的两条主缓冲由 `StateCache::beginFrame` 自动登记。
+- 顶点绑定带非 0 偏移、或一次绑多个绑定的调用，仍然直达 `vkCmdBindVertexBuffers`。
+
+### 不引入的
+
+- 不做「命令表 + 桶排序」（P3-1 的 `MeshDrawCommandList`）：在 T-09 已经吃掉 34.5% 管线冗余、这一刀又吃掉 40~72% 缓冲冗余之后，剩下的冗余主要是跨 pass 的，排序解决不了。
+- 不缓存 `vkCmdPushConstants`：push 每画一次都不同，缓存没有意义。
+
+### 踩到的坑
+
+`Model::bind()` 在 `isSkinned()` 时会换绑动态顶点缓冲。缓存按 `(VkBuffer, offset)` 记账，换绑自然触发一次真正的绑定 —— 但要保证「动态缓冲每帧被写」这件事不依赖绑定的重复与否，所以蒙皮路径的 `dynamicVertexBufferIndex` 仍然每帧推进。

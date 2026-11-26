@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1088 行
+size: ~1090 行
 updated: 2026-11-26
 ---
 
@@ -1087,3 +1087,5 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 全量回归（2026-11-26，Debug）**96 项 ALL PASS**（`build/validation/build/validation/20261126-135254`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=19198）。
 
 **P3 第零步（2026-11-26，hitch 尺子与基线）**：`FrameStats` 加了 60 帧窗口的「最长帧 / 中位帧」比值（超 3 倍记违规），`--stats-frame` 多打一行 `[FrameTime] hitch`。基线（Release，cube-field 10000，240 帧）`pipelineBinds/frame=27.5 redundant=9.5（34.5%）`、hitch `windows=4 violations=0 worst=2.54x`。三个结论：P3 的 hitch 判据现在就达标；「状态切换 −40%」的头寸已被 T-09 的 `StateCache` 吃掉 34.5%，剩下的是跨 pass 与顶点/索引缓冲两处，排序消不掉；P3-4 的「首用即建」在本引擎不成立（管线都在 `initAll()` 里建好），PSO 预热只能省启动时间。
+
+**P3 第二步（2026-11-26，StateCache 覆盖顶点/索引缓冲）**：`StateCache` 现在也记「上次绑的顶点/索引缓冲是谁」，新增 `bindVertexBuffer` / `bindIndexBuffer`，并接进 `Model::bind()`、几何 arena、合并网格与阴影地形 arena 四处。读数：地形流式场景顶点绑定 31.5 → 12.9 次/帧（省 59.0%）、索引 28.5 → 8.0（省 72.1%）；cube-field 与默认场景都是 5.0 → 3.0（省 40%）。画面与 `--no-pipeline-cache` 逐像素一致（差 274 像素全在 HUD 的 FPS 文字）。P3-1 的命令表暂不做：管线 34.5% + 缓冲 40~72% 的冗余已吃掉，剩下的是跨 pass 冗余，排序消不掉。

@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~500 行
+size: ~502 行
 updated: 2026-11-26
 ---
 
@@ -492,9 +492,11 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 - 剩余冗余两处：跨 pass 重复绑同一条管线、`vkCmdBindVertexBuffers` / `vkCmdBindIndexBuffer` 每实体重复发。
 - P3-4 的「PSO 首用即建」不成立：所有管线都在 `initAll()` 里创建，预热只能省启动时间。
 
+**已落地（2026-11-26，P3-2 前一半）**：`StateCache` 现在也记顶点/索引缓冲的「上次绑的是谁」（`bindVertexBuffer` / `bindIndexBuffer`），接进 `Model::bind()`、几何 arena、合并网格、阴影地形 arena 四处。读数（Release）：地形流式场景顶点 31.5 → 12.9 次/帧（省 59.0%）、索引 28.5 → 8.0（省 72.1%）；cube-field 与默认场景 5.0 → 3.0（省 40%）。画面与 `--no-pipeline-cache` 逐像素一致。
+
 **下一步候选**（按收益/成本排序）：
-1. 顶点/索引缓冲绑定的去重（几何 pass 内按 `(VkBuffer, offset)` 记账，收益可直接用 `--stats-frame` 量）。
-2. TM-12 的着色器参数块从 SSAO 推广到几何/光照 pass（P3-5，纯收益项）。
+1. TM-12 的着色器参数块从 SSAO 推广到几何/光照 pass（P3-5，纯收益项）。
+2. 阴影 pass 的地形 arena 索引绑定也接进缓存（当前只接了顶点绑定）。
 3. `MeshDrawCommandList` + 桶排序：只有在上面两件事之后仍有明显跨 pass 冗余时才值得做。
 
 **回退开关**：`--no-draw-command-list`、`--no-pso-precache`（这两个开关尚未实现，等对应的机制落地时一起加）。

@@ -1,6 +1,8 @@
 #include "RHI/RenderGraphBlackboard.h"
 #include "Render/FramePayloads.h"
 #include "Render/SceneGpuBatch.h"
+
+#include "RHI/StateCache.h"
 #include "RHI/ResourceStats.h"
 #include <cmath>
 #include <iomanip>
@@ -2247,9 +2249,9 @@ void SceneGpuBatch::recordDrawView(VkCommandBuffer commandBuffer, FrameInfo& fra
     const ViewResources& view = res.views[viewIndex];
     const uint32_t groupCount = static_cast<uint32_t>(modelGroups.size());
     {
-        const VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mergedMesh.vertices.buffer, &offset);
-        vkCmdBindIndexBuffer(commandBuffer, mergedMesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        tiny::statecache::bindVertexBuffer(commandBuffer, mergedMesh.vertices.buffer, 0);
+        tiny::statecache::bindIndexBuffer(commandBuffer, mergedMesh.indices.buffer, 0,
+                                          VK_INDEX_TYPE_UINT32);
         // 一条 multidraw：命令里的 firstInstance 决定每个组件实例从哪条实例记录取变换。
         vkCmdDrawIndexedIndirect(commandBuffer, view.commands.buffer, 0, groupCount,
                                  kCommandWords * sizeof(uint32_t));
@@ -2273,9 +2275,9 @@ void SceneGpuBatch::drawMergedIndirect(VkCommandBuffer commandBuffer, FrameInfo&
         return;
     const ViewResources& view = frames[frameInfo.frameInFlightIndex].views[viewIndex];
     const uint32_t groupCount = static_cast<uint32_t>(modelGroups.size());
-    const VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mergedMesh.vertices.buffer, &offset);
-    vkCmdBindIndexBuffer(commandBuffer, mergedMesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+    tiny::statecache::bindVertexBuffer(commandBuffer, mergedMesh.vertices.buffer, 0);
+    tiny::statecache::bindIndexBuffer(commandBuffer, mergedMesh.indices.buffer, 0,
+                                      VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexedIndirect(commandBuffer, view.commands.buffer, 0, groupCount,
                              kCommandWords * sizeof(uint32_t));
 }

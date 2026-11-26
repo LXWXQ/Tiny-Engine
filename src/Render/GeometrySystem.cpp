@@ -1,6 +1,8 @@
 #include "RHI/RenderGraphBlackboard.h"
 #include "Render/FramePayloads.h"
 #include "GeometrySystem.h"
+
+#include "RHI/StateCache.h"
 #include "Core/DescriptorManager.h"
 #include "RHI/CommandUtils.h"
 #include "RHI/GBuffer.h"
@@ -1117,11 +1119,10 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         }
         if (arenaBacked)
         {
-            VkBuffer arenaVertexBuffer = terrainMeshArena->getVertexBuffer();
-            VkDeviceSize arenaVertexOffset = 0;
-            vkCmdBindVertexBuffers(commandBuffer, 0, 1, &arenaVertexBuffer, &arenaVertexOffset);
-            vkCmdBindIndexBuffer(commandBuffer, terrainMeshArena->getIndexBuffer(), 0,
-                                 VK_INDEX_TYPE_UINT32);
+            tiny::statecache::bindVertexBuffer(commandBuffer,
+                terrainMeshArena->getVertexBuffer(), 0);
+            tiny::statecache::bindIndexBuffer(commandBuffer,
+                terrainMeshArena->getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
         }
         else
         {
@@ -1345,11 +1346,10 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         batchTerrainPush.clipMode = viewOverride != nullptr ? viewOverride->clipMode : 0u;
 
         geometryPipeline->bind(commandBuffer);
-        VkBuffer arenaVertices = terrainMeshArena->getVertexBuffer();
-        VkBuffer arenaIndices = terrainMeshArena->getIndexBuffer();
-        VkDeviceSize arenaVertexOffset = 0;
-        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &arenaVertices, &arenaVertexOffset);
-        vkCmdBindIndexBuffer(commandBuffer, arenaIndices, 0, VK_INDEX_TYPE_UINT32);
+        tiny::statecache::bindVertexBuffer(commandBuffer,
+            terrainMeshArena->getVertexBuffer(), 0);
+        tiny::statecache::bindIndexBuffer(commandBuffer,
+            terrainMeshArena->getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
         VkDescriptorSet chunkSets[] =
             { terrainChunkInstanceSets[frameInfo.frameInFlightIndex] };
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1417,11 +1417,10 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         batchVoxelPush.clipMode = viewOverride != nullptr ? viewOverride->clipMode : 0u;
 
         geometryPipeline->bind(commandBuffer);
-        VkBuffer arenaVertices = terrainMeshArena->getVertexBuffer();
-        VkBuffer arenaIndices = terrainMeshArena->getIndexBuffer();
-        VkDeviceSize arenaVertexOffset = 0;
-        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &arenaVertices, &arenaVertexOffset);
-        vkCmdBindIndexBuffer(commandBuffer, arenaIndices, 0, VK_INDEX_TYPE_UINT32);
+        tiny::statecache::bindVertexBuffer(commandBuffer,
+            terrainMeshArena->getVertexBuffer(), 0);
+        tiny::statecache::bindIndexBuffer(commandBuffer,
+            terrainMeshArena->getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
         VkDescriptorSet voxelSets[] =
             { voxelChunkInstanceSets[frameInfo.frameInFlightIndex] };
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,

@@ -10,6 +10,7 @@
 #include "Core/FrameInFlight.h"
 #include "Core/FrameInfo.h"
 #include "RHI/Pipeline.h"
+#include "RHI/StateCache.h"
 #include "RHI/RenderGraph.h"
 #include "Render/TerrainMeshArena.h"
 #include "Scene/Components.h"
@@ -568,9 +569,7 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
             // 所以这里不做剔除，靠深度测试和 2048² 分辨率兜住开销。
             if (!buffersBound)
             {
-                VkBuffer vertexBuffers[] = { terrainMeshArena->getVertexBuffer() };
-                VkDeviceSize offsets[] = { 0 };
-                vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+                tiny::statecache::bindVertexBuffer(cmd, terrainMeshArena->getVertexBuffer(), 0);
                 vkCmdBindIndexBuffer(cmd, terrainMeshArena->getIndexBuffer(), 0,
                                      VK_INDEX_TYPE_UINT32);
                 buffersBound = true;
@@ -618,9 +617,7 @@ void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint3
             continue;
         if (voxelArenaBacked)
         {
-            VkBuffer vertexBuffers[] = { terrainMeshArena->getVertexBuffer() };
-            VkDeviceSize offsets[] = { 0 };
-            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+            tiny::statecache::bindVertexBuffer(cmd, terrainMeshArena->getVertexBuffer(), 0);
             vkCmdBindIndexBuffer(cmd, terrainMeshArena->getIndexBuffer(), 0,
                                  VK_INDEX_TYPE_UINT32);
         }

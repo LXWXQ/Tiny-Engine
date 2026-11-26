@@ -21,6 +21,15 @@ struct Slot
     VkPipeline compute = VK_NULL_HANDLE;
     // 只有显式登记过的缓冲才敢跳过重复绑定：没登记的缓冲可能刚被 reset 过。
     bool tracked = false;
+
+    // P3-2：顶点/索引缓冲的「上次绑的是谁」。和管线一样随帧清空。
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkDeviceSize vertexOffset = 0;
+    bool vertexValid = false;
+    VkBuffer indexBuffer = VK_NULL_HANDLE;
+    VkDeviceSize indexOffset = 0;
+    VkIndexType indexType = VK_INDEX_TYPE_UINT32;
+    bool indexValid = false;
 };
 
 Slot g_slots[kSlots];
@@ -191,6 +200,61 @@ void bindCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline)
     noteBound(commandBuffer, pipeline, true);
 }
 
+void bindVertexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset)
+{
+    ++g_frame.vertexBindCalls;
+    ++g_total.vertexBindCalls;
+    if (!g_enabled || !isTracked(commandBuffer))
+    {
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &buffer, &offset);
+        ++g_frame.vertexIssued;
+        ++g_total.vertexIssued;
+        return;
+    }
+    Slot& slot = slotFor(commandBuffer);
+    if (slot.vertexValid && slot.vertexBuffer == buffer && slot.vertexOffset == offset)
+    {
+        ++g_frame.vertexSkipped;
+        ++g_total.vertexSkipped;
+        return;
+    }
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &buffer, &offset);
+    slot.vertexBuffer = buffer;
+    slot.vertexOffset = offset;
+    slot.vertexValid = true;
+    ++g_frame.vertexIssued;
+    ++g_total.vertexIssued;
+}
+
+void bindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                     VkIndexType indexType)
+{
+    ++g_frame.indexBindCalls;
+    ++g_total.indexBindCalls;
+    if (!g_enabled || !isTracked(commandBuffer))
+    {
+        vkCmdBindIndexBuffer(commandBuffer, buffer, offset, indexType);
+        ++g_frame.indexIssued;
+        ++g_total.indexIssued;
+        return;
+    }
+    Slot& slot = slotFor(commandBuffer);
+    if (slot.indexValid && slot.indexBuffer == buffer && slot.indexOffset == offset &&
+        slot.indexType == indexType)
+    {
+        ++g_frame.indexSkipped;
+        ++g_total.indexSkipped;
+        return;
+    }
+    vkCmdBindIndexBuffer(commandBuffer, buffer, offset, indexType);
+    slot.indexBuffer = buffer;
+    slot.indexOffset = offset;
+    slot.indexType = indexType;
+    slot.indexValid = true;
+    ++g_frame.indexIssued;
+    ++g_total.indexIssued;
+}
+
 const Stats& frameStats()
 {
     return g_frame;
@@ -219,6 +283,16 @@ void report()
     std::printf("[StateCache] frames=%llu | bindCalls/frame=%.1f issued=%.1f unmanaged=%.1f skipped=%.1f | saved=%.1f%%\n",
                 static_cast<unsigned long long>(g_frames), perFrame(g_total.bindCalls),
                 perFrame(g_total.issued), perFrame(g_total.unmanaged), perFrame(g_total.skipped), savedPct);
+
+    // P3-2：顶点/索引缓冲单独一行 —— 管线缓存省的是指令，这一行省的是"每次换模型都重发两条绑定"。
+    const auto savedOf = [](uint64_t calls, uint64_t skipped) {
+        return calls == 0 ? 0.0 : 100.0 * static_cast<double>(skipped) / static_cast<double>(calls);
+    };
+    std::printf("[StateCache] buffers | vertexBinds/frame=%.1f issued=%.1f skipped=%.1f (%.1f%%) | indexBinds/frame=%.1f issued=%.1f skipped=%.1f (%.1f%%)\n",
+                perFrame(g_total.vertexBindCalls), perFrame(g_total.vertexIssued),
+                perFrame(g_total.vertexSkipped), savedOf(g_total.vertexBindCalls, g_total.vertexSkipped),
+                perFrame(g_total.indexBindCalls), perFrame(g_total.indexIssued),
+                perFrame(g_total.indexSkipped), savedOf(g_total.indexBindCalls, g_total.indexSkipped));
 }
 
 bool selfTest()

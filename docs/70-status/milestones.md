@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1831 行
+size: ~1841 行
 updated: 2026-11-26
 ---
 
@@ -1830,3 +1830,13 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 结论：P3 第二条验收现在就达标；第一条「状态切换 −40%」的 34.5% 已被 T-09 的 `StateCache` 吃掉，剩余冗余是跨 pass 与顶点/索引缓冲两类，排序消不掉。
 - 结论：P3-4 的「首用即建」不成立 —— 管线都在 `initAll()` 建好，PSO 预热只影响启动时间。
 - Debug 同场景 `hitch violations=1 worst=12.32x (max=112.18ms)`，是首帧冷启动，判据只在 Release 上用。
+
+## P3 第二步：StateCache 覆盖顶点/索引缓冲（P3-2，2026-11-26）
+
+- `src/RHI/StateCache.{h,cpp}`：`Slot` 增加顶点/索引缓冲的「上次绑的是谁」，新增 `bindVertexBuffer` / `bindIndexBuffer`，规则与管线一致（未登记的命令缓冲照发、`--no-pipeline-cache` 整体回退）。
+- `Stats` 增加六个计数，`report()` 多打 `[StateCache] buffers | vertexBinds/frame= issued= skipped= (..%) | indexBinds/frame= ...`。
+- 接入四处：`src/Scene/Model.cpp` 的 `Model::bind()`、`src/Render/GeometrySystem.cpp` 的 arena 绑定（3 处）、`src/Render/SceneGpuBatch.cpp` 的合并网格绑定（2 处）、`src/Render/ShadowPass.cpp` 的地形 arena 顶点绑定（2 处）。
+- 读数（Release）：地形流式场景顶点 binds 31.5 → 12.9（省 59.0%）、索引 28.5 → 8.0（省 72.1%）；cube-field 与默认场景都是 5.0 → 3.0（省 40%）。
+- 画面：默认 vs `--no-pipeline-cache` 第 60 帧 1920×1080 只差 274 像素，全在 HUD 的 FPS 文字上，面板外 0。
+- 验证：Debug 五组 `errors=0 warnings=0`、stderr 0 字节；全量回归 96 项 ALL PASS（`build/validation/20261126-142524`）；DocCheck PASS（documents=82 lines=19346）。
+- 未接入：`ShadowPass` 的地形 arena 索引绑定（收益小，留给需要时）。
