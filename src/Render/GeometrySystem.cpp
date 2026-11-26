@@ -529,15 +529,16 @@ void GeometrySystem::createPipelines()
 
     // 动态渲染：附件格式必须与渲染图里 writeColor 的顺序完全一致
     config.colorAttachmentFormats = {
-        GBufferFormat::Position, GBufferFormat::Normal, GBufferFormat::Albedo, GBufferFormat::Pbr
+        GBufferFormat::Position, GBufferFormat::Normal, GBufferFormat::Albedo, GBufferFormat::Pbr,
+        GBufferFormat::Velocity
     };
     config.depthAttachmentFormat = depthFormat;
     config.pipelineLayout = pipelineLayout;
 
-    // 4 个颜色附件，混合全部关闭
+    // 5 个颜色附件（含 P5-1 的 velocity），混合全部关闭
     VkPipelineColorBlendAttachmentState defaultAttachment = config.colorBlendAttachments[0];
-    config.colorBlendAttachments.assign(4, defaultAttachment);
-    config.colorBlendInfo.attachmentCount = 4;
+    config.colorBlendAttachments.assign(5, defaultAttachment);
+    config.colorBlendInfo.attachmentCount = 5;
     config.colorBlendInfo.pAttachments = config.colorBlendAttachments.data();
 
     geometryPipeline = std::make_unique<Pipeline>(vulkanDevice,

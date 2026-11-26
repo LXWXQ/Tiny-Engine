@@ -22,6 +22,9 @@ layout(location = 6) flat out float fragTerrainLodBlend;
 layout(location = 7) flat out uint fragTerrainLodBlendMode;
 // F1：GPU 驱动提交下，实例下标要交给片元去实例缓冲里取材质参数。
 layout(location = 8) flat out uint fragInstanceIndex;
+// P5-1：当前与上一帧的裁剪空间位置，片元里相减得到屏幕空间运动矢量。
+layout(location = 9) out vec4 fragCurrClip;
+layout(location = 10) out vec4 fragPrevClip;
 
 layout(set = 0, binding = 0) uniform GlobalUbo
 {
@@ -30,6 +33,11 @@ layout(set = 0, binding = 0) uniform GlobalUbo
     vec3 lightDirection;
     vec4 lightColor;
     vec4 cameraPos; 
+    // P5-1：下面三个字段必须按 std140 顺序声明到底 —— previousProjectionView 在
+    // C++ 侧的偏移是 144（vec4 cameraPos 之后先有两个标量）。
+    int numLights;
+    float exposure;
+    mat4 previousProjectionView;
 } ubo;
 
 layout(push_constant) uniform Push 
@@ -93,8 +101,13 @@ void main()
         modelMatrix = inst.model;
         normalMatrix = inst.normal;
     }
+    // 上一帧的模型矩阵：GPU 场景走实例记录里的 previousModel，其余路径（普通/地形）
+    // 认为物体没动，恒等于当前矩阵。
+    mat4 previousModel = push.gpuScene != 0u ? instances[instanceIndex].previousModel : modelMatrix;
     vec4 positionWorld = modelMatrix * vec4(inPosition, 1.0);
     gl_Position = ubo.projectionView * positionWorld;
+    fragCurrClip = gl_Position;
+    fragPrevClip = ubo.previousProjectionView * previousModel * vec4(inPosition, 1.0);
     fragNormalWorld = normalize(mat3(normalMatrix) * inNormal);
     fragPosWorld = positionWorld.xyz;
     fragColor = inColor;

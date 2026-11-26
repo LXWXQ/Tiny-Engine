@@ -25,6 +25,10 @@ namespace GBufferFormat
     // 结果整块天空都在起辉光，变成一层假雾。
     constexpr VkFormat Albedo   = VK_FORMAT_R16G16B16A16_SFLOAT;
     constexpr VkFormat Pbr      = VK_FORMAT_R8G8B8A8_UNORM;
+    // P5-1：屏幕空间运动矢量，单位是「NDC 的一半」= UV 增量。RG16F 足够：
+    // 一帧内的位移一般 < 0.1；真正需要精度的是「跨帧重投影是否落回同一个像素」，
+    // 0.5 像素的判据留了足够余量。它只给 TAA/运动模糊读，不参与光照。
+    constexpr VkFormat Velocity = VK_FORMAT_R16G16_SFLOAT;
 
     static_assert(Position == VK_FORMAT_R32G32B32A32_SFLOAT,
                   "G-Buffer Position must stay 32F: 16F world positions break SSAO "
@@ -61,6 +65,7 @@ public:
     const FrameBufferAttachment& getNormal() const { return normal; }
     const FrameBufferAttachment& getAlbedo() const { return albedo; }
     const FrameBufferAttachment& getPbr() const { return pbr; }
+    const FrameBufferAttachment& getVelocity() const { return velocity; }
     const FrameBufferAttachment& getDepth() const { return depth; }
     VkSampler getSampler() const { return sampler; }
     VkExtent2D getExtent() const { return currentExtent; }
@@ -76,6 +81,7 @@ private:
     FrameBufferAttachment normal;
     FrameBufferAttachment albedo;
     FrameBufferAttachment pbr;
+    FrameBufferAttachment velocity;
     FrameBufferAttachment depth;
     VkSampler sampler = VK_NULL_HANDLE;
 };

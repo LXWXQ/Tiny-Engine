@@ -40,6 +40,7 @@ void GeometryPass::init()
         resources.gbNormal[frame]   = import("GBuffer.Normal",   gBuffer.getNormal(),   colorUsage);
         resources.gbAlbedo[frame]   = import("GBuffer.Albedo",   gBuffer.getAlbedo(),   colorUsage);
         resources.gbPbr[frame]      = import("GBuffer.Pbr",      gBuffer.getPbr(),      colorUsage);
+        resources.gbVelocity[frame] = import("GBuffer.Velocity", gBuffer.getVelocity(), colorUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         resources.gbDepth[frame]    = import("GBuffer.Depth",    gBuffer.getDepth(),    depthUsage);
     }
 
@@ -80,6 +81,7 @@ void GeometryPass::resize(VkExtent2D extent)
         update("GBuffer.Normal",   gBuffer.getNormal(),   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, resources.gbNormal[frame]);
         update("GBuffer.Albedo",   gBuffer.getAlbedo(),   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, resources.gbAlbedo[frame]);
         update("GBuffer.Pbr",      gBuffer.getPbr(),      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, resources.gbPbr[frame]);
+        update("GBuffer.Velocity", gBuffer.getVelocity(), VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, resources.gbVelocity[frame]);
         update("GBuffer.Depth",    gBuffer.getDepth(),    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, resources.gbDepth[frame]);
     }
 }
@@ -115,6 +117,8 @@ void GeometryPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     pass.writeColor(resources.gbNormal[frame],   VK_ATTACHMENT_LOAD_OP_CLEAR, clearColor);
     pass.writeColor(resources.gbAlbedo[frame],   VK_ATTACHMENT_LOAD_OP_CLEAR, clearColor);
     pass.writeColor(resources.gbPbr[frame],      VK_ATTACHMENT_LOAD_OP_CLEAR, clearColor);
+    // 速度先清成 0：天空/网格/植被这些不产生运动的着色器不写它，清零等价于「没有运动」。
+    pass.writeColor(resources.gbVelocity[frame], VK_ATTACHMENT_LOAD_OP_CLEAR, clearColor);
     pass.writeDepth(resources.gbDepth[frame],    VK_ATTACHMENT_LOAD_OP_CLEAR, clearDepth);
 
     pass.execute([this, &frameInfo](VkCommandBuffer cmd)

@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1759 行
+size: ~1805 行
 updated: 2026-11-26
 ---
 
@@ -1758,3 +1758,49 @@ Debug 六组全部 `errors=0 warnings=0`、stderr 0 字节：水面 + 外部实�
 1. `VUID-VkGraphicsPipelineCreateInfo-layout-07988`：一条管线同时服务两条路径时，`set 3` 在 shader 里静态引用、但管线布局创建时 `sceneInstanceSetLayout` 还是 `VK_NULL_HANDLE`。
 2. `UNASSIGNED-CoreValidation-DrawState-InvalidCommandBuffer-VkBuffer`（8 帧 220 条）：`ensureMergedMesh` 重建时立刻 `destroyBuffer`，而同帧的阴影视图已经把旧缓冲绑进了命令缓冲。改成「推进 `retiredMergedBuffers[currentFrameSlot]`，下一轮同槽的 fence 等到后再销毁」。
 3. `setSceneGpuBatch` 必须在 `Application::initAll()` 之后调，否则 `getSceneGpuBatch()` 还是空指针。
+## 决策 67：运动矢量进 G-Buffer，P5-1 只铺数据（2026-11-26）
+
+### 问题
+
+TAA 一直用「当前帧与上一帧的矩阵」反推重投影，没有逐像素的运动矢量：相机在原地、物体在动时，TAA 会把移动物体的旧像素混进来，出现拖影与边缘抖动。P5-1 要求 G-Buffer 里有一张速度图；P5-2 再把 TAA 改成读它。P2-2 铺的 `InstanceRecord::previousModel` 正是这张图缺的那一半数据。
+
+### 做法
+
+- `GBufferFormat::Velocity = VK_FORMAT_R16G16_SFLOAT`：存「NDC 的一半」= UV 增量，TAA 可以直接加到采样坐标上。16F 的 ULP 在 0.5 像素判据下仍有半个数量级余量，带宽只有 32F 的一半。
+- `GBuffer` 多一张附件（`VK_IMAGE_USAGE_TRANSFER_SRC_BIT`，给后续 `--velocity-probe` 拷回主机统计），`GeometryPass` 导入并在每帧开头 `CLEAR`。
+- `GeometrySystem` / `VegetationPass` 的管线从 4 个颜色附件扩到 5 个（混合状态同步），`mrt.vert` / `mrt.frag` 写第 5 个输出；`skybox_mrt.frag` / `grid_mrt.frag` / `sky_geometry.frag` / `vegetation.frag` 显式写 `vec2(0.0)`（它们不产生屏幕空间运动）。
+- `mrt.vert`：UBO 尾部补 `int numLights; float exposure; mat4 previousProjectionView;`（std140 下 `previousProjectionView` 必须落在偏移 144 —— 这两个标量不能省），顶点算两个裁剪空间位置 `fragCurrClip` / `fragPrevClip`，片元 `outVelocity = (curr.xy/curr.w - prev.xy/prev.w) * 0.5`。
+- 上一帧的模型矩阵：`push.gpuScene != 0u` 时取 `instances[instanceIndex].previousModel`，其余路径（普通/地形）恒等于当前矩阵。
+- 反射通道复用同一批管线，它的 G-Buffer 也必须补齐第 5 张（不读，见下）。
+
+### 为什么速度用 UV 单位，而不是像素
+
+TAA 的重投影是「上一帧的 UV → 本帧 UV」，直接相减即可；像素单位还要跟着 extent 变，resize 后容易忘。NDC 的一半正好等于 UV 增量（Vulkan 的 NDC 是 [-1,1]，UV 是 [0,1]）。
+
+### 为什么「上一帧的模型矩阵」塞在实例记录里
+
+见决策 64：着色器只有一处按实例取记录，`model` 与 `previousModel` 在同一条 stride 里，`mrt.vert` / `shadow_gpu.vert` / `mrt.frag` 的声明天生一致；另开缓冲要省 64 字节却要多一个绑定和一次下标计算。
+
+### 验收（2026-11-26）
+
+- Debug 三组 `[Validation] errors=0 warnings=0`、stderr 0 字节、exit=0：默认场景 30 帧、`--streaming-world 2 --gpu-scene-external 400`、`--cube-field 10000 --cube-field-motion 500`。
+- 第一版在流水场景报了 89 条 `VUID-vkCmdDrawIndexed-Indirect-colorAttachmentCount-06179`：反射通道的 G-Buffer 还是 4 张、却复用了 5 个颜色附件的管线。补上第 5 张后归零。
+- 本步没有消费者，画面不变；逐像素 A/B 与「velocity 与 CPU 投影差分 < 0.5 像素」的判据留到 P5-2（TAA 改读它）一并验。
+
+### 代价与边界
+
+- 每像素多 4 字节写带宽；G-Buffer 常驻内存 +4 字节/像素（1920×1080 ≈ 8 MB）。
+- 反射视图的 velocity 只被清零，不读也不算 —— 它的相机在主视图镜像位置，若将来要让反射也用运动模糊，需要单独一份重投影矩阵。
+- 地形/体素合批的实例行 `previousModel` 目前是 0 矩阵；这两条路径 `push.gpuScene == 0`，着色器不读它，所以不构成错误，但等 P5-2 想给它们算运动时要补上。
+
+### 不引入的
+
+- 不做「相机运动补偿」的额外 pass：`previousProjectionView` 已经在 UBO 里，顶点算一次就够。
+- 不做半分辨率 velocity：TAA 的采样点在整像素上，降采样省下来的带宽还不够补插值的麻烦。
+
+### 踩到的坑
+
+1. UBO 偏移：只在 `mrt.vert` 里加 `mat4 previousProjectionView` 会落在 128（`cameraPos` 之后），而 C++ 侧是 144 —— 中间那两个标量（`numLights` / `exposure`）必须一起声明。
+2. 共用管线的通道必须同样多：反射的 G-Buffer 少一张就报 06179，且只在走反射的场景里出现（默认场景水面关着，看不出来）。
+
+**全量回归（2026-11-26，Debug）**：96 项 ALL PASS（`build/validation/20261126-114143`），stderr 全 0 字节；DocCheck PASS（documents=82 lines=18906）。

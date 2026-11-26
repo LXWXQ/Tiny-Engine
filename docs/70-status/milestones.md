@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1765 行
+size: ~1774 行
 updated: 2026-11-26
 ---
 
@@ -1764,3 +1764,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 验收：Debug 四组 `errors=0 warnings=0`、stderr 0；阴影 A/B 第 40 帧差 77,254 像素、δ≥8 仅 2,681（0.13%）且全在阴影边缘（纹素级舍入）；全量回归 **96 项** ALL PASS（`build/validation/20261126-111338`）。
 - 坑：一条管线不能同时服务两条路径（`VUID-VkGraphicsPipelineCreateInfo-layout-07988`）；合并网格重建要按帧槽退役旧缓冲（否则 `InvalidCommandBuffer-VkBuffer`）。
 - 边界：阴影视图用上一帧的组/实例表（视图 0 的 `prepare` 更晚），每帧重建的场景滞后一帧；地形/体素/动态物体仍走逐模型路径。
+## P5-1：运动矢量进 G-Buffer（2026-11-26）
+
+- `GBufferFormat::Velocity = VK_FORMAT_R16G16_SFLOAT`，G-Buffer 第 6 张附件（带 `TRANSFER_SRC`），单位是 UV 增量（NDC 的一半）。
+- `GeometrySystem` / `VegetationPass` 的管线扩到 5 个颜色附件；`mrt.vert` 输出当前/上一帧裁剪位置，`mrt.frag` 写 `location = 4`；天空盒/网格/几何天空/植被显式写 0。
+- `mrt.vert` 的 `GlobalUbo` 尾部补 `numLights` / `exposure` / `previousProjectionView`：std140 下后者必须落在偏移 144。
+- 上一帧模型矩阵取自 `InstanceRecord::previousModel`（决策 64 铺的数据），其余路径恒等于当前矩阵。
+- 验收：Debug 三组 `errors=0 warnings=0`；补齐反射 G-Buffer 的第 5 张后，`VUID-vkCmdDrawIndexed-Indirect-colorAttachmentCount-06179` 归零。
+- 遗留：本步没有消费者，逐像素与「差分 < 0.5 像素」的判据留到 P5-2。
+- 全量回归 96 项 ALL PASS（`build/validation/20261126-114143`），stderr 全 0。

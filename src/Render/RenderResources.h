@@ -44,6 +44,8 @@ struct RenderResources
     std::array<RenderGraph::TextureHandle, kFramesInFlight> gbNormal;
     std::array<RenderGraph::TextureHandle, kFramesInFlight> gbAlbedo;
     std::array<RenderGraph::TextureHandle, kFramesInFlight> gbPbr;
+    // P5-1：运动矢量（RG16F），只给 TAA/运动模糊读；`--velocity-probe` 会拷回主机统计。
+    std::array<RenderGraph::TextureHandle, kFramesInFlight> gbVelocity;
     std::array<RenderGraph::TextureHandle, kFramesInFlight> gbDepth;
 
     std::array<RenderGraph::TextureHandle, kFramesInFlight> ssaoRaw;

@@ -380,7 +380,8 @@ void VegetationPass::createPipeline()
     config.pipelineLayout = pipelineLayout;
     config.colorAttachmentFormats = {
         GBufferFormat::Position, GBufferFormat::Normal,
-        GBufferFormat::Albedo, GBufferFormat::Pbr
+        GBufferFormat::Albedo, GBufferFormat::Pbr,
+        GBufferFormat::Velocity
     };
     config.depthAttachmentFormat = depthFormat;
     config.bindingDescriptions.assign(std::begin(bindings), std::end(bindings));
@@ -390,8 +391,8 @@ void VegetationPass::createPipeline()
     attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     attachment.blendEnable = VK_FALSE;
-    config.colorBlendAttachments.assign(4, attachment);
-    config.colorBlendInfo.attachmentCount = 4;
+    config.colorBlendAttachments.assign(5, attachment);
+    config.colorBlendInfo.attachmentCount = 5;
     config.colorBlendInfo.pAttachments = config.colorBlendAttachments.data();
 
     // 植被必须遮挡后面的几何，也参与深度测试；alpha test 在片元里 discard，
@@ -757,6 +758,7 @@ void VegetationPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     pass.writeColor(resources.gbNormal[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
     pass.writeColor(resources.gbAlbedo[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
     pass.writeColor(resources.gbPbr[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
+    pass.writeColor(resources.gbVelocity[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
     pass.writeDepth(resources.gbDepth[frame], VK_ATTACHMENT_LOAD_OP_LOAD);
 
     pass.execute([this, &frameInfo, frame](VkCommandBuffer cmd)

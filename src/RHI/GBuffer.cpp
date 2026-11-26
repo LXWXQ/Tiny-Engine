@@ -11,6 +11,8 @@ GBuffer::GBuffer(Device& device, VkExtent2D extent)
     createAttachment(GBufferFormat::Normal,   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &normal);
     createAttachment(GBufferFormat::Albedo,   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &albedo);
     createAttachment(GBufferFormat::Pbr,      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &pbr);
+    // 速度附件带 TRANSFER_SRC：`--velocity-probe` 要把它整块拷回主机做统计。
+    createAttachment(GBufferFormat::Velocity, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, &velocity);
     createAttachment(device.findDepthFormat(), VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, &depth);
 
     // 创建 G-Buffer 专属采样器
@@ -28,7 +30,7 @@ GBuffer::GBuffer(Device& device, VkExtent2D extent)
     {
         throw std::runtime_error("[致命错误] G-Buffer 采样器创建失败！");
     }
-    std::cout << "[Tiny 通报] G-Buffer 锻造完成！5 张底片已就绪。\n";
+    std::cout << "[Tiny 通报] G-Buffer 锻造完成！6 张底片已就绪。\n";
 }
 
 GBuffer::~GBuffer() 
@@ -37,6 +39,7 @@ GBuffer::~GBuffer()
     destroyAttachment(normal);
     destroyAttachment(albedo);
     destroyAttachment(pbr);
+    destroyAttachment(velocity);
     destroyAttachment(depth);
 
     if (sampler != VK_NULL_HANDLE) 
@@ -56,6 +59,7 @@ void GBuffer::resize(VkExtent2D extent)
     destroyAttachment(normal);
     destroyAttachment(albedo);
     destroyAttachment(pbr);
+    destroyAttachment(velocity);
     destroyAttachment(depth);
 
     currentExtent = extent;
@@ -63,6 +67,7 @@ void GBuffer::resize(VkExtent2D extent)
     createAttachment(GBufferFormat::Normal,   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &normal);
     createAttachment(GBufferFormat::Albedo,   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &albedo);
     createAttachment(GBufferFormat::Pbr,      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &pbr);
+    createAttachment(GBufferFormat::Velocity, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, &velocity);
     createAttachment(device.findDepthFormat(), VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, &depth);
 }
 

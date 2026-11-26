@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~435 行
+size: ~452 行
 updated: 2026-11-26
 ---
 
@@ -433,3 +433,20 @@ updated: 2026-11-26
 **回退开关**：无独立开关；`useGpuPath && hasInstances` 不成立时（实例数低于 `gpuSceneMinInstances`，或持久化被关）阴影自动回到逐模型路径。
 
 **遗留**：阴影视图用上一帧的组/实例表（视图 0 的 `prepare` 在几何 pass 里，晚于阴影），每帧重建的场景滞后一帧；地形/体素/动态物体仍走逐模型路径。
+## P5 待办：运动矢量与 TAA 重投影（P5-1 数据面已落地）
+
+**现状**：TAA 用「当前帧/上一帧矩阵」反推重投影，没有逐像素运动矢量；相机静止、物体运动时会把旧像素混进来。
+
+**已落地（2026-11-26，决策 67）**：`GBufferFormat::Velocity`（RG16F）作为第 6 张 G-Buffer 附件；`mrt.vert` 算当前/上一帧裁剪位置、`mrt.frag` 写 `location = 4`；天空盒/网格/几何天空/植被写 0；`GeometrySystem` / `VegetationPass` 管线扩到 5 个颜色附件；反射 G-Buffer 同步补第 5 张（否则 `VUID-vkCmdDrawIndexed-Indirect-colorAttachmentCount-06179`）。
+
+**读数（2026-11-26）**：Debug 三组（默认 / `--streaming-world 2 --gpu-scene-external 400` / `--cube-field 10000 --cube-field-motion 500`）全部 `errors=0 warnings=0`、stderr 0；本步无消费者，画面不变。
+
+**回退开关**：无（附件恒在，速度为 0 时等价于「没有运动」）。
+
+**遗留**：P5-2 把 TAA 改成读 velocity + YCoCg 方差裁剪；P5-3 薄几何/去遮挡检测；P5-4 运动模糊改读 velocity；地形/体素合批的实例行 `previousModel` 还是 0 矩阵（当前不被读）。
+
+## 其他遗留：Hi-Z 金字塔没有消费者（2026-11-26）
+
+P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `GeometryPass` 每帧仍然 `buildHiZ`（`--no-hiz` 可关）。两种处理：接给 P6 meshlet 的遮挡输入，或者整条链拆掉。暂时保留，别在没量过代价前删。
+
+**P5-1 全量回归（2026-11-26）**：96 项 ALL PASS（`build/validation/20261126-114143`），stderr 全 0 字节。

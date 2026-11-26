@@ -13,6 +13,7 @@ layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 layout(location = 3) out vec4 outPBR;
+layout(location = 4) out vec2 outVelocity;
 
 layout(push_constant) uniform Push {
     vec4 timeWind;
@@ -89,4 +90,6 @@ void main()
 
     float roughness = push.timeWind.z < 0.5 ? 0.90 : 0.80;
     outPBR = vec4(0.0, roughness, 0.0, 1.0);
+    // 这一类几何不产生屏幕空间运动（顶点随相机一起动，或本身就是无限远）。
+    outVelocity = vec2(0.0);
 }

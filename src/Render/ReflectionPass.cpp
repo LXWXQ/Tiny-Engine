@@ -87,9 +87,11 @@ void ReflectionPass::init()
 
 void ReflectionPass::createTextures(VkExtent2D extent)
 {
-    static const char* const gbufferNames[kFramesInFlight][4] = {
-        { "Reflection.Position.0", "Reflection.Normal.0", "Reflection.Albedo.0", "Reflection.Pbr.0" },
-        { "Reflection.Position.1", "Reflection.Normal.1", "Reflection.Albedo.1", "Reflection.Pbr.1" }
+    static const char* const gbufferNames[kFramesInFlight][5] = {
+        { "Reflection.Position.0", "Reflection.Normal.0", "Reflection.Albedo.0", "Reflection.Pbr.0",
+          "Reflection.Velocity.0" },
+        { "Reflection.Position.1", "Reflection.Normal.1", "Reflection.Albedo.1", "Reflection.Pbr.1",
+          "Reflection.Velocity.1" }
     };
     static const char* const depthNames[kFramesInFlight] = {
         "Reflection.Depth.0", "Reflection.Depth.1"
@@ -97,9 +99,13 @@ void ReflectionPass::createTextures(VkExtent2D extent)
     static const char* const colorNames[kFramesInFlight] = {
         "Reflection.Color.0", "Reflection.Color.1"
     };
-    const VkFormat gbufferFormats[4] = {
+    // 第 5 个是 P5-1 的 velocity：主视图的管线声明了 5 个颜色附件，反射复用同一批管线，
+    // 所以它的渲染通道也必须是 5 个附件（否则 VUID-vkCmdDrawIndexed-Indirect-colorAttachmentCount-06179）。
+    // 反射不需要运动矢量，这张图不参与任何读取。
+    const VkFormat gbufferFormats[5] = {
         GBufferFormat::Position, GBufferFormat::Normal,
-        GBufferFormat::Albedo, GBufferFormat::Pbr
+        GBufferFormat::Albedo, GBufferFormat::Pbr,
+        GBufferFormat::Velocity
     };
 
     currentExtent = extent;
@@ -110,14 +116,14 @@ void ReflectionPass::createTextures(VkExtent2D extent)
         {
             // 平面反射的这些图只在本帧内（反射 G-Buffer -> 反射 Pass -> SSR/Glass/Water）读写，
             // 合成一份就够；其余槽直接引用槽 0 的句柄。
-            for (uint32_t i = 0; i < 4; ++i)
+            for (uint32_t i = 0; i < 5; ++i)
                 gbufferTextures[frame][i] = gbufferTextures[0][i];
             depthTextures[frame] = depthTextures[0];
             colorTextures[frame] = colorTextures[0];
             continue;
         }
 
-        for (uint32_t i = 0; i < 4; ++i)
+        for (uint32_t i = 0; i < 5; ++i)
         {
             RenderGraph::TextureDesc desc{};
             desc.name = gbufferNames[frame][i];
@@ -196,7 +202,7 @@ void ReflectionPass::resize(VkExtent2D extent)
     currentExtent = half;
     for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
     {
-        for (uint32_t i = 0; i < 4; ++i)
+        for (uint32_t i = 0; i < 5; ++i)
         {
             if (gbufferTextures[frame][i].valid())
                 renderGraph.resizeOwnedTexture(gbufferTextures[frame][i], half);
@@ -375,7 +381,7 @@ void ReflectionPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     }
 
     auto& gbufferPass = graph.addGraphicsPass("PlanarReflection.GBuffer");
-    for (uint32_t i = 0; i < 4; ++i)
+    for (uint32_t i = 0; i < 5; ++i)
         gbufferPass.writeColor(gbufferTextures[frame][i], VK_ATTACHMENT_LOAD_OP_CLEAR);
     VkClearValue depthClear{};
     depthClear.depthStencil = { 1.0f, 0 };

@@ -21,6 +21,7 @@ layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 layout(location = 3) out vec4 outPBR;
+layout(location = 4) out vec2 outVelocity;
 
 void main() {
     vec3 normal = fragNormalWorld;
@@ -37,4 +38,6 @@ void main() {
     outNormal = vec4(normal, 1.0);
     outAlbedo = vec4(tint, 1.0);
     outPBR = vec4(0.0, 1.0, 0.0, 1.0);
+    // 这一类几何不产生屏幕空间运动（顶点随相机一起动，或本身就是无限远）。
+    outVelocity = vec2(0.0);
 }

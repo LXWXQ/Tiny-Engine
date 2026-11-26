@@ -70,7 +70,7 @@ private:
 
     std::unique_ptr<LightingSystem> lightingSystem;
 
-    std::array<std::array<RenderGraph::TextureHandle, 4>, kFramesInFlight> gbufferTextures{};
+    std::array<std::array<RenderGraph::TextureHandle, 5>, kFramesInFlight> gbufferTextures{};
     std::array<RenderGraph::TextureHandle, kFramesInFlight> depthTextures{};
     std::array<RenderGraph::TextureHandle, kFramesInFlight> colorTextures{};
 

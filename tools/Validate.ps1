@@ -419,6 +419,15 @@ if ($EnableProfiling) {
 # 「运行时角色找不到 / 相机位姿不同」假失败（现象：stderr 340 字节、
 # [Editor] runtime character selfTest FAIL ... interpolatedFollows=0）。
 $stateFiles = @("Resources/Scenes/main.scene.json", "config/engine.json")
+# 快照必须来自「提交里的版本」。手工跑过截图/编辑器时引擎会把相机位姿写回
+# config/engine.json，拿工作区当前内容做基准等于把漂移的相机固定下来 ——
+# terrain-render 曾因此报 missing marker '[Terrain] GPU selection selfTest PASS'。
+$gitCommand = Get-Command git -ErrorAction SilentlyContinue
+if ($null -ne $gitCommand -and (Test-Path -LiteralPath (Join-Path $repoRoot ".git"))) {
+    foreach ($stateFile in $stateFiles) {
+        & $gitCommand.Source -C $repoRoot checkout -- $stateFile 2>$null
+    }
+}
 $stateSnapshot = @{}
 foreach ($stateFile in $stateFiles)
 {

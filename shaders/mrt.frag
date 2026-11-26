@@ -11,6 +11,8 @@ layout(location = 6) flat in float fragTerrainLodBlend;
 layout(location = 7) flat in uint fragTerrainLodBlendMode;
 // F1：GPU 驱动提交下，材质参数来自实例缓冲而不是 push constant。
 layout(location = 8) flat in uint fragInstanceIndex;
+layout(location = 9) in vec4 fragCurrClip;
+layout(location = 10) in vec4 fragPrevClip;
 
 // 向 4 个 G-Buffer 颜色附件输出。
 // 编号是「输出槽位」而不是附件序号 —— 动态渲染下附件集合由 GeometryPass
@@ -19,6 +21,8 @@ layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 layout(location = 3) out vec4 outPBR;
+// P5-1 运动矢量：半分辨率 NDC 差值 = UV 增量，TAA/运动模糊用它重投影。
+layout(location = 4) out vec2 outVelocity;
 
 // ---------------------------------------------------------------------------
 // D-3 bindless：材质纹理不再是"每材质一个描述符集"，而是 4 个纹理数组，
@@ -537,4 +541,11 @@ void main() {
                           0.04, 1.0);
     }
     outPBR = vec4(metallic, roughness, 0.0, 1.0);
+
+    // 5. 运动矢量：两个裁剪空间位置各自做透视除法再相减。
+    // w 接近 0（顶点在相机背后）时给 0，避免除出天文数字污染 TAA。
+    if (fragCurrClip.w > 1e-5 && fragPrevClip.w > 1e-5)
+        outVelocity = (fragCurrClip.xy / fragCurrClip.w - fragPrevClip.xy / fragPrevClip.w) * 0.5;
+    else
+        outVelocity = vec2(0.0);
 }
