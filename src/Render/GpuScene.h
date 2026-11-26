@@ -40,12 +40,13 @@ public:
         glm::uvec4 draw;   // x=firstIndex y=indexCount z=vertexOffset w=materialSlot
     };
 
-    // 一个实例 = 世界矩阵 + 法线矩阵 + 它属于哪个原语。144 字节。
+    // 一个实例 = 世界矩阵 + 法线矩阵 + 它属于哪个原语 + 上一帧世界矩阵。208 字节。
     struct Instance
     {
         glm::mat4 transform;
         glm::mat4 normal;
         glm::uvec4 ids;    // x=primitiveIndex y=instanceInPrimitive z=flags w=保留
+        glm::mat4 previousTransform; // 上一次结构上传时的世界矩阵（P2-2 收尾）
     };
 
     struct Stats

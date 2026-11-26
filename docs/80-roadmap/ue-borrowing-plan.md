@@ -4,8 +4,8 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1063 行
-updated: 2026-11-25
+size: ~1065 行
+updated: 2026-11-26
 ---
 
 # UE 借鉴改造总纲
@@ -822,7 +822,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 | T-08 | `primitiveBuffer` + `instanceBuffer` 骨架（先只读） | `src/Render/GpuScene.{h,cpp}` | 编号跨帧稳定；一万实例的 `primitives=104 / instances=10103`，稳态上传 0.2 KB/帧 | 3 | **已落地（只读骨架）** |
 
 **T-08 只读骨架（2026-11-24）**：`GpuScene` 用内容键给图元与实例分配跨帧稳定编号（图元键 `(模型指针, 子网格)`，实例键再混组内序号），脏区间攒成一帧一次 `vkCmdCopyBuffer`；`SceneGpuBatch::buildInstances` 末尾镜像一份进持久缓冲，`prepare` 里 `beginFrame/flush/endFrame`。实测 cube-field `primitives=104 / instances=10103`、`dirtyFrames=1/40`、`upload=35.6 KB/frame`；Sponza `103/103`、`dirtyFrames=1/120`、`upload=0.2 KB/frame`。骨架阶段没有任何着色器绑定这两条缓冲，剔除仍走 `GroupRecord`，所以**这一步不产生帧时间收益**——它的价值是把「编号不漂移」变成可验收的不变量，供 P2 的实例级剔除直接记账。开关 `--no-gpu-scene-persist`（默认开）。踩坑：`SceneGpuBatch` 在 `GeometryPass::init()` 里才创建，`setEnabled` 必须放在 `renderPipeline.initAll()` 之后，否则启动期空指针 `0xC0000005`（stderr 0 字节、日志停在 `[Tiny] 材质就绪`）。
-| T-09（已落地） | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
+| T-09（已落地一半） | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
 
 **P2 第一步已落地（2026-11-24，决策 53）**：世界 AABB 改中心/半长（对仿射精确），`subMeshBoundsFor` 挪到加载期预热（`SceneGpuBatch::prewarmModelBounds`，启动打 `[SceneGpu] prewarm | models=N`）。`flatten` 从 33.55 / 56.52 / 116.99 ms（default / 10k / 30k）降到 10.94 / 34.31 / 72.05 ms；帧率不变（88.75 → 88.20 FPS，噪声内），省的是首帧 hitch（`max` 90 → 76.5 ms）。
 **P2 的摊平分解（2026-11-24）**：`[SceneGpu] flatten breakdown` 把一次结构重建拆成 collect / merged / entities / external / sort / assemble / mirror 七段。`--cube-field 10000` 实测 total 56.5 ms：`external` 23.3 ms（每实例 ≈ 2.3 µs）、`entities` 17.6 ms（其中 `subMeshBoundsFor` 首次索引扫描 17.3 ms，一次性）、`merged` 8.6 ms、`mirror` 5.6 ms；`30000` 时 total 126.3 ms、`external` 74.6 ms、`mirror` 17.0 ms —— 逐实例部分是线性大头，`sort` + `assemble` 合计 < 2%。**结论：P2 的 −70% 必须打在逐实例构造上（把法线矩阵与 8 角点 AABB 挪到 GPU 或按实例缓存），搬家/排序省不出来；另外 `subMeshBoundsFor` 应该在加载期预热，否则首帧摊平被一次性扫描虚高。**
@@ -1061,4 +1061,6 @@ P2 的三条验收（`visible/submitted ≤ 0.6`、摊平 CPU 时间 −70%、dr
 **P2 第十步（2026-11-25，灯数据搬进灯缓冲）**：`GlobalUbo.pointLights[100]` 搬出 UBO，进 set 0 新增的 binding 19（`LightBuffer { PointLight lights[]; }`，容量 `kMaxPointLights = 1024`、32 KiB / 帧槽、`DescriptorManager` 持有常驻映射缓冲）；UBO 只剩 `numLights`，`sizeof(GlobalUbo)` 3680 → 480，`previousProjectionView` 改为显式 `alignas(16)`（以前靠被搬走的数组顶对齐）。`lighting.frag` 的逐灯循环改读 `lights[i]`，`present.frag` / `present_no_bloom.frag` / `taa.frag` 删掉各自的 `PointLight pointLights[100]` 声明（不读但占 std140 的 3200 字节）。容量第一次真正解除：`--light-stress 1500` → `applied=1024 requested=1500`（旧代码只会上 100）。画面证据：半径 12 的 `--light-stress` 截图，0 → 100 盏 118,653 个像素不同、**100 → 512 盏 208,703 个（≥8 的 2,446）**；逐灯 512 与聚簇 512 的差异从「只上 100 盏时」的 182,807（9.5%）缩到 9,785（0.47%），说明逐灯路径第一次看到全部灯。**踩坑**：`alignas(16)` 的搭便车、三个后效 shader 的占位数组、`buildGlobalSet` 末尾的占位覆盖、以及反射通道自建 set 0 必须补 `applyLightBinding`（漏了会每帧一条 `VUID-vkCmdDrawIndexedIndirect-None-08114`）。验证必须在 Debug 下做（Release 的 `enableValidationLayers` 在 `NDEBUG` 下是 `false`）：六组用例全部 `errors=0 warnings=0`、stderr 0 字节。全量回归 **96 项** ALL PASS（stderr 全 0，`build/validation/20261125-132707`）；DocCheck PASS（documents=81）。
 
 **P2 第十一步（2026-11-25，退役组级剔除）**：`GroupRecord` 只保留「合并网格的索引区间」—— 64 字节缩到 32 字节（`uvec4 draw` + `uvec4 counts`），组 AABB 留在 CPU 侧给 `gpuScene` 用。`shaders/scene_cull.comp` 的模式 0 由组剔除改成「只写基线命令」，可见性完全由模式 1 的逐实例判定决定，模式 2 成为唯一裁决策（`stats[0].y/z`、可见三角形/顶点都在这里）；屏率误差剔除降到实例粒度，组级 Hi-Z 遮挡随组级剔除一起退役（金字塔仍在建、无消费者）。读数：default `instances 59→60`、`submit 59→60`，10k `6815→6816`，30k `11216→11217`，`submit` 第一次等于逐实例可见数（60/6816/11217 = `gpuInst` 的逐帧分子），`gpuInst` 逐位不变；`visibleRatio` 0.61/0.62/0.62 → 0.58/0.59/0.59（口径变化：43 = 40 条空组 + 3 条全不可见组）。画面：default 面板外 0 像素差异，10k 面板外 9,425 像素变化全在左下角 `(0,1000)-(151,1079)`（旧组级判定误杀的可见实例）。**踩坑**：`projectionMatrix[1][1]` 为负（Vulkan Y 朝下，`src/Scene/Camera.cpp:15`），屏率公式必须 `abs(frame.screen.z)` —— 这个 bug 从组级版本就在，只是组 AABB 太大触发不到。验证必须用 Debug（`NDEBUG` 关验证层）：9 组用例全部 `errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项** ALL PASS（`build/validation/20261125-140206`）；DocCheck PASS（documents=81 lines=18387）。
+
+**P2 第十二步（2026-11-26，上一帧世界矩阵）**：`InstanceRecord` 224 → 288 字节，尾部加 `previousModel`；`GpuScene::Instance` 144 → 208，加 `previousTransform`；两个 shader 的镜像结构同步加字段（本步不读）。填值全部来自现成状态：实体用 `worldTransform.previousMatrix * nodeMatrix`（渲染插值本来就在用），外部缓存命中用 `external.transform`、未命中但同绑定用 `cache.transform`。新增 `[SceneGpu] instance history | instances=… moved=…` 读数：default `103/0`、10k `10103/0`、30k `30103/0`、motion `10103/10000`，三档 `gpuInst` 与 P2-5 逐位相同（0.58 / 0.6747 / 0.3726），证明 shader 侧 stride 对齐。Debug 五组 `errors=0`、全量回归 **96 项** ALL PASS（`build/validation/20261126-092708`）、DocCheck PASS（documents=81 lines=18673）。**边界**：本步零消费者，P5-1 才读；`--rebuild-structure n` 时「上一帧」退化成「上次重建」。这一刀把 P5-1 的前置条件补齐了，P5 那条线可以随时开工。
 

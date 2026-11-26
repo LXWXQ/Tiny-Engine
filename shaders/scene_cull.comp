@@ -62,6 +62,7 @@ struct InstanceRecord
     vec4 boundsMin;    // xyz = 局部 AABB 下界，w = 1 表示包围盒有效
     vec4 boundsMax;
     uvec4 draw;        // 顶点/片元阶段用，这里不读
+    mat4 previousModel; // 上一次结构上传时的世界矩阵；本步只保证 stride 与 C++ 一致
 };
 
 layout(set = 0, binding = 5) readonly buffer InstanceBuffer

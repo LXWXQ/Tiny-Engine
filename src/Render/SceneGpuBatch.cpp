@@ -44,12 +44,14 @@ struct CullPushConstants
 static_assert(sizeof(CullPushConstants) == 32, "scene_cull.comp push constant layout mismatch");
 
 // 与着色器共享的记录布局。任何字段变动都必须两边一起改。
-static_assert(sizeof(SceneGpuBatch::InstanceRecord) == 224,
+static_assert(sizeof(SceneGpuBatch::InstanceRecord) == 288,
               "InstanceRecord must match scene_cull.comp / mrt.vert");
 static_assert(offsetof(SceneGpuBatch::InstanceRecord, flags) == 128,
               "InstanceRecord.flags offset mismatch");
 static_assert(offsetof(SceneGpuBatch::InstanceRecord, draw) == 208,
               "InstanceRecord.draw offset mismatch");
+static_assert(offsetof(SceneGpuBatch::InstanceRecord, previousModel) == 224,
+              "InstanceRecord.previousModel offset mismatch");
 
 static_assert(sizeof(SceneGpuBatch::GroupRecord) == 32,
               "GroupRecord must match scene_cull.comp");
@@ -949,6 +951,8 @@ void SceneGpuBatch::buildInstances(FrameInfo& frameInfo)
     instanceScratch.clear();
     modelGroups.clear();
     buckets.clear();
+    historyInstances = 0;
+    historyMoved = 0;
     // P2 度量：摊平到底花在哪。分七段计时，只在重建结构的帧累加（稳定帧不跑这段）。
     // P2 度量：只做视锥测试的「实例级可见比例」上界（不含 Hi-Z，Debug 读数用）。
     glm::vec4 instancePlanes[6];
@@ -1199,6 +1203,12 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             record.boundsMin = glm::vec4(localMin, 1.0f);
             record.boundsMax = glm::vec4(localMax, 0.0f);
             record.draw = glm::uvec4(0u);   // 命令由 compute 写，这里不再塞绘制参数
+            // 上一帧的世界矩阵直接从插值组件取：previousMatrix 就是上一次 tick 的实体变换，
+            // 乘同一个 nodeMatrix 之后与 instanceMatrix 同一口径（P5-1 的 velocity 要用它）。
+            record.previousModel = worldTransform.previousMatrix * nodeMatrix;
+            ++historyInstances;
+            if (std::memcmp(&record.model, &record.previousModel, sizeof(glm::mat4)) != 0)
+                ++historyMoved;
             buckets[groupIndexValue].push_back(record);
             // 世界 AABB 用中心/半长直接算：对仿射变换是精确解，9 次乘法。
             const glm::vec3 localCenter = (localMin + localMax) * 0.5f;
@@ -1306,6 +1316,9 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
         if (sameBinding && std::memcmp(&cache.transform, &external.transform, sizeof(glm::mat4)) == 0)
         {
             record = cache.record;
+            // 缓存命中说明这条实例的变换与上次重建完全相同：上一帧就是当前帧。
+            record.previousModel = external.transform;
+            ++historyInstances;
             worldCenter = cache.worldCenter;
             worldHalf = cache.worldHalf;
             ++cullTotals.externalReused;
@@ -1324,6 +1337,12 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             record.boundsMin = glm::vec4(localMin, 1.0f);
             record.boundsMax = glm::vec4(localMax, 0.0f);
             record.draw = glm::uvec4(0u);
+            // 同一个外部槽位、只是变换变了：旧变换就是上一帧；换了绑定（模型/子网格/材质槽）
+            // 说明是另一条实例，没有可继承的历史，直接取当前值。
+            record.previousModel = (cache.valid && sameBinding) ? cache.transform : external.transform;
+            ++historyInstances;
+            if (std::memcmp(&record.model, &record.previousModel, sizeof(glm::mat4)) != 0)
+                ++historyMoved;
             externalRecordMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - extRecordStart).count());
 
             // 中心/半长求世界 AABB：对仿射变换是精确解，只要 9 次乘法，
@@ -1436,6 +1455,7 @@ const uint64_t renderTick = interpolation != nullptr ? interpolation->tick : 0;
             record.transform = source.model;
             record.normal = source.normal;
             record.ids = glm::uvec4(primitiveIndex, instance, source.flags.x, source.flags.y);
+        record.previousTransform = source.previousModel;
             const uint64_t instanceKey = primitiveKey ^ (static_cast<uint64_t>(instance + 1u) * 0x9E3779B97F4A7C15ull);
             gpuScene.ensureInstance(instanceKey, record);
         }
@@ -1530,6 +1550,14 @@ void SceneGpuBatch::logCullSummary() const
                   << " submit/frame=" << (static_cast<double>(cullTotals.visibleInstances) / frames)
                   << " cull=" << (instanceCullEnabled ? "on" : "off")
                   << "\n";
+    }
+
+    // P2-2：上一帧世界矩阵的覆盖情况。静止场景 moved 必须是 0；
+    // 带 --cube-field-motion 时应接近实例总数（那时每帧都重建）。
+    if (cullTotals.structureSamples > 0)
+    {
+        std::cout << "[SceneGpu] instance history | instances=" << historyInstances
+                  << " moved=" << historyMoved << " (last rebuild)\n";
     }
 
     // P2 度量：摊平花在哪。只在重建结构的帧有样本，稳定帧不计入。

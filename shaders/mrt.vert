@@ -71,6 +71,7 @@ struct InstanceRecord
     vec4 boundsMin;
     vec4 boundsMax;
     uvec4 draw;
+    mat4 previousModel; // 上一次结构上传时的世界矩阵（P2-2；P5-1 velocity 读它）
 };
 layout(set = 3, binding = 0) readonly buffer InstanceBuffer { InstanceRecord instances[]; };
 // P2 实例级剔除：命令里的实例区间是紧凑后的，gl_InstanceIndex 只是这段区间里的位置，

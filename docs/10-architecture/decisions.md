@@ -4,8 +4,8 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~1582 行
-updated: 2026-11-25
+size: ~1645 行
+updated: 2026-11-26
 ---
 
 # 关键设计决策
@@ -1580,4 +1580,67 @@ Release，120 帧，固定机位 `--camera -4.6485233,5.2119632,0.0523994,0.3507
 1. **`radius` 与未归一化平面**：旧组级 `frustumVisible` 的 `radius = length(extent)` 少乘了平面的 `|plane|`，比逐实例那套 `abs(p.x)*half.x + ...` 更爱剔 —— 这才是「每帧漏 1 个实例」的根因。删函数的时候要把「它一直在误杀」写清楚，否则下次还会有人照着老公式写第三份。
 2. **`projectionMatrix[1][1]` 是负的**（`src/Scene/Camera.cpp:15`，Vulkan 的 Y 轴朝下）。屏率公式里 `radius * (0.5 * screen.y * screen.z) / distance` 拿到负数，于是 `screen.x > 0` 时**每个实例都被判为「太小」** —— 这个 bug 从组级那版就在，只是组 AABB 太大、从来触发不到这条分支，所以没人发现。修法是 `abs(frame.screen.z)`（与 `SunFlarePass.cpp:176`、`ViewModelPass.cpp:245-247` 同一个理由），改完 `--gpu-scene-min-px` 才第一次真的分级响应。
 3. 组的 `instanceCount == 0` 是常态（default 场景 103 条组里有 40 条没有实例），旧代码把它算「可见」，退役后算「剔除」，`visibleRatio` 的分布跟着变 —— 看读数时别把它当退化。
+
+## 决策 64：实例记录先补上「上一帧世界矩阵」，这一步只铺数据不消费（P2 第十二步）
+
+### 问题
+
+P5-1 的运动矢量要算「这一帧的裁剪坐标」与「上一帧的裁剪坐标」之差，后者需要**上一帧的模型矩阵**。`InstanceRecord` 只有 `model`（当前帧），`src/Render/GpuScene.h` 的 `Instance` 也只有 `transform`；计划里 P2-2 的字段清单本来写了这一项（「世界矩阵 / 法线矩阵 / primitiveId / flags / 上一帧世界矩阵」），T-08 落地时只做了只读骨架。
+
+这一刀只铺数据：加字段、填值、把「上次重建以来有多少实例动过」打出来，**画面与所有读数必须一位不变**。消费者留给 P5-1。
+
+### 做法
+
+`InstanceRecord` 从 224 涨到 288 字节，尾部加 `glm::mat4 previousModel`（offset 224，`static_assert` 锁住）；`src/Render/GpuScene.h` 的 `Instance` 同步从 144 涨到 208，尾部加 `previousTransform`。两个 shader（`shaders/scene_cull.comp`、`shaders/mrt.vert`）里的 `InstanceRecord` 镜像也要加同名字段 —— 这一刀不读它，加它只为 stride 与 C++ 一致。
+
+填值不需要新的持久化状态，两套路径都现成：
+
+| 路径 | `previousModel` 的来源 |
+|---|---|
+| 实体（`src/Render/SceneGpuBatch.cpp` 的实体分支） | `worldTransform.previousMatrix * nodeMatrix`（渲染插值本来就在用 `previousMatrix`） |
+| 外部，命中 `ExternalRecordCache` | `external.transform`（缓存命中即「变换没变」，上一帧就是当前帧） |
+| 外部，未命中但同绑定 | `cache.transform`（上一条记录的变换） |
+| 外部，首次出现 | `external.transform`（没有上一帧，按当前帧算） |
+
+同时在 `buildInstances()` 里统计 `historyInstances` / `historyMoved`（用 `memcmp` 比 `model` 与 `previousModel`），每次重建后由 `logCullSummary()` 打一行 `[SceneGpu] instance history | instances=… moved=… (last rebuild)`。
+
+### 为什么塞进同一条记录，而不是另开一块缓冲
+
+三条：其一，shader 只有两处按实例取记录（`shaders/mrt.vert` 的 set 3 binding 0、`shaders/scene_cull.comp` 的 set 0 binding 5），字段放同一条记录，stride 天生一致，没有第二套索引；其二，另开缓冲每条实例省 64 字节，代价是多一个 binding、一套描述符、一次额外的按实例寻址（着色器里就是多一次 `instances[i]` 之外的 load）；其三，现在没有按需流式加载，实例缓冲是整块常驻，带宽不是瓶颈。
+
+代价是显存的固定开销：30k 场景 × 3 帧槽 × 288 字节 = 26.0 MB（原 224 字节时 20.2 MB），多 5.8 MB。这个数写在 `SceneGpuBatch::ensureCapacity` 的容量推导里，改记录尺寸时会被 `static_assert` 与这里同时提醒。
+
+### 为什么「上一帧」等于「上一次结构上传」
+
+决策 56 的结论：稳定帧不重建结构，移动实例改签名让每帧重建。所以「上一次结构上传」在静止场景与「上一帧」等价（`moved=0`，`previousModel == model`），在运动场景就是上一帧（`moved=10000`，实测）。
+
+边界：`--rebuild-structure n` 强制每 n 帧重建时，粒度退化成 n 帧 —— 此时 P5-1 算出来的 velocity 是「n 帧的平均位移」，会偏大。这一条要在 P5-1 落地时重新确认（要么禁止与 `--rebuild-structure` 同用，要么把 `previousModel` 改成逐帧更新）。
+
+### 验收（2026-11-26）
+
+Release，120 帧，固定机位 `--camera -4.6485233,5.2119632,0.0523994,0.3507974,-17.3302765`：
+
+| 场景 | `instance history` | `instances/frame` | `gpuInst` |
+|---|---|---|---|
+| default | `instances=103 moved=0` | 60.0 | 0.58 (7080/12154) |
+| `--cube-field 10000` | `instances=10103 moved=0` | 6816.0 | 0.6747 (804288/1192154) |
+| `--cube-field 30000` | `instances=30103 moved=0` | 11217.0 | 0.3726 (1323606/3552154) |
+| `--cube-field 10000 --cube-field-motion 500` | `instances=10103 moved=10000` | 6788.7 | 0.67 (801071/1192154) |
+
+三档的 `instances/frame`、`submit/frame`、`gpuInst` 与 P2-5 逐位相同 —— 这是「shader 侧 stride 对齐」的间接证明（少声明一个 `mat4` 不会报错，只会从第 1 个实例开始读错位的数据，`gpuInst` 立刻会掉）。
+
+Debug 五组（default / cf10k / motion / `--no-instance-cull` / `--voxel-world 1`）全部 `[Validation] errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项 ALL PASS**（`build/validation/20261126-092708`）；DocCheck PASS（documents=81 lines=18673）。MSBuild（`build`）与 Ninja（`build-ninja`）两套构建各跑一遍三档 + motion，读数一致。
+
+### 代价与边界
+
+- 记录 224 → 288 字节，`GpuScene::Instance` 144 → 208；30k 场景实例缓冲 20.2 → 26.0 MB。
+- `flattenUs` 在噪声内（10k 8388 → 8435 us、30k 20936 vs 21106 us），`moved` 的 `memcmp` 是每实例 64 字节比较，摊平期一次性成本。
+- `historyInstances/historyMoved` 只反映**最后一次**重建，稳定帧不刷新 —— 读数是「上次重建的快照」，不是累计。
+- 这一刀没有消费者：如果 P5 最终不做，这 64 字节要能整段删掉（`previousModel`、`previousTransform`、两个 shader 的镜像字段、统计行）。
+
+### 不引入的
+
+- 不做「按实例脏标记 + 只重写变化的那几条」—— 结构上传本来就是整块 memcpy（决策 56 摊平过，稳态≈0）。
+- 不做双缓冲历史（现在的按帧槽缓冲天然就是三份历史）。
+- 不在 shader 里读 `previousModel`（本步零消费者，读它只会让「读数不变」这条验收失去意义）。
 

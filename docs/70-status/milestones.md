@@ -4,8 +4,8 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1732 行
-updated: 2026-11-25
+size: ~1742 行
+updated: 2026-11-26
 ---
 
 # 里程碑与实测基线
@@ -1730,4 +1730,14 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 坑：`projectionMatrix[1][1]` 为负（`src/Scene/Camera.cpp:15`），屏率公式必须 `abs(frame.screen.z)`，否则 `--gpu-scene-min-px > 0` 一律剔光（这个 bug 从组级版本就在）。
 - 验证（必须 Debug）：三档 + `--no-instance-cull` + `--gpu-scene-min-px 8/60` + `--no-hiz` + `--voxel-world 1` + `--validation-features sync` 共 9 组 `errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项 ALL PASS**（`build/validation/20261125-140206`）；DocCheck PASS（documents=81 lines=18387）。
 - 遗留：Hi-Z 金字塔仍在建但无消费者（`stats.occlusionTests/Culled` 恒 0），待复活或整条拆除；`--no-instance-cull` 语义改为「完全不剔除」。
+
+## P2 第十二步：实例记录补上上一帧世界矩阵（P2-2 收尾，2026-11-26）
+
+- `InstanceRecord` 224 → 288 字节（尾部 `glm::mat4 previousModel`，offset 224 由 `static_assert` 锁住）；`src/Render/GpuScene.h` 的 `Instance` 144 → 208（`previousTransform`）；`shaders/scene_cull.comp` 与 `shaders/mrt.vert` 的镜像结构同步加字段（本步不读，只为 stride 一致）。
+- 填值：实体用 `worldTransform.previousMatrix * nodeMatrix`，外部缓存命中用 `external.transform`、未命中但同绑定用 `cache.transform`、首次出现用当前帧；`historyInstances` / `historyMoved` 每次重建统计，`logCullSummary()` 打 `[SceneGpu] instance history | instances=… moved=… (last rebuild)`。
+- 读数（Release，120 帧，固定机位）：default `103/0`、10k `10103/0`、30k `30103/0`、`--cube-field-motion 500` `10103/10000`；三档 `instances/frame` 60 / 6816 / 11217 与 `gpuInst` 0.58 / 0.6747 / 0.3726 与 P2-5 逐位相同。
+- 验证（必须 Debug）：default / cf10k / motion / `--no-instance-cull` / `--voxel-world 1` 五组 `errors=0 warnings=0`、stderr 0 字节；全量回归 **96 项 ALL PASS**（`build/validation/20261126-092708`）；DocCheck PASS（documents=81 lines=18673）。
+- 两套构建对照：MSBuild（`build`）与 Ninja（`build-ninja`）各跑一遍三档 + motion，读数一致。
+- 坑：shader 少声明 `previousModel` 不报错、只把第 1 个之后的实例读成错位数据（靠读数逐位不变才证明 stride 对齐）；`tools/Validate.ps1` 的 configure 写死 `-G "Visual Studio 17 2022"`，不能指到 `build-ninja`（报 `generator ... Does not match the generator used previously`）；运行引擎会改 `config/engine.json` 的相机位姿，提交前要 `git checkout --`。
+- 边界：本步没有消费者（P5-1 的 velocity 才读它）；`--rebuild-structure n` 时「上一帧」退化成「上次重建」，velocity 会算成 n 帧位移；30k 场景实例缓冲 20.2 → 26.0 MB。
 

@@ -4,8 +4,8 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~398 行
-updated: 2026-11-25
+size: ~411 行
+updated: 2026-11-26
 ---
 
 # 后续任务台账
@@ -396,3 +396,16 @@ updated: 2026-11-25
 **回退开关**：无（这一步删代码，回退只能 revert 提交）。`--no-instance-cull` 的语义在本次改变：从「退回组级剔除」变成「完全不剔除」（模式 0 基线 + 模式 4 恒等 remap），提交量等于实例总数。
 
 **遗留**：Hi-Z 金字塔仍在构建但没有消费者（`stats.occlusionTests/Culled` 恒 0，`--no-hiz` 仍可用），需要在「逐实例遮挡复活」与「整条拆除」之间选一个。
+
+## P2 待办：实例记录的上一帧世界矩阵（P2-2 收尾）
+
+**现状**：`InstanceRecord` 只有当前帧的世界矩阵与法线矩阵，`GpuScene::Instance` 也一样；P5-1 的运动矢量需要「上一帧的模型矩阵」才能算出重投影位置，计划里 P2-2 的字段清单本来列了它，T-08 落地时缺这一项。
+
+**已落地（2026-11-26，决策 64）**：`InstanceRecord` 224 → 288 字节（尾部 `glm::mat4 previousModel`，offset 224 有 `static_assert`）；`GpuScene::Instance` 144 → 208（`previousTransform`）；`shaders/scene_cull.comp`、`shaders/mrt.vert` 的镜像结构同步加字段（只为 stride，本步不读）。填值：实体 `worldTransform.previousMatrix * nodeMatrix`、外部缓存命中 `external.transform`、未命中但同绑定 `cache.transform`、首次出现用当前帧。新增 `[SceneGpu] instance history | instances=… moved=… (last rebuild)`。
+
+**读数（2026-11-26，Release 120 帧）**：default `instances=103 moved=0`、10k `10103/0`、30k `30103/0`、`--cube-field-motion 500` `10103/10000`；三档 `instances/frame`（60 / 6816 / 11217）与 `gpuInst`（0.58 / 0.6747 / 0.3726）与 P2-5 逐位相同。MSBuild 与 Ninja 两套构建读数一致。
+
+**回退开关**：无（纯数据铺设，没有分支可切；要退只能 revert 提交）。
+
+**遗留**：P5-1 的 velocity 消费者未接（这一刀只铺数据）；`--rebuild-structure n` 时「上一帧」退化成「上次重建」，P5-1 落地时要重新确认；A2（阴影/反射各一份剔除与紧凑可见表）尚未开工。
+

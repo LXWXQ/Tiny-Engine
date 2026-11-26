@@ -27,7 +27,8 @@ struct FrameInfo;
 //
 // 分组键从「模型」细化到「(模型, 子网格)」：同一个子网格被多个实体复用时，
 // 它们的实例在缓冲里连续排列，一条命令带 instanceCount = N 就能一次画完（实例化），
-// 而不是每实例一条命令。剔除按组的并集 AABB 做，属于保守剔除（组内任一实例可见 -> 整组可见）。
+// 而不是每实例一条命令。P2-5 起剔除不再按组：compute 逐实例测视锥/屏率，再把每组的
+// 可见实例压成一段紧凑区间改写命令 —— 组只剩「一段索引区间 + 一段实例区间」的身份。
 class SceneGpuBatch
 {
 public:
@@ -42,6 +43,7 @@ public:
         glm::vec4 boundsMin;   // xyz=局部 AABB 下界 w=1 表示有效
         glm::vec4 boundsMax;
         glm::uvec4 draw;       // 保留：图形侧不再读，命令由 compute 写
+        glm::mat4 previousModel; // 上一次结构上传时的世界矩阵（P2-2 收尾；P5-1 velocity 的数据源）
     };
 
     // 与 shaders/scene_cull.comp 的 GroupRecord 逐字节一致。
@@ -360,6 +362,9 @@ private:
     std::array<uint64_t, kFramesInFlight> slotSignatures{};
     std::array<uint32_t, kFramesInFlight> slotGenerations{};
     uint32_t stableFrames = 0;
+    // 最近一次重建时写进实例记录的「上一帧世界矩阵」覆盖情况：静止场景 moved 为 0。
+    uint32_t historyInstances = 0;
+    uint32_t historyMoved = 0;
     uint32_t structureRebuilds = 0;
     uint64_t structureMicros = 0;
 
