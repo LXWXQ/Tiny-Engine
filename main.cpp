@@ -198,6 +198,13 @@ bool audioSpatialTest = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg = argv[i];
+        // P4-2：放进下面那条大 else-if 链会撞 MSVC 的块嵌套上限（C1061），
+        // 所以这个只在启动阶段用一次的开关单独早退。
+        if (arg == "--dump-vsm-resources")
+        {
+            diagOptions.dumpVsmResources = true;
+            continue;
+        }
         if (arg == "--help" || arg == "-h")
         {
             printUsage(argv[0]);

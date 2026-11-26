@@ -4,7 +4,7 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~2465 行
+size: ~2530 行
 updated: 2026-11-26
 ---
 
@@ -2464,3 +2464,68 @@ P4 的验收有两条是时间比值：「静态场景阴影 Pass 的 GPU 时间
 - 不扩 `SceneGpuBatch::kMaxViews`：5 个视图槽（主视图 + 平面反射 + 三级联）正好用满，加槽要同步改描述符池（`kSetCount = kFramesInFlight * kMaxViews`）。
 - 不给阴影单独维护一份实例表：那样就要在 `SceneGpuBatch` 外面复制剔除逻辑，正是这次撞上的「两边漂移」。
 - 不改 `gpuSceneMinInstances` 的默认值：主视图在小场景上逐子网格确实更省，问题只在「每级联重画」这一侧，用独立开关表达。
+
+## 决策 80：虚拟阴影图先立资源形状（P4-2，2026-11-26）
+
+### 问题
+
+P4-5 之后阴影还是三张 4096² 的 CSM 图、每级联整张重画。虚拟阴影图要换成「一张 8192² 图集切成 4096 张 128² 页 + 页表说明每页属于谁 + 每页自己的 HZB」。如果把这些和 P4-3（clipmap 滚动）、P4-4（页标记）一起写，出错时就分不清是「布局算术错了」还是「剔除/标记逻辑错了」—— 这两类错误的症状都是「阴影缺一块」。
+
+用户 2026-11-26 已明确接受「P4-2 不产生读数变化」（m00317 第 2 点）。所以这一步只立形状：页 → 图集坐标、页表索引、每页 HZB 七级的排布，全部用纯整数断言锁死；谁能建显存、谁不能，用开关分开。
+
+### 做法
+
+- 新增 `src/Render/VirtualShadowMap.{h,cpp}`（130 + 322 行，4 空格缩进，全局命名空间，只依赖 `Core/FrameInFlight.h`、`RHI/Device.h`、`RHI/ResourceStats.h` 与 `SparsePageAllocator`）。
+- 常量：`kPageSize = 128`、`kAtlasPagesPerAxis = 64`、`kPageCount = 4096`、`kAtlasResolution = 8192`、`kClipmapLevels = 3`、`kPageTableAxis = 32`、`kPageTableEntries = 1024`、`kHzbLevels = 7`、`kInvalidPage = 0xFFFFFFFFu`。
+- 布局算术做成 `static` 函数，谁都能算而不必持有对象：`pageOriginX(page) = (page % 64) * 128`、`pageOriginY(page) = (page / 64) * 128`、`hzbTileSize(level) = 128 >> level`、`hzbOffsetX(level) = Σ_{i=1..level-1} hzbTileSize(i)`、`pageTableIndex(x, y) = y * 32 + x`。
+- `init(bool allocateResources)`：无条件建 `SparsePageAllocator(4096)`；只有 `allocateResources` 才 `createAtlas()`（深度图集 `VK_FORMAT_D32_SFLOAT` + HZB 图集 `VK_FORMAT_R16G16_SFLOAT`，都 `mipLevels = 1`）与 `createPageTables()`（每帧槽一条 host-visible `STORAGE_BUFFER | TRANSFER_DST` 缓冲，`stride = 3 × 1024 × 4 = 12288 B`），然后 `resetPageTable()` 全部写 `kInvalidPage` 并 flush。
+- 开关 `--dump-vsm-resources`（`src/Core/CliCatalog.cpp` 归「剖析」组），`reportResources()` 打两行：资源账与 HZB 排布。
+- `VirtualShadowMap::selfTest()` 每次启动跑，八项纯整数断言：图集边长 = 64 × 128、页数 = 64 × 64、七个样本页的瓦片落在图集内且 `pageOrigin % 128 == 0`（页 63 → (8064, 0)、页 64 → (0, 128)、页 4095 → (8064, 8064)）、HZB 七级边长 64→1 且每级 offset 接在前一级之后、`hzbOffsetX(7) + 1 == 127 == kPageSize - 1`、三个 clipmap 的 3072 页在 4096 之内且余 1024、页表索引四角（0 / 31 / 32 / 1023）、`pageTableStride == 12288`。
+- 零开销守卫加一列：`| vsm=<bytes>B`，`anyDebugEnabled` 与 `guardOk` 都纳入（开关关着就必须是 0 B）。
+
+### 为什么是「先立形状」，而不是一步写到位
+
+512 MiB 是常驻级别的显存：全量回归连续起 96 个进程，每个都建一遍就是 96 次 512 MiB 的分配；而 P4-2 之后还没有任何采样方，建出来也验证不了「对不对」，只能验证「建成了」。所以默认只建 CPU 侧（页分配器 + 页表镜像，24 KiB），`--dump-vsm-resources` 才真的建 512 MiB 并把账打出来。等 P4-3 有了消费者再翻成常驻。
+
+### 为什么 HZB 横排在页瓦片里，而不是走 mip 链
+
+mip 链意味着整张 8192² 要 8 级 mip（显存 ×8/7），而且 128² 的页瓦片在 mip 上无法独立寻址 —— VSM 的 HZB 是按页重算的（脏页粒度就是页），必须让一页的七级全落在同一块连续 texel 里。横排后每页只有 127 texel 宽的一条行带（64 + 32 + 16 + 8 + 4 + 2 + 1 = 127 / 128），一次 compute dispatch 算一整页，采样时也只要一组 UV。
+
+### 验收（2026-11-26）
+
+| 一线 | 结果 |
+|---|---|
+| 显存账 | depth 256.0 MiB（D32）+ hzb 256.0 MiB（RG16F）= 512.0 MiB；页表 24.0 KiB（3 × 1024 × 4 B × 2 帧槽） |
+| 页预算 | 3 个 clipmap × 32 × 32 = 3072 页 / 图集 4096 页，余 1024 页 |
+| HZB 排布 | 每页瓦片第一条行带 127/128 texel，offset 0, 64, 96, 112, 120, 124, 126 |
+| 启动自检 | 八项整数断言全过（图集坐标 / 页表索引 / HZB 连续性 / 预算 / stride） |
+| 实测输出 | `[VSM] atlas ready | depth=D32 hzb=RG16F resolution=8192x8192 pages=4096 pageSize=128`、`[VSM] page table ready | levels=3 axis=32 entries=1024 stride=12288B frameSlots=2`、`[VSM] resources | … | total=512.0MiB | clipmap=3 levels x 32x32 pages = 3072 used / 1024 spare` |
+| 零开销守卫 | 不带开关 `PASS | queryPool=0 | screenshotBuffer=0 | shadowQueries=0 | vsm=0B`；带开关 `SKIP (debug capability on) | … | vsm=536895488B` |
+| Debug 验证组 | 六组（默认 / `--dump-vsm-resources` / `--page-alloc-selftest` / `--cube-field 4000` / `--terrain-test` / `--no-shadows`）全部 `errors=0 warnings=0`、stderr 0 字节、exit=0 |
+| 全量回归 | 96 项 ALL PASS（build/validation/20261126-175133，日志 202 行，FAIL=0） |
+| DocCheck | PASS（documents=82 lines=19893） |
+| 读数变化 | 无（本步不进帧循环；`--stats-shadow-timing` 与 P4-5 后一致） |
+
+### 代价与边界
+
+- 512 MiB 只在这个开关打开时存在。P4-3 真接入之后它会变成常驻，届时要同时把 CSM 的 402 MiB 减掉，否则 8 GB 的卡上「两套阴影资源并存」会顶到上限。
+- 页表缓冲是整块 `vmaFlushAllocation(VK_WHOLE_SIZE)`：12 KiB 一次刷比逐 entry 更省；P4-3 的滚动如果变成逐页改，仍然建议整块刷。
+- 图集是单张 8192²：`maxImageDimension2D` 在 8 GB 的 2070 上是 32768，没问题；但本机另一块 AMD 核显的 `maxStorageImageDimension2D` 只有 8192 —— HZB 图集要挂 `STORAGE_BIT`，这条在 P4-6 绑定采样器时要再核一次。
+- 页表还没决定放哪个描述符集（backlog「待决」第 1 条），本步只把缓冲建出来，没有任何绑定。
+- 每页一次 draw 的提交方式仍未量（「待决」第 2 条），P4-3 动手前必须先量。
+
+### 踩到的坑
+
+- 带开关跑 Release 自检时进程以 `-1073741819`（0xC0000005）收场，日志却是干净的：`virtualShadowMap` 是 `Application` 的成员，而 `run()` 的收尾在 `src/Core/Application.cpp:1450` 就 `vulkanDevice.reset()`（连带 `vmaDestroyAllocator`），成员析构发生在它之后 → `vmaDestroyImage` 打在空中。修法照既有注释「不要依赖成员声明顺序来表达销毁依赖」：在 `vulkanDevice.reset()` 之前显式 `virtualShadowMap->destroy(); virtualShadowMap.reset();`。只有带开关才崩（开关关着没建显存），所以第一次跑自检时容易误判成「验证通过」。
+- `main.cpp(531): fatal error C1061: 编译器限制: 块嵌套太深`：参数解析那条巨大的 `else if (arg == …)` 链已经顶到 MSVC 的嵌套上限，再加一行就炸。修法不是拆链，而是把「只在启动阶段用一次」的开关写成链前的早退块（`if (arg == "--dump-vsm-resources") { …; continue; }`）—— 以后加启动型开关都照这个写。
+- 补丁脚本的多行锚点在 CRLF 文件上匹配不到（`count == 0`）：`read()` 必须先把 `
+` 归一成 `
+`，写回时再换回来。单行锚点不受影响，所以是「前面几步都过、到多行才炸」。
+- 同一个脚本里中途断言失败不会回滚已 `write()` 的文件，接线时要按文件拆成多个脚本推进。
+
+### 不引入的
+
+- 不做 GPU 侧页分配（`shaders/page_alloc.comp` 留到 P4-4，那时才有消费者；现在写就是无法验证的死代码）。
+- 不给 HZB 建 mip 链（见上）。
+- 不做 residency / clipmap 滚动 / 页标记（P4-3、P4-4）。
+- 不把页表与图集接进描述符（P4-6 与采样一起做，否则就是无人读取的绑定）。

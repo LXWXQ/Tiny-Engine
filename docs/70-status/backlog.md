@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~535 行
+size: ~537 行
 updated: 2026-11-26
 ---
 
@@ -517,12 +517,12 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 **进度**：
 - [x] P4-1 稀疏页分配器：`src/Render/SparsePageAllocator.{h,cpp}` + 启动自检 + `--page-alloc-selftest`（20 万次随机操作对账，Release 8.3 ns/op、peak=4096）
 - [x] P4-5 阴影几何复用 `visibleIdList`：`ShadowPass` 每级联一次 `prepareView(视图 2/3/4)` + 一条 `drawMergedIndirect`，替掉 103 子网格 × 3 级联 = 309 次 CPU 提交；判据 `SceneGpuBatch::isShadowBatchReady()` 故意不吃 `gpuSceneMinInstances`；回退 `--no-shadow-batch`。实测 −24~28%（0.087 → 0.063~0.066 ms），**门槛②的 60% 未达成**（见决策 79）
-- [ ] P4-2 图集 / 页表 / 每页 HZB（预期不产生读数变化：页分配在 P4-1 已完成，这一层只是把页变成可采样的图）
+- [x] P4-2 图集 / 页表 / 每页 HZB：`src/Render/VirtualShadowMap.{h,cpp}` 定死布局（8192² 图集 / 4096 张 128² 页 / 每帧槽 12 KiB 页表 / 每页瓦片横排 7 级 HZB，127/128 texel），启动自检八项整数断言；显存只在 `--dump-vsm-resources` 时建（512.0 MiB + 24.0 KiB），零开销守卫新增 `| vsm=<bytes>B`。读数不变（本步不进帧循环，与预期一致）
 - [ ] P4-3 clipmap 滚动 + P4-4 页标记（`markPages` 脏页位图，未标记页复用上帧内容；GPU 侧 `page_alloc.comp` 在这里落地）
 - [ ] P4-6 `shaders/lighting.frag` 页表采样 + `--no-vsm` 回退
 
 **待决（动 P4-2 之前要定）**：
-1. 页表放哪个描述符集：`lighting.frag` 的 set 0 binding 11 现在是 `sampler2DArray shadowMaps`，而页表要「SSBO + 图集采样器」两个绑定 —— 加进 set 0 会改全局布局（`DescriptorManager::createGlobalLayout()` 与反射头），加 set 1 会碰 bindless 材质数组。
+1. 页表放哪个描述符集：`lighting.frag` 的 set 0 binding 11 现在是 `sampler2DArray shadowMaps`，而页表要「SSBO + 图集采样器」两个绑定 —— 加进 set 0 会改全局布局（`DescriptorManager::createGlobalLayout()` 与反射头），加 set 1 会碰 bindless 材质数组。**P4-2 已把这边的形状定死**：页表是每帧槽 12 KiB 的 `STORAGE_BUFFER`（`VirtualShadowMap::getPageTableBuffers()`），图集是单张 8192²（depth D32 + hzb RG16F），所以两种方案要加的绑定数与类型都已经确定，剩下的是选集。
 2. 每页一次 draw 的提交方式：多级间接 draw（每页一段命令区间）还是别的？P4-5 给出了参照 —— 现在是「每级联一条 `drawMergedIndirect`、103 个组」，而 P4-3/P4-4 要的是「每页一段命令」，页数远比组数多，提交侧会重新变成大头，这一点在 P4-3 动手前必须先量一遍。
 3. `--no-shadow-batch` 与将来的 `--no-vsm` 要不要合并成一个「阴影走 CSM/走 VSM」的开关：前者只能退回 CPU 侧的实体，`setExternalInstances` 灌进来的外部实例（`--cube-field`、粒子、GPU 场景外部实例）只有合并路径画得到，所以它不是等价开关。
 
@@ -533,3 +533,5 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 - P4-5 修掉的老 bug：逐模型阴影路径漏乘 glTF 节点矩阵（`Model::getNodeWorldMatrix(subMesh.node)`）。任何新写的「逐子网格提交」路径都要问一句「这个 `mat4` 是实体空间还是节点空间」—— 漏了不会报错，只会静默画出一张位置和尺度都错的地图。
 - 默认 Sponza 场景的相机在 `(-182.5, 6.69, 52.63)`、模型世界中心在 `(-0.48, 5.21, -0.31)`，相距约 190 单位、远超 90 m 阴影距离 → 该场景的级联阴影本来就是空的。要么改场景默认相机，要么按场景尺度缩放 `kMaxShadowDistance`，这事与 P4 无关但会持续污染所有阴影相关 A/B。
 - `prepareView` 只在 `viewIndex == 0` 时上传实例表/组表，级联视图吃的是本帧上传之前的表（上一帧的结构）。结构变化的那一帧阴影可能用旧表，下一帧自愈；要消掉这个窗口得让首个级联也参与上传判定。
+- 销毁顺序：`Application::run()` 在 `src/Core/Application.cpp:1450` 就 `vulkanDevice.reset()`（连带 `vmaDestroyAllocator`），而成员析构在它之后 —— 任何自己持有 VMA 资源的新成员都必须在 `vulkanDevice.reset()` 之前显式销毁，否则带资源退出时以 `0xC0000005` 收场、日志却是干净的（P4-2 的 `virtualShadowMap` 就撞了一次）。
+- `main.cpp` 的参数解析是一条巨大的 `else if (arg == …)` 链，已经顶到 MSVC 的块嵌套上限：再加一条就 `main.cpp(531): fatal error C1061: 编译器限制: 块嵌套太深`。新增「只在启动阶段用一次」的开关要写成链前的早退块（`if (arg == …) { …; continue; }`），不要再往链尾塞。

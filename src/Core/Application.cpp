@@ -20,6 +20,7 @@
 #include "RHI/FrameStats.h"
 #include "Render/GpuScene.h"
 #include "Render/SparsePageAllocator.h"
+#include "Render/VirtualShadowMap.h"
 #include "RHI/RenderGraphBlackboard.h"
 #include "Render/FramePayloads.h"
 #include "RHI/StateCache.h"
@@ -872,6 +873,13 @@ streamingConfig.skirtsEnabled = false;
 
 	// F6：级联阴影。必须在 GeometryPass 之前注册 —— 它写阴影图，Lighting 读，
 	// 而渲染图按注册顺序执行。
+	// P4-2：虚拟阴影图的资源骨架（深度图集 / 页表 / 每页 HZB）。它不参与帧循环，
+	// 只有 --dump-vsm-resources 才真的把 512 MiB 建出来，其余情况只建 CPU 侧状态。
+	virtualShadowMap = std::make_unique<VirtualShadowMap>(*vulkanDevice);
+	virtualShadowMap->init(diagnosticsOptions.dumpVsmResources);
+	if (diagnosticsOptions.dumpVsmResources)
+		virtualShadowMap->reportResources();
+
 	auto shadowPass = std::make_unique<ShadowPass>(*vulkanDevice, *renderGraph, scene->getTerrainMeshArena());
 	// P4 第零步：CSM 基线尺子。只做运行期门控：不开 --stats-shadow-timing 时连 query pool 都不建。
 	shadowPass->setTimingEnabled(diagnosticsOptions.statsShadowTiming);
@@ -1437,6 +1445,15 @@ FirstApp::~FirstApp()
 	renderer.reset();
 	descriptorManager.reset();
 	scene.reset();
+
+	// P4-2：虚拟阴影图自己持有 512 MiB 的图集与页表缓冲，必须在 Device（也就是
+	// VMA 分配器）之前销毁。放在成员析构里不行 —— 那会晚于这里的 vulkanDevice.reset()，
+	// 实测在 --dump-vsm-resources 下以 0xC0000005 收场。
+	if (virtualShadowMap)
+	{
+		virtualShadowMap->destroy();
+		virtualShadowMap.reset();
+	}
 
 	// 4) Device 最后（它会销毁 VMA 分配器和 VkDevice）
 	vulkanDevice.reset();
@@ -2286,6 +2303,10 @@ int FirstApp::runHeadlessSelfTest(int frames)
 		throw std::runtime_error("RenderGraph setPassEnabled selfTest failed");
 
 	// P4-1：稀疏页分配器的纯逻辑自检 —— 线性分配 / FIFO 复用 / 版本号 / 脏页去重 / 无泄漏。
+	// P4-2：图集/页表/HZB 的布局算术（纯整数，不需要设备）。
+	if (!VirtualShadowMap::selfTest())
+		throw std::runtime_error("VirtualShadowMap selfTest failed");
+
 	if (!tiny::SparsePageAllocator::selfTest())
 		throw std::runtime_error("SparsePageAllocator selfTest failed");
 	// --page-alloc-selftest：压力自检（随机 20 万次分配/释放，与独立口径逐项对账）。
@@ -3577,13 +3598,19 @@ geometryPassPtr->getSceneGpuBatch()->getGpuScene().report();
 
     // P0-6 零开销守卫：关闭时不应有任何调试用 GPU 资源 / 额外文件。
     const uint32_t shadowTimingQueries = (shadowPassPtr != nullptr) ? shadowPassPtr->timingQueryCount() : 0u;
-    const bool anyDebugEnabled = gpuTimingWasEnabled || screenshotWasEnabled || shadowTimingQueries > 0;
-    const bool guardOk = (gpuTimingQueries == 0 && screenshotBytes == 0 && shadowTimingQueries == 0);
+    // P4-2：虚拟阴影图的图集/页表也属于「只有开关打开才该存在」的调试资源，一并计入守卫。
+    const uint64_t vsmBytes = (virtualShadowMap && virtualShadowMap->isAllocated())
+        ? virtualShadowMap->getStats().totalBytes : 0ull;
+    const bool anyDebugEnabled = gpuTimingWasEnabled || screenshotWasEnabled || shadowTimingQueries > 0
+        || diagnosticsOptions.dumpVsmResources;
+    const bool guardOk = (gpuTimingQueries == 0 && screenshotBytes == 0 && shadowTimingQueries == 0
+        && vsmBytes == 0);
     std::cout << "[Diag] zero-overhead guard "
               << (anyDebugEnabled ? "SKIP (debug capability on)" : (guardOk ? "PASS" : "FAIL"))
               << " | queryPool=" << gpuTimingQueries
               << " | screenshotBuffer=" << screenshotBytes
               << " | shadowQueries=" << shadowTimingQueries
+              << " | vsm=" << vsmBytes << "B"
               << " | validationJsonl=" << (diagnosticsOptions.validationJsonlPath.empty() ? "off" : "on")
               << "\n";
 }

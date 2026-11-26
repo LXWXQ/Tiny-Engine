@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1887 行
+size: ~1896 行
 updated: 2026-11-26
 ---
 
@@ -1886,3 +1886,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 读数（Release 300 帧，三次一致）：静态 Sponza 0.087 → 0.063~0.066 ms（−24~28%）；`--terrain-test` 0.183 → 0.135；`--voxel-world 1` 0.083 → 0.066；`--light-stress 300` 0.087 → 0.063；`--streaming-world 2` 0.249 → 0.244（地形主导）。验收门槛②「静态 −60%」未达成 —— 基数修正后只到 −28%，要拿到 60% 得靠 P4-3/P4-4 的页标记跳过。
 - 像素等价：`--terrain-test --no-water --no-ssr --no-taa` 第 40 帧 A/B 差 162 像素、Sponza 差 233 像素，bbox 全是 FPS 文字框 `(109,119)-(157,129)`。Debug 七组 `errors=0 warnings=0`、stderr 0 字节；守卫不带开关 PASS；全量回归 96 项 ALL PASS；DocCheck PASS。
 - 顺带记录一个场景问题：默认相机在 `(-182.5, 6.69, 52.63)`、Sponza 世界中心在 `(-0.48, 5.21, -0.31)`，相距约 190 单位、远超 90 m 阴影距离 → 该场景的级联阴影本来就是空的（历史遗留，待收拾）。
+
+## P4-2：虚拟阴影图先立资源形状（P4-2，2026-11-26）
+
+- 新增 `src/Render/VirtualShadowMap.{h,cpp}`：一张 8192² 图集切 4096 张 128² 页、每帧槽一块 12 KiB 页表（3 个 clipmap × 32² entry）、每页瓦片里横排 7 级 HZB（64+32+16+8+4+2+1 = 127/128 texel）。
+- 布局算术全部做成 `static` 函数 + 启动自检八项整数断言（图集坐标 / 页表索引 / HZB 连续性 / 3072 页预算 / stride 12288），把「布局错」与「P4-3/P4-4 的剔除、标记错」分开 —— 这两类错误的症状都是「阴影缺一块」。
+- 显存只在 `--dump-vsm-resources` 时才建：depth D32 256.0 MiB + hzb RG16F 256.0 MiB = 512.0 MiB，页表 24.0 KiB。默认只建 CPU 侧（页分配器 + 页表镜像），因为 P4-2 之后还没有采样方，建满 512 MiB 既验证不了正确性，又会在 96 个进程的回归里反复分配。零开销守卫新增 `| vsm=<bytes>B` 一列，开关关着必须是 0 B。
+- 为什么横排不进 mip 链：VSM 的 HZB 按页重算（脏页粒度是页），必须让一页的七级落在同一块连续 texel 里；mip 链既多 8/7 的显存，又没法独立寻址 128² 瓦片。
+- 两个坑：①带开关跑完进程以 `0xC0000005` 收场 —— `Application::run()` 在 `:1450` 就 `vulkanDevice.reset()`，成员的析构晚于它，得在 `vulkanDevice.reset()` 之前显式 `virtualShadowMap->destroy()`；②`main.cpp(531): fatal error C1061: 编译器限制: 块嵌套太深` —— 参数解析那条 `else if` 链已顶到 MSVC 上限，启动型开关要写成链前的早退块。
+- 验证：Debug 六组（默认 / `--dump-vsm-resources` / `--page-alloc-selftest` / `--cube-field 4000` / `--terrain-test` / `--no-shadows`）全部 `errors=0 warnings=0`、stderr 0 字节；全量回归 96 项 ALL PASS（build/validation/20261126-175133，日志 202 行，FAIL=0）；DocCheck PASS（documents=82 lines=19893）。读数不变（本步不进帧循环）。

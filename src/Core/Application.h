@@ -34,6 +34,7 @@ class UiCompositePass;
 class EditorOverlayPass;
 class SSAOPass;
 class ShadowPass;
+class VirtualShadowMap;
 class TAAPass;
 class ITemporalUpscaler;
 class SubresourceProbePass;
@@ -154,6 +155,9 @@ private:
 	SSAOPass* ssaoPassPtr = nullptr;
 	// F6：级联阴影。指针不拥有对象（unique_ptr 在 init 里，随渲染管线走）。
 	ShadowPass* shadowPassPtr = nullptr;
+	// P4-2：虚拟阴影图的资源骨架。只有 --dump-vsm-resources 时才会真正建图集，
+	// 其余情况只建立 CPU 侧状态（页分配器 + 页表镜像）。
+	std::unique_ptr<VirtualShadowMap> virtualShadowMap;
 	// TAA：Glass 之后、Bloom 之前，负责抖动重建与历史混合。
 	TAAPass* taaPassPtr = nullptr;
 	// P5-5 的接缝：所有时域上采样都从这个指针走，底下是 TAA。

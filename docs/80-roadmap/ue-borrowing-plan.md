@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1111 行
+size: ~1115 行
 updated: 2026-11-26
 ---
 
@@ -1110,3 +1110,7 @@ CSM 基线（Release，300 帧，三次重复一致）：静态 Sponza `total=0.
 
 **P4-5（2026-11-26，阴影几何复用可见实例表）**：把 `SceneGpuBatch` 的视图槽 2/3/4 真正接上 —— 每级联一次 `prepareView` + 一条 `drawMergedIndirect`，替掉原来「103 子网格 × 3 级联 = 309 次 CPU 提交、零剔除」。判据单独一条 `isShadowBatchReady()`，故意不吃 `gpuSceneMinInstances`（Sponza 只有 103 实例，主视图逐子网格更省，阴影却是每级联重画）。回退开关 `--no-shadow-batch`。
 过程中挖出一个 P4 之前就存在的老 bug：逐模型阴影路径漏乘 glTF 节点矩阵，Sponza 被放大 125 倍画到离光源相机 700 单位处、糊满整张 4096² —— 此前记的 0.204 ms 基线是画错地图的开销，真实基线 0.087 ms。修完实测 0.063~0.066 ms（−24~28%），`--terrain-test` −26%、`--voxel-world 1` −20%、`--light-stress 300` −28%、`--streaming-world 2` −2%（地形主导）。验收门槛②「静态 −60%」**未达成** —— 0.087 的基数上 0.063 只是 −28%，60% 要等 P4-3/P4-4 的页标记与未变页跳过。附带结论：`--no-shadow-batch` 不是等价开关（外部实例只有合并路径画得到），且默认 Sponza 场景的相机离模型 190 单位、级联阴影本来就为空，需另行收拾。
+
+**P4-2（2026-11-26，虚拟阴影图的资源形状）**：`src/Render/VirtualShadowMap.{h,cpp}` 把「页 → 图集」这套算术一次定死 —— 8192² 图集切 4096 张 128² 页、页表每级 32² entry（3 × 1024 × 4 B = 12 KiB/帧槽）、每页的 7 级 HZB 横排在那 128² 瓦片的第一条行带里（64+32+16+8+4+2+1 = 127/128 texel，offset 0/64/96/112/120/124/126）。深度图集 D32 256 MiB、HZB 图集 RG16F 256 MiB，都 `mipLevels = 1`。
+显存只在 `--dump-vsm-resources` 时建（512.0 MiB + 24.0 KiB 页表），默认只建 CPU 侧：这一步之后还没有任何采样方，建满也验证不了正确性，只会在 96 个进程的全量回归里反复分配。启动自检八项纯整数断言锁住布局；零开销守卫新增 `| vsm=<bytes>B`，开关关着必须 0 B。
+两个坑值得记：①`Application::run()` 在 `:1450` 就 `vulkanDevice.reset()`，成员析构晚于它 —— 带开关跑完以 `0xC0000005` 收场，必须在 reset 之前显式销毁 VSM；②`main.cpp` 的 `else if` 参数链已顶到 MSVC 的块嵌套上限（`fatal error C1061`），启动型开关要写成链前的早退块。读数不变（本步不进帧循环）。下一步 P4-3 的 clipmap 滚动 + P4-4 的页标记才是真正拿回「静态 −60%」的地方，但动手前先量「每页一段命令」的提交成本。

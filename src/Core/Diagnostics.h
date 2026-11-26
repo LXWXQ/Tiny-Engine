@@ -84,6 +84,9 @@ namespace diag
         // P4-1：稀疏页分配器的压力自检（随机分配/释放 + 独立口径对账）。
         // 不进帧循环、不建 GPU 资源；只在启动阶段跑一次然后正常开局。
         bool pageAllocSelftest = false;
+        // P4-2：把虚拟阴影图的图集/页表/HZB 真正建出来并打印占用。默认不建 ——
+        // 这一层不参与帧循环，常驻 512 MiB 显存只在真要用它（P4-3 之后）时才划算。
+        bool dumpVsmResources = false;
     // T-09 的整体回退：关掉管线绑定缓存，每次绑定都照发。
     bool noPipelineCache = false;
     // T-05：Pass 剔除默认关（本引擎暂无「输出无人读」的 Pass）；--pass-cull 打开，
