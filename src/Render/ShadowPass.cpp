@@ -30,6 +30,7 @@ static_assert(ShadowPass::kShadowViewBase + ShadowPass::kCascadeCount <= SceneGp
 #include <limits>
 #include <stdexcept>
 #include <vector>
+#include <cstdint>
 
 namespace
 {
@@ -380,7 +381,7 @@ void ShadowPass::addToGraph(RenderGraph& graph, FrameInfo& frameInfo)
     {
         stats = Stats{};
         if (virtualShadowMap != nullptr && virtualShadowMap->isAllocated())
-            markVirtualShadowPages(*virtualShadowMap, frameInfo);
+            recordVirtualShadowPages(cmd, frameInfo);
 
         // P4 第零步：先读回「上一轮用同一个帧槽」的时间戳（那次提交早已过 timeline
         // 等待点），再把本槽的 query 重置 —— 顺序反了会读到未定义值。
@@ -694,13 +695,22 @@ namespace
     }
 }
 
-void ShadowPass::markVirtualShadowPages(VirtualShadowMap& map, FrameInfo& frameInfo)
+void ShadowPass::recordVirtualShadowPages(VkCommandBuffer cmd, FrameInfo& frameInfo)
 {
+    VirtualShadowMap& map = *virtualShadowMap;
     entt::registry& registry = frameInfo.registry;
-    std::vector<VirtualShadowMap::CasterBounds> casters;
 
-    // 父实体循环 + 子网格循环，和 recordCascade 的逐模型路径同一套取法：
-    // 顶点活在节点局部空间，所以包围盒也要先过节点矩阵。
+    // 一个投影者的一次绘制需要的东西：模型（顶点/索引缓冲）、子网格、实例矩阵。
+    struct PageCaster
+    {
+        Model* model = nullptr;
+        const SubMesh* subMesh = nullptr;
+        glm::mat4 instanceMatrix{ 1.0f };
+    };
+
+    std::vector<PageCaster> pageCasters;
+    std::vector<VirtualShadowMap::CasterBounds> bounds;
+
     for (auto [entity, mesh] : registry.view<MeshComponent>().each())
     {
         if (!mesh.model)
@@ -715,7 +725,9 @@ void ShadowPass::markVirtualShadowPages(VirtualShadowMap& map, FrameInfo& frameI
         const auto& subMeshes = mesh.model->getSubMeshes();
         for (uint32_t index = 0; index < static_cast<uint32_t>(subMeshes.size()); ++index)
         {
-            const auto& subMesh = subMeshes[index];
+            const SubMesh& subMesh = subMeshes[index];
+            if (subMesh.indexCount == 0u)
+                continue;
 
             glm::vec3 localMin = mesh.model->getBoundsMin();
             glm::vec3 localMax = mesh.model->getBoundsMax();
@@ -739,7 +751,6 @@ void ShadowPass::markVirtualShadowPages(VirtualShadowMap& map, FrameInfo& frameI
                 ? world->matrix
                 : world->matrix * mesh.model->getNodeWorldMatrix(subMesh.node);
 
-            // 8 个角过一遍矩阵，取世界轴对齐包围盒。
             glm::vec3 worldMin(std::numeric_limits<float>::max());
             glm::vec3 worldMax(-std::numeric_limits<float>::max());
             for (int corner = 0; corner < 8; ++corner)
@@ -757,11 +768,233 @@ void ShadowPass::markVirtualShadowPages(VirtualShadowMap& map, FrameInfo& frameI
             caster.version = casterVersionHash(instanceMatrix, subMesh.alphaMasked, subMesh.alphaCutoff);
             caster.center = (worldMin + worldMax) * 0.5f;
             caster.halfExtent = (worldMax - worldMin) * 0.5f;
-            casters.push_back(caster);
+            bounds.push_back(caster);
+
+            PageCaster draw;
+            draw.model = mesh.model.get();
+            draw.subMesh = &subMesh;
+            draw.instanceMatrix = instanceMatrix;
+            pageCasters.push_back(draw);
         }
     }
 
-    map.markPages(frameInfo.settings.directionalLightDir, casters);
+    const glm::vec3 lightDirection = frameInfo.settings.directionalLightDir;
+    map.markPages(lightDirection, bounds);
+
+    const VirtualShadowMap::PageMarkStats& marks = map.getPageMarkStats();
+    ++vsmDrawFrames;
+    if (marks.dirtyPages == 0u)
+    {
+        // 稳态：一页都没变，所以这里一条命令都不发。VSM 相对 CSM 的全部收益都出自这一行。
+        ++vsmSkipFrames;
+        return;
+    }
+
+    // ---- 逐页分桶：CSR（计数 -> 前缀和 -> 填充），一页一份投影者下标列表 ----
+    constexpr uint32_t kPages = VirtualShadowMap::kPageTableEntries;
+    const uint32_t levels = VirtualShadowMap::kClipmapLevels;
+    const size_t cells = static_cast<size_t>(levels) * kPages;
+    pageCellCounts.assign(cells, 0u);
+
+    for (size_t caster = 0; caster < bounds.size(); ++caster)
+    {
+        for (uint32_t level = 0; level < levels; ++level)
+        {
+            uint32_t minX = 0, minY = 0, maxX = 0, maxY = 0;
+            if (!VirtualShadowMap::pageRangeForBounds(map.getClipmap(level), lightDirection,
+                                                     bounds[caster].center, bounds[caster].halfExtent,
+                                                     minX, minY, maxX, maxY))
+                continue;
+            for (uint32_t y = minY; y <= maxY; ++y)
+                for (uint32_t x = minX; x <= maxX; ++x)
+                    ++pageCellCounts[static_cast<size_t>(level) * kPages +
+                                     VirtualShadowMap::pageTableIndex(x, y)];
+        }
+    }
+
+    pageCellOffsets.assign(cells + 1u, 0u);
+    for (size_t cell = 0; cell < cells; ++cell)
+        pageCellOffsets[cell + 1u] = pageCellOffsets[cell] + pageCellCounts[cell];
+    pageCellItems.assign(pageCellOffsets[cells], 0u);
+
+    // 复用 counts 当写指针（先备份每格起点，用 offsets 回填）。
+    std::vector<uint32_t> writeCursor(pageCellOffsets.begin(), pageCellOffsets.end());
+    for (size_t caster = 0; caster < bounds.size(); ++caster)
+    {
+        for (uint32_t level = 0; level < levels; ++level)
+        {
+            uint32_t minX = 0, minY = 0, maxX = 0, maxY = 0;
+            if (!VirtualShadowMap::pageRangeForBounds(map.getClipmap(level), lightDirection,
+                                                     bounds[caster].center, bounds[caster].halfExtent,
+                                                     minX, minY, maxX, maxY))
+                continue;
+            for (uint32_t y = minY; y <= maxY; ++y)
+            {
+                for (uint32_t x = minX; x <= maxX; ++x)
+                {
+                    const size_t cell = static_cast<size_t>(level) * kPages +
+                                        VirtualShadowMap::pageTableIndex(x, y);
+                    pageCellItems[writeCursor[cell]++] = static_cast<uint32_t>(caster);
+                }
+            }
+        }
+    }
+
+    // ---- 图集从上一帧的布局过渡到深度附件（第一次是 UNDEFINED）----
+    {
+        VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        barrier.oldLayout = vsmAtlasInDepthLayout ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+                                                  : VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = map.getDepthAtlas();
+        barrier.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+        barrier.srcAccessMask = vsmAtlasInDepthLayout ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0;
+        barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+                             vsmAtlasInDepthLayout ? VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
+                                                   : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &barrier);
+    }
+
+    const bool fullClear = marks.dirtyPages >= marks.livePages;
+    VkRenderingAttachmentInfo depthAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+    depthAttachment.imageView = map.getDepthView();
+    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachment.loadOp = fullClear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttachment.clearValue.depthStencil = { 1.0f, 0 };
+
+    VkRenderingInfo renderingInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+    renderingInfo.renderArea.offset = { 0, 0 };
+    renderingInfo.renderArea.extent = { VirtualShadowMap::kAtlasResolution,
+                                        VirtualShadowMap::kAtlasResolution };
+    renderingInfo.layerCount = 1;
+    renderingInfo.colorAttachmentCount = 0;
+    renderingInfo.pDepthAttachment = &depthAttachment;
+    vkCmdBeginRendering(cmd, &renderingInfo);
+
+    pipeline->bind(cmd);
+
+    uint32_t levelDrawnPages[VirtualShadowMap::kClipmapLevels] = { 0u, 0u, 0u };
+    uint64_t drawnPages = 0;
+    uint64_t drawCalls = 0;
+
+    uint32_t fastLevels = 0;
+
+    for (uint32_t level = 0; level < levels; ++level)
+    {
+        const VirtualShadowMap::ClipmapLevel& clipmap = map.getClipmap(level);
+        const uint32_t levelDirty = map.getDirtyPageCount(level);
+        if (levelDirty == 0u)
+            continue;
+
+        if (levelDirty >= VirtualShadowMap::kPageTableEntries)
+        {
+            // 整级都脏（光源转了、或者这一级跟着相机滚过一页）：这一级的 32x32 页在图集里
+            // 是一块连续的 4096x4096 矩形，所以一条全级绘制就够 —— 每个投影者只发一次。
+            uint32_t blockX = 0;
+            uint32_t blockY = 0;
+            VirtualShadowMap::levelAtlasOrigin(level, blockX, blockY);
+            VkViewport viewport{ static_cast<float>(blockX), static_cast<float>(blockY),
+                                  static_cast<float>(VirtualShadowMap::kAtlasBlockSize),
+                                  static_cast<float>(VirtualShadowMap::kAtlasBlockSize), 0.0f, 1.0f };
+            VkRect2D scissor{ { static_cast<int32_t>(blockX), static_cast<int32_t>(blockY) },
+                              { VirtualShadowMap::kAtlasBlockSize, VirtualShadowMap::kAtlasBlockSize } };
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            Model* boundModel = nullptr;
+            for (size_t caster = 0; caster < bounds.size(); ++caster)
+            {
+                uint32_t minX = 0, minY = 0, maxX = 0, maxY = 0;
+                if (!VirtualShadowMap::pageRangeForBounds(clipmap, lightDirection,
+                                                          bounds[caster].center, bounds[caster].halfExtent,
+                                                          minX, minY, maxX, maxY))
+                    continue;
+                const PageCaster& draw = pageCasters[caster];
+                if (draw.model != boundModel)
+                {
+                    draw.model->bind(cmd);
+                    boundModel = draw.model;
+                }
+                PushData push{ draw.instanceMatrix, clipmap.lightViewProjection };
+                vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(PushData), &push);
+                draw.model->drawSubMesh(cmd, *draw.subMesh);
+                ++drawCalls;
+            }
+            ++fastLevels;
+            drawnPages += VirtualShadowMap::kPageTableEntries;
+            levelDrawnPages[level] = VirtualShadowMap::kPageTableEntries;
+            continue;
+        }
+
+        for (uint32_t pageY = 0; pageY < VirtualShadowMap::kPageTableAxis; ++pageY)
+        {
+            for (uint32_t pageX = 0; pageX < VirtualShadowMap::kPageTableAxis; ++pageX)
+            {
+                if (!map.isPageDirty(level, pageX, pageY))
+                    continue;
+                const uint32_t pageIndex = VirtualShadowMap::pageTableIndex(pageX, pageY);
+                const uint32_t globalPage = level * VirtualShadowMap::kPageTableEntries + pageIndex;
+                const size_t cell = static_cast<size_t>(level) * kPages + pageIndex;
+                const uint32_t begin = pageCellOffsets[cell];
+                const uint32_t count = pageCellOffsets[cell + 1u] - begin;
+                if (count == 0u)
+                    continue;   // 这一页没有投影者：脏了也只是清成 1.0，跳过
+
+                const uint32_t originX = VirtualShadowMap::pageOriginX(globalPage);
+                const uint32_t originY = VirtualShadowMap::pageOriginY(globalPage);
+                VkViewport viewport{ static_cast<float>(originX), static_cast<float>(originY),
+                                     static_cast<float>(VirtualShadowMap::kPageSize),
+                                     static_cast<float>(VirtualShadowMap::kPageSize), 0.0f, 1.0f };
+                VkRect2D scissor{ { static_cast<int32_t>(originX), static_cast<int32_t>(originY) },
+                                  { VirtualShadowMap::kPageSize, VirtualShadowMap::kPageSize } };
+                vkCmdSetViewport(cmd, 0, 1, &viewport);
+                vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+                const glm::mat4 pageViewProjection =
+                    VirtualShadowMap::pageViewProjection(clipmap, pageX, pageY);
+
+                Model* boundModel = nullptr;
+                for (uint32_t i = 0; i < count; ++i)
+                {
+                    const PageCaster& caster = pageCasters[pageCellItems[begin + i]];
+                    if (caster.model != boundModel)
+                    {
+                        caster.model->bind(cmd);
+                        boundModel = caster.model;
+                    }
+                    PushData push{ caster.instanceMatrix, pageViewProjection };
+                    vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                       sizeof(PushData), &push);
+                    caster.model->drawSubMesh(cmd, *caster.subMesh);
+                    ++drawCalls;
+                }
+                ++drawnPages;
+                ++levelDrawnPages[level];
+            }
+        }
+    }
+
+    vkCmdEndRendering(cmd);
+    vsmAtlasInDepthLayout = true;
+    vsmDrawnPages += drawnPages;
+    vsmDrawCalls += drawCalls;
+
+    if ((vsmDrawFrames % 60ull) == 1ull)
+    {
+        std::printf("[VSM] draw | frame=%llu dirty=%u/%u fullClear=%d pages=%llu draws=%llu fast=%u | "
+                    "level0=%u level1=%u level2=%u | skippedFrames=%llu\n",
+                    static_cast<unsigned long long>(vsmDrawFrames), marks.dirtyPages, marks.livePages,
+                    fullClear ? 1 : 0, static_cast<unsigned long long>(drawnPages),
+                    static_cast<unsigned long long>(drawCalls), fastLevels, levelDrawnPages[0],
+                    levelDrawnPages[1], levelDrawnPages[2],
+                    static_cast<unsigned long long>(vsmSkipFrames));
+    }
 }
 
 void ShadowPass::recordCascade(VkCommandBuffer cmd, uint32_t cascadeIndex, uint32_t frameIndex,

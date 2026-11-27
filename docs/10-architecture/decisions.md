@@ -4,8 +4,8 @@ title: 关键设计决策与取舍
 type: architecture
 scope: 空（跨代码库的设计理由）
 read-when: 想改变某个既有设计之前；或评审"这个方案为什么不用更好的做法"
-size: ~2674 行
-updated: 2026-11-26
+size: ~2739 行
+updated: 2026-11-27
 ---
 
 # 关键设计决策
@@ -2673,3 +2673,68 @@ P4-3 立起了三级 clipmap，但「这一帧谁该被画进图集」还没定�
 - GPU 侧页标记（`markPages` compute）：103 个投影者的 CPU 线性扫描在这个规模上没有可测成本，等实例数上千再说。
 - 页表重映射式的「搬页」：见上。
 - HZB 的增量更新：HZB 还没接进任何采样路径（P4-6 才用），先不谈增量。
+
+## 决策 83：把脏页画进图集 —— 整级一条全级绘制（P4-4b，2026-11-27）
+
+### 问题
+
+P4-4 只标了脏页，页里的内容还是空的：8192² 图集从建出来那天起没被写过一次。要把它画出来，同时兑现「静态场景不重画」这个承诺 —— 否则脏页位图只是一套没人消费的记账。
+
+### 做法
+
+1. 逐页投影矩阵 `VirtualShadowMap::pageViewProjection(level, x, y)`：页在这一级的 clip 空间里只占 1/32，所以先放大 32 倍、再把页中心平移到原点，配合「viewport 设到该页瓦片」使用。
+2. 图集按级分块：8192² / 4096² = 2 x 2 四块，前 3 块给 3 级、第 4 块空着。全局页号 = 级号 x 1024 + 级内页号，`pageOriginX/Y()` 与 `levelAtlasOrigin()` 都按这个换算。
+3. 三档执行（`ShadowPass::recordVirtualShadowPages()`）：
+   - `dirtyPages == 0` → 一条命令都不发，只 `++vsmSkipFrames`。VSM 相对 CSM 的全部收益在这个分支里。
+   - 某一级 1024 页全脏 → 一条「全级绘制」：viewport 覆盖这一级的 4096² 区块、矩阵直接用 `level.lightViewProjection`，每个投影者只发一次。
+   - 否则 → 逐脏页：CSR 分桶（计数 → 前缀和 → 填充，写指针用副本），每页一次 `vkCmdSetViewport/Scissor`，页内每个投影者一次 push + draw；页里没有投影者就跳过（脏页清成 1.0 也算完成）。
+4. 一次 `vkCmdBeginRendering` 覆盖整张图集：`loadOp = dirtyPages >= livePages ? CLEAR : LOAD`、`storeOp = STORE`；进渲染前从上一帧的 `DEPTH_ATTACHMENT_OPTIMAL`（首帧 `UNDEFINED`）屏障过来。
+5. 投影者采集与页标记共用同一次遍历：`PageCaster { Model*, const SubMesh*, instanceMatrix }` 与 `CasterBounds` 一一对应，靠下标对齐。
+
+### 为什么加「整级一条」这条快路径
+
+飞行场景的对照读数（Release，130 帧，每 60 帧一行）：
+
+| 路径 | frame=1 | frame=61 | frame=121 |
+|---|---|---|---|
+| 逐页提交 | 225,982 draws | 27,310 | 20,238 |
+| 整级一条 | 309 draws | 184 | 93 |
+
+差三个数量级。按 P4-3 前量到的 ~2.3 ns/条命令解释不了这个差值 —— 真正的代价是每次 draw 的顶点/索引绑定与驱动侧状态，而逐页提交会把同一个子网格重复提交到它覆盖的每一页（第 0 级的页只有 0.15 m，一个几米大的子网格能盖上几十页）。整级重画本来就已经是全脏，粒度损失为零。
+
+### 为什么把图集布局从线性换成按级分块
+
+旧布局 `page % 64` 让一级的页散在 8192 x 2048 的横带里（第 0 级占 0..15 行），没法用一条 viewport 覆盖；按级分块后一级正好是一块 4096² 矩形。顺带把「每级一块」变成可断言的结构：`pageOriginX(1024) == 4096`、`pageOriginY(1024) == 0`。
+
+### 验收（2026-11-27）
+
+| 项 | 结果 |
+|---|---|
+| 静态 Sponza（casters=103） | frame=1 `fast=3 pages=3072 draws=0`，frame=61/121 不进绘制分支（`dirty=0/3072`）；`draws=0` 是因为该场景相机离几何约 190 m、clipmap 里没有子网格，不是路径没跑 |
+| `--terrain-test`（casters=115） | frame=1 `fast=3 pages=3072 draws=15`，随后 `dirty=0/3072` 一条命令不发 → 静态收益成立 |
+| `--streaming-world 2 --streaming-fly 60` | `draws=309 / 184 / 93`，`fast=3`，滚动照常整级重画 |
+| 页数 | 三级共 3072 页全部被写入，第 4 块（1024 页）留空 |
+| 零开销守卫 | 不带开关 `PASS ... vsm=0B`；带 `--dump-vsm-resources` `SKIP ... vsm=536895488B` |
+| Debug 验证组 | 七组（默认 / `--dump-vsm-resources` / 飞行 / 地形 / `--page-alloc-selftest` / `--cube-field 4000 --cube-field-motion 200` / `--no-shadows`）全部 `exit=0`、`stderr=0B`、`[Validation] errors=0 warnings=0` |
+| 全量回归 | 96 项 ALL PASS（build/validation/20261127-124938，日志 202 行，FAIL=0） |
+| DocCheck | PASS（documents=82 lines=20165） |
+
+### 代价与边界
+
+- 整级脏时放弃页级精度（本来就没有精度可放弃）；部分脏仍逐页。
+- 图集 512 MiB 只在 `--dump-vsm-resources` 下建，默认路径零开销、输出与 P4-4 逐行一致。
+- 只认 `MeshComponent` 里的投影者：外部实例（`--cube-field`、粒子、`setExternalInstances`）标不到也画不到 —— 实测 `--cube-field 4000 --cube-field-motion 200` 是 `draws=0`，这是已知缺口（P4-4c）。
+- 图集内容这一版还没有任何采样者（P4-6 才接页表采样），所以「画得对不对」目前只有页数、绘制数、`errors=0` 三条间接证据。
+
+### 踩到的坑
+
+- 自检断言先写错：第 4 块（页号 3072..4095）的最后一页在块内右下角，`pageOriginX(4095)` 是 `8192 - 128 = 8064`，不是 `4096`。表现是启动即 `致命错误: VirtualShadowMap selfTest failed`，而它前面的每一行日志都正常 —— 只看日志会以为自检没跑。
+- 用多行 `std::printf` 打临时探针后按「含标记的行」删除，会把续行留下，编译器报 `error C2059: 语法错误`。删探针要整块删。
+- `kPageSize` / `kPageTableAxis` / `kAtlasBlockSize` 只在 `VirtualShadowMap.h` 里可见，`ShadowPass.cpp` 里必须写 `VirtualShadowMap::` 前缀（漏了就是 `error C2065: 未声明的标识符`）。
+
+### 不引入的
+
+- 页表重映射式的搬页（滚动时把老页内容映射到新位置）：整级一条已经把滚动压到百次绘制量级。
+- 图集内 `vkCmdCopyImage` 搬像素：同上。
+- 多级间接 draw 的命令压缩：P4-3 前量过逐页提交是微秒级；真正的成本在「整级重复提交同一子网格」，已由全级快路径解决。
+- GPU 侧页标记 / GPU 侧页分配。

@@ -4,7 +4,7 @@ title: 里程碑与实测基线
 type: status
 scope: 空
 read-when: 对照历史进度、或需要"已知良好基线数字"
-size: ~1919 行
+size: ~1928 行
 updated: 2026-11-26
 ---
 
@@ -1918,3 +1918,12 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 投影者采集 `ShadowPass::markVirtualShadowPages()`：逐子网格取局部包围盒（`subMesh.hasBounds` / `getNodeBounds` / 模型整体），8 个角过 `world->matrix * getNodeWorldMatrix(node)`；103 个子网格 = 103 个投影者。
 - 读数：静态 130 帧稳态 `dirty=0/3072`（这是 P4-4b 跳过绘制、拿下验收②60% 的来源）；临时探针下单个小投影者每帧变身份 `dirty=6~8/3072`、光方向每帧转 0.002 rad `dirty=3072 light=1`、飞行 `scroll=3 dirty=3072`。
 - 门控与验证：只在 `--dump-vsm-resources` 下执行（默认路径 `[VSM]` 行 0 条、守卫 `vsm=0B`）；Debug 七组 `errors=0 warnings=0`、stderr 0 字节；全量回归与 DocCheck 见决策 82 的验收表。
+
+## P4-4b：把脏页画进图集（P4-4b，2026-11-27）
+
+- 图集布局改成按级分块：8192² = 2 x 2 块 4096²，前 3 块给三级 clipmap、第 4 块空着；全局页号 = 级号 x 1024 + 级内页号。这样一整级在图上是一块连续矩形。
+- `ShadowPass::recordVirtualShadowPages()` 三档执行：0 脏页 → 一条命令不发；某一级 1024 页全脏 → 一条全级绘制（`level.lightViewProjection` + 4096² viewport）；否则逐脏页（CSR 分桶 + 每页 viewport/scissor + `pageViewProjection`）。
+- 投影者采集与页标记共用一次遍历，`PageCaster` 与 `CasterBounds` 按下标对齐；一次 `vkCmdBeginRendering` 覆盖整张图集，`loadOp` 在全脏时 `CLEAR`、否则 `LOAD`。
+- 读数：飞行场景逐页路径 225,982 / 27,310 / 20,238 draws，整级一条后 309 / 184 / 93；地形场景 frame=1 `draws=15` 之后 `dirty=0` 一条命令不发；静态 Sponza 因相机离几何 190 m 而 `draws=0`（几何不在 clipmap 里）。
+- 验证：Debug 七组 `errors=0 warnings=0`、stderr 0 字节；守卫两态；全量回归与 DocCheck 见决策 83 的验收表。
+- 已知缺口：外部实例（`--cube-field`、粒子）不在 `MeshComponent` 里，标不到也画不到；图集内容还没有采样者（P4-6 才接）。

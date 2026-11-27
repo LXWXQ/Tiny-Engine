@@ -4,7 +4,7 @@ title: 后续任务台账
 type: status
 scope: 空
 read-when: 准备开始下一项地形/规模化工作，或需要确认剩余任务顺序
-size: ~549 行
+size: ~553 行
 updated: 2026-11-26
 ---
 
@@ -520,7 +520,8 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 - [x] P4-2 图集 / 页表 / 每页 HZB：`src/Render/VirtualShadowMap.{h,cpp}` 定死布局（8192² 图集 / 4096 张 128² 页 / 每帧槽 12 KiB 页表 / 每页瓦片横排 7 级 HZB，127/128 texel），启动自检八项整数断言；显存只在 `--dump-vsm-resources` 时建（512.0 MiB + 24.0 KiB），零开销守卫新增 `| vsm=<bytes>B`。读数不变（本步不进帧循环，与预期一致）
 - [x] P4-3 三级 clipmap 与页对齐滚动：级比 4、4.8 / 19.2 / 76.8 米，每级 32 x 32 页 = 4096 texel；第 0 级 853.3 texel/m = CSM 的 8.26 倍（验收①的分母）；中心按光空间两轴吸附到页网格（0.150 / 0.60 / 2.40 m），静态 130 帧 `scrolls=0`、飞行每 60 帧 `scrolls` 增 180 且 `aligned=1`。只在 `--dump-vsm-resources` 下计算，读数不变（决策 81）
 - [x] P4-4 页标记：`VirtualShadowMap::markPages()` 三条失效条件（光源方向 / 级中心整页滚动 / 投影者 `version`）换一张每级 16 个 `uint64` 的脏页位图（三级共 384 B）；投影者由 `ShadowPass::markVirtualShadowPages()` 逐子网格取世界 AABB（过节点矩阵）。静态 130 帧稳态 `dirty=0/3072`、单个小投影者每帧变身份 `dirty=6~8/3072`、光方向每帧转 0.002 rad `dirty=3072 light=1`、飞行 `scroll=3 dirty=3072`（决策 82）
-- [ ] P4-4b 把页画进图集 + 跳过未脏页：每页一次 viewport+scissor+draw（提交成本已量 ~2.3 ns/条），候选几何按页裁；外部实例（`--cube-field` / 粒子）的包围盒要从 `SceneGpuBatch` 实例表取，否则它们在这条路径上会被整片漏掉
+- [x] P4-4b 把页画进图集 + 跳过未脏页：`ShadowPass::recordVirtualShadowPages()` 三档（0 脏页不发命令 / 整级全脏走「整级一条」/ 其余逐脏页 CSR 分桶）；图集布局改成按级分块（2 x 2 块 4096²，全局页号 = 级号 x 1024 + 级内页号）。飞行场景 225,982 / 27,310 / 20,238 draws → 309 / 184 / 93；地形静态 frame=1 `draws=15` 之后一条命令不发（决策 83）
+- [ ] P4-4c 把外部实例纳入页标记与绘制：`--cube-field` / 粒子 / `setExternalInstances` 不在 `MeshComponent` 里，这一版标不到也画不到（实测 `--cube-field 4000 --cube-field-motion 200` 是 `draws=0`）
 - [ ] P4-6 `shaders/lighting.frag` 页表采样 + `--no-vsm` 回退
 
 **待决（动 P4-2 之前要定）**：
@@ -531,8 +532,11 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
    0.019 → 0.026 ms（+7 µs，约 2.3 ns/条），30 帧墙钟差异全在噪声里。
    **结论：早前按「P4-5 的 75 ns/draw」外推的 0.2~0.3 ms 是错的** —— 那个差值是逐模型路径换顶点缓冲 /
    push / 描述符的代价，不是命令本身的代价。逐页提交（3072 条）在这个 GPU 上是微秒级，所以 P4-4 可以
-   直接「每页一次 viewport+scissor+draw」，不必先做多级间接 draw 的命令压缩。真正的每页代价要等 P4-4
-   带上真实几何再量一次。
+   直接「每页一次 viewport+scissor+draw」，不必先做多级间接 draw 的命令压缩。
+   **P4-4b 带上真实几何再量了一次，结论反转了一半**：命令本身确实便宜，但逐页提交会把同一个子网格
+   重复提交到它覆盖的每一页 —— 飞行场景每帧 225,982 / 27,310 / 20,238 draws，改成「整级一条」
+   （`level.lightViewProjection` + 4096² viewport）后降到 309 / 184 / 93。所以真正的成本在
+   「同一份几何被重复发」，不在命令流。
 3. `--no-shadow-batch` 与将来的 `--no-vsm` 要不要合并成一个「阴影走 CSM/走 VSM」的开关：前者只能退回 CPU 侧的实体，`setExternalInstances` 灌进来的外部实例（`--cube-field`、粒子、GPU 场景外部实例）只有合并路径画得到，所以它不是等价开关。
 
 **回退开关**：`--no-vsm`（P4-6 落地时加；CSM 路径保留到验收后 3 个版本）。
@@ -543,7 +547,7 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 - 默认 Sponza 场景的相机在 `(-182.5, 6.69, 52.63)`、模型世界中心在 `(-0.48, 5.21, -0.31)`，相距约 190 单位、远超 90 m 阴影距离 → 该场景的级联阴影本来就是空的。要么改场景默认相机，要么按场景尺度缩放 `kMaxShadowDistance`，这事与 P4 无关但会持续污染所有阴影相关 A/B。
 - `prepareView` 只在 `viewIndex == 0` 时上传实例表/组表，级联视图吃的是本帧上传之前的表（上一帧的结构）。结构变化的那一帧阴影可能用旧表，下一帧自愈；要消掉这个窗口得让首个级联也参与上传判定。
 - 销毁顺序：`Application::run()` 在 `src/Core/Application.cpp:1450` 就 `vulkanDevice.reset()`（连带 `vmaDestroyAllocator`），而成员析构在它之后 —— 任何自己持有 VMA 资源的新成员都必须在 `vulkanDevice.reset()` 之前显式销毁，否则带资源退出时以 `0xC0000005` 收场、日志却是干净的（P4-2 的 `virtualShadowMap` 就撞了一次）。
-- 页标记（P4-4）只认 `MeshComponent` 里的投影者，外部实例（`--cube-field`、粒子、`setExternalInstances`）标记不到 —— P4-4b 接绘制路径时必须把它们补上，否则 VSM 上那些实例没有阴影，而 CSM 有，A/B 会显示成「VSM 更省但不是等价画面」。
+- 页标记（P4-4）与页绘制（P4-4b）都只认 `MeshComponent` 里的投影者，外部实例（`--cube-field`、粒子、`setExternalInstances`）标不到也画不到 —— 实测 `--cube-field 4000 --cube-field-motion 200` 是 `draws=0`。要补得从 `SceneGpuBatch` 的实例表取包围盒（P4-4c），否则 VSM 上那些实例没有阴影而 CSM 有，A/B 会显示成「VSM 更省但不是等价画面」。
 - 三级 clipmap 覆盖 76.8 米，比 CSM 的 90 米阴影距离短 13.2 米。P4-6 换掉 CSM 之前必须定远场归属
   （CSM 兜底 / 加第 4 级 / 按距离淡出），否则远处会出现一圈没有阴影。
 - `main.cpp` 的参数解析是一条巨大的 `else if (arg == …)` 链，已经顶到 MSVC 的块嵌套上限：再加一条就 `main.cpp(531): fatal error C1061: 编译器限制: 块嵌套太深`。新增「只在启动阶段用一次」的开关要写成链前的早退块（`if (arg == …) { …; continue; }`），不要再往链尾塞。

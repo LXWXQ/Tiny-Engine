@@ -62,8 +62,15 @@ public:
     };
 
     // 页 -> 图集瓦片左上角（同一套坐标，深度图集与 HZB 图集共用）。
-    static uint32_t pageOriginX(uint32_t page) { return (page % kAtlasPagesPerAxis) * kPageSize; }
-    static uint32_t pageOriginY(uint32_t page) { return (page / kAtlasPagesPerAxis) * kPageSize; }
+    // 图集按 clipmap 分级切成 4096x4096 的区块（8192 / 4096 = 2 x 2，共 4 块：前 3 块给 3 级，
+    // 第 4 块空着）。一整级因此是图上的一块连续矩形，重画整级时一条全级绘制就够，
+    // 不必逐页发。全局页号 = 级号 * 1024 + 级内页号。
+    static constexpr uint32_t kAtlasBlockSize = kPageTableAxis * kPageSize;            // 4096
+    static constexpr uint32_t kAtlasBlocksPerAxis = kAtlasResolution / kAtlasBlockSize; // 2
+
+    static uint32_t pageOriginX(uint32_t page);
+    static uint32_t pageOriginY(uint32_t page);
+    static void levelAtlasOrigin(uint32_t level, uint32_t& originX, uint32_t& originY);
 
     // HZB 第 level 级（1..7）的瓦片边长；第 0 级就是深度页本身，不在 HZB 图集里。
     static uint32_t hzbTileSize(uint32_t level) { return kPageSize >> level; }
@@ -161,6 +168,10 @@ public:
     // 每帧一次：三条失效条件（光源变换 / 页网格滚动 / 投影者变化）各管一块，
     // 结果是脏页位图。全零就说明上帧内容可以原样复用。
     void markPages(const glm::vec3& lightDirection, const std::vector<CasterBounds>& casters);
+
+    // 把某一页的世界方块铺满整块 128x128 瓦片：一级的 clip 空间里这一页只占 1/32，
+    // 所以先放大 32 倍再平移到原点。渲染时配合「viewport 设到该页瓦片」使用。
+    static glm::mat4 pageViewProjection(const ClipmapLevel& level, uint32_t pageX, uint32_t pageY);
     void clearPageDirty();
     bool isPageDirty(uint32_t level, uint32_t pageX, uint32_t pageY) const;
     uint32_t getDirtyPageCount(uint32_t level) const;

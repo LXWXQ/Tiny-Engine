@@ -103,9 +103,19 @@ public:
 
 private:
 
-    // P4-4：把本帧每个子网格的世界包围盒 + 身份交给页标记。
-    void markVirtualShadowPages(VirtualShadowMap& map, FrameInfo& frameInfo);
+    // P4-4 / P4-4b：采集投影者 → 标脏页 → 只把脏页画进图集。
+    void recordVirtualShadowPages(VkCommandBuffer cmd, FrameInfo& frameInfo);
     VirtualShadowMap* virtualShadowMap = nullptr;
+
+    // 逐页分桶用的 CSR（每帧重建，复用容量）：一级 1024 页，各页的投影者列表。
+    std::vector<uint32_t> pageCellCounts;
+    std::vector<uint32_t> pageCellOffsets;
+    std::vector<uint32_t> pageCellItems;
+    uint64_t vsmDrawFrames = 0;
+    uint64_t vsmSkipFrames = 0;
+    uint64_t vsmDrawnPages = 0;
+    uint64_t vsmDrawCalls = 0;
+    bool vsmAtlasInDepthLayout = false;
     struct Frame
     {
         VkImage image = VK_NULL_HANDLE;

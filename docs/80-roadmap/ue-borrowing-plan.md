@@ -4,7 +4,7 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1124 行
+size: ~1130 行
 updated: 2026-11-26
 ---
 
@@ -1123,3 +1123,9 @@ CSM 基线（Release，300 帧，三次重复一致）：静态 Sponza `total=0.
 远场归属要在 P4-6 之前定（CSM 兜底 / 加第 4 级 / 按距离淡出）。读数不变。
 
 **P4-4（2026-11-26，页标记）**：三条失效条件（光源方向 / 级中心整页滚动 / 投影者 `version`）换一张每级 16 个 `uint64` 的脏页位图，三级共 384 B；投影者由 `ShadowPass` 逐子网格取世界 AABB（过节点矩阵）后交给 `VirtualShadowMap::markPages()`。静态 130 帧稳态 `dirty=0/3072`，小投影者动起来只有 6~8 页脏，光方向动则整张 3072 页脏。滚动取「整级置脏」的保守解（搬页的代价与整级重画同量级）。外部实例这一版标记不到，留给 P4-4b 接绘制路径时从 `SceneGpuBatch` 实例表补齐。
+
+**P4-4b（2026-11-27，把脏页画进图集）**：`ShadowPass::recordVirtualShadowPages()` 把 P4-4 的脏页位图变成绘制：0 脏页直接返回（一条命令不发），某一级全脏就走「整级一条」（`level.lightViewProjection` + 4096² viewport，每个投影者只发一次），其余情况逐脏页（CSR 分桶 + `pageViewProjection` 放大 32 倍 + viewport 指到页瓦片）。图集布局同时从线性改成按级分块（2 x 2 块 4096²），让一整级成为一块连续矩形。
+
+读数：飞行场景的逐页路径是 225,982 / 27,310 / 20,238 draws，整级一条后 309 / 184 / 93 —— 逐页提交的真正代价不是命令本身（P4-3 前量到 ~2.3 ns/条），而是同一个子网格被重复提交到它覆盖的每一页。地形场景静态下 frame=1 `draws=15`，此后 `dirty=0` 一条命令不发，「静态不重画」这条终于有了 GPU 侧证据。
+
+缺口：外部实例（`--cube-field`、粒子、`setExternalInstances`）不在 `MeshComponent` 里，标记与绘制都覆盖不到；图集内容还没有采样者，正确性要等 P4-6 的页表采样才能逐像素验。

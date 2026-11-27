@@ -334,6 +334,41 @@ uint32_t VirtualShadowMap::getDirtyPageCount(uint32_t level) const
     return count;
 }
 
+uint32_t VirtualShadowMap::pageOriginX(uint32_t page)
+{
+    const uint32_t level = page / kPageTableEntries;
+    const uint32_t local = page % kPageTableEntries;
+    return (level % kAtlasBlocksPerAxis) * kAtlasBlockSize + (local % kPageTableAxis) * kPageSize;
+}
+
+uint32_t VirtualShadowMap::pageOriginY(uint32_t page)
+{
+    const uint32_t level = page / kPageTableEntries;
+    const uint32_t local = page % kPageTableEntries;
+    return (level / kAtlasBlocksPerAxis) * kAtlasBlockSize + (local / kPageTableAxis) * kPageSize;
+}
+
+void VirtualShadowMap::levelAtlasOrigin(uint32_t level, uint32_t& originX, uint32_t& originY)
+{
+    originX = (level % kAtlasBlocksPerAxis) * kAtlasBlockSize;
+    originY = (level / kAtlasBlocksPerAxis) * kAtlasBlockSize;
+}
+
+glm::mat4 VirtualShadowMap::pageViewProjection(const ClipmapLevel& level, uint32_t pageX, uint32_t pageY)
+{
+    const float axisCount = static_cast<float>(kPageTableAxis);
+    // 页中心在这一级 clip 空间里的坐标（[-1,1]）。
+    const float centerX = ((static_cast<float>(pageX) + 0.5f) / axisCount) * 2.0f - 1.0f;
+    const float centerY = ((static_cast<float>(pageY) + 0.5f) / axisCount) * 2.0f - 1.0f;
+
+    glm::mat4 tile(1.0f);
+    tile[0][0] = axisCount;
+    tile[1][1] = axisCount;
+    tile[3][0] = -centerX * axisCount;
+    tile[3][1] = -centerY * axisCount;
+    return tile * level.lightViewProjection;
+}
+
 void VirtualShadowMap::markPages(const glm::vec3& lightDirection, const std::vector<CasterBounds>& casters)
 {
     if (clipmaps.size() != static_cast<size_t>(kClipmapLevels))
@@ -589,9 +624,15 @@ bool VirtualShadowMap::selfTest()
     }
     if (pageOriginX(0) != 0 || pageOriginY(0) != 0)
         return false;
-    if (pageOriginX(63) != kAtlasResolution - kPageSize || pageOriginY(63) != 0)
+    if (pageOriginX(31) != kAtlasBlockSize - kPageSize || pageOriginY(31) != 0)
         return false;
-    if (pageOriginX(64) != 0 || pageOriginY(64) != kPageSize)
+    if (pageOriginX(32) != 0 || pageOriginY(32) != kPageSize)
+        return false;
+    if (pageOriginX(1023) != kAtlasBlockSize - kPageSize || pageOriginY(1023) != kAtlasBlockSize - kPageSize)
+        return false;
+    if (pageOriginX(1024) != kAtlasBlockSize || pageOriginY(1024) != 0)
+        return false;
+    if (pageOriginX(3071) != kAtlasBlockSize - kPageSize || pageOriginY(3071) != kAtlasResolution - kPageSize)
         return false;
     if (pageOriginX(4095) != kAtlasResolution - kPageSize || pageOriginY(4095) != kAtlasResolution - kPageSize)
         return false;
