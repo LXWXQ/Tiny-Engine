@@ -607,3 +607,15 @@ if (mergedMesh.valid && mergedMesh.signature == signature)
 **修法**：删掉多余那条，或者给 `if` 加花括号。凡是「在 `if` 分支末尾加注释/加语句」的行插入，都要在写回后 `Select-String` 回读该函数体的全部 `return`。
 
 **顺带修的第二个坑（同一类假失败）**：`Resources/Scenes/main.scene.json` 与 `config/engine.json` 是**运行态文件** —— 引擎退出时会写回相机位姿与渲染设置，而 editor 用例的自检依赖仓库里的默认场景。先跑的用例把状态改脏之后，后面的 `e8-editor-mode` / `e9-runtime-character` / `f3-voxel-persist` 等会假失败：`stderr 340 字节` + `[Editor] runtime character selfTest FAIL: ... interpolatedFollows=0`。`tools/Validate.ps1` 现在在脚本开头快照这两个文件，并在**每个用例启动前**还原（`Restore-EngineState`）。判据：同一个用例单独跑通过、放进整轮却失败，且 stderr 里是 editor 自检断言。
+
+## 43. `--camera` 的 pitch/yaw 是弧度，不是角度
+
+**现象**：想让相机"朝 -z 略低头"，凭直觉写 `--camera 0,4,14,10,180`，截出来的画面却像被按在地面上 —— 俯角被顶到 89.4°（接近正俯视），yaw 变成 10313°。同一个机位两次跑，只要先有别的用例动过相机，画面还会不一样。
+
+**原因**：`--camera` 的 pitch / yaw 原样写进 `scene->getCameraTransform().setEuler()`，而 `CameraController::cameraForward(float yaw, float pitch)` 里直接就是 `std::sin(yaw)` / `std::cos(yaw)`，俯角还被 `glm::clamp(pitch, -half_pi<float>() + 0.01f, half_pi<float>() - 0.01f)` 夹住 —— 整条链路都是**弧度**。传角度会得到 180 rad ≈ 10313°，pitch 被夹成 ±89.427°。
+
+**判据**：看截图左上 Camera 面板回读的 Rotation。传 `...,10,180` 显示 `89.427 10313.240`；传 `...,0,0` 显示 `0.000 0.000`（这时才对）。
+
+**修法**：按弧度给。朝 -z（正对原点）略低头 8° 写 `--camera 0,4,14,0.14,3.1416`。截图金标里把它当"弧度"记，别在参数里塞 30、90 这类数字。
+
+**顺带一个同类坑：方向光强度在 `lighting.color.w`，不在 `sun.intensity`**。`shaders/lighting.frag` 的 `CalcDirectionalLight` 里 `vec3 radiance = ubo.lightColor.xyz * ubo.lightColor.w;`，而 `sun.intensity` 只调太阳圆盘与眩光。默认 `lighting.color` 的 w = 1.0，方向光在室内场景里只占画面几个百分点 —— 此时 `--vsm` / `--no-vsm` 的像素差恒为 0，看着像"阴影没接上"，其实是"没有可见的直射光"。要验证阴影画质，把 `lighting.color` 的 w 提到 10~12、`lighting.exposure` 降到 0.3~0.4，再用 `--scene` 载入一个能看见受光面的 `.scene.json`。

@@ -181,6 +181,11 @@ bool updateProfile = false;
 // 会干扰"点选/包围盒/手柄"这类交互的观察。
 bool emptyScene = false;
 
+// --scene <path>：用场景文件（.scene.json）替换默认内容。
+// 阴影画质这类验证需要一个"看得见受光面"的可控场景 —— 默认的 Sponza
+// 是封闭室内，可见表面全在阴影里，靠它量不出画质差。
+std::string scenePath;
+
 // --runtime-mode：编辑器启动后直接进入运行模式（便于截图/演练角色）。
 bool runtimeMode = false;
 

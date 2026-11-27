@@ -62,6 +62,7 @@
 #include "Scene/FeatureComponents.h"
 #include "Scene/Components.h"
 #include "Scene/SkyCamera.h"
+#include "Editor/SceneSerializer.h"
 #include <cmath>
 #include <unordered_map>
 
@@ -212,10 +213,32 @@ renderGraph->setRenderTargetPoolEnabled(diagnosticsOptions.renderTargetPool);
 
 	scene = std::make_unique<Scene>();
 	// 编辑器模式默认不加载 Sponza（见 Scene::init）。--empty-scene 对运行时构建仍有效。
-const bool loadDefaultScene = !diagnosticsOptions.emptyScene && !diagnosticsOptions.editorMode;
+const bool loadDefaultScene = !diagnosticsOptions.emptyScene && !diagnosticsOptions.editorMode &&
+	diagnosticsOptions.scenePath.empty();
 scene->init(*vulkanDevice, renderer->getCommandPool(), *descriptorManager,
 		loadDefaultScene, jobSystem.get());
 	scene->getCameraController().registerCallbacks(window);
+
+	// --scene：用场景文件替换默认内容。放在 init 之后、配置应用之前，
+	// 这样场景里的相机 / 设置仍会被 main 传进来的配置与 --camera 覆盖。
+	if (!diagnosticsOptions.scenePath.empty())
+	{
+		scene::SceneDescription description;
+		std::string sceneError;
+		if (!editor::SceneSerializer::loadFromFile(diagnosticsOptions.scenePath, description, sceneError))
+		{
+			std::cerr << "[Scene] --scene 解析失败：" << sceneError << "\n";
+		}
+		else if (!scene->buildFromDescription(description, sceneError))
+		{
+			std::cerr << "[Scene] --scene 构建失败：" << sceneError << "\n";
+		}
+		else
+		{
+			std::cout << "[Scene] 已载入场景文件 " << diagnosticsOptions.scenePath
+				<< "（" << description.entities.size() << " 个实体）\n";
+		}
+	}
 
 	// W1：把配置应用到场景。顺序很重要 —— Scene::init 里会摆好默认相机位姿，
 	// 配置只能在那之后再覆盖，否则会被 init 的默认值抹掉。

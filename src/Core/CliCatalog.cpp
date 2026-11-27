@@ -10,6 +10,7 @@ const std::vector<UsageLine> kCatalog = {
     { "运行模式", "--selftest [N]", "跑 N 帧后退出（默认 600），无人值守回归用" },
     { "运行模式", "--editor", "以场景编辑器模式启动（TinyEditor.exe 默认开启）" },
     { "运行模式", "--empty-scene", "不加载 Sponza / 天空盒，只留相机" },
+    { "运行模式", "--scene <path>", "用 .scene.json 替换默认场景（阴影画质验证等需要可控场景时用）" },
     { "运行模式", "--camera <px,py,pz,pitch,yaw>", "覆盖 config 里的相机位姿（基准场景与截图要固定视角）" },
     { "运行模式", "--runtime-mode", "编辑器启动后直接进入运行模式（角色 + 第三人称相机）" },
     { "窗口", "--hidden / --visible", "不显示 / 强制显示窗口（自检与截图默认 --hidden）" },

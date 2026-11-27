@@ -1,0 +1,10 @@
+{
+  "entities": [
+    { "name": "Ground", "parent": -1, "mesh": "Models/debug_cube.obj", "translation": [0.0, -0.25, 0.0], "rotation": [0.0, 0.0, 0.0], "scale": [60.0, 0.5, 60.0], "material": { "name": "__EngineDefault", "baseColorFactor": [0.7, 0.7, 0.72, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.95 } },
+    { "name": "Blade20", "parent": -1, "mesh": "Models/debug_cube.obj", "translation": [-1.5, 0.75, -3.0], "rotation": [0.0, 0.0, 0.0], "scale": [0.2, 1.5, 0.6], "material": { "name": "__EngineDefault", "baseColorFactor": [0.9, 0.9, 0.9, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.5 } },
+    { "name": "Blade10", "parent": -1, "mesh": "Models/debug_cube.obj", "translation": [-0.5, 0.75, -3.0], "rotation": [0.0, 0.0, 0.0], "scale": [0.1, 1.5, 0.6], "material": { "name": "__EngineDefault", "baseColorFactor": [0.9, 0.9, 0.9, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.5 } },
+    { "name": "Blade05", "parent": -1, "mesh": "Models/debug_cube.obj", "translation": [0.5, 0.75, -3.0], "rotation": [0.0, 0.0, 0.0], "scale": [0.05, 1.5, 0.6], "material": { "name": "__EngineDefault", "baseColorFactor": [0.9, 0.9, 0.9, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.5 } },
+    { "name": "Blade02", "parent": -1, "mesh": "Models/debug_cube.obj", "translation": [1.5, 0.75, -3.0], "rotation": [0.0, 0.0, 0.0], "scale": [0.02, 1.5, 0.6], "material": { "name": "__EngineDefault", "baseColorFactor": [0.9, 0.9, 0.9, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.5 } },
+    { "name": "Pebble", "parent": -1, "mesh": "Models/debug_cube.obj", "translation": [0.0, 0.01, -1.0], "rotation": [0.0, 0.0, 0.0], "scale": [0.02, 0.02, 0.02], "material": { "name": "__EngineDefault", "baseColorFactor": [0.9, 0.2, 0.2, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.5 } }
+  ]
+}

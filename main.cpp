@@ -221,6 +221,12 @@ bool audioSpatialTest = false;
             diagOptions.vsm = false;
             continue;
         }
+        // P4-6b：--scene 同样走早退块 —— 那条 else-if 链再加分支就是 C1061。
+        if (arg == "--scene" && i + 1 < argc)
+        {
+            diagOptions.scenePath = argv[++i];
+            continue;
+        }
         if (arg == "--help" || arg == "-h")
         {
             printUsage(argv[0]);

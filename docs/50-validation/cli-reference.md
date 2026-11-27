@@ -96,7 +96,8 @@ updated: 2026-11-24
 | `--screenshot-frame <n>` | 指定帧号（隐含 `--screenshot`） | 同上 |
 | `--screenshot-viewport` | 截图拍编辑器离屏视口（纯 3D，不含 UI）；需配合 `--editor` | 0 |
 | `--empty-scene` | 不加载 Sponza / 天空盒，只留相机（调试单物体交互） | 0 |
-| `--camera <px,py,pz,pitch,yaw>` | 覆盖 `config/engine.json` 里保存的相机位姿。基准场景与截图金标必须用固定机位：不加这个开关时相机来自"上次谁动过"，同一份代码两次跑出的画面与剔除读数都不同 | 0 |
+| `--scene <path>` | 用 `.scene.json` 替换默认内容（与编辑器里打开场景同一套 `SceneSerializer`）。阴影 / 材质这类需要“看得见受光面”的画质验证靠它造可控场景；路径相对仓库根或绝对路径均可 | 0（不传时行为不变） |
+| `--camera <px,py,pz,pitch,yaw>` | 覆盖 `config/engine.json` 里保存的相机位姿。基准场景与截图金标必须用固定机位：不加这个开关时相机来自"上次谁动过"，同一份代码两次跑出的画面与剔除读数都不同。注意 **pitch / yaw 单位是弧度**（直接喂 `CameraController::cameraForward`），不是角度：朝 -z 略低头写 `0,4,14,0.16,3.1416` | 0 |
 | `--terrain-test` | 启动时在相机前方创建一块持久地形，用于端到端渲染/截图回归；常与 `--empty-scene --selftest` 配合 | 0（不传时不生成、不分摊） |
 | `--capture-frame <n>` | RenderDoc 在第 n 帧抓帧（需注入） | 0（不调 `RENDERDOC_GetAPI`） |
 | `--stats-pipelines` | 退出时打印管线数量、建管线耗时与状态去重 | 0（关时只累加整数、不建表） |
