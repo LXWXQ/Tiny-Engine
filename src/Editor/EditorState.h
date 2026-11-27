@@ -213,8 +213,8 @@ struct EditorState
     bool showStatistics = true;
 
     // ---- 视口 ----
-    // 3D 画面目前直接铺满整个交换链，面板浮在它上面。
-    // 这个矩形记录"没有被面板遮挡的中央区域"，后续做离屏视口时以它为准。
+    // 视口已走离屏渲染（TD-31）：场景先画到 viewport render target，再作为纹理贴进中央区域。
+    // 这个矩形记录未被面板遮挡的中央区域，离屏渲染的相机宽高比与鼠标拾取都以它为准。
     float viewportX = 0.0f;
     float viewportY = 0.0f;
     float viewportWidth = 0.0f;

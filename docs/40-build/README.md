@@ -24,4 +24,4 @@ updated: 2026-11-26
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/Validate.ps1
 ```
 
-它做四件事：准备依赖 -> 全新 configure/build -> 跑 21 项回归 -> 检查文档一致性。
+它做四件事：准备依赖 -> 全新 configure/build -> 跑 96 项回归 -> 检查文档一致性。

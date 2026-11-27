@@ -4,13 +4,15 @@ title: 代码与文档反查表
 type: meta
 scope: src/, shaders/, tools/, CMakeLists.txt, main.cpp
 read-when: 改动任何源文件 / shader / 脚本之前
-size: ~202 行
-updated: 2026-11-20
+size: ~254 行
+updated: 2026-11-27
 ---
 
 # 代码 <-> 文档反查表
 
 **用法**：改代码前扫一眼"源文件"列，找到你的文件，把"必读文档"读一遍；改完按"回写"列更新。
+
+**收录范围**：只列有独立职责、会单独被改的模块；同目录下的私有实现与纯数据结构头文件不单列，改它们按所在层的文档走。
 
 ## 1. RHI 层（`src/RHI/`）
 
@@ -38,6 +40,21 @@ updated: 2026-11-20
 | `FormatTable.h/.cpp` | 格式名字/字节数/能力位（颜色·深度·采样·存储·blit·线性）与 `--print-formats` | [decisions](../10-architecture/decisions.md) 决策 36 | decisions |
 | `TransientProbe.h/.cpp` | 惰性分配两条判据（用法被接受 + 存在 `LAZILY_ALLOCATED` 内存类型）与 `--probe-transient` | [decisions](../10-architecture/decisions.md) 决策 39 | decisions |
 | `RenderGraphAlias.h/.cpp` | 资源别名化的只读报告：按 Pass 序号算 `firstWrite` / `lastUse`，线性扫描 best-fit 装箱（格式 / 尺寸 / mip / 层数全同才合并）；区分渲染图持有与导入目标；`--alias-report` | [diagnostics](../60-debug-profiling/diagnostics.md) 第 11 节、[borrowed-techniques](../80-roadmap/borrowed-techniques.md) TM-08 | diagnostics |
+| `ShadowPass.*` / `VirtualShadowMap.*` / `shadow_gpu.vert` | 阴影贴图、虚拟阴影图（页表采样，`--no-vsm` 回退） | [shadow](../20-pipeline/shadow.md) | shadow |
+| `SSRPass.*` / `ReflectionPass.*` / `GlassPass.*` / `ssr.frag` / `glass.*` | 水面屏幕空间反射、平面反射、玻璃折射与粗糙透射 | [pass-order](../20-pipeline/pass-order.md) | pass-order |
+| `TAAPass.*` / `TemporalUpscaler.h` | 时域抗锯齿：抖动、速度重投影、历史校验与拒绝 | [pass-order](../20-pipeline/pass-order.md)、[diagnostics](../60-debug-profiling/diagnostics.md) | pass-order |
+| `TerrainComputeGenerator.*` / `TerrainGpuMeshBuilder.*` / `TerrainMeshArena.*` / `terrain_height.comp` / `terrain_mesh.comp` | 地形 GPU 生成三段（高度 → 网格 → arena 切分与空闲区间合并） | [terrain](../30-systems/terrain.md) | terrain |
+| `GpuScene.*` / `SparsePageAllocator.*` | GPU 场景与稀疏页分配（页表、页存储、回收） | [gpu-driven-submission](../10-architecture/gpu-driven-submission.md) | gpu-driven-submission |
+| `FramePayloads.h` | 帧内 payload 结构（Pass 之间传数据，不进 `FrameInfo`） | [pass-order](../20-pipeline/pass-order.md) | pass-order |
+| `ViewModelPass.*` / `viewmodel.*` / `sky_geometry.*` / `editor_overlay.*` | 第一人称视图模型、天空几何、编辑器选中框叠加 | [viewmodel](../30-systems/viewmodel.md)、[skybox](../30-systems/skybox.md)、[gizmo](../90-editor/gizmo.md) | viewmodel、gizmo |
+
+| `RenderGraphInternal.h` / `RenderGraphBarrier.cpp` / `RenderGraphBlackboard.h` | 图的内部结构、屏障批处理、Pass 与系统之间的数据黑板 | [rendergraph](../10-architecture/rendergraph.md) | rendergraph |
+| `StateCache.h/.cpp` | 管线 / 描述符 / 布局的冗余设置抑制（同一状态不重复录） | [synchronization](../10-architecture/synchronization.md) | synchronization |
+| `RenderTargetPool.*` / `TextureBudget.*` | 渲染目标池与纹理显存预算（超预算降级并记账） | [resource-lifetime](../10-architecture/resource-lifetime.md)、[diagnostics](../60-debug-profiling/diagnostics.md) | resource-lifetime、diagnostics |
+| `FrameStats.*` / `QueueStats.*` / `ResourceStats.*` | 每帧 / 每队列 / 每资源的统计聚合，`--stats-*` 的输出源 | [diagnostics](../60-debug-profiling/diagnostics.md) | diagnostics |
+| `DescriptorReflect.h` | 反射头里的 set/binding/偏移约定（`SpirvReflect.cpp` 的运行时侧） | [descriptors](../10-architecture/descriptors.md)、[shaders](../20-pipeline/shaders.md) | descriptors、shaders |
+| `ShaderReload.h/.cpp` | 轮询 `.spv` 的 mtime 重建管线（`--hot-reload`）；只重建 VkPipeline 与模块 | [build](../40-build/build.md) §3.5 | build |
+
 ## 2. Render 层（`src/Render/`）
 
 | 源文件 | 内容 | 必读文档 | 回写 |
@@ -68,6 +85,7 @@ updated: 2026-11-20
 | `CrossQueueProbePass.*` | TD-02 跨队列双方向探针 | [test-matrix](../50-validation/test-matrix.md) | test-matrix |
 | `SubresourceProbePass.*` | TD-05 子资源正/反例探针 | [rendergraph](../10-architecture/rendergraph.md) | rendergraph |
 
+
 ## 3. Core 层（`src/Core/`）
 
 | 源文件 | 内容 | 必读文档 | 回写 |
@@ -82,17 +100,19 @@ updated: 2026-11-20
 | `EventBus.h/.cpp` / `AppEvents.h` | latched 事件总线（后订阅者收到补发）+ 两个尺寸事件；交换链重建时订阅者各自跟上 | [decisions](../10-architecture/decisions.md) 决策 38 | decisions |
 | `CliCatalog.h/.cpp` | 命令行选项表（分组 / 开关 / 说明）的单一来源；`--help`、`--list-options` 与编辑器「帮助 → 命令行选项」面板都渲染它 | [cli-reference](../50-validation/cli-reference.md) 第 6 节 | cli-reference |
 | `AssetPath.h/.cpp` | 运行时资产根探测与 `asset://` / `shader://` / `config://` 解析；构建期路径优先、失效才按锚点回溯 | [decisions](../10-architecture/decisions.md) 决策 37 | decisions |
-| `ShaderReload.h/.cpp` | 轮询 `.spv` 的 mtime 重建管线（`--hot-reload`）；只重建 VkPipeline 与模块 | [build](../40-build/build.md) §3.5 | build |
 | `ImGuiSystem.h/.cpp` | 后端初始化（docking）、面板、ASCII 约束、交换链重建时与 PresentPass/UiCompositePass 的指针同步 | [imgui](../30-systems/imgui.md)、[viewport](../90-editor/viewport.md) | imgui、viewport |
 | `FrameInfo.h` / `FrameInFlight.h` | 每帧数据总线、`kFramesInFlight` | [synchronization](../10-architecture/synchronization.md) | synchronization |
 | `Material.h` / `MaterialSystem.*` / `MaterialSlot.h` | 材质数据、槽位哨兵 `kInvalidMaterialSlot` | [descriptors](../10-architecture/descriptors.md) | descriptors |
 | `Profiler.h` | Tracy CPU zone 宏（关闭时展开为 `(void)0`） | [zero-overhead](../60-debug-profiling/zero-overhead.md) | zero-overhead |
+| `AssetPack.*` | 资产包读取（清单 + 单文件回退） | [asset-pack](../30-systems/asset-pack.md) | asset-pack |
+| `StartupLog.*` | 启动日志落盘（崩溃后仍可看到启动阶段） | [diagnostics](../60-debug-profiling/diagnostics.md) | diagnostics |
+
 
 ## 4. Scene 层（`src/Scene/`）
 
 | 源文件 | 内容 | 必读文档 | 回写 |
 |---|---|---|---|
-| `Scene.h/.cpp` | `entt::registry`、setParent、世界变换传播、visibleEntities、地形异步请求/主线程上传 | [scene-ecs](../30-systems/scene-ecs.md)、[terrain](../30-systems/terrain.md) | scene-ecs、terrain |
+| `Scene.h/.cpp` | `entt::registry`、setParent、世界变换传播、visibleEntities、地形异步请求/回线程上传 | [scene-ecs](../30-systems/scene-ecs.md)、[terrain](../30-systems/terrain.md) | scene-ecs、terrain |
 | `Components.h` | 全部 component 定义（含 `TerrainComponent::generating` / `isTerrain`） | [scene-ecs](../30-systems/scene-ecs.md)、[terrain](../30-systems/terrain.md) | scene-ecs、terrain |
 | `ComponentTypes.h` / `ComponentRegistry.h` | 属性值、`ComponentDescriptor`、`PropertyDescriptor.enumLabels` / `withEnumOptions()` 元数据 | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
 | `FeatureComponents.*` / `SceneComponents.*` | 实体组件与系统（`effects.*`，含 Particle 200）、12 个 `scene.*` 场景组件（含 Vegetation、`shadows.filterMode`）与 `syncSceneSettings` | [scene-ecs](../30-systems/scene-ecs.md)、[vegetation](../30-systems/vegetation.md) | scene-ecs |
@@ -100,6 +120,14 @@ updated: 2026-11-20
 | `GLTFLoader.h/.cpp` | glTF 导入（几何烘焙到世界空间） | [scene-ecs](../30-systems/scene-ecs.md)、[known-limits](../70-status/known-limits.md) | scene-ecs |
 | `Model.h/.cpp` | 顶点/索引上传、子网格、OBJ | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
 | `Camera*` / `CameraController.*` | 相机与输入 | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
+| `EntityHandle.h/.cpp` | 实体句柄（index + version 薄包装，非第二套存储）+ `--handle-test` | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
+| `Trace.h/.cpp` / `Scene::traceRay` | 统一拾取入口：请求 → 结果（地形 / 体素 / 网格后端） | [scene-ecs](../30-systems/scene-ecs.md)、[gizmo](../90-editor/gizmo.md) | scene-ecs |
+| `NativeComponents.*` / `SystemScheduler.*` | 原生组件表与系统调度顺序（决定每帧谁先跑） | [scene-ecs](../30-systems/scene-ecs.md)、[simulation-tick](../30-systems/simulation-tick.md) | scene-ecs、simulation-tick |
+| `SimulationClock.*` / `SimulationReplay.*` / `RenderInterpolation.*` | 固定步长时钟、输入回放、渲染帧插值 | [simulation-tick](../30-systems/simulation-tick.md)、[replay](../30-systems/replay.md) | simulation-tick、replay |
+| `CharacterCollision.*` / `CharacterSimulation.*` | 角色胶囊碰撞与运动求解 | [character](../30-systems/character.md) | character |
+| `SkyCamera.*` / `ViewModel.*` | 天空相机的时间/朝向状态、视图模型姿态 | [skybox](../30-systems/skybox.md)、[viewmodel](../30-systems/viewmodel.md) | skybox、viewmodel |
+
+| `EntityHandle.h/.cpp` | 实体句柄（index + version 薄包装，不是第二套存储）+ `--handle-test` | [scene-ecs](../30-systems/scene-ecs.md) | scene-ecs |
 
 ### Terrain 层（`src/Terrain/`）
 
@@ -111,6 +139,8 @@ updated: 2026-11-20
 | `TerrainMeshBuilder.*` | 顶点/索引/法线/UV/顶点色 | [terrain](../30-systems/terrain.md) | terrain |
 | `TerrainTextureGenerator.*` | 确定性可平铺 4 层 albedo/normal/height/roughness 纹素 | [terrain-materials](../30-systems/terrain-materials.md) | terrain-materials |
 | `TerrainSelfTest.*` | 高度场/网格/纹理缓冲不变量自检 | [terrain](../30-systems/terrain.md) | terrain |
+| `TerrainBrush.*` / `TerrainSculptDelta.*` | 笔刷（半径/强度/衰减）与雕刻增量（判据 + 落盘） | [terrain](../30-systems/terrain.md) | terrain |
+
 
 ### Vegetation 层（`src/Vegetation/`）
 
@@ -118,7 +148,20 @@ updated: 2026-11-20
 |---|---|---|---|
 | `VegetationGenerator.*` | 纯 CPU：确定性抖动网格放置、树根邻点最低高度、草/针叶/阔叶三套程序化网格与接触圆盘 | [vegetation](../30-systems/vegetation.md) | vegetation |
 
-## 5. Shader（`shaders/`）
+## 5. 音频层（`src/Audio/`）
+
+| 源文件 | 内容 | 必读文档 | 回写 |
+|---|---|---|---|
+| `AudioDevice.*` / `AudioService.*` | 设备打开/关闭、对外服务与错误降级（没有音频设备时静默） | [audio](../30-systems/audio.md) | audio |
+| `AudioClip.*` / `AudioMixer.*` / `AudioSpatial.*` | 剪辑解码、混音总线、3D 空间化与距离衰减 | [audio](../30-systems/audio.md) | audio |
+
+## 6. 体素层（`src/Voxel/`）
+
+| 源文件 | 内容 | 必读文档 | 回写 |
+|---|---|---|---|
+| `VoxelTypes.*` / `VoxelChunk.*` | 体素数据类型、chunk 生成与网格化 | [voxel](../30-systems/voxel.md) | voxel |
+
+## 7. Shader（`shaders/`）
 
 | 文件 | 用途 | 必读文档 |
 |---|---|---|
@@ -137,26 +180,27 @@ updated: 2026-11-20
 | `ibl_*.frag/.vert` | IBL 烘焙 | [ibl](../20-pipeline/ibl.md) |
 | `fullscreen.vert` | 全屏三角 | [shaders](../20-pipeline/shaders.md) |
 | `compute_probe.comp`、`cross_queue_probe.*` | 测试探针 | [test-matrix](../50-validation/test-matrix.md) |
+| `terrain_height.comp`、`terrain_mesh.comp` | GPU 地形：高度采样与网格生成（写进 arena） | [terrain](../30-systems/terrain.md) |
+| `shadow_gpu.vert` | 阴影深度-only 顶点路径（与 `mrt.vert` 共用变换约定） | [shadow](../20-pipeline/shadow.md) |
 
 任何 shader 增删都要回写 [shaders.md](../20-pipeline/shaders.md) 的清单表。
 
-## 6. 构建与脚本
+
+## 8. 构建与脚本
 
 | 文件 | 内容 | 必读文档 | 回写 |
 |---|---|---|---|
-| `CMakeLists.txt` | 依赖检查、shader 编译 + `spirv-val`、`TINY_ENABLE_*` 开关 | [build](../40-build/build.md)、[dependencies](../40-build/dependencies.md) | build、dependencies |
+| `CMakeLists.txt` | 依赖检查、shader 编译 + `spirv-val`、`TINY_ENABLE_*` 开关；三个目标（`tiny_core` 对象库 + `TinyEngine` / `TinyEditor`）+ `TinyShaders` | [build](../40-build/build.md)、[dependencies](../40-build/dependencies.md)、[compile-speed](../40-build/compile-speed.md) | build、dependencies、compile-speed |
 | `cmake/AssetPaths.h.in` | 资源绝对路径注入 | [build](../40-build/build.md) | build |
-| `main.cpp` | 全部 CLI 参数解析 | [cli-reference](../50-validation/cli-reference.md) | cli-reference |
-| `tools/Validate.ps1` | 主回归（80 项 + 文档检查） | [test-matrix](../50-validation/test-matrix.md) | test-matrix |
+| `main.cpp` | 唯一被编译两次的文件（`TinyEngine` / `TinyEditor`，`TINY_DEFAULT_EDITOR` 决定默认模式）；全部 CLI 参数解析 | [cli-reference](../50-validation/cli-reference.md)、[build](../40-build/build.md) | cli-reference、build |
+| `tools/Validate.ps1` | 主回归（96 项 + 文档检查） | [test-matrix](../50-validation/test-matrix.md) | test-matrix |
 | `tools/SetupDependencies.ps1` | 8 个依赖的固定版本安装 | [dependencies](../40-build/dependencies.md) | dependencies |
 | `tools/DocCheck.ps1` | 本文档系统的自动校验 | [doc-rules](doc-rules.md) | doc-rules |
 | `tools/SpirvReflect.cpp` | 构建期解析 `.spv`，生成 `build/shaders/<name>.reflect.h`（set / binding / 块大小与成员偏移） | [shaders](../20-pipeline/shaders.md) 第 6 节 | shaders |
 | `tools/Baseline.ps1` / `DebugBundle.ps1` / `DeepValidation.ps1` / `Screenshot.ps1` / `Capture.ps1` / `Profile.ps1` | 剖析与证据收集 | [tools](../60-debug-profiling/tools.md) | tools |
 | `config/engine.json` | 运行时配置（version 2） | [config](../30-systems/config.md) | config |
-| `CMakeLists.txt` | 两个可执行目标（`TinyEngine` / `TinyEditor`）+ `tiny_core` 对象库 + `TinyShaders` | [build](../40-build/build.md) | build |
-| `main.cpp` | 唯一被编译两次的文件；`TINY_DEFAULT_EDITOR` 决定默认模式 | [build](../40-build/build.md)、[editor](../90-editor/README.md) | build、editor |
 
-## 6.5 编辑器层（`src/Editor/`）
+## 9. 编辑器层（`src/Editor/`）
 
 > 编辑器是 `--editor` 才启用的独立层。关掉时这条路径完全不存在。
 
@@ -178,6 +222,13 @@ updated: 2026-11-20
 | `panels/AssetBrowserPanel.*` | 扫描 Models 目录，双击创建实体（走命令栈） | [editor/panels](../90-editor/panels.md) | panels |
 | `panels/RenderSettingsPanel.*` | 组件目录（12 单一性 / 15 对象 / 1 系统天空盒）、创建向导、engine.json 默认值 | [editor/panels](../90-editor/panels.md)、[scene-ecs](../30-systems/scene-ecs.md) | panels、scene-ecs |
 | `ComponentWidgets.h` | Inspector 与 Render 向导共用的属性控件（含 Int 枚举 Combo） | [scene-ecs](../30-systems/scene-ecs.md)、[editor/panels](../90-editor/panels.md) | scene-ecs、panels |
+| `EditorPanel.h` | 面板基类契约与绘制顺序约定 | [editor/panels](../90-editor/panels.md) | panels |
+| `EditorPreferences.*` | 编辑器偏好存读（面板显隐、上次布局、启动场景） | [editor/architecture](../90-editor/architecture.md) | architecture |
+| `EditorSceneQuery.*` | 场景查询：拾取候选、框选、按名/按类型查找 | [editor/viewport](../90-editor/viewport.md)、[scene-ecs](../30-systems/scene-ecs.md) | viewport、scene-ecs |
+| `Prefab.*` | 预制体存读（子树捕获 / 实例化 / 引用重写） | [editor/prefabs](../90-editor/prefabs.md)、[serialization](../90-editor/serialization.md) | prefabs、serialization |
+| `TextureLibrary.*` | 纹理库与缩略图缓存（资产面板、材质面板共用） | [editor/materials](../90-editor/materials.md) | materials |
+| `panels/HistoryPanel.*` | 撤销/重做历史列表（与 `CommandStack` 同源） | [editor/commands](../90-editor/commands.md) | commands |
+| `panels/CliReferencePanel.*` | 「帮助 → 命令行选项」面板，渲染 `CliCatalog` | [cli-reference](../50-validation/cli-reference.md) | cli-reference |
 
 配套的引擎侧改动（改这些要同时看编辑器文档）：
 
@@ -192,11 +243,12 @@ updated: 2026-11-20
 | `src/Core/ImGuiSystem.cpp` 描述符池 | 容量 64，供 `AddTexture` 注册视口纹理 | [editor/viewport](../90-editor/viewport.md) |
 | `src/Scene/Components.h` `NameComponent` | 实体名（层级面板 + 序列化） | [scene-ecs](../30-systems/scene-ecs.md)、[editor/serialization](../90-editor/serialization.md) |
 
-## 7. 新会话最短路径
 
-1. 读根 [`README.md`](../../README.md)（约 150 行）——知道项目是什么、怎么跑。
+## 10. 新会话最短路径
+
+1. 读根 [`README.md`](../../README.md)（186 行）——知道项目是什么、怎么跑。
 2. 读 [`reading-paths.md`](reading-paths.md)，按任务选 1~3 篇。
 3. 只读选中那几篇的 front-matter + 正文，不要去读整个 `docs/`。
 
-**不要**在没有具体任务时通读 `10-architecture/` 全部文档——那是 1500+ 行，
+**不要**在没有具体任务时通读 `10-architecture/` 全部文档——那是 4,100+ 行，
 只有做架构级改动时才需要。

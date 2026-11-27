@@ -4,14 +4,14 @@ title: 回归测试矩阵
 type: validation
 scope: tools/Validate.ps1
 read-when: 加/改回归项，或某项失败需要知道它在测什么
-size: ~151 行
-updated: 2026-11-13
+size: ~157 行
+updated: 2026-11-27
 ---
 
 # 回归测试矩阵
 
-`tools/Validate.ps1` 默认跑 **78 项引擎/编辑器用例 + 2 项工具自测 = 80 项**；
-加 `-EnableProfiling` 时再多一项 `p1-profiling-enabled`（第 81 项）。
+`tools/Validate.ps1` 默认跑 **96 项**：94 个引擎/编辑器用例 + 2 个脚本步骤（`p3-baseline-diff`、`p3-debug-bundle`）；
+另有三项固定守卫（TD-08 dead-file guard、M1-A2 销毁入口门禁、DocCheck），日志末尾打印 `[validate] ALL PASS`。加 `-EnableProfiling` 时追加 `p1-profiling-enabled`（第 95 个用例，合计 97 项）。
 
 ## 1. 每项的判据（统一）
 
@@ -21,9 +21,7 @@ updated: 2026-11-13
 | 退出码 = `ExpectedExitCode` | 默认仍是 0；错误路径的用例显式声明（例如 `--not-a-flag` 约定返回 2） |
 | `stderr` 0 字节 | 默认要求；`AllowStderr = $true` 的用例放宽，并可用 `MustContainStderr` 断言那里的提示 |
 | 验证层标记 | 默认要求 `[Validation] errors=0 warnings=0`；`SkipValidationMarker = $true` 的用例不要求（帮助、纯参数校验这类不进设备） |
-| **stderr = 0 字节** | 任何 stderr 输出都算失败（验证层已不写 stderr） |
 | 关键 stdout 标记存在 | 每项有自己的 `MustContain` |
-| `[Validation] errors=0 warnings=0` | 除 4 项不建设备的用例，其余都必须出现 |
 
 ## 2. 引擎用例
 
@@ -119,6 +117,15 @@ updated: 2026-11-13
 | `m1-b3-material-json` | `--material-json-test` | `[Material] jsonSelfTest PASS` | 只写非默认字段、往返、25 材质 -88% |
 | `m1-b4-terrain-sculpt` | `--terrain-sculpt-test` | `[Terrain] sculptDeltaSelfTest PASS`、`[Terrain] sculptJsonSelfTest PASS` | 差分只收改动格、存档往返、空差分不写盘 |
 | `m1-b5-texture-budget` | `--texture-budget-test` | `[Texture] budgetSelfTest PASS` | mip 链字节、25% / 75% 两档降级、记账与峰值 |
+| `m1-c1-tick-clock` | `--tick-test` | `[Sim] clockSelfTest PASS` | 固定步长累加、追帧上限、暂停/倍速切换的时钟语义 |
+| `m1-c1c-render-interp` | `--render-interp-test` | `[Render] interpolationSelfTest PASS` | 相邻两帧渲染位姿插值、alpha 边界与退化步长 |
+| `m1-c3-particle-bench` | `--particle-bench` | `[Particle] bench PASS` | 粒子池吞吐与批量更新耗时基线 |
+| `m1-c4-audio` | `--audio-test` | `[Audio] mixerSelfTest PASS` | 混音总线增益、静音与削波保护 |
+| `m1-c4b-audio-spatial` | `--audio-spatial-test` | `[Audio] spatialSelfTest PASS` | 3D 衰减、声道映射与听者变换 |
+| `m1-d1-character-collision` | `--character-collision-test` | `[Collision] characterSelfTest PASS` | 胶囊-地形/网格碰撞、台阶与斜坡滑动 |
+| `m1-d2-replay` | `--replay-test` | `[Replay] characterSimulation PASS`、`[Replay] replaySelfTest PASS` | 输入录制回放一致性、确定性重演 |
+| `m1-d3-viewmodel` | `--viewmodel-test` | `[ViewModel] selfTest PASS` | 视图模型跟随相机、武器摆动与 FOV 补偿 |
+| `m1-d3b-sky3d` | `--sky3d-test` | `[Sky] cameraSelfTest PASS` | 天空相机时间/朝向推进与太阳方位计算 |
 
 ## 3. 工具自测
 

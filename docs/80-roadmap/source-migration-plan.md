@@ -32,7 +32,7 @@ updated: 2026-11-20
 | C1a | 固定步长模拟时钟 | 完成（`SimulationClock` + `--tick-test`） | `118a758` |
 | C1b | 编辑器两条模拟路径接入 | 完成（`stepSimulation` + `simulationDrivenExternally`） | `3e33071` |
 | C1c | 渲染插值（TRS + slerp） | 完成（按 tick 门控，含地形闪烁修复） | `c451f07` `90e5dcb` |
-| C2 | JobSystem work stealing + 依赖 + 取消 | 完成（5.9–6.2× 加速；偶发挂死已修） | `ab1cda3` `d0fa6c8` |
+| C2 | JobSystem work stealing + 依赖 + 取消 | 完成（5.9–6.2× 加速；偶发挂死已修）。取消能力在 `JobSystem` 内部（`CancelToken`），消费端接线未做 | `ab1cda3` `d0fa6c8` |
 | C3 | 粒子 SoA | **判定不做**（实测 0.025ms/帧） | `d0fa6c8` |
 | C4 | 音频子系统（混音器 + XAudio2） | 完成 | `9075e5a` |
 | C4b | 3D 音源接入场景 | 完成（距离衰减/声像/低通） | `e1265b6` |
@@ -41,8 +41,8 @@ updated: 2026-11-20
 | D2 | 角色步进纯函数 + 录制/回放 | 完成（60/144Hz 抖动帧逐 tick 哈希一致） | `e5fd09b` |
 | D3 | 第一人称手持物独立通道 | 完成（独立近远平面 + 独立深度） | `5446ef4` |
 | D3b | 3D 几何天空（SkyCamera） | 完成（锁相机 + `skyGeometryPipeline`） | `508ab6e` |
-| D4 | shader specialization constants | **未做**（`Pipeline.cpp` 仍 `pSpecializationInfo = nullptr`） | — |
-| D5 | GPU LOD 选级 | **未做**（只有 CPU 选级） | — |
+| D4 | shader specialization constants | **已评估：不接**（决策 85；`Pipeline.cpp:105/:113` 显式 `pSpecializationInfo = nullptr` 属有意为之，运行时可调标量走 push constant） | — |
+| D5 | GPU LOD 选级 | 地形已完成（`shaders/terrain_lod.comp` + CPU parity 镜像）；**模型没有 LOD 链**，故模型侧无从选级 | — |
 
 ## 2. 未完成项
 

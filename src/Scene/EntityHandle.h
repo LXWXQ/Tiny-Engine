@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 // M1-A1: entity handle contract.
 //
-// Why this exists (docs/source-migration/10-core/01-entity-handles.md):
+// Why this exists (docs/30-systems/scene-ecs.md):
 // the Source engine packs a 16 bit entry index and a 16 bit serial into one
 // uint32 so a stale handle can be detected after the slot is reused. EnTT's
 // entt::entity already stores exactly that pair, so the value type is not the

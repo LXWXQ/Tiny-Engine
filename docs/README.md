@@ -4,8 +4,8 @@ title: 文档系统总纲
 type: meta
 scope: docs/
 read-when: 第一次接触本项目、或要新增/移动/删除文档
-size: ~251 行
-updated: 2026-11-23
+size: ~284 行
+updated: 2026-11-27
 ---
 # 文档系统总纲
 
@@ -14,8 +14,8 @@ updated: 2026-11-23
 
 ## 0. 为什么要有这一层
 
-本项目由 LLM 驱动开发：每次新对话的上下文是**有限预算**，而代码规模（约 100 个源文件、
-51KB 的 `RenderGraph.cpp`、47 个 shader）远超一次能全读的量。
+本项目由 LLM 驱动开发：每次新对话的上下文是**有限预算**，而代码规模（295 个源文件、约 8.35 万行、
+1890 行的 `RenderGraph.cpp`、56 个 shader）远超一次能全读的量。
 
 所以文档系统的首要目标不是"写得多"，而是：
 
@@ -23,8 +23,9 @@ updated: 2026-11-23
 2. **可定位**：从"我要改 X"能在两步内找到该读哪篇，而不是全文搜索。
 3. **不可漂移**：代码改了文档没改，要被机器检查出来（`tools/DocCheck.ps1`）。
 
-推论：**每个文档必须自带 front-matter、必须被父索引登记、必须控制体量**。
-一篇 3000 行的巨型文档等于没有文档——它读不进上下文，也没法定位。
+推论：**每个文档必须自带 front-matter、必须被父索引登记**；体量按"主题能不能独立成立"判断，
+**不设行数上限**（2026-11-04 起取消按行数硬拆，见 [doc-rules](00-meta/doc-rules.md) §4）。
+一篇什么都讲的文档仍然没人读——那是边界没划清，不是行数太多。
 
 ---
 
@@ -52,94 +53,110 @@ updated: 2026-11-23
 ## 2. 层次规则（像文件系统一样）
 
 ```
-README.md                        根：是什么 / 怎么跑 / 特性 / 索引 / 管理规则摘要
+README.md                              根：是什么 / 怎么跑 / 特性 / 索引 / 管理规则摘要
 └── docs/
-    ├── README.md                本文件：类型、层次、规则、完整索引
+    ├── README.md                      本文件：类型、层次、规则、完整索引
     ├── 00-meta/
-    │   ├── README.md            本分类索引
-    │   ├── doc-rules.md         文档管理规则（详细版）
-    │   ├── doc-template.md      新文档模板
-    │   ├── doc-map.md           代码 <-> 文档 反查表
-    │   └── reading-paths.md     按任务给出的最小阅读集
+    │   ├── README.md                  本分类索引
+    │   ├── doc-rules.md               文档管理规则（详细版）
+    │   ├── doc-template.md            新文档模板
+    │   ├── doc-map.md                 代码 <-> 文档 反查表
+    │   └── reading-paths.md           按任务给出的最小阅读集
     ├── 10-architecture/
     │   ├── README.md
-    │   ├── layering.md          分层与依赖方向
-    │   ├── rendergraph.md       渲染图：屏障推导 / 子资源 / 语义校验
-    │   ├── resource-lifetime.md 谁创建谁销毁 / 帧槽位 / 销毁顺序
-    │   ├── synchronization.md   多帧在飞 / 双队列 / timeline / present
-    │   ├── descriptors.md       Set0 全局 + Set1 bindless
-    │   ├── decisions.md         21 条关键设计决策与取舍
-    │   └── weak-points.md       架构薄弱点（按影响排序）
+    │   ├── layering.md                分层与依赖方向
+    │   ├── rendergraph.md             渲染图：屏障推导 / 子资源 / 语义校验
+    │   ├── resource-lifetime.md       谁创建谁销毁 / 帧槽位 / 销毁顺序
+    │   ├── synchronization.md         多帧在飞 / 双队列 / timeline / present
+    │   ├── descriptors.md             Set0 全局 + Set1 bindless
+    │   ├── gpu-driven-submission.md   实例缓冲 / compute 剔除 / 间接绘制
+    │   ├── world-origin.md            浮动原点 / 大世界坐标 / 地形噪声锚点
+    │   ├── decisions.md               85 条关键设计决策与取舍
+    │   └── weak-points.md             架构薄弱点（按影响排序）
     ├── 20-pipeline/
     │   ├── README.md
-    │   ├── pass-order.md        Pass 顺序 + 为什么是这个顺序
-    │   ├── gbuffer.md           5 个 G-Buffer 附件与格式选择
-    │   ├── intermediate.md      中间目标 / Bloom 金字塔 / HDR
-    │   ├── ibl.md               split-sum 烘焙三步
-    │   └── shaders.md           47 个 shader 清单与编译管线
+    │   ├── pass-order.md              Pass 顺序 + 为什么是这个顺序
+    │   ├── gbuffer.md                 5 个 G-Buffer 附件与格式选择
+    │   ├── intermediate.md            中间目标 / Bloom 金字塔 / TAA 历史 / HDR
+    │   ├── ibl.md                     split-sum 烘焙三步
+    │   ├── shadow.md                  级联阴影（F6-a）
+    │   └── shaders.md                 56 个 shader 清单与编译管线
     ├── 30-systems/
     │   ├── README.md
-    │   ├── scene-ecs.md         EnTT / Transform 层级 / 空间索引
-    │   ├── jobsystem.md         worker pool / parallelFor / 限制
-    │   ├── config.md            EngineConfig v2 / 迁移 / 原子写
-    │   ├── imgui.md             面板 / 后端 / ASCII 约束
-    │   ├── terrain.md           程序化地形：参数 / 生成 / 渲染 / 存读
-    │   ├── terrain-materials.md 地形 Set2：四层 PBR / 材质集 / Surface Style
-    │   ├── character.md         运行模式角色：glTF 蒙皮 / 动画状态机 / CPU skinning
-    │   ├── vegetation.md        地形植被：程序化草/树 / 放置规则 / 实例化
-    │   ├── voxel.md             方块体素：chunk / 贪心网格 / 挖放 / 玻璃
-    │   ├── fog-volume.md        局部体积雾：雾盒摆放 / raymarch / 噪声 / 调参
-    │   └── water.md             水面：径向网格 / footprint 波浪过滤 / 反射 / 泡沫 / 距离雾
+    │   ├── scene-ecs.md               EnTT / Transform 层级 / 空间索引
+    │   ├── jobsystem.md               worker pool / parallelFor / 限制
+    │   ├── simulation-tick.md         固定步长模拟时钟
+    │   ├── replay.md                  输入录制与回放（D2）
+    │   ├── config.md                  EngineConfig v2 / 迁移 / 原子写
+    │   ├── imgui.md                   面板 / 后端 / ASCII 约束
+    │   ├── asset-pack.md              资产包 .tpack
+    │   ├── audio.md                   混音器与设备后端
+    │   ├── particles.md               粒子系统与模拟成本
+    │   ├── skybox.md                  2D 环境贴图与 3D 几何天空
+    │   ├── viewmodel.md               第一人称手持物
+    │   ├── character.md               运行模式角色：glTF 蒙皮 / 动画状态机
+    │   ├── terrain.md                 程序化地形：参数 / 生成 / 渲染 / 存读
+    │   ├── terrain-materials.md       地形 Set2：四层 PBR / 材质集 / Surface Style
+    │   ├── vegetation.md              地形植被：程序化草/树 / 放置规则 / 实例化
+    │   ├── voxel.md                   方块体素：chunk / 贪心网格 / 挖放 / 玻璃
+    │   ├── fog-volume.md              局部体积雾：雾盒摆放 / raymarch / 噪声 / 调参
+    │   └── water.md                   水面：径向网格 / footprint 波浪过滤 / 反射 / 泡沫 / 距离雾
     ├── 40-build/
     │   ├── README.md
-    │   ├── dependencies.md      8 个固定版本 / 目录布局 / setup 脚本
-    │   ├── build.md             构建流程 / 三条隐形规则
-    │   ├── troubleshooting.md   构建期与运行期故障排查
-    │   └── git-workflow.md      提交/推送流程与失败处理
+    │   ├── dependencies.md            9 个固定版本第三方依赖 / 目录布局 / setup 脚本
+    │   ├── build.md                   构建流程 / 三条隐形规则
+    │   ├── compile-speed.md           编译速度：瓶颈、优化开关与踩坑
+    │   ├── troubleshooting.md         构建期与运行期故障排查
+    │   └── git-workflow.md            提交/推送流程与失败处理
     ├── 50-validation/
     │   ├── README.md
-    │   ├── cli-reference.md     全部命令行参数
-    │   ├── test-matrix.md       80 项回归矩阵与判据
-    │   └── acceptance.md        验收标准与"结果可信度"三规则
+    │   ├── cli-reference.md           全部命令行参数
+    │   ├── test-matrix.md             回归矩阵与判据
+    │   └── acceptance.md              验收标准与"结果可信度"三规则
     ├── 60-debug-profiling/
     │   ├── README.md
-    │   ├── zero-overhead.md     两层开关模型与 9 条实现规则
-    │   ├── tools.md             工具速查（自研 + 外部）
-    │   ├── diagnostics.md       Diagnostics / GpuTimer / Screenshot 实现
-    │   └── pitfalls.md          坑清单（改代码前必读）
+    │   ├── zero-overhead.md           两层开关模型与实现规则
+    │   ├── tools.md                   工具速查（自研 + 外部）
+    │   ├── diagnostics.md             Diagnostics / GpuTimer / Screenshot 实现
+    │   └── pitfalls.md                坑清单（改代码前必读）
     ├── 70-status/
     │   ├── README.md
-    │   ├── milestones.md        里程碑与实测基线
-    │   ├── milestones-archive.md 历史里程碑归档（D-8～D-24）
-    │   ├── backlog.md          后续任务台账
-    │   ├── tech-debt.md         当前技术债
-    │   ├── baseline.md          三场景性能基线（bench.ps1 实测）
-    │   └── known-limits.md      已知边界
+    │   ├── milestones.md              当前基线 + 近期里程碑（2026-11-23 起）
+    │   ├── milestones-archive.md      历史里程碑归档（D-8～F6-08）
+    │   ├── backlog.md                 后续任务台账
+    │   ├── tech-debt.md               当前技术债
+    │   ├── baseline.md                三场景性能基线（bench.ps1 实测）
+    │   └── known-limits.md            已知边界
     ├── 80-roadmap/
     │   ├── README.md
-    │   ├── roadmap.md           F1~F7 主功能路线
-    │   ├── borrowed-techniques.md 可借鉴技术清单（TM 系列）
-    │   ├── ue-borrowing-plan.md UE 借鉴改造总纲（分层 / 分类 / 分阶段）
-    │   └── terrain-plan.md      程序化地形实施方案（F2 / D-18）
+    │   ├── roadmap.md                 F1~F7 主功能路线
+    │   ├── borrowed-techniques.md     可借鉴技术清单（TM 系列）
+    │   ├── ue-borrowing-plan.md       UE 借鉴改造总纲（分层 / 分类 / 分阶段）
+    │   ├── terrain-plan.md            程序化地形实施方案（F2 / D-18）
+    │   └── source-migration-plan.md   Source 迁移改造计划（M1）
     └── 90-editor/
-        ├── README.md            编辑器总览与面板清单
-        ├── architecture.md      EditorContext / EditorState / 接缝
-        ├── commands.md          命令栈与撤销重做
-        ├── gizmo.md             射线拾取与三轴手柄
-        ├── materials.md         占位材质棋盘格
-        ├── ux-rules.md          多用户友好性判据（U1~U9）
-        ├── ux-audit.md          界面友好性现状审计（P0/P1/P2）
-        └── ux-playbook.md       UX 改造的 AI 执行协议
-        ├── panels.md            面板与布局
-        ├── serialization.md     *.scene.json 场景存读
-        └── viewport.md          离屏视口
+        ├── README.md                  编辑器总览与面板清单
+        ├── architecture.md            EditorContext / EditorState / 接缝
+        ├── commands.md                命令栈与撤销重做
+        ├── gizmo.md                   射线拾取与三轴手柄
+        ├── materials.md               占位材质棋盘格
+        ├── panels.md                  面板与布局
+        ├── prefabs.md                 预制体资产
+        ├── serialization.md           *.scene.json 场景存读
+        ├── viewport.md                离屏视口
+        ├── ux-rules.md                多用户友好性判据（U1~U9）
+        ├── ux-audit.md                界面友好性现状审计（P0/P1/P2）
+        ├── ux-playbook.md             UX 改造的 AI 执行协议
+        └── milestones.md              编辑器里程碑（E1 起）
 ```
 
 **层次约束**
 
-- 单篇目标体量：**150~450 行**。超过 500 行就该拆成子文档并在父索引登记。
+- 体量：**不设行数上限**；某篇长期只讲一个碎片（<60 行）时，与相邻主题合并或降级为索引条目，
+  某篇混讲两件互不相干的事时按主题拆开，不建子目录。
 - 层级最深 3 级（`docs/<分类>/<文档>`）。再深说明分类没分对。
 - 每篇必须能被"父索引 + 本页 front-matter"**唯一定位**。
+- 同一分类超过 8 篇时按 [doc-rules](00-meta/doc-rules.md) §4 建二级目录。
 
 ---
 
@@ -153,19 +170,19 @@ id: architecture/rendergraph
 title: 渲染图
 type: architecture
 scope: src/RHI/RenderGraph.{h,cpp}
-read-when: 修改 Pass 声明、屏障、子资源校验时
-size: ~251 行
-updated: 2026-11-23
+read-when: 修改任何 Pass 的资源声明、新增资源、调整 Pass 顺序、调试 layout/hazard 报错
+size: ~242 行
+updated: 2026-11-27
 ---
 ```
 
 | 字段 | 作用 |
 |---|---|
-| `id` | 稳定标识，跨文档引用用 |
+| `id` | 稳定标识，跨文档引用用；必须与路径匹配 |
 | `title` | 人读标题 |
-| `type` | 九种类型之一（见 §1） |
+| `type` | 十种类型之一（见 §1） |
 | `scope` | 覆盖的代码路径；**空 scope 表示纯说明文档** |
-| `read-when` | **关键字段**：让 LLM 判断"这次要不要读这篇" |
+| `read-when` | **关键字段**：让 LLM 判断"这次要不要读这篇"；写触发条件，不写"介绍XX" |
 | `size` | 体量提示，帮助估算上下文成本 |
 | `updated` | 最后修改日期 |
 
@@ -177,9 +194,10 @@ updated: 2026-11-23
 
 1. **根目录只允许 `README.md`**。其余一律进 `docs/`。
 2. **改动子文档 -> 必须回写父索引**。新增/删除/改名/改职责，在**同一次改动**里更新
-   本分类 `README.md`、本文 §2 的树、以及根 `README.md` 的索引表。
+   本分类 `README.md`、本文 §2 的树与 §5 的索引表、以及根 `README.md` 的索引表。
 3. **改代码 -> 必须查 [doc-map](00-meta/doc-map.md)**，按表回写受影响文档。
-4. **`tools/DocCheck.ps1` 必须通过**（已接入 `tools/Validate.ps1`）。
+4. **`tools/DocCheck.ps1` 必须通过**（已接入 `tools/Validate.ps1`）。它检查 front-matter 完整性、
+   id 与路径匹配、父索引登记、相对链接可达；**不检查行数**。
 5. **文档语言：中文**；代码标识符、命令、路径保持原文。ImGui 可见文本必须是 ASCII（见
    [imgui](30-systems/imgui.md)），但文档本身不受此限。
 6. **不写"将来可能"**：未做的写进 [roadmap](80-roadmap/roadmap.md)，
@@ -200,24 +218,37 @@ updated: 2026-11-23
 | architecture | [resource-lifetime](10-architecture/resource-lifetime.md) | 新增资源 / 改销毁顺序 / 帧槽位 |
 | architecture | [synchronization](10-architecture/synchronization.md) | 多帧、双队列、timeline、resize |
 | architecture | [descriptors](10-architecture/descriptors.md) | 改描述符布局 / 材质槽位 |
+| architecture | [gpu-driven-submission](10-architecture/gpu-driven-submission.md) | 改几何提交 / 剔除 / 间接绘制 |
+| architecture | [world-origin](10-architecture/world-origin.md) | 改场景坐标 / 接大世界 / 远距离抖动 |
 | architecture | [decisions](10-architecture/decisions.md) | **质疑现有设计前** |
 | architecture | [weak-points](10-architecture/weak-points.md) | 评估改动风险 |
 | pipeline | [pass-order](20-pipeline/pass-order.md) | 调整 Pass 顺序 / 新增 Pass |
 | pipeline | [gbuffer](20-pipeline/gbuffer.md) | 改 G-Buffer 布局或格式 |
-| pipeline | [intermediate](20-pipeline/intermediate.md) | 改中间目标 / Bloom 级数 |
+| pipeline | [intermediate](20-pipeline/intermediate.md) | 改中间目标 / Bloom / TAA 历史 |
 | pipeline | [ibl](20-pipeline/ibl.md) | 改环境光照 |
-| pipeline | [shaders](20-pipeline/shaders.md) | 增删 shader / 编译报错 |
+| pipeline | [shadow](20-pipeline/shadow.md) | 调阴影质量 / 阴影不显示 |
+| pipeline | [shaders](20-pipeline/shaders.md) | 增删 shader / 编译报错 / binding 不一致 |
 | systems | [scene-ecs](30-systems/scene-ecs.md) | 改场景 / 变换 / 剔除 |
 | systems | [jobsystem](30-systems/jobsystem.md) | 用或改并行任务 |
+| systems | [simulation-tick](30-systems/simulation-tick.md) | 改角色移动/跳跃 / 重放不一致 |
+| systems | [replay](30-systems/replay.md) | 录制回放 / 排查轨迹分叉 |
 | systems | [config](30-systems/config.md) | 改可调参数 / 配置格式 |
 | systems | [imgui](30-systems/imgui.md) | 改面板 |
+| systems | [asset-pack](30-systems/asset-pack.md) | 打包/挂载资产 / 贴图读不到 |
+| systems | [audio](30-systems/audio.md) | 播放声音 / 没声音 / 爆音 |
+| systems | [particles](30-systems/particles.md) | 改粒子模拟 / 粒子上限 |
+| systems | [skybox](30-systems/skybox.md) | 改天空 / 远处景物与视差 |
+| systems | [viewmodel](30-systems/viewmodel.md) | 手持物显示不对 / 贴墙被裁 |
+| systems | [character](30-systems/character.md) | 改角色移动/动画/蒙皮 |
 | systems | [terrain](30-systems/terrain.md) | 改地形生成 / 网格 / 顶点色 / 地形存读 |
+| systems | [terrain-materials](30-systems/terrain-materials.md) | 改地形 Set2 纹理 / 材质集 / 四层混合 |
 | systems | [vegetation](30-systems/vegetation.md) | 改草/树分布、外观、风摆 |
 | systems | [voxel](30-systems/voxel.md) | 改体素网格、挖放、玻璃透明 |
 | systems | [fog-volume](30-systems/fog-volume.md) | 摆放局部雾、调浓度/高度/噪声/风 |
 | systems | [water](30-systems/water.md) | 改水面外观 / 波浪过滤 / 反射 / 距离雾 |
 | build | [dependencies](40-build/dependencies.md) | 换机器 / 加依赖 |
 | build | [build](40-build/build.md) | 每次构建 |
+| build | [compile-speed](40-build/compile-speed.md) | 觉得编译慢 / 改 pch.h |
 | build | [troubleshooting](40-build/troubleshooting.md) | 编不过 / 跑不起来 |
 | build | [git-workflow](40-build/git-workflow.md) | 提交 / 推送代码 |
 | validation | [cli-reference](50-validation/cli-reference.md) | 加参数 / 写脚本 |
@@ -228,7 +259,7 @@ updated: 2026-11-23
 | debug | [diagnostics](60-debug-profiling/diagnostics.md) | 改验证层/计时/截图 |
 | debug | [pitfalls](60-debug-profiling/pitfalls.md) | **改代码前必读** |
 | status | [milestones](70-status/milestones.md) | 对照基线 |
-| status | [milestones-archive](70-status/milestones-archive.md) | 回看历史逐轮记录 |
+| status | [milestones-archive](70-status/milestones-archive.md) | 回看历史逐轮记录（D-25 之后也在这里） |
 | status | [backlog](70-status/backlog.md) | 下一项做什么 |
 | status | [tech-debt](70-status/tech-debt.md) | 决定下一步 |
 | status | [known-limits](70-status/known-limits.md) | 判断需求可行性 |
@@ -236,12 +267,14 @@ updated: 2026-11-23
 | roadmap | [roadmap](80-roadmap/roadmap.md) | 开新主功能前 |
 | roadmap | [terrain-plan](80-roadmap/terrain-plan.md) | 做地形 F2 / D-18 |
 | roadmap | [borrowed-techniques](80-roadmap/borrowed-techniques.md) | 决定下一项基础改造 |
-| roadmap | [ue-borrowing-plan](80-roadmap/ue-borrowing-plan.md) | 决定下一项基础改造 / 排期 |
+| roadmap | [ue-borrowing-plan](80-roadmap/ue-borrowing-plan.md) | UE 借鉴改造排期 |
+| roadmap | [source-migration-plan](80-roadmap/source-migration-plan.md) | 确认某项 M1 改造是否做完 |
 | editor | [editor](90-editor/README.md) | **做编辑器任何改动前** |
 | editor | [architecture](90-editor/architecture.md) | 加面板 / 改接缝 |
 | editor | [commands](90-editor/commands.md) | 加可撤销操作 |
 | editor | [serialization](90-editor/serialization.md) | 改场景格式 |
 | editor | [panels](90-editor/panels.md) | 写新面板 / 改布局 |
+| editor | [prefabs](90-editor/prefabs.md) | 做预制体 / 改菜单/序列化 |
 | editor | [viewport](90-editor/viewport.md) | 改视口 / 画面拉伸或发暗 |
 | editor | [gizmo](90-editor/gizmo.md) | 点选与三轴手柄 |
 | editor | [materials](90-editor/materials.md) | 占位材质棋盘格 |

@@ -127,7 +127,7 @@ updated: 2026-11-20
   Model 接管 VMA allocation；多 chunk 手动地形仍走 CPU builder。B-05 已把单
   chunk GPU mesh 改为 4 槽异步 submit/poll，CPU picking mirror 也在 worker 线程
   生成；默认 257² 异步重建主线程 poll 约 1ms，但同步场景加载仍阻塞。
-- 场景加载仍同步；重复 Generate 会触发 Scene 级协作取消，但取消粒度是顶点行，不是硬中断。
+- 场景文件加载（`SceneSerializer` / glTF）仍同步；地形实体创建与重建已异步（`Scene::createTerrainEntityAsync`，主线程约 0.28ms）。重复 Generate 会触发 Scene 级协作取消，取消粒度是顶点行，不是硬中断。
 - 地形材质最多 4 个 Set2 材质集，每个 set 固定 12 张纹理（height/roughness
   已打包）。set 0 启动时加载根目录，set 1~3 按需从 `setN/` 加载；16 张 PNG
   不齐就整套回退程序化纹理，仓库不附带美术资产。

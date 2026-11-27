@@ -17,7 +17,7 @@ updated: 2026-10-31
 | # | 判据 |
 |---|---|
 | 1 | 构建**零警告** |
-| 2 | `tools/Validate.ps1` **21 项全 PASS** |
+| 2 | `tools/Validate.ps1` **96 项全 PASS** |
 | 3 | 每项 **stderr 0 字节** |
 | 4 | 每项 `[Validation] errors=0 warnings=0` |
 | 5 | 涉及画质/性能时：`Baseline.ps1 -Action Diff` 无回归 |

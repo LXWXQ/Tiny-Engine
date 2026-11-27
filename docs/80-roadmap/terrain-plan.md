@@ -48,7 +48,7 @@ updated: 2026-11-02
 | 编辑器 | ImGui 面板；`EditorLayer` 菜单；Hierarchy 有 Create Empty；Assets 双击创建网格 | `EditorLayer.cpp` |
 | 撤销 | `CommandStack` + `CreateEntityCommand` / `DeleteEntityCommand` | `Editor/Commands.*` |
 | 序列化 | `SceneDescription` 纯数据 + JSON v1；网格只存文件路径 | `SceneDescription.h`、`SceneSerializer.cpp` |
-| JobSystem | 有 worker pool、submit、parallelFor；无取消/依赖图；**不在 EngineServices 里暴露** | `Core/JobSystem.*`、`EditorContext.h` |
+| JobSystem | 有 worker pool、`submit`、`parallelFor`、依赖图与 `CancelToken`（M1-C2）；但地形/体素仍各用自己的 `cancelRequested`，token 未接线；**不在 EngineServices 里暴露** | `Core/JobSystem.*`、`EditorContext.h` |
 | 空间索引 | Scene 显式 dirty transform/spatial 集合；只对 dirty bounds 重算世界 AABB，bucket 增量 upsert/remove，destroy 同步移除 | `Scene::refreshSpatialIndex`、`SpatialIndex::insert/remove` |
 | 测试 | `--selftest`、`EditorLayer::selfTest`、`Validate.ps1`；没有独立单测框架 | `Application.cpp`、`tools/` |
 
@@ -118,7 +118,7 @@ Scene::visibleEntities -> GeometrySystem -> mrt.frag
 
 **取舍 B：MVP 同步生成，不引入异步任务状态机。**
 
-`JobSystem` 的 `submit` 没有取消；把生成放到 worker 后，UI 必须每帧轮询结果，
+地形在 `submit` 出去的任务里靠自己的 `cancelRequested` 轮询取消（`JobSystem::CancelToken` 未接线）；把生成放到 worker 后，UI 必须每帧轮询结果，
 还要处理"旧任务晚到覆盖新地形"、对象销毁、GPU 上传主线程等问题。MVP 先用
 显式 Generate + 默认 129²（上限 257²），生成耗时可控；阶段 7 再按真实 profile 决定。
 

@@ -87,7 +87,7 @@ JobSystem::Stats s = jobs.stats();               // submitted/executed/skippedCa
 - 回调永远在主线程执行，编辑器据此构造可撤销的 `RegenerateTerrainCommand`；
 - Scene 清理会先等待所有未完成任务，避免 worker 写已销毁的 task 对象。
 
-当前 Scene 仍用自己的 `cancelRequested` 做请求级取消；`JobSystem::CancelToken`
+当前 Scene 仍用自己的 `cancelRequested` 做请求级取消（`CancelToken` 已有自检用例 `m1-c1-tick-clock` 之外的独立覆盖，但消费端未接线，见 [tech-debt](../70-status/tech-debt.md) #4）；`JobSystem::CancelToken`
 是通用化的下一步，迁移时只要把 `cancelRequested` 换成 token 即可，轮询点不变。
 
 ## 5. 自检

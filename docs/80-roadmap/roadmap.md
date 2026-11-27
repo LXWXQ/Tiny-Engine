@@ -134,7 +134,7 @@ Amanatides-Woo DDA 拾取、挖/放 + 逐格撤销、`queryGroundAtWorld` 叠加
 
 ## F5：运行时架构
 
-- JobSystem：work stealing、任务依赖图、取消、优先级（已完成，M1-C2）
+- JobSystem：worker pool、`parallelFor`、work stealing、任务依赖图、优先级（已完成，M1-C2）；`JobSystem::CancelToken` 已实现且有自检，但地形/体素消费端仍各用自己的 `cancelRequested`（见 [tech-debt](../70-status/tech-debt.md) #4）
 - ECS systems：元数据组件注册表 + SystemScheduler（Simulation / updateWorldTransforms / PostTransform）已完成（F5-01）；预制体保存/实例化已完成（F5-02）；内置效果/运动组件第一批（Bob/Pulse/Sway/LookAt/Follow）已完成（F5-03）；原生组件接入统一 Add Component 已完成（F5-04）；剩余更细阶段划分与热重载
 - SpatialIndex：dirty flag / 增量更新 / 分块索引
 - 场景序列化与热重载

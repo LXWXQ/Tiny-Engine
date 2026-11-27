@@ -5,7 +5,7 @@ type: meta
 scope: 空（纯索引）
 read-when: 新会话开始，或接到一个具体任务时
 size: ~125 行
-updated: 2026-11-06
+updated: 2026-11-27
 ---
 
 # 阅读路径
@@ -17,8 +17,8 @@ updated: 2026-11-06
 
 | 顺序 | 文档 | 目的 | 成本 |
 |---|---|---|---|
-| 1 | [根 README](../../README.md) | 项目定位、构建命令、特性总表 | 小 |
-| 2 | [pitfalls](../60-debug-profiling/pitfalls.md) | **已知的 36 个坑**，能直接避免几小时的排查 | 中 |
+| 1 | [根 README](../../README.md) | 项目定位、构建命令、特性索引（细节在各自文档） | 小（201 行，约 1 万字符） |
+| 2 | [pitfalls](../60-debug-profiling/pitfalls.md) | **已知的 42 个坑**，能直接避免几小时的排查 | 中（609 行） |
 
 > 例外：纯文档改动可以只读 [doc-rules](doc-rules.md)。
 
@@ -102,23 +102,24 @@ updated: 2026-11-06
 3. [ux-playbook](../90-editor/ux-playbook.md) ← 任务卡、批次顺序、禁区、验收命令
 4. [panels](../90-editor/panels.md) ← 要动的面板归属与布局常量
 
-> 不要通读 `EditorLayer.cpp`（近 3000 行）。按 audit 的编号定位到函数即可。
+> 不要通读 `EditorLayer.cpp`（5393 行）。按 audit 的编号定位到函数即可。
 > 也不要"顺手把界面整体美化一遍"：一批只动一个编号，见 playbook 第 5 节。
 
 ## 2. 上下文预算参考
 
 | 阅读组合 | 约行数 | 适合 |
 |---|---|---|
-| 根 README | ~150 | 只需要知道项目是什么 |
-| + pitfalls | ~550 | 准备动手改代码 |
-| + 一个 architecture 文档 | ~800 | 做该子系统内的改动 |
-| + 两个 architecture + 一个 pipeline | ~1400 | 跨子系统改动 |
+| 根 README | ~200 | 只需要知道项目是什么 |
+| [decisions](../10-architecture/decisions.md) 的「怎么读这篇」主题表 | ~30 | 改既有设计前先定位到那几条编号，再只读那几条 |
+| + pitfalls | ~800 | 准备动手改代码 |
+| + 一个 architecture 文档 | ~1100 | 做该子系统内的改动 |
+| + 两个 architecture + 一个 pipeline | ~1700 | 跨子系统改动 |
 
 超过约 1500 行后，建议**先只读 front-matter 和目录**，定位到具体小节再展开。
 
 ## 3. 不允许的做法
 
-- 一次性读 `docs/` 下所有 `.md`（约 6000+ 行，会挤掉代码本身的上下文）。
+- 一次性读 `docs/` 下所有 `.md`（83 篇、约 2.04 万行，通读约 30 万 tokens，会挤掉代码本身的上下文）。
 - 只读根 README 就开始改 `RenderGraph`（会漏掉子资源/语义校验的不变量）。
 - 读 [decisions](../10-architecture/decisions.md) 后凭记忆改代码而不读对应的实现文档
   —— 决策文档写的是"为什么"，具体接口在实现文档里。

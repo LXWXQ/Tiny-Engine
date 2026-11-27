@@ -13,7 +13,7 @@ updated: 2026-10-31
 | 文档 | 回答的问题 |
 |---|---|
 | [cli-reference](cli-reference.md) | 全部命令行参数是什么？怎么组合？ |
-| [test-matrix](test-matrix.md) | 21 项回归各测什么？判据是什么？ |
+| [test-matrix](test-matrix.md) | 96 项回归各测什么？判据是什么？ |
 | [acceptance](acceptance.md) | 什么算"通过"？测量本身怎么保证可信？ |
 
 ## 唯一权威入口

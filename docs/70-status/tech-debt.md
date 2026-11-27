@@ -10,41 +10,42 @@ updated: 2026-11-20
 
 # 当前技术债
 
-## 1. 已关闭（TD-01 ~ TD-28）
+## 1. 已关闭（TD-01 ~ TD-31）
 
-| ID | 问题 | 修法要点 |
-|---|---|---|
-| TD-01 | 依赖与验证脚本不可复现 | `SetupDependencies.ps1` 固定 8 个版本 + `Validate.ps1` 一条命令 |
-| TD-02 | 跨队列 producer-consumer 缺失 | `crossQueue` CONCURRENT + 单向依赖推导 + `--cross-queue-test` |
-| TD-03 | 窗口缩放 / swapchain 重建缺失 | 帧边界原地重建 + RenderGraph 原位 resize + `--resize-test` |
-| TD-04 | 材质槽位归还用 `vkDeviceWaitIdle` | graphics timeline 延迟回收 + `UPDATE_AFTER_BIND` + `--material-stress` |
-| TD-24 | 地形创建同步阻塞整帧（257² 默认档 Debug 实测 105.9 ms） | `Scene::createTerrainEntityAsync`：实体当帧建好并置 `generating`，高度场/网格交给已有的 `requestRegenerateTerrain` 后台管线；`CreateTerrainCommand(deferBuild)` 让撤销重做也走异步；主线程提交 0.28 ms（~375×）；自检 `[Scene] async terrain create selfTest PASS` |
-| TD-05 | 语义校验只到整张图 | `SubresourceRange` / `BufferRange` 独立跟踪 + 正反例 |
-| TD-06 | Bloom 关闭仍有 7 个全屏 pass | 真跳过 + PresentPass 双布局 + `present_no_bloom.frag` |
-| TD-07 | ComputeProbe 固定开销 | 默认关闭，`--compute-test` 显式启用 |
-| TD-08 | 遗留代码 / 废弃 shader | 删除 + `Validate.ps1` dead-file guard |
-| TD-09 | `EngineConfig` 无版本迁移 | v0->v1->v2 + 备份 + 损坏保护 + `--config-test` |
-| TD-10 | RenderGraph 同步语义缺口 | `LOAD` 补读访问位 + `imageAvailable` 等 `ALL_COMMANDS` |
-| TD-11 | 地形 GPU mesh 同步 submit + fence wait | 4 槽异步 submit/poll + worker picking mirror；257² 主线程 poll 约 1ms |
-| TD-12 | 组件 public 字段可直写 + 生产销毁入口不一致 + 无区域索引 | 字段私有/getter/setPose；XZ region bucket；clearEntities/相机复用走 Scene::destroyEntity |
-| TD-25 | 体素世界不进场景 JSON（`captureDescription()` 只序列化地形与普通实体，`buildFromDescription()` 的 `clearEntities()` 会连 chunk 一起清掉） | 存 `seed/radiusChunks/baseY` + 每 chunk 的改动差分区（`[x,y,z,block]` 四元组），载入时重建后逐格回放；场景版本 2，老文件缺 `voxelWorlds` 按空处理 | 挖一格 `captureDescription()` 恰好一条 Air 记录、放回清零；`SceneSerializer::roundTrip` 逐字段一致 |
-| TD-26 | 体素透明方块（`Glass`/`Leaves`，`opaque = false`）没有逐面排序，依赖实体顺序与深度测试，玻璃叠放观感不稳定 | `voxel::buildGlassMesh()` 逐面拆出玻璃（只画邻格为空气的面），`buildMesh` 跳过玻璃；新增 `GlassPass`（Lighting 后、Bloom 前，LOAD HDR/深度、`depthWrite = FALSE`、`LESS_OR_EQUAL`、`SRC_ALPHA/ONE_MINUS_SRC_ALPHA`），CPU 按面质心远→近排序后一次 `vkCmdDrawIndexed`；glass-only chunk 只分配材质槽、不需要 Model | `[Glass] sorted=879 drawcalls=1`、telemetry draw calls +1 / desc binds +1、`[Validation] errors=0 warnings=0`；`f3-voxel-glass` 回归 |
-| TD-27 | 体素 chunk 每块一份独立 `Model`（`Scene::createVoxelWorld`），渲染时逐块 bind | `Scene::applyVoxelChunkMesh()` 先建临时 `Model` 上传，再 `TerrainMeshArena::acquire/copyInto` 并 `releaseGpuBuffers()`，切片写进 `VoxelChunkComponent`；重建前归还旧切片。`GeometrySystem` 预扫描可见 chunk，填 224B 实例表与 `VkDrawIndexedIndirectCommand`，整批一条 `vkCmdDrawIndexedIndirect`；材质槽池 256→1024 | 半径 12：`chunks=625 arena=625 vertices=725888 indices=1088832`，可见 535 块 `commands=535`，`[Validation] errors=0 warnings=0`；`f3-voxel-arena-625` |
-| TD-13 | `RenderGraph::setPassEnabled` 帧间失效（`passes` 每帧重建） | `PassSwitchboard` 记住规则 + 注册时重放 + 前缀匹配 + 未命中诊断 + 纯逻辑自检 |
-| TD-14 | `Pass::writeDepth` 静默把 `depth==0 && stencil==0` 改写成 `{1.0, 0}` | 清屏值由调用方显式给出；删掉隐式改写，GeometryPass 本来就显式传 1.0 |
-| TD-15 | GPU 批每子网格一条间接命令、无全局合并缓冲（原未关闭第 14 条） | 合并顶点/索引缓冲 + 单 range/单 counter + 一次 `vkCmdDrawIndexedIndirectCount`；索引不重写，用 `vertexOffset` 施加 `baseVertex` |
-| TD-16 | GPU 批每组一条命令（instanceCount 恒为 1）+ 无材质排序 + 无遮挡剔除 + 包围盒缓存以裸指针为键 | 分组键改为 `(模型, 子网格)` 实现实例化；组按 materialSlot 排序；缓存改用 `Model::getGeometryId()` 并按 600 帧/64 条淘汰；Hi-Z 金字塔（`R32_SFLOAT`，GENERAL，错帧一帧）做组级保守遮挡剔除，`--no-hiz` 可关 |
-| TD-17 | GPU 批只有逐模型提交路径、没有屏幕空间误差剔除、粒子/体素无入口 | 删掉非合并模式逐模型 bind，合并缓冲成为唯一 GPU 提交路径（`useGpuPath()` 要求 `mergedActive`）；`FrameData` 加 `vec4 screen` 做 SSE 剔除；新增 `ExternalInstance` 与 `setExternalInstances()`，外部实例与 ECS 实例共用分组/合并缓冲/同一条 indirect 命令 |
-| TD-18 | 地形每个 chunk 一份独立 Model，渲染时逐 chunk `bind` + 逐 chunk `drawIndexedIndirectCount` | 合并贛图与十几次提交，半径 3 就是 49 次绑定 | `TerrainMeshArena`（96 槽，每槽 4096 顶点 / 20480 索引）+ set 3 的 chunk 实例表（64 行 x 224B，复用 `InstanceRecord` 布局），间接命令写 `firstIndex = 子网格基址 + arena 索引基址`、`vertexOffset = arena 顶点基址`、`firstInstance = 实体槽号`；清空 2048 条命令区后只发一条 `vkCmdDrawIndexedIndirect`。实测 `--streaming-world 2` 的 `draw calls 13` 降到 2，两路截图逐像素一致（`max diff = 0`）；任一 chunk adopt 失败则整帧回退到逐 chunk 路径 |
+> 编号在 2026-11 前出现过重号，已就地拆分：arena 槽位那条由 TD-24 改为 **TD-30**（TD-24 保留给"异步地形创建"，[terrain](../30-systems/terrain.md) 与 [test-matrix](../50-validation/test-matrix.md) 引用的都是它）；离屏视口那条由 TD-09 改为 **TD-31**（TD-09 保留给 `EngineConfig` 版本迁移）。
 
-| TD-19 | 世界坐标全程是 `float`，相机走远后矩阵/深度抖动；流送世界没有原点概念 | 万米量级地形与阴影都会糊 | 局部坐标 + `Scene::worldOrigin`（double）的浮动原点：超阈值时吸到整块 chunk、平移所有 Transform 与相机平滑状态、重排 chunk 索引与 key 表；地形噪声锚点保持绝对。实测 600 帧 13 次 rebase、chunk 数稳定 35 |
-| TD-20 | 流送半径上限 8、地形 GPU 选择 64 槽 / 命令区 4096 / arena 96 槽，半径超过 3 就开始回退 CPU 路径；单帧生成无预算 | 扩容到半径 12（625 块）：选择 384 槽、命令区 12288、arena 384 槽（2048 顶点 / 12288 索引，约 51 MB），并加每帧 `maxUpdateMs` 预算（默认 2 ms，`--streaming-budget`） | 实测半径 8 = 289 块全量落地、draw calls 2；预算 0.2 ms 时 budgetHits 明显非零 |
-| TD-21 | 地形每 chunk 保留全分辨率 CPU picking mirror（33x33 约 38 KB，257x257 约 1.3 MB），由 `std::async` 生成 | 取消 mirror：`Scene::raycastTerrain()` 改走 `HeightField` 沿射线步进 + 二分；`TerrainGpuMeshBuilder` 不再调 `buildPickingMirror()`；GPU/同步/流送三条路径都传空 picking 数组 | sculpt / character controller / 编辑器 streamed terrain 自检 picking=OK |
-| TD-24 | arena 按固定槽位（2048 顶点 / 12288 索引）切分，chunk 实际只用约 1620 / 8544，浪费近三成 | 空槽里的剩余空间无法复用；半径 12 的 625 块需要 384 槽 × 136 KB ≈ 51 MB，而实际几何约 36 MB | 改成按实际尺寸的首次适配 + 空闲区间合并（bump allocator）：顶点 1.1M / 索引 5.9M 两块大缓冲，`Slice` 记录 base + count，`release()` 前后合并；实测半径 2 的 25 块只用 25 次分配，飞行 600 帧 `arenaAllocs` 在 305~323 之间回落 |
-| TD-23 | 地形每个 chunk 各持一个 `Model` 与自己的 device-local VBO/IBO，生成时各拷贝一次、渲染时逐 chunk 绑定 | 半径 12 的 625 块就是 625 份缓冲对象 + 625 次 bind；与「每 chunk 固定开销」的无限世界目标冲突 | 把 arena 所有权移到 `Scene`（`getTerrainMeshArena()`），网格一落地就 `acquire()` + `copyInto()` + `Model::releaseGpuBuffers()`，Model 只留子网格/包围盒/UV 元数据；实体销毁时归还槽位；抢不到槽位的 chunk 保留自己的 buffer 走旧路径 |
-| TD-22 | 浮动原点只在运行时生效，`EngineConfig::save()` 直接写局部坐标 | 存档写绝对坐标（局部 + `worldOrigin`），`loadConfig()` 落 Transform 时再减去当前原点；顺带把 `saveToFile()` 打开失败的 `errno`/`strerror` 带进错误串 | 飞行 + rebase 后退出，`config/engine.json` 不再出现 ±chunk 整数倍偏移 |
-| TD-28 | 渲染功能硬编码在 RenderSettingsPanel/EngineSettings，不能随场景保存或开关，且与组件 UI 形成两套入口 | 11 个 `scene.*` 场景组件（scope=Scene）+ 隐藏设置实体 + `syncSceneSettings` 写回 EngineSettings；Render 面板只保留 engine.json 默认值与 GPU 批调试 | Inspector 无选中可添加/启用/调参/移除；场景组件随 v4 `sceneComponents` 存读；`[Scene] ECS component selfTest` 断言 27 描述符与 sync |
-| TD-29 | 粒子没有生产方，只有 `ExternalInstance` 数据入口 | 实体级 `ParticleEmitterComponent`（16 属性，默认 512/属性上限 4096）+ CPU 发射/模拟系统（Particle 200）+ 独立 `ParticlePass`（Water 后、TAA 前，前向混合 HDR、`depthWrite = FALSE`、按相机距离排序）；不占用 `ExternalInstance` 与 merged buffer | `--particle-demo` 240 帧 `alive=376`、`drawcalls=1`、验证层 0/0；`f6-particles` 回归 |
+| ID | 问题 | 影响 | 修法要点 | 证据 / 回归 |
+|---|---|---|---|---|
+| TD-01 | 依赖与验证脚本不可复现 | — | `SetupDependencies.ps1` 固定 8 个版本 + `Validate.ps1` 一条命令 | — |
+| TD-02 | 跨队列 producer-consumer 缺失 | — | `crossQueue` CONCURRENT + 单向依赖推导 + `--cross-queue-test` | — |
+| TD-03 | 窗口缩放 / swapchain 重建缺失 | — | 帧边界原地重建 + RenderGraph 原位 resize + `--resize-test` | — |
+| TD-04 | 材质槽位归还用 `vkDeviceWaitIdle` | — | graphics timeline 延迟回收 + `UPDATE_AFTER_BIND` + `--material-stress` | — |
+| TD-05 | 语义校验只到整张图 | — | `SubresourceRange` / `BufferRange` 独立跟踪 + 正反例 | — |
+| TD-06 | Bloom 关闭仍有 7 个全屏 pass | — | 真跳过 + PresentPass 双布局 + `present_no_bloom.frag` | — |
+| TD-07 | ComputeProbe 固定开销 | — | 默认关闭，`--compute-test` 显式启用 | — |
+| TD-08 | 遗留代码 / 废弃 shader | — | 删除 + `Validate.ps1` dead-file guard | — |
+| TD-09 | `EngineConfig` 无版本迁移 | — | v0->v1->v2 + 备份 + 损坏保护 + `--config-test` | — |
+| TD-10 | RenderGraph 同步语义缺口 | — | `LOAD` 补读访问位 + `imageAvailable` 等 `ALL_COMMANDS` | — |
+| TD-11 | 地形 GPU mesh 同步 submit + fence wait | — | 4 槽异步 submit/poll + worker picking mirror；257² 主线程 poll 约 1ms | — |
+| TD-12 | 组件 public 字段可直写 + 生产销毁入口不一致 + 无区域索引 | — | 字段私有/getter/setPose；XZ region bucket；clearEntities/相机复用走 Scene::destroyEntity | — |
+| TD-13 | `RenderGraph::setPassEnabled` 帧间失效（`passes` 每帧重建） | — | `PassSwitchboard` 记住规则 + 注册时重放 + 前缀匹配 + 未命中诊断 + 纯逻辑自检 | — |
+| TD-14 | `Pass::writeDepth` 静默把 `depth==0 && stencil==0` 改写成 `{1.0, 0}` | — | 清屏值由调用方显式给出；删掉隐式改写，GeometryPass 本来就显式传 1.0 | — |
+| TD-15 | GPU 批每子网格一条间接命令、无全局合并缓冲（原未关闭第 14 条） | — | 合并顶点/索引缓冲 + 单 range/单 counter + 一次 `vkCmdDrawIndexedIndirectCount`；索引不重写，用 `vertexOffset` 施加 `baseVertex` | — |
+| TD-16 | GPU 批每组一条命令（instanceCount 恒为 1）+ 无材质排序 + 无遮挡剔除 + 包围盒缓存以裸指针为键 | — | 分组键改为 `(模型, 子网格)` 实现实例化；组按 materialSlot 排序；缓存改用 `Model::getGeometryId()` 并按 600 帧/64 条淘汰；Hi-Z 金字塔（`R32_SFLOAT`，GENERAL，错帧一帧）做组级保守遮挡剔除，`--no-hiz` 可关 | — |
+| TD-17 | GPU 批只有逐模型提交路径、没有屏幕空间误差剔除、粒子/体素无入口 | — | 删掉非合并模式逐模型 bind，合并缓冲成为唯一 GPU 提交路径（`useGpuPath()` 要求 `mergedActive`）；`FrameData` 加 `vec4 screen` 做 SSE 剔除；新增 `ExternalInstance` 与 `setExternalInstances()`，外部实例与 ECS 实例共用分组/合并缓冲/同一条 indirect 命令 | — |
+| TD-18 | 地形每个 chunk 一份独立 Model，渲染时逐 chunk `bind` + 逐 chunk `drawIndexedIndirectCount` | 合并贛图与十几次提交，半径 3 就是 49 次绑定 | `TerrainMeshArena`（96 槽，每槽 4096 顶点 / 20480 索引）+ set 3 的 chunk 实例表（64 行 x 224B，复用 `InstanceRecord` 布局），间接命令写 `firstIndex = 子网格基址 + arena 索引基址`、`vertexOffset = arena 顶点基址`、`firstInstance = 实体槽号`；清空 2048 条命令区后只发一条 `vkCmdDrawIndexedIndirect`。实测 `--streaming-world 2` 的 `draw calls 13` 降到 2，两路截图逐像素一致（`max diff = 0`）；任一 chunk adopt 失败则整帧回退到逐 chunk 路径 | — |
+| TD-19 | 世界坐标全程是 `float`，相机走远后矩阵/深度抖动；流送世界没有原点概念 | 万米量级地形与阴影都会糊 | 局部坐标 + `Scene::worldOrigin`（double）的浮动原点：超阈值时吸到整块 chunk、平移所有 Transform 与相机平滑状态、重排 chunk 索引与 key 表；地形噪声锚点保持绝对。实测 600 帧 13 次 rebase、chunk 数稳定 35 | — |
+| TD-20 | 流送半径上限 8、地形 GPU 选择 64 槽 / 命令区 4096 / arena 96 槽，半径超过 3 就开始回退 CPU 路径；单帧生成无预算 | — | 扩容到半径 12（625 块）：选择 384 槽、命令区 12288、arena 384 槽（2048 顶点 / 12288 索引，约 51 MB），并加每帧 `maxUpdateMs` 预算（默认 2 ms，`--streaming-budget`） | 实测半径 8 = 289 块全量落地、draw calls 2；预算 0.2 ms 时 budgetHits 明显非零 |
+| TD-21 | 地形每 chunk 保留全分辨率 CPU picking mirror（33x33 约 38 KB，257x257 约 1.3 MB），由 `std::async` 生成 | — | 取消 mirror：`Scene::raycastTerrain()` 改走 `HeightField` 沿射线步进 + 二分；`TerrainGpuMeshBuilder` 不再调 `buildPickingMirror()`；GPU/同步/流送三条路径都传空 picking 数组 | sculpt / character controller / 编辑器 streamed terrain 自检 picking=OK |
+| TD-22 | 浮动原点只在运行时生效，`EngineConfig::save()` 直接写局部坐标 | — | 存档写绝对坐标（局部 + `worldOrigin`），`loadConfig()` 落 Transform 时再减去当前原点；顺带把 `saveToFile()` 打开失败的 `errno`/`strerror` 带进错误串 | 飞行 + rebase 后退出，`config/engine.json` 不再出现 ±chunk 整数倍偏移 |
+| TD-23 | 地形每个 chunk 各持一个 `Model` 与自己的 device-local VBO/IBO，生成时各拷贝一次、渲染时逐 chunk 绑定 | 半径 12 的 625 块就是 625 份缓冲对象 + 625 次 bind；与「每 chunk 固定开销」的无限世界目标冲突 | 把 arena 所有权移到 `Scene`（`getTerrainMeshArena()`），网格一落地就 `acquire()` + `copyInto()` + `Model::releaseGpuBuffers()`，Model 只留子网格/包围盒/UV 元数据；实体销毁时归还槽位；抢不到槽位的 chunk 保留自己的 buffer 走旧路径 | — |
+| TD-24 | 地形创建同步阻塞整帧（257² 默认档 Debug 实测 105.9 ms） | — | `Scene::createTerrainEntityAsync`：实体当帧建好并置 `generating`，高度场/网格交给已有的 `requestRegenerateTerrain` 后台管线；`CreateTerrainCommand(deferBuild)` 让撤销重做也走异步；主线程提交 0.28 ms（~375×）；自检 `[Scene] async terrain create selfTest PASS` | — |
+| TD-25 | 体素世界不进场景 JSON（`captureDescription()` 只序列化地形与普通实体，`buildFromDescription()` 的 `clearEntities()` 会连 chunk 一起清掉） | — | 存 `seed/radiusChunks/baseY` + 每 chunk 的改动差分区（`[x,y,z,block]` 四元组），载入时重建后逐格回放；场景版本 2，老文件缺 `voxelWorlds` 按空处理 | 挖一格 `captureDescription()` 恰好一条 Air 记录、放回清零；`SceneSerializer::roundTrip` 逐字段一致 |
+| TD-26 | 体素透明方块（`Glass`/`Leaves`，`opaque = false`）没有逐面排序，依赖实体顺序与深度测试，玻璃叠放观感不稳定 | — | `voxel::buildGlassMesh()` 逐面拆出玻璃（只画邻格为空气的面），`buildMesh` 跳过玻璃；新增 `GlassPass`（Lighting 后、Bloom 前，LOAD HDR/深度、`depthWrite = FALSE`、`LESS_OR_EQUAL`、`SRC_ALPHA/ONE_MINUS_SRC_ALPHA`），CPU 按面质心远→近排序后一次 `vkCmdDrawIndexed`；glass-only chunk 只分配材质槽、不需要 Model | `[Glass] sorted=879 drawcalls=1`、telemetry draw calls +1 / desc binds +1、`[Validation] errors=0 warnings=0`；`f3-voxel-glass` 回归 |
+| TD-27 | 体素 chunk 每块一份独立 `Model`（`Scene::createVoxelWorld`），渲染时逐块 bind | — | `Scene::applyVoxelChunkMesh()` 先建临时 `Model` 上传，再 `TerrainMeshArena::acquire/copyInto` 并 `releaseGpuBuffers()`，切片写进 `VoxelChunkComponent`；重建前归还旧切片。`GeometrySystem` 预扫描可见 chunk，填 224B 实例表与 `VkDrawIndexedIndirectCommand`，整批一条 `vkCmdDrawIndexedIndirect`；材质槽池 256→1024 | 半径 12：`chunks=625 arena=625 vertices=725888 indices=1088832`，可见 535 块 `commands=535`，`[Validation] errors=0 warnings=0`；`f3-voxel-arena-625` |
+| TD-28 | 渲染功能硬编码在 RenderSettingsPanel/EngineSettings，不能随场景保存或开关，且与组件 UI 形成两套入口 | — | 11 个 `scene.*` 场景组件（scope=Scene）+ 隐藏设置实体 + `syncSceneSettings` 写回 EngineSettings；Render 面板只保留 engine.json 默认值与 GPU 批调试 | Inspector 无选中可添加/启用/调参/移除；场景组件随 v4 `sceneComponents` 存读；`[Scene] ECS component selfTest` 断言 27 描述符与 sync |
+| TD-29 | 粒子没有生产方，只有 `ExternalInstance` 数据入口 | — | 实体级 `ParticleEmitterComponent`（16 属性，默认 512/属性上限 4096）+ CPU 发射/模拟系统（Particle 200）+ 独立 `ParticlePass`（Water 后、TAA 前，前向混合 HDR、`depthWrite = FALSE`、按相机距离排序）；不占用 `ExternalInstance` 与 merged buffer | `--particle-demo` 240 帧 `alive=376`、`drawcalls=1`、验证层 0/0；`f6-particles` 回归 |
+| TD-30 | arena 按固定槽位（2048 顶点 / 12288 索引）切分，chunk 实际只用约 1620 / 8544，浪费近三成 | 空槽里的剩余空间无法复用；半径 12 的 625 块需要 384 槽 × 136 KB ≈ 51 MB，而实际几何约 36 MB | 改成按实际尺寸的首次适配 + 空闲区间合并（bump allocator）：顶点 1.1M / 索引 5.9M 两块大缓冲，`Slice` 记录 base + count，`release()` 前后合并；实测半径 2 的 25 块只用 25 次分配，飞行 600 帧 `arenaAllocs` 在 305~323 之间回落 | — |
 
 > TD-28 证据：`[Scene] ECS component selfTest PASS | components=27 | systems=8` 覆盖 scope 约束、settings 同步、capture/clear/reset；编辑器自检覆盖 v4 存读往返；全套 77 项 ALL PASS，日志 `build/validation/20261110-140504`；DocCheck PASS（documents=68 lines=12275）。
 ## 1.1 M1 迁移改造（2026-11-13 ~ 11-17）
@@ -62,11 +63,11 @@ updated: 2026-11-20
 
 仍然开放：
 
-- **A1 接线**：`EntityHandle` 只有契约与自检，生产代码 0 处使用（仍裸 `entt::entity`）。
-- **A3 接线**：`TraceRequest/TraceResult` 无消费方，`Scene::traceRay()` 未写。
-- **B4b 流送 chunk 雕刻落盘**：`sculptEdits` 只服务手动地形。
-- **C2 收尾**：`CancelToken` 在 JobSystem 之外未使用，地形/体素仍是自己的 `cancelRequested`。
-- **D4 / D5**：`Pipeline.cpp` 仍 `pSpecializationInfo = nullptr`；LOD 只有 CPU 选级。
+- **B4b 流送 chunk 雕刻落盘**：`sculptEdits` 只服务手动地形，流送 chunk 的雕刻仍不落盘。
+- **C2 收尾**：`CancelToken` 目前只在 `src/Core/JobSystem.{h,cpp}` 内部存在；地形/体素仍各用自己的 `cancelRequested`。JobSystem 自身的 work stealing / 依赖图 / 取消已随 M1-C2 落地，本项剩下的只是"消费端接线"。
+- **A1 / A3 已接线，2026-11-27 核销**：`EntityHandle` 已在 `Scene` 与编辑器使用（`EditorState::pendingTerrainBuild` / `voxelWorld` / `runtimeCharacter`、`EditorContext`、`Gizmo`）；`Scene::traceRay()` 实现于 `src/Scene/Scene.cpp:5979`，消费方是 `ViewportPanel` 的点选与 `EditorLayer::selfTestWithScene`。原文"生产代码 0 处使用 / 未写"已过期。
+- **D4 转为决策**：不接 specialization constants，`src/RHI/Pipeline.cpp:105` 与 `:113` 显式 `pSpecializationInfo = nullptr`，理由见决策 85（[decisions](../10-architecture/decisions.md)）。
+- **D5 就地改写**：地形 LOD 已有 GPU 选层（`shaders/terrain_lod.comp` + `GeometrySystemGpu.cpp` 的 CPU↔GPU parity 校验），剩余真实边界是"模型没有 LOD 链"，见 §2 第 14 条。
 
 ## 2. 未关闭（按"何时必须处理"排序）
 
@@ -75,7 +76,7 @@ updated: 2026-11-20
 | 1 | 跨队列资源走 `CONCURRENT` sharing，未实现 EXCLUSIVE ownership transfer（**已评估：决策 28 判定本结构下不做，保留作记录**） | 不是最优路径（已验证层确认无法在单提交结构内配对 release） | 若将来改成多提交/多队列并行再评估 |
 | 2 | glTF 内部节点层级被烘焙掉 | 局部动态物体不可动 | 资产管线升级时 |
 | 3 | bindless `normalMaps` 绑了没采样 | 每材质白占 1/4 描述符 | 启用切线空间法线贴图时 |
-| 4 | JobSystem 无 work stealing / 依赖图 / 核心取消令牌 | 大量短任务负载不均；地形目前使用 Scene 级 atomic 协作取消 | 地形/体素接入后按 profile 升级 |
+| 4 | JobSystem 的 work stealing / 依赖图 / `CancelToken` 只存在于 JobSystem 内部，消费端（地形/体素）仍各用 `cancelRequested` | 取消语义分裂成两套，排查"为什么没停"要读两处 | 地形/体素按 profile 需求把 `cancelRequested` 换成 `CancelToken` |
 | 5 | 自检开关只覆盖 bloom / ssao | 新 Pass 的可关闭分支是验证盲区 | 加新 Pass 时照 [pitfalls](../60-debug-profiling/pitfalls.md) 坑 14 做 |
 | 6 | 长时间运行未验证（回归都在 120 帧内） | 可能存在缓慢泄漏 | 做"长时运行"需求前 |
 | 7 | `LightingPass` 兼任"导入交换链" | 职责不对称 | 清理窗口期 |
@@ -85,13 +86,15 @@ updated: 2026-11-20
 | 11 | 地形材质最多 4 个 Set2 set，但渲染按实体顺序遇到变化即重绑，未按材质集排序/合批 | 交替材质会增加 descriptor switch，材质集切换次数不设上限 | 多材质 chunk profiling 时 |
 | 12 | 合并缓冲的源数据要 CPU 侧完整顶点/索引副本（`Model::cpuVertices/cpuIndices`），Sponza 约 11MB；地形模型不留 | CPU 内存随可批模型总量线性增长 | 资产规模上去、或改走 GPU 回读重建时 |
 | 13 | 外部实例与 ECS 实体共用 `(模型, 子网格)` 分组，同一子网格上不同材质的外部实例会归到同一组、只用第一条记录的材质槽 | 外部实例若同一网格多材质会串色 | 外部实例生产方接入前（当前粒子走独立 Pass，体素走专用 arena） |
-| 14 | GPU 端只有 SSE 剔除，没有 LOD 选级（模型本身没有 LOD 链） | 顶点量上来后只能整组剔除，不能按距离换级 | F4 资产管线产出 LOD 之后 |
+| 14 | 模型没有 LOD 链（地形 LOD 已有 GPU 选层与交叉淡化，见 [terrain](../30-systems/terrain.md)） | 模型顶点量上来后只能整组剔除，不能按距离换级 | F4 资产管线产出 LOD 之后 |
 | 16 | arena 是两块大缓冲（F2-h 起按流送环尺寸算，半径 24 约 171 MB + 82 MB），不能增长；单块超过剩余容量时该 chunk 退回自有 buffer | 显存随半径平方增长，半径 32 就要 ~400 MB | 需要更大世界时改成分页/多块 arena |
 | 17 | 性能结论只有 Release 构建才算数：同一 2401 对象场景 `updateVisibility` 在 Debug 2.08 ms、Release 61 µs（`SpatialIndex::query` 时代差距约 100 倍） | 用 Debug 数字做容量决策会得出完全错误的瓶颈结论（「半径 24 只有 17 FPS」就是这么来的） | 所有性能验收都在 Release 跑（`--update-profile` 分段计时），Debug 只保证功能与验证层 0；文档里的 FPS 一律标注构建类型 |
 | 18 | 地形噪声锚点是 `float` 绝对值，1e6 量级量化步长约 0.06 | 极远处地形细节变粗（相邻 chunk 同网格，不会裂缝） | 噪声改 double 或分块重锚定时 |
 | 21 | 体素网格化每块一个 job，提交阶段一次建 625 个实体（Release 7.9 ms，Debug 70.7 ms），没有总预算/取消 | 大半径首帧仍有可感停顿 | 体素预算（V-02） |
 | 22 | 体素没有 LOD，远距离仍全密网格 | 半径 12 的 triangles 27.6 万，随半径平方增长 | 体素 LOD（V-03） |
 | 23 | 体素世界半径上限 12（`Scene::kMaxVoxelRadius`），没有分页/流送 | 无法做更大世界 | 体素分页（V-05） |
+
+> 编号 15 / 19 / 20 为空号（原条目已并入 §1），编号保持不变，因为其他文档用「tech-debt #N」引用这些行。
 
 ## 3. 明确"不打算做"的
 
@@ -102,6 +105,7 @@ updated: 2026-11-20
 - 用日志库替换 `std::cout`（决策 18，spdlog 已就位但未接）
 - 持久化"场景/资源"状态（决策 19）
 - 多套画质预设
+- 接 Vulkan specialization constants（决策 85：统一用 push constant + 反射偏移，不为每个变体再开一条通道）
 
 ## 4. 处理顺序建议
 
@@ -109,7 +113,7 @@ updated: 2026-11-20
 2. 修一项就补一项回归（[test-matrix](../50-validation/test-matrix.md)）；
 3. 修完在本文件 §1 加一行、从 §2 删一行，并更新 `updated`。
 
-## TD-09 ~~编辑器视口仍是整窗渲染~~ （已完成）
+## 附：离屏视口原始分析（TD-31，已完成）
 
 > 已实现，见 [editor/viewport](../90-editor/viewport.md)。以下保留原始分析作为背景。
 
