@@ -262,7 +262,9 @@ void DescriptorManager::createGlobalLayout()
 	// R-06：binding 14 = 水面法线贴图（世界 XZ 平铺）。
 	// TM-13：binding 15~18 = 聚簇光照的参数与三张表（storage buffer）。
 	// P2-6：binding 19 = 点光源数组（storage buffer，容量 kMaxPointLights）。
-	std::vector<VkDescriptorSetLayoutBinding> bindings(20);
+	// P4-6：binding 20 = 虚拟阴影图深度图集（sampler2D），21 = 页表（storage buffer）。
+	// 20 之后是空的，所以新绑定接在 19 后面不动任何既有编号。
+	std::vector<VkDescriptorSetLayoutBinding> bindings(22);
 
 	bindings[0].binding = lightingReflect::kUboBinding;
 	bindings[0].descriptorType = tiny::reflect::kDescriptorType<lightingReflect::kUboKind>;
@@ -279,6 +281,16 @@ void DescriptorManager::createGlobalLayout()
 	bindings[11].descriptorType = tiny::reflect::kDescriptorType<lightingReflect::kShadowMapsKind>;
 	bindings[11].descriptorCount = lightingReflect::kShadowMapsCount;
 	bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	bindings[20].binding = 20;
+	bindings[20].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	bindings[20].descriptorCount = 1;
+	bindings[20].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+	bindings[21].binding = 21;
+	bindings[21].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	bindings[21].descriptorCount = 1;
+	bindings[21].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 	bindings[12].binding = 12;
 	bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -490,7 +502,9 @@ void DescriptorManager::buildGlobalSet(
 	VkSampler shadowSampler, const std::array<VkImageView, kFramesInFlight>& shadowViews,
 	VkSampler reflectionSampler, const std::array<VkImageView, kFramesInFlight>& reflectionViews,
 	VkSampler ssrSampler, const std::array<VkImageView, kFramesInFlight>& ssrViews,
-	const VkDescriptorImageInfo& waterNormalInfo)
+	const VkDescriptorImageInfo& waterNormalInfo,
+	VkSampler vsmSampler, const std::array<VkImageView, kFramesInFlight>& vsmViews,
+	const std::array<VkBuffer, kFramesInFlight>& vsmPageTables)
 {
 	// TD-03: rebuild in place so repeated resizes do not exhaust the descriptor pool.
 	if (globalSets.size() != kFramesInFlight)
@@ -523,7 +537,7 @@ void DescriptorManager::buildGlobalSet(
 			irradianceCopy, prefilteredCopy, brdfLutCopy
 		};
 
-		std::array<VkWriteDescriptorSet, 20> writes{};
+		std::array<VkWriteDescriptorSet, 22> writes{};
 
 		VkDescriptorImageInfo shadowInfo{ shadowSampler, shadowViews[frame],
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -566,6 +580,27 @@ void DescriptorManager::buildGlobalSet(
 		writes[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		writes[14].descriptorCount = 1;
 		writes[14].pImageInfo = &waterNormalCopy;
+
+		// P4-6：虚拟阴影图。未启用时图集回落到 CSM 的 shadow 视图，
+		// 页表回落到材质 factor 缓冲 —— 描述符必须始终有效，采样由 vsmParams.x 短路。
+		VkDescriptorImageInfo vsmInfo{ vsmSampler != VK_NULL_HANDLE ? vsmSampler : shadowSampler,
+			vsmViews[frame] != VK_NULL_HANDLE ? vsmViews[frame] : shadowViews[frame],
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		writes[20].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[20].dstSet = globalSets[frame];
+		writes[20].dstBinding = 20;
+		writes[20].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		writes[20].descriptorCount = 1;
+		writes[20].pImageInfo = &vsmInfo;
+
+		VkDescriptorBufferInfo vsmPageTableInfo{ vsmPageTables[frame] != VK_NULL_HANDLE
+			? vsmPageTables[frame] : materialFactorBuffer, 0, VK_WHOLE_SIZE };
+		writes[21].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writes[21].dstSet = globalSets[frame];
+		writes[21].dstBinding = 21;
+		writes[21].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		writes[21].descriptorCount = 1;
+		writes[21].pBufferInfo = &vsmPageTableInfo;
 
 		VkDescriptorBufferInfo factorBufferInfo{ materialFactorBuffer, 0, VK_WHOLE_SIZE };
 		writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

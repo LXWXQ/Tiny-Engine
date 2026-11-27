@@ -2738,3 +2738,59 @@ P4-4 只标了脏页，页里的内容还是空的：8192² 图集从建出来�
 - 图集内 `vkCmdCopyImage` 搬像素：同上。
 - 多级间接 draw 的命令压缩：P4-3 前量过逐页提交是微秒级；真正的成本在「整级重复提交同一子网格」，已由全级快路径解决。
 - GPU 侧页标记 / GPU 侧页分配。
+
+## 决策 84：把页表采样接进着色器（P4-6，2026-11-27）
+
+- `shaders/lighting.frag` 新增 `float SampleVirtualShadow(vec3 fragPosWorld, vec3 N, float NdotL)`，与 CSM 的 `SampleShadow` 同签名、同深度约定（非 reverse-Z）：`ubo.vsmParams.x < 0.5` 直接返回 -1（不在覆盖内 → 调用方回退 CSM），否则按「能覆盖该点且最细」选一级，`vsmPageTable[级号 * 1024 + page.y * 32 + page.x]` 取块内偏移（entry 高位是块号、低位是页内号），3 x 3 双循环投 9 票，返回 `lit / 9.0`（0 = 全阴影、1 = 全受光）。调用点是 `CalcDirectionalLight` 里 `if (vsm >= 0.0) shadow = vsm;`，与 CSM 的 `SampleShadow` 同权替换。
+- `GlobalUbo` 尾部追加 `vsmMatrices[3] @480` / `vsmLevels[3] @672` / `vsmParams @720`，`sizeof(GlobalUbo) == 736`，四条 `static_assert` 把偏移钉住 —— 着色器与 C++ 两侧任一处动了布局都编译期炸（Debug / Release 都过）。
+- 描述符：set 0 新增 binding 20（`COMBINED_IMAGE_SAMPLER`，8192^2 D32 图集）与 binding 21（`STORAGE_BUFFER`，每帧槽 12 KiB 页表）；未启用 VSM 时两者都绑 2D 白替身 + 材质因子缓冲，保证开关关着也有一组合法绑定。
+- **每级深度范围加深**：光相机沿光线退到中心外 90 m（`kClipmapOccluderReach`），近平面贴在光相机上（`lightProjection[2][2] = -1/depthRange`、`[3][2] = 0`，z_ndc = t/depthRange）。原来是「距相机 r..3r」、r = 边长 x 1.732，第 0 级 4.8 m 方形只有 8.3 m 厚的深度壳 —— 沿光线挡住这一级的屋顶（太阳 45 度时 10 m 高度对应 14 m 深度差）整块落在近平面外，那一级就整片判受光。
+- **bias 换成世界单位**：`texelWorld = 边长 / 4096`，`worldBias = max(texelWorld x 1.5, texelWorld x 4 x (1 - NdotL))`，归一化时用 `depthRange = 1 / length(合并 VP 的 z 行 xyz)` 反解（P[2][2] = -1/D 且光空间 z 轴单位长，所以不必再加 UBO 字段）。原来固定 0.001 的归一化 bias 在 90 m 深度范围里只剩 9 cm，第 2 级（2.4 m 一页）远远不够。
+
+### 踩到的三个坑（都是这一版才现形）
+
+1. **构造里就建了全局描述符，开关却是构造之后才设。** `rebuildGlobalDescriptors()` 在 `src/Core/Application.cpp:1084`（构造函数内）已经跑过一次，而 `main.cpp:771 app.setVsmEnabled(...)` 在后面 → binding 20 绑的是 CSM 的**比较采样器**（`compareEnable=TRUE`），以 `sampler2D` 采样恒得 1.0 → 整幅无阴影。症状极具误导性：日志全绿、图集里有内容、`errors=0`，只是 VSM 等价于「关掉阴影」（`vsm-nosh` 只有 214 px，约等于 FPS 文字框）。修法：`setVsmEnabled` 里改完开关直接 `rebuildGlobalDescriptors()`。
+2. **回退路径把 CSM 的 `VK_IMAGE_VIEW_TYPE_2D_ARRAY` 视图写进了 `sampler2D` 的 binding** → 每帧一条 `VUID-vkCmdDraw-viewType-07752`（「ImageView type is VK_IMAGE_VIEW_TYPE_2D_ARRAY but the OpTypeImage has (Dim = 2D) and (Arrrayed = 0)」）。修法：任何情况下都绑一张 2D 视图（未启用时用 `Material::defaultWhiteTextureInfo`）。
+3. **`ReflectionPass` 自己 `allocateSet(globalSetLayout)`**，只写到 binding 12，15~19 靠 `applyClusterBindings` / `applyLightBinding` 补（那段注释早就记着同一个坑）→ 新增的 20/21 没人写，一开 SSR（只有地形/体素 + 水面才跑）就 `VUID-vkCmdDraw-None-08114`。修法：`setSharedInputs` 多收 VSM 三件套，在 `writes`（13 条固定数组）上用 `push_back` 追加 20/21；**不能**把 vector 尺寸改成 21，`DescriptorManager::writeSet` 会把整段交给 `vkUpdateDescriptorSets`，空 `sType` 直接变成非法写。
+
+### 验收（2026-11-27）
+
+| 项 | 结果 |
+|---|---|
+| 1 texel 密度 | 853.3 texel/m vs CSM 103.3 = **8.26 倍**（P4-3 已量，未变） |
+| 采样是否真的接上 | 整张图集铺满屏：三块 4096^2 里都有 caster 剪影；覆盖探针 96.2% 像素落在某一级内、页表项 0 个 `0xFFFFFFFF`、未覆盖 0 px |
+| VSM vs CSM 分类一致 | 1,619,707 px 判阴影对 1,619,707 px，`csm-only=0` / `vsm-only=0`，两者差值均值 0.032 |
+| Debug 验证组 | 七组全部 `exit=0`、`stderr=0B`、`[Validation] errors=0 warnings=0` |
+| 全量回归 | 97 项 ALL PASS（build/validation/20261127-150426，日志 201 行，FAIL=0） |
+| DocCheck | PASS（documents=82 lines=20233） |
+| 零开销守卫 | 不带开关 `vsm=0B`；`--vsm` 才建 512.0 MiB 图集 |
+
+### 关键发现：这个场景量不出「阴影差」
+
+按 `vsm-nosh` / `vsm-csm` 像素差判读时，`vsm-csm` 恒为 0 需要解释；排查结论是**本场景没有受光面**：
+
+- 方向光只占画面约 4%（把 `CalcDirectionalLight` 整个清零：均值 83.18 -> 79.46），受光面在 ACES 之后饱和，把 direct 项乘 0.65 只让整幅掉 0.02。
+- 掩码探针（R = CSM 的 shadow、G = VSM 的投票）显示可见表面 **100% 判阴影**（Sponza 是封闭室内，阳光进不来），两条路径对每个像素投同样的票。
+- 压曝光到 0.25 也不改变结论（vsm 33.50 / csm 33.50 / nosh 36.52，`vsm-csm` 仍为 0）。
+
+所以判据改成三条间接证据：1）图集里确有 caster 剪影；2）覆盖 / 页表 / 无空页；3）VSM 与 CSM 分类一致且不一致像素为 0。像素级「阴影更好看」要等到有受光面的场景（外部/半室外机位，或 P4-4c 把外部实例纳进来之后）才有意义。
+
+### 代价与边界
+
+- CSM 路径保留：`SampleVirtualShadow` 返回 -1 即回退，`--no-vsm` 是硬开关；76.8~90 m 那 13.2 m 现在由 CSM 兜底。
+- 每级光相机多退 90 m，但投影仍是正交、页标记只看光空间 x/y（`pageRangeForBounds` 没有 z 裁剪），所以加深深度范围不影响页分配。
+- 外部实例仍不进图集（P4-4c）；图集跨帧槽共用（写 N+1 读 N 有重叠窗口），这一版没动。
+- 反射通道顺带拿到了真正的 VSM 图集 —— 否则 `08114` 会随 SSR 一起回来。
+
+### 踩到的坑
+
+- `Copy-Item` 保留源文件 mtime → ninja 报 `ninja: no work to do`，改完 shader 却还是旧 SPV（症状是「改了 shader 一点反应都没有」）。还原备份后必须 `(Get-Item shaders/lighting.frag).LastWriteTime = Get-Date`。
+- 探针一次只留一个块：用 `anchor.strip()` 追加会把上一版探针留在文件末尾覆盖输出，连续三次误判都源于此。
+- 截图颜色是色调映射之后的，`(1,1,1)` 出来是 231 不是 255；用「精确 RGB 相等」统计颜色必然 0 命中。
+- 本仓 `.cpp` / `.h` / `.frag` 是 CRLF 无 BOM，python 补丁必须 `newline=''` + `\\r\\n` 与 `\\n` 归一；`src/Core/Application.cpp` 是 tab 缩进、`src/Render/*.cpp` 是 4 空格，锚点要分开写。
+
+### 不引入的
+
+- PCSS / 接触硬化：3 x 3 tap 够这次验收，软化留给有受光面的场景再谈。
+- 每级单独一张图集：按级分块已经让一整级是一条连续矩形。
+- 图集里存线性距离而非深度：现在与 CSM 同约定，换约定会把两条路径的 bias 全部重算。

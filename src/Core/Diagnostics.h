@@ -87,6 +87,9 @@ namespace diag
         // P4-2：把虚拟阴影图的图集/页表/HZB 真正建出来并打印占用。默认不建 ——
         // 这一层不参与帧循环，常驻 512 MiB 显存只在真要用它（P4-3 之后）时才划算。
         bool dumpVsmResources = false;
+    // P4-6：--vsm。必须待在诊断选项里：图集是在 FirstApp 构造时建的，
+    // 而 setVsmEnabled 要等 main 拿到 app 之后才调得到（那时构造已经跑完）。
+    bool vsm = false;
     // T-09 的整体回退：关掉管线绑定缓存，每次绑定都照发。
     bool noPipelineCache = false;
     // T-05：Pass 剔除默认关（本引擎暂无「输出无人读」的 Pass）；--pass-cull 打开，

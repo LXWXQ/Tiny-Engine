@@ -1129,3 +1129,5 @@ CSM 基线（Release，300 帧，三次重复一致）：静态 Sponza `total=0.
 读数：飞行场景的逐页路径是 225,982 / 27,310 / 20,238 draws，整级一条后 309 / 184 / 93 —— 逐页提交的真正代价不是命令本身（P4-3 前量到 ~2.3 ns/条），而是同一个子网格被重复提交到它覆盖的每一页。地形场景静态下 frame=1 `draws=15`，此后 `dirty=0` 一条命令不发，「静态不重画」这条终于有了 GPU 侧证据。
 
 缺口：外部实例（`--cube-field`、粒子、`setExternalInstances`）不在 `MeshComponent` 里，标记与绘制都覆盖不到；图集内容还没有采样者，正确性要等 P4-6 的页表采样才能逐像素验。
+
+**P4-6（2026-11-27，页表采样）**：`SampleVirtualShadow` 接进 `CalcDirectionalLight`，与 CSM 的 `SampleShadow` 同签名、同深度约定 —— `vsmParams.x < 0.5` 或没有一级覆盖（或页表项是 `0xFFFFFFFF`）就返回 -1，由调用方回退 CSM。选级取「能覆盖该点且最细」的一级，`vsmPageTable[级号 * 1024 + page.y * 32 + page.x]` 给出块内偏移，3 x 3 tap 投 9 票。`GlobalUbo` 尾部加 `vsmMatrices[3]` / `vsmLevels[3]` / `vsmParams`（`sizeof == 736`，四条 `static_assert`），set 0 新增 binding 20（8192^2 图集）与 21（页表 SSBO）。

@@ -94,6 +94,12 @@ public:
     // 一级的边长（texel）：32 页 x 128 texel。
     static constexpr uint32_t kClipmapTexelsPerAxis = kPageTableAxis * kPageSize;
 
+    // P4-6：光相机沿光线往太阳方向退多远。阴影比的是「沿这条光线谁更近」，
+    // 挡住这一级的投影者（屋顶、拱廊顶）往往在级方块外十几米处；退得太少就会
+    // 把它们裁在近平面之外，于是整片区域判成受光。这个退距与 CSM 的 90 米阴影
+    // 距离对齐 —— 90 米之外本来也是交给 CSM 兜底的。
+    static constexpr float kClipmapOccluderReach = 90.0f;
+
     // 一级 clipmap 的几何：一级就是一个在光空间里轴对齐的正方形，边长 worldExtent 米，
     // 用 4096 texel 画完；它的中心吸附到页网格上（pageWorldSize 的整数倍），
     // 所以相机连续移动时页面不会逐帧抖动，只在跨页时整页滚动。
@@ -123,6 +129,10 @@ public:
     VkImageView getDepthView() const { return depthView; }
     VkImage getHzbAtlas() const { return hzbAtlas; }
     VkImageView getHzbView() const { return hzbView; }
+    // P4-6：采样深度图集用的采样器（最近邻 + clamp to border 1.0）。
+    // 不能用 CSM 那个 sampler2DArray 的采样器 —— 它是线性过滤的，跨页会
+    // 把两张根本不相邻的页混在一起。
+    VkSampler getDepthSampler() const { return depthSampler; }
     const VkBuffer* getPageTableBuffers() const { return pageTableBuffers; }
     uint64_t getPageTableStride() const { return pageTableStride; }
 
@@ -188,6 +198,11 @@ public:
     // 页表镜像的 CPU 侧重置（每级每项写 kInvalidPage）。
     void resetPageTable();
 
+    // P4-6：把某一帧槽的页表刷成恒等映射（页 (level, x, y) -> 级内瓦片），
+    // 再上传。现在三级整级都渲染，所以每一页都是有效的；等按需分配落地之后，
+    // 只有分配器里活着的页才写有效项，其余保持 kInvalidPage（着色器退回 CSM）。
+    void updatePageTable(uint32_t frameIndex);
+
     void reportResources() const;
 
     // 纯整数运算的布局自检：页 -> 瓦片、HZB 七级的偏移与行占用、页表覆盖率、
@@ -208,6 +223,7 @@ private:
     VkImage hzbAtlas = VK_NULL_HANDLE;
     VmaAllocation hzbAllocation = VK_NULL_HANDLE;
     VkImageView hzbView = VK_NULL_HANDLE;
+    VkSampler depthSampler = VK_NULL_HANDLE;
 
     std::vector<ClipmapLevel> clipmaps;
     bool clipmapReported = false;

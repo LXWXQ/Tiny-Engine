@@ -47,7 +47,12 @@ public:
                          const VkDescriptorImageInfo& brdfLutInfo,
                          const VkDescriptorImageInfo& ssaoInfo,
                          VkSampler shadowSampler,
-                         const std::array<VkImageView, kFramesInFlight>& shadowViews);
+                         const std::array<VkImageView, kFramesInFlight>& shadowViews,
+                         // P4-6：反射通道自己建 global set，binding 20/21 也得补齐；
+                         // 传空句柄时按"未启用 VSM"写占位（不采样）。
+                         VkSampler vsmSampler,
+                         const std::array<VkImageView, kFramesInFlight>& vsmViews,
+                         const std::array<VkBuffer, kFramesInFlight>& vsmPageTables);
     void rebuildDescriptors();
 
     bool isActive() const { return active; }
@@ -94,6 +99,9 @@ private:
     VkDescriptorImageInfo ssaoInfo{};
     VkSampler shadowSampler = VK_NULL_HANDLE;
     std::array<VkImageView, kFramesInFlight> shadowViews{};
+    VkSampler vsmSampler = VK_NULL_HANDLE;
+    std::array<VkImageView, kFramesInFlight> vsmViews{};
+    std::array<VkBuffer, kFramesInFlight> vsmPageTables{};
 
     VkExtent2D currentExtent{ 0, 0 };
     bool active = false;

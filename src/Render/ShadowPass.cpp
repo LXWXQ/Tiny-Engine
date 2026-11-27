@@ -840,21 +840,23 @@ void ShadowPass::recordVirtualShadowPages(VkCommandBuffer cmd, FrameInfo& frameI
         }
     }
 
-    // ---- 图集从上一帧的布局过渡到深度附件（第一次是 UNDEFINED）----
+    // ---- 图集从上一帧的采样布局过渡到深度附件（第一次是 UNDEFINED）----
     {
         VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        barrier.oldLayout = vsmAtlasInDepthLayout ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
-                                                  : VK_IMAGE_LAYOUT_UNDEFINED;
+        // P4-6：上一帧末尾已经把它转成 SHADER_READ_ONLY（光照 Pass 要采样），
+        // 所以这一帧进来时它在采样布局，不是深度附件布局。
+        barrier.oldLayout = vsmAtlasReadable ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                             : VK_IMAGE_LAYOUT_UNDEFINED;
         barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = map.getDepthAtlas();
         barrier.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
-        barrier.srcAccessMask = vsmAtlasInDepthLayout ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0;
+        barrier.srcAccessMask = vsmAtlasReadable ? VK_ACCESS_SHADER_READ_BIT : 0;
         barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         vkCmdPipelineBarrier(cmd,
-                             vsmAtlasInDepthLayout ? VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
-                                                   : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             vsmAtlasReadable ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                              : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0,
                              0, nullptr, 0, nullptr, 1, &barrier);
     }
@@ -981,7 +983,24 @@ void ShadowPass::recordVirtualShadowPages(VkCommandBuffer cmd, FrameInfo& frameI
     }
 
     vkCmdEndRendering(cmd);
-    vsmAtlasInDepthLayout = true;
+
+    // P4-6：画完立刻转成可采样 —— 同一帧稍后的光照 Pass 就要读它。
+    // （CSM 那条路是在几何 Pass 之后统一转，这里 VSM 自己管自己的布局。）
+    {
+        VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        barrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = map.getDepthAtlas();
+        barrier.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+        barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &barrier);
+    }
+    vsmAtlasReadable = true;
     vsmDrawnPages += drawnPages;
     vsmDrawCalls += drawCalls;
 

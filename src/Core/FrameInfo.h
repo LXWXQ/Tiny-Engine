@@ -61,6 +61,16 @@ struct GlobalUbo
 	// TM-13：x = 是否按簇取灯（0 = 逐灯遍历）, y = near, z = far, w 保留。
 	// 放在 UBO 尾部：四个旧着色器只声明到 previousProjectionView，加在末尾不动已有偏移。
 	alignas(16) glm::vec4 clusterParams{ 0.f, 0.1f, 5000.f, 0.f };
+
+	// P4-6：虚拟阴影图。三级 clipmap 的矩阵与级参数接在 UBO 尾部；页表不进
+	// UBO（4096 条 32 位 = 16 KiB，会把每帧参数撑大），走 set 0 binding 21 的
+	// SSBO —— 它只是「页 -> 图集瓦片」的查表。
+	glm::mat4 vsmMatrices[3]{ glm::mat4(1.f), glm::mat4(1.f), glm::mat4(1.f) };
+	// xyz = 级中心（世界空间），w = halfExtent（该级覆盖半边长，米）。
+	alignas(16) glm::vec4 vsmLevels[3]{};
+	// x = 是否启用（0 = 整条走 CSM），y = 页边长（纹素），z = 图集分辨率，
+	// w = 每边页数。着色器用后三个把 uv 拆成「页 + 页内偏移」再拼图集 uv。
+	alignas(16) glm::vec4 vsmParams{ 0.f, 128.f, 8192.f, 32.f };
 };
 
 // ---------------------------------------------------------------------------
@@ -89,7 +99,13 @@ static_assert(offsetof(GlobalUbo, shadowFilterParams) == 208 + 3 * sizeof(glm::m
 	"GlobalUbo.shadowFilterParams offset mismatch");
 static_assert(offsetof(GlobalUbo, clusterParams) == 208 + 3 * sizeof(glm::mat4) + 4 * sizeof(glm::vec4),
 	"GlobalUbo.clusterParams offset mismatch");
-static_assert(sizeof(GlobalUbo) == 208 + 3 * sizeof(glm::mat4) + 5 * sizeof(glm::vec4),
+static_assert(offsetof(GlobalUbo, vsmMatrices) == 208 + 3 * sizeof(glm::mat4) + 5 * sizeof(glm::vec4),
+	"GlobalUbo.vsmMatrices offset mismatch");
+static_assert(offsetof(GlobalUbo, vsmLevels) == 208 + 6 * sizeof(glm::mat4) + 5 * sizeof(glm::vec4),
+	"GlobalUbo.vsmLevels offset mismatch");
+static_assert(offsetof(GlobalUbo, vsmParams) == 208 + 6 * sizeof(glm::mat4) + 8 * sizeof(glm::vec4),
+	"GlobalUbo.vsmParams offset mismatch");
+static_assert(sizeof(GlobalUbo) == 208 + 6 * sizeof(glm::mat4) + 9 * sizeof(glm::vec4),
 	"GlobalUbo size mismatch");
 
 struct SimplePushConstantData
@@ -241,6 +257,9 @@ struct EngineSettings
 	// F6：方向光级联阴影（3 级 / 2048²）。默认开 —— 阴影是「画面像不像真的」里
 	// 性价比最高的一项，关掉只是排查用。
 	bool shadowEnabled = true;
+	// P4-6：虚拟阴影图（三级 clipmap + 页表采样）。默认关 —— CSM 是当前的
+	// 默认路径，--vsm 打开它，--no-vsm 显式关掉（A/B 与回退都用它）。
+	bool vsmEnabled = false;
 	// 最远阴影距离（米）。越大覆盖越远，但同样的 2048² 摊到更大范围就更糊。
 	float shadowDistance = 90.0f;
 	// 阴影强度：0 = 完全不加暗，1 = 全黑遮挡。0.65 是不把暗部压死的经验值。

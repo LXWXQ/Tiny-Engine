@@ -71,7 +71,12 @@ public:
 		// SSR 关闭时传环境贴图作为占位，水面着色器不会采样。
 		// R-06：binding 14 = 无缝水波法线贴图（世界 XZ 平铺，完整 mip 链）。
 		VkSampler ssrSampler, const std::array<VkImageView, kFramesInFlight>& ssrViews,
-		const VkDescriptorImageInfo& waterNormalInfo);
+		const VkDescriptorImageInfo& waterNormalInfo,
+		// P4-6：20 = 虚拟阴影图深度图集（单张 8192^2），21 = 页表（页 -> 图集瓦片）。
+		// 未启用时传空句柄：图集回落到 CSM 的 shadow 视图，页表回落到材质 factor 缓冲，
+		// 着色器由 vsmParams.x = 0 短路，不会读到它们。
+		VkSampler vsmSampler, const std::array<VkImageView, kFramesInFlight>& vsmViews,
+		const std::array<VkBuffer, kFramesInFlight>& vsmPageTables);
 	VkDescriptorSet getGlobalSet(uint32_t frameInFlightIndex) const
 	{
 		return globalSets[frameInFlightIndex];

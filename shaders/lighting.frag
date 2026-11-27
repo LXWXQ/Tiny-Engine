@@ -26,6 +26,10 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     vec4 shadowFilterParams;    // x = 0 PCF / 1 PCSS, yzw 保留
     // TM-13：x = 是否按簇取灯（0 = 逐灯遍历）, y = near, z = far, w 保留
     vec4 clusterParams;
+    // P4-6：虚拟阴影图三级 clipmap —— 顺序必须和 C++ 的 GlobalUbo 一致。
+    mat4 vsmMatrices[3];
+    vec4 vsmLevels[3];   // xyz = 级中心, w = halfExtent
+    vec4 vsmParams;      // x = 启用, y = 页边长纹素, z = 图集分辨率, w = 每边页数
 } ubo;
 
 // P2-6：灯数据从 UBO 搬进 storage buffer —— UBO 只剩 numLights，
@@ -43,6 +47,11 @@ layout(set = 0, binding = 6) uniform sampler2D inSSAO;
 // IBL 三件套（由 IBLBaker 在初始化阶段预烘焙）
 // F6：3 级联阴影图（每级一个 layer）。
 layout(set = 0, binding = 11) uniform sampler2DArray shadowMaps;
+
+// P4-6：虚拟阴影图。20 = 8192x8192 的深度图集（按级分块，页是 128x128 瓦片），
+// 21 = 页表（页 -> 图集瓦片）。页表是间接的一层，页在图上未必相邻。
+layout(set = 0, binding = 20) uniform sampler2D vsmDepthAtlas;
+layout(set = 0, binding = 21) readonly buffer VsmPageTable { uint vsmPageTable[]; };
 
 // TM-13 聚簇光照：参数 + 三张表（set 0, binding 15~18）。
 // 关闭时 ubo.clusterParams.x = 0，这几张表不会被读。
@@ -212,6 +221,98 @@ float SampleShadow(vec3 fragPosWorld, float viewDepth, vec3 N, float NdotL) {
     return SampleShadowPCF(proj.xy, cascade, compare, ubo.shadowParams.z);
 }
 
+// P4-6：虚拟阴影图的页表采样。返回负数表示「这一点不在任何一级的覆盖内」，
+// 调用方保留 CSM 的结果 —— 三级 clipmap 只到 76.8 m，CSM 的 90 m 上限里
+// 那一段仍然由它兜底，所以两条路径不是二选一，而是「近处精细 + 远处兜底」。
+float SampleVirtualShadow(vec3 fragPosWorld, vec3 N, float NdotL) {
+    if (ubo.vsmParams.x < 0.5)
+        return -1.0;
+
+    const uint pageAxis = uint(ubo.vsmParams.w);
+    const float pageTexels = ubo.vsmParams.y;
+    const float atlasSize = ubo.vsmParams.z;
+    const uint pagesPerLevel = pageAxis * pageAxis;
+    const float blockSize = pageTexels * float(pageAxis);
+    const uint blocksPerAxis = uint(atlasSize / blockSize);
+
+    // 沿法线抬一点压住自遮蔽。VSM 的页是独立瓦片、没有跨页的保守深度，
+    // 所以偏移比 CSM 那条路更小，别让接触阴影缩进去。
+    vec3 samplePos = fragPosWorld + N * 0.02;
+
+    // 选级：挑「能覆盖该点、且最细」的一级（级越小 texel 越细）。
+    int level = -1;
+    vec2 uv = vec2(0.0);
+    float compare = 0.0;
+    float bestHalf = 1e30;
+    for (int i = 0; i < 3; ++i) {
+        float halfExtent = ubo.vsmLevels[i].w;
+        if (halfExtent >= bestHalf)
+            continue;
+        vec4 clip = ubo.vsmMatrices[i] * vec4(samplePos, 1.0);
+        if (abs(clip.w) < 1e-6)
+            continue;
+        vec3 ndc = clip.xyz / clip.w;
+        vec2 candidate = ndc.xy * 0.5 + 0.5;
+        if (candidate.x < 0.0 || candidate.x >= 1.0 || candidate.y < 0.0 || candidate.y >= 1.0)
+            continue;
+        if (ndc.z < 0.0 || ndc.z > 1.0)
+            continue;
+        level = i;
+        bestHalf = halfExtent;
+        uv = candidate;
+        compare = ndc.z;
+    }
+    if (level < 0)
+        return -1.0;
+
+    // uv -> 页号 + 页内偏移。一页在级里正好占 1/pageAxis。
+    vec2 pageUV = uv * float(pageAxis);
+    ivec2 page = ivec2(floor(pageUV));
+    vec2 inPage = pageUV - vec2(page);
+
+    uint entry = vsmPageTable[uint(level) * pagesPerLevel + uint(page.y) * pageAxis + uint(page.x)];
+    if (entry == 0xFFFFFFFFu)
+        return -1.0;   // 这一页没分配/没渲染过：交回 CSM
+
+    // 图集按级分块：级 0/1 在第一行，级 2 在第二行（blocksPerAxis = 2）。
+    uint pageLevel = entry / pagesPerLevel;
+    uint local = entry - pageLevel * pagesPerLevel;
+    uint blockX = (pageLevel % blocksPerAxis) * uint(blockSize);
+    uint blockY = (pageLevel / blocksPerAxis) * uint(blockSize);
+    vec2 pageOrigin = vec2(float(blockX + (local % pageAxis) * uint(pageTexels)),
+                           float(blockY + (local / pageAxis) * uint(pageTexels)));
+    vec2 atlasUV = (pageOrigin + inPage * pageTexels + 0.5) / atlasSize;
+
+    // 页是独立瓦片：滤波核必须压在本页内，否则会采到图集里根本不相邻的另一页。
+    vec2 texel = vec2(1.0 / atlasSize);
+    vec2 pageMin = (pageOrigin + 0.5) / atlasSize;
+    vec2 pageMax = (pageOrigin + pageTexels - 0.5) / atlasSize;
+
+    // P4-6：bias 换成世界单位再按该级的深度范围归一化。CSM 那条路的常量 0.0008 是拿
+    // 「级边长 39.66 米 x 2 段」标定的；VSM 这一级的深度范围现在是「90 米退距 + 一级对角线」
+    // （第 0 级 98 米、第 2 级 223 米），同一串数字会变成 8 厘米到 18 厘米的浮动，
+    // 接触阴影整条缩进去。改成一个 texel 起步：世界偏移 1.5 texel，斜射面放大到 4 texel。
+    // depthRange 从合并矩阵的 z 行反解 —— 正交投影 P[2][2] = -1/D 且光空间 z 轴是单位向量，
+    // 所以「z 行的 xyz 长度」正好是 1/D，不需要再往 UBO 加字段。
+    float levelHalfExtent = ubo.vsmLevels[level].w;
+    float texelWorld = levelHalfExtent * 2.0 / (pageTexels * float(pageAxis));
+    float depthRange = 1.0 / max(length(vec3(ubo.vsmMatrices[level][0][2],
+                                             ubo.vsmMatrices[level][1][2],
+                                             ubo.vsmMatrices[level][2][2])), 1e-9);
+    float worldBias = max(texelWorld * 1.5, texelWorld * 4.0 * (1.0 - NdotL));
+    float depthRef = compare - worldBias / max(depthRange, 1e-3);
+
+    float lit = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec2 tap = clamp(atlasUV + vec2(x, y) * texel, pageMin, pageMax);
+            float stored = texture(vsmDepthAtlas, tap).r;
+            lit += depthRef <= stored ? 1.0 : 0.0;
+        }
+    }
+    return lit / 9.0;
+}
+
 vec3 CalcDirectionalLight(vec3 N, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0,
                           vec3 fragPosWorld, float viewDepth) {
     vec3 L = normalize(-ubo.lightDirection.xyz);
@@ -219,6 +320,12 @@ vec3 CalcDirectionalLight(vec3 N, vec3 V, vec3 albedo, float roughness, float me
     vec3 direct = CalcLightBRDF(L, V, N, albedo, roughness, metallic, F0, radiance);
     float NdotL = max(dot(N, L), 0.0);
     float shadow = SampleShadow(fragPosWorld, viewDepth, N, NdotL);
+    // P4-6：VSM 覆盖范围内优先用它；返回负数说明不在覆盖内，保留 CSM 的
+    // 结果 —— 76.8~90 m 那一段仍然靠 CSM。--no-vsm 时 vsmParams.x = 0，
+    // 这里直接返回负数，整条路径回到 CSM。
+    float vsm = SampleVirtualShadow(fragPosWorld, N, NdotL);
+    if (vsm >= 0.0)
+        shadow = vsm;
     // 强度做 mix 而不是乘法：0 强度等于完全不加暗，而不是把方向光一起关掉。
     return direct * mix(1.0, shadow, clamp(ubo.shadowParams.y, 0.0, 1.0));
 }

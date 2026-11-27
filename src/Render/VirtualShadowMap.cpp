@@ -149,6 +149,21 @@ void VirtualShadowMap::createAtlas()
     if (vkCreateImageView(device.getDevice(), &hzbViewInfo, nullptr, &hzbView) != VK_SUCCESS)
         throw std::runtime_error("VirtualShadowMap: HZB 图集视图创建失败");
 
+    // P4-6：采样器。最近邻 + 边缘钳到 1.0：页是 128x128 的独立瓦片，
+    // 线性过滤会把相邻页（页表是间接的，图上不一定相邻）混进同一个 tap。
+    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.maxLod = 0.0f;
+    if (vkCreateSampler(device.getDevice(), &samplerInfo, nullptr, &depthSampler) != VK_SUCCESS)
+        throw std::runtime_error("VirtualShadowMap: 深度图集采样器创建失败");
+
     std::cout << "[VSM] atlas ready | depth=" << formatName(VK_FORMAT_D32_SFLOAT)
               << " hzb=" << formatName(VK_FORMAT_R16G16_SFLOAT)
               << " resolution=" << kAtlasResolution << "x" << kAtlasResolution
@@ -189,6 +204,11 @@ void VirtualShadowMap::createPageTables()
 
 void VirtualShadowMap::destroyResources()
 {
+    if (depthSampler != VK_NULL_HANDLE)
+    {
+        vkDestroySampler(device.getDevice(), depthSampler, nullptr);
+        depthSampler = VK_NULL_HANDLE;
+    }
     if (hzbView != VK_NULL_HANDLE)
     {
         vkDestroyImageView(device.getDevice(), hzbView, nullptr);
@@ -241,6 +261,23 @@ void VirtualShadowMap::resetPageTable()
             entries[i] = kInvalidPage;
         vmaFlushAllocation(device.getVmaAllocator(), pageTableAllocations[frame], 0, VK_WHOLE_SIZE);
     }
+}
+
+void VirtualShadowMap::updatePageTable(uint32_t frameIndex)
+{
+    if (frameIndex >= kFramesInFlight)
+        return;
+    if (pageTableMapped[frameIndex] == nullptr)
+        return;
+
+    auto* entries = static_cast<uint32_t*>(pageTableMapped[frameIndex]);
+    for (uint32_t level = 0; level < kClipmapLevels; ++level)
+    {
+        const uint32_t base = level * kPageTableEntries;
+        for (uint32_t i = 0; i < kPageTableEntries; ++i)
+            entries[base + i] = base + i;
+    }
+    vmaFlushAllocation(device.getVmaAllocator(), pageTableAllocations[frameIndex], 0, VK_WHOLE_SIZE);
 }
 
 // ---- P4-4：页标记 ----
@@ -491,20 +528,26 @@ VirtualShadowMap::ClipmapLevel VirtualShadowMap::computeClipmapLevel(uint32_t le
     glm::vec3 lightUp(0.0f);
     lightBasis(lightDirection, direction, right, lightUp);
 
-    // 正交光相机放在这一级中心的后方 2r 处，深度方向覆盖「距相机 r .. 3r」这段；
+    // P4-6：光相机沿光线退到 kClipmapOccluderReach 米之外，深度覆盖「退距 + 一级对角线」。
+    // 以前只退 2r、深度只有距相机 r .. 3r 这一段（等于级中心 ±0.87 个边长），头顶十米的
+    // 屋顶按 45 度太阳方向就是 14 米深度差，直接被近平面裁掉 —— 那一级整片跟着判成受光，
+    // 中庭 68% 的像素就这么没了（见 build\P4-6-HANDOFF.md 与决策 84）。
     // r 取这一级正方形外接球半径（边长 x sqrt(3) / 2），保证斜着看也不裁。
     const float halfExtent = out.worldExtent * 0.5f;
     const float radius = halfExtent * 1.7320508f;
-    const glm::vec3 eye = out.center - direction * (radius * 2.0f);
+    const glm::vec3 eye = out.center - direction * kClipmapOccluderReach;
     const glm::mat4 lightView = glm::lookAt(eye, out.center, lightUp);
 
-    // 手写正交投影（与 ShadowPass::buildCascade 同一套约定）：x/y 按这一级的半边归一化，
-    // 深度 z_ndc = (-z_view - r) / (2r)，正好落在 [0,1] 上。
+    // 手写正交投影：x/y 按这一级的半边归一化，近平面贴在光相机上（t_near = 0），
+    // 所以 z_ndc = t / depthRange（t = 到光相机的距离），所有落在这条光线上、
+    // 距离不超过 depthRange 的投影者都被收进来。着色器会从合并矩阵的 z 行反解
+    // 出 depthRange 来归一化 bias（见 shaders/lighting.frag 的 SampleVirtualShadow）。
+    const float depthRange = kClipmapOccluderReach + radius * 2.0f;
     glm::mat4 lightProjection(1.0f);
     lightProjection[0][0] = 1.0f / halfExtent;
     lightProjection[1][1] = 1.0f / halfExtent;
-    lightProjection[2][2] = -1.0f / (2.0f * radius);
-    lightProjection[3][2] = -0.5f;
+    lightProjection[2][2] = -1.0f / depthRange;
+    lightProjection[3][2] = 0.0f;
 
     out.lightViewProjection = lightProjection * lightView;
     return out;

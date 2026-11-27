@@ -522,7 +522,7 @@ P2-5 退役组级遮挡后，`scene_cull.comp` 不再声明 `hizPyramid`，但 `
 - [x] P4-4 页标记：`VirtualShadowMap::markPages()` 三条失效条件（光源方向 / 级中心整页滚动 / 投影者 `version`）换一张每级 16 个 `uint64` 的脏页位图（三级共 384 B）；投影者由 `ShadowPass::markVirtualShadowPages()` 逐子网格取世界 AABB（过节点矩阵）。静态 130 帧稳态 `dirty=0/3072`、单个小投影者每帧变身份 `dirty=6~8/3072`、光方向每帧转 0.002 rad `dirty=3072 light=1`、飞行 `scroll=3 dirty=3072`（决策 82）
 - [x] P4-4b 把页画进图集 + 跳过未脏页：`ShadowPass::recordVirtualShadowPages()` 三档（0 脏页不发命令 / 整级全脏走「整级一条」/ 其余逐脏页 CSR 分桶）；图集布局改成按级分块（2 x 2 块 4096²，全局页号 = 级号 x 1024 + 级内页号）。飞行场景 225,982 / 27,310 / 20,238 draws → 309 / 184 / 93；地形静态 frame=1 `draws=15` 之后一条命令不发（决策 83）
 - [ ] P4-4c 把外部实例纳入页标记与绘制：`--cube-field` / 粒子 / `setExternalInstances` 不在 `MeshComponent` 里，这一版标不到也画不到（实测 `--cube-field 4000 --cube-field-motion 200` 是 `draws=0`）
-- [ ] P4-6 `shaders/lighting.frag` 页表采样 + `--no-vsm` 回退
+- [x] P4-6 `shaders/lighting.frag` 页表采样 + `--no-vsm` 回退：`SampleVirtualShadow()` 按「能覆盖且最细」选级、查页表 entry、3 x 3 tap 返回 `lit / 9.0`，`vsmParams.x < 0.5` 或未覆盖返回 -1 回退 CSM；`GlobalUbo` 尾部加 `vsmMatrices[3]` / `vsmLevels[3]` / `vsmParams`（`sizeof == 736`，四条 `static_assert`），set 0 新增 binding 20（图集）/ 21（页表）。顺手修三层：构造期建描述符早于 `setVsmEnabled` 导致 binding 20 绑成 CSM 比较采样器（整幅无阴影）、回退路径把 `2D_ARRAY` 视图写进 sampler2D（`viewType-07752`）、`ReflectionPass` 自建 global set 漏写 20/21（`None-08114`）。图集内容、覆盖 96.2%、VSM 与 CSM 分类 1,619,707 px 全等；七组 + 全量回归 97 项 + DocCheck 全绿（决策 84）
 
 **待决（动 P4-2 之前要定）**：
 1. 页表放哪个描述符集：`lighting.frag` 的 set 0 binding 11 现在是 `sampler2DArray shadowMaps`，而页表要「SSBO + 图集采样器」两个绑定 —— 加进 set 0 会改全局布局（`DescriptorManager::createGlobalLayout()` 与反射头），加 set 1 会碰 bindless 材质数组。**P4-2 已把这边的形状定死**：页表是每帧槽 12 KiB 的 `STORAGE_BUFFER`（`VirtualShadowMap::getPageTableBuffers()`），图集是单张 8192²（depth D32 + hzb RG16F），所以两种方案要加的绑定数与类型都已经确定，剩下的是选集。

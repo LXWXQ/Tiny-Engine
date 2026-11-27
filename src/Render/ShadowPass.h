@@ -115,7 +115,8 @@ private:
     uint64_t vsmSkipFrames = 0;
     uint64_t vsmDrawnPages = 0;
     uint64_t vsmDrawCalls = 0;
-    bool vsmAtlasInDepthLayout = false;
+    // P4-6：图集现在是「可采样」布局（上一帧末尾转过去），下一个写帧要转回来。
+    bool vsmAtlasReadable = false;
     struct Frame
     {
         VkImage image = VK_NULL_HANDLE;

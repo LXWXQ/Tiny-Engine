@@ -876,8 +876,11 @@ streamingConfig.skirtsEnabled = false;
 	// P4-2：虚拟阴影图的资源骨架（深度图集 / 页表 / 每页 HZB）。它不参与帧循环，
 	// 只有 --dump-vsm-resources 才真的把 512 MiB 建出来，其余情况只建 CPU 侧状态。
 	virtualShadowMap = std::make_unique<VirtualShadowMap>(*vulkanDevice);
-	virtualShadowMap->init(diagnosticsOptions.dumpVsmResources);
-	if (diagnosticsOptions.dumpVsmResources)
+	// P4-6：--vsm 也要真的建图（否则光照 Pass 没有可采样的图集）。
+	// 开关来自诊断选项而不是 scene 设置：这一段跑在 FirstApp 的构造函数里，
+	// 而 setVsmEnabled 要等 main 拿到 app 之后才调得到。
+	virtualShadowMap->init(diagnosticsOptions.dumpVsmResources || diagnosticsOptions.vsm);
+	if (diagnosticsOptions.dumpVsmResources || diagnosticsOptions.vsm)
 		virtualShadowMap->reportResources();
 
 	auto shadowPass = std::make_unique<ShadowPass>(*vulkanDevice, *renderGraph, scene->getTerrainMeshArena());
@@ -1706,16 +1709,42 @@ void FirstApp::rebuildGlobalDescriptors()
 		}
 	}
 
+	// P4-6：虚拟阴影图的图集与页表。未启用时交出空句柄，buildGlobalSet 会
+	// 回落到 CSM 的 shadow 视图与材质 factor 缓冲当占位（描述符必须始终有效）。
+	VkSampler vsmSampler = VK_NULL_HANDLE;
+	std::array<VkImageView, kFramesInFlight> vsmViews{};
+	std::array<VkBuffer, kFramesInFlight> vsmPageTables{};
+	if (virtualShadowMap && virtualShadowMap->isAllocated() && scene->getSettings().vsmEnabled)
+	{
+		vsmSampler = virtualShadowMap->getDepthSampler();
+		for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+		{
+			vsmViews[frame] = virtualShadowMap->getDepthView();
+			vsmPageTables[frame] = virtualShadowMap->getPageTableBuffers()[frame];
+		}
+	}
+	else
+	{
+		// P4-6：VSM 没开（或图集还没建）时 binding 20 也必须挂一张 **2D** 视图 —— 着色器里
+		// 是 sampler2D，拿 CSM 的 2D_ARRAY 视图顶替会每帧触发一条
+		// VUID-vkCmdDraw-viewType-07752。纯白替身不会被采样（vsmParams.x = 0 已短路），
+		// 万一被采到也是全受光，安全侧。
+		vsmSampler = Material::defaultWhiteTextureInfo.sampler;
+		for (uint32_t frame = 0; frame < kFramesInFlight; ++frame)
+			vsmViews[frame] = Material::defaultWhiteTextureInfo.imageView;
+	}
+
 	descriptorManager->buildGlobalSet(globalUboBuffers, envInfo, constGBufferPtrs,
 		ssaoPassPtr->getOutputSampler(), ssaoViews,
 		irradianceInfo, prefilteredInfo, brdfLutInfo,
 		shadowSampler, shadowViews, reflectionSampler, reflectionViews,
-		ssrSampler, ssrViews, waterNormalInfo);
+		ssrSampler, ssrViews, waterNormalInfo, vsmSampler, vsmViews, vsmPageTables);
 
 	if (reflectionPassPtr != nullptr)
 	{
 		reflectionPassPtr->setSharedInputs(envInfo, irradianceInfo, prefilteredInfo, brdfLutInfo,
-			Material::defaultWhiteTextureInfo, shadowSampler, shadowViews);
+			Material::defaultWhiteTextureInfo, shadowSampler, shadowViews,
+			vsmSampler, vsmViews, vsmPageTables);
 		reflectionPassPtr->rebuildDescriptors();
 	}
 }
@@ -2169,6 +2198,17 @@ void FirstApp::setShadowsEnabled(bool enabled)
 void FirstApp::setShadowGpuBatchEnabled(bool enabled)
 {
 	scene->getSettings().shadowGpuBatch = enabled;
+}
+
+void FirstApp::setVsmEnabled(bool enabled)
+{
+	if (scene->getSettings().vsmEnabled == enabled)
+		return;
+	scene->getSettings().vsmEnabled = enabled;
+	// P4-6：全局描述符在构造函数里就写好了（那时 main 还没调到这里），所以开关一变
+	// 就得重建一次 —— 否则 binding 20/21 还挂在 CSM 的比较采样器与材质 factor 缓冲上，
+	// 比较采样器喂给 sampler2D 的采样结果恒为 1.0，整片地都不带阴影。
+	rebuildGlobalDescriptors();
 }
 
 void FirstApp::setGpuSceneMinScreenPixels(float pixels)
@@ -3345,6 +3385,27 @@ if (lightSources.empty() && diagnosticsOptions.lightStress > 0)
 			ubo.shadowParams = glm::vec4(1.0f / static_cast<float>(ShadowPass::kResolution),
 				settings.shadowEnabled ? settings.shadowStrength : 0.0f, 1.5f,
 				settings.shadowEnabled ? 1.0f : 0.0f);
+
+			// P4-6：虚拟阴影图。只有建了图集、开关打开、且阴影本身没关时才把三级
+			// clipmap 搬进 UBO；否则 vsmParams.x = 0，着色器整条走 CSM（--no-vsm）。
+			const bool vsmActive = virtualShadowMap && virtualShadowMap->isAllocated()
+				&& settings.vsmEnabled && settings.shadowEnabled;
+			ubo.vsmParams = glm::vec4(vsmActive ? 1.0f : 0.0f,
+				static_cast<float>(VirtualShadowMap::kPageSize),
+				static_cast<float>(VirtualShadowMap::kAtlasResolution),
+				static_cast<float>(VirtualShadowMap::kPageTableAxis));
+			if (vsmActive)
+			{
+				const auto& vsmLevels = virtualShadowMap->getClipmaps();
+				for (uint32_t level = 0; level < vsmLevels.size() && level < 3u; ++level)
+				{
+					ubo.vsmMatrices[level] = vsmLevels[level].lightViewProjection;
+					ubo.vsmLevels[level] = glm::vec4(vsmLevels[level].center,
+						vsmLevels[level].worldExtent * 0.5f);
+				}
+				// 三级整级都渲染，所以页 -> 级内瓦片是恒等映射。
+				virtualShadowMap->updatePageTable(frameInFlight);
+			}
 		}
 
 		// B：距离雾参数。和阴影无关，即使 ShadowPass 被关掉也要写入。
@@ -3614,7 +3675,7 @@ geometryPassPtr->getSceneGpuBatch()->getGpuScene().report();
     const uint64_t vsmBytes = (virtualShadowMap && virtualShadowMap->isAllocated())
         ? virtualShadowMap->getStats().totalBytes : 0ull;
     const bool anyDebugEnabled = gpuTimingWasEnabled || screenshotWasEnabled || shadowTimingQueries > 0
-        || diagnosticsOptions.dumpVsmResources;
+        || diagnosticsOptions.dumpVsmResources || scene->getSettings().vsmEnabled;
     const bool guardOk = (gpuTimingQueries == 0 && screenshotBytes == 0 && shadowTimingQueries == 0
         && vsmBytes == 0);
     std::cout << "[Diag] zero-overhead guard "

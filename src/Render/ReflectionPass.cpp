@@ -223,7 +223,10 @@ void ReflectionPass::setSharedInputs(const VkDescriptorImageInfo& env,
                                      const VkDescriptorImageInfo& brdfLut,
                                      const VkDescriptorImageInfo& ssao,
                                      VkSampler shadowSamplerIn,
-                                     const std::array<VkImageView, kFramesInFlight>& shadowViewsIn)
+                                     const std::array<VkImageView, kFramesInFlight>& shadowViewsIn,
+                                     VkSampler vsmSamplerIn,
+                                     const std::array<VkImageView, kFramesInFlight>& vsmViewsIn,
+                                     const std::array<VkBuffer, kFramesInFlight>& vsmPageTablesIn)
 {
     envInfo = env;
     irradianceInfo = irradiance;
@@ -232,6 +235,9 @@ void ReflectionPass::setSharedInputs(const VkDescriptorImageInfo& env,
     ssaoInfo = ssao;
     shadowSampler = shadowSamplerIn;
     shadowViews = shadowViewsIn;
+    vsmSampler = vsmSamplerIn;
+    vsmViews = vsmViewsIn;
+    vsmPageTables = vsmPageTablesIn;
 }
 
 void ReflectionPass::rebuildDescriptors()
@@ -277,7 +283,7 @@ void ReflectionPass::rebuildDescriptors()
         colorInfo.imageView = getColorView(frame);
         colorInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        std::vector<VkWriteDescriptorSet> writes(13);
+        std::vector<VkWriteDescriptorSet> writes(13);  // 0~12；15~19 交给 apply*，20/21 单独 push_back
         auto addImage = [&](uint32_t binding, const VkDescriptorImageInfo* info)
         {
             writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -320,6 +326,38 @@ void ReflectionPass::rebuildDescriptors()
         writes[11].pImageInfo = &shadowInfo;
 
         addImage(12, &colorInfo);
+
+        // P4-6：lighting.frag 静态使用 binding 20（VSM 深度图集 sampler2D）与 21（页表
+        // SSBO）。图集没开时 binding 20 仍必须是一张 **2D** 视图 —— 拿 CSM 的 2D_ARRAY
+        // 视图顶替会触发 VUID-vkCmdDraw-viewType-07752；这里用 G-Buffer 的 2D 视图占位，
+        // 着色器由 vsmParams.x 短路，不会真采到。
+        VkDescriptorImageInfo vsmInfo{};
+        vsmInfo.sampler = vsmSampler != VK_NULL_HANDLE ? vsmSampler : gbufferSampler;
+        vsmInfo.imageView = vsmViews[frame] != VK_NULL_HANDLE
+            ? vsmViews[frame] : gbufferInfos[0].imageView;
+        vsmInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet vsmWrite{};
+        vsmWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        vsmWrite.dstSet = reflectionSets[frame];
+        vsmWrite.dstBinding = 20;
+        vsmWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        vsmWrite.descriptorCount = 1;
+        vsmWrite.pImageInfo = &vsmInfo;
+        writes.push_back(vsmWrite);
+
+        VkDescriptorBufferInfo vsmPageTableInfo{};
+        vsmPageTableInfo.buffer = vsmPageTables[frame] != VK_NULL_HANDLE
+            ? vsmPageTables[frame] : descriptorManager->getMaterialFactorBuffer();
+        vsmPageTableInfo.offset = 0;
+        vsmPageTableInfo.range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet vsmPageTableWrite{};
+        vsmPageTableWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        vsmPageTableWrite.dstSet = reflectionSets[frame];
+        vsmPageTableWrite.dstBinding = 21;
+        vsmPageTableWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        vsmPageTableWrite.descriptorCount = 1;
+        vsmPageTableWrite.pBufferInfo = &vsmPageTableInfo;
+        writes.push_back(vsmPageTableWrite);
 
         descriptorManager->writeSet(reflectionSets[frame], writes);
         // lighting.frag 静态使用 binding 15~18（聚簇四张表）。这个 set 是反射通道

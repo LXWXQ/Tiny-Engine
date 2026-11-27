@@ -95,6 +95,8 @@ const std::vector<UsageLine> kCatalog = {
         { "剖析", "--stats-shadow-timing", "阴影 Pass 每级联 GPU 计时（P4 第零步尺子；每 60 帧一行，退出打平均）" },
         { "剖析", "--page-alloc-selftest", "稀疏页分配器压力自检（P4-1；随机分配/释放与独立口径对账，不建 GPU 资源）" },
         { "剖析", "--dump-vsm-resources", "建出虚拟阴影图的深度图集/页表/每页 HZB 并打印占用（P4-2；不进帧循环）" },
+        { "渲染", "--vsm", "方向光阴影改走虚拟阴影图（P4-6；三级 clipmap 页表采样，76.8 m 之外仍由 CSM 兜底）" },
+        { "渲染", "--no-vsm", "阴影回到 CSM（P4-6 的回退开关；也是默认路径）" },
     { "剖析", "--no-pipeline-cache", "关掉管线绑定缓存（T-09 的整体回退；关掉后每次绑定都照发）" },
         { "剖析", "--pass-cull", "打开 Pass 剔除（T-05）。默认关：本引擎的 Pass 在关闭时就不进图，实测没有「输出无人读」的 Pass" },
     { "剖析", "--no-pass-cull", "关掉 Pass 剔除（T-05 的整体回退；关掉后没人读输出的 Pass 也照跑）" },

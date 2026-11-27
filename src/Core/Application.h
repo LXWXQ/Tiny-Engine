@@ -71,6 +71,9 @@ public:
 	void setShadowsEnabled(bool enabled);
 	// P4-5：阴影退回 CPU 逐模型提交（--no-shadow-batch，排查 / A-B 对比用）。
 	void setShadowGpuBatchEnabled(bool enabled);
+	// P4-6：虚拟阴影图开关（--vsm / --no-vsm）。必须在 initialize 之前调用 ——
+	// 它决定启动时要不要建 512 MiB 的图集，运行期改了也不会重建描述符。
+	void setVsmEnabled(bool enabled);
 	// TAA：无人值守自检里对比开关效果。
 	void setTAAEnabled(bool enabled);
 	void setTAAMatrixReprojection(bool enabled);

@@ -132,6 +132,9 @@ int main(int argc, char** argv)
     bool noMergedBuffers = false;
     bool noHiZ = false;
     bool noShadows = false;
+    // P4-6：虚拟阴影图。默认关（CSM 仍是默认路径），--vsm 开、--no-vsm 显式关，
+    // 后者是验收之后的回退开关。
+    bool vsmEnabled = false;
     bool noShadowBatch = false;
     bool noTerrainBatch = false;
     // F2-a：流送世界。radius 默认 3（7x7=49 个 chunk 实体，低于地形 GPU 选择的 64 个 slot 上限）。
@@ -203,6 +206,19 @@ bool audioSpatialTest = false;
         if (arg == "--dump-vsm-resources")
         {
             diagOptions.dumpVsmResources = true;
+            continue;
+        }
+        // P4-6：同样走早退块 —— 那条 else-if 链再加两个分支就又是 C1061。
+        if (arg == "--vsm")
+        {
+            vsmEnabled = true;
+            diagOptions.vsm = true;
+            continue;
+        }
+        if (arg == "--no-vsm")
+        {
+            vsmEnabled = false;
+            diagOptions.vsm = false;
             continue;
         }
         if (arg == "--help" || arg == "-h")
@@ -751,6 +767,8 @@ diagOptions.cubeField = value;
         if (noMergedBuffers) app.setGpuMergedBuffers(false);
         if (noHiZ) app.setHiZEnabled(false);
         if (noShadows) app.setShadowsEnabled(false);
+        // 必须在 initialize 之前：它决定启动时要不要建 512 MiB 的图集。
+        app.setVsmEnabled(vsmEnabled);
         if (noShadowBatch) app.setShadowGpuBatchEnabled(false);
         if (noTerrainBatch) app.setTerrainBatchEnabled(false);
         if (gpuSceneMinPixels > 0.0f) app.setGpuSceneMinScreenPixels(gpuSceneMinPixels);

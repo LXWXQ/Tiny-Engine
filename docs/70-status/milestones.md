@@ -1927,3 +1927,13 @@ P2 的三条验收要「visible/submitted ≤ 0.6」「摊平 CPU 时间 −70%�
 - 读数：飞行场景逐页路径 225,982 / 27,310 / 20,238 draws，整级一条后 309 / 184 / 93；地形场景 frame=1 `draws=15` 之后 `dirty=0` 一条命令不发；静态 Sponza 因相机离几何 190 m 而 `draws=0`（几何不在 clipmap 里）。
 - 验证：Debug 七组 `errors=0 warnings=0`、stderr 0 字节；守卫两态；全量回归与 DocCheck 见决策 83 的验收表。
 - 已知缺口：外部实例（`--cube-field`、粒子）不在 `MeshComponent` 里，标不到也画不到；图集内容还没有采样者（P4-6 才接）。
+
+## P4-6：页表采样接进着色器（P4-6，2026-11-27）
+
+- `shaders/lighting.frag` 新增 `SampleVirtualShadow(fragPosWorld, N, NdotL)`：`vsmParams.x < 0.5` 返回 -1（回退 CSM），否则按「能覆盖且最细」选级、查页表 entry、3 x 3 tap 返回 `lit / 9.0`；`CalcDirectionalLight` 里 `if (vsm >= 0.0) shadow = vsm;` 直接顶替 CSM 的 `SampleShadow`。`GlobalUbo` 尾部加 `vsmMatrices[3]` / `vsmLevels[3]` / `vsmParams`，`sizeof == 736` 由四条 `static_assert` 钉住。
+- 描述符 set 0 新增 binding 20（8192^2 D32 图集，`COMBINED_IMAGE_SAMPLER`）与 21（每帧槽 12 KiB 页表，`STORAGE_BUFFER`）；未启用 VSM 时绑 2D 白替身 + 材质因子缓冲。
+- 两处结构性修正：1）每级光相机沿光线退 90 m、近平面贴相机（`z_ndc = t/depthRange`），否则第 0 级只有 8.3 m 厚的深度壳，沿光线挡住它的屋顶全被近平面裁掉、整片判受光；2）bias 从固定 0.001 换成「按级 texel 世界尺寸 x 1.5~4」，`depthRange` 由合并 VP 的 z 行长度反解 1/D，不加 UBO 字段。
+- 三个坑：构造里就建好的全局描述符把 binding 20 绑成 CSM 的**比较采样器**（sampler2D 采样恒 1.0 → 整幅无阴影，`vsm-nosh` 只剩 214 px 的文字框差）；回退路径把 `2D_ARRAY` 视图写进 sampler2D（`VUID-vkCmdDraw-viewType-07752`）；`ReflectionPass` 自建的 global set 没写 20/21（开 SSR 才 `VUID-vkCmdDraw-None-08114`）。
+- 验收：texel 密度 8.26 倍不变；图集有 caster 剪影、覆盖 96.2%、页表无 `0xFFFFFFFF`、未覆盖 0 px；VSM 与 CSM 分类 1,619,707 px 对 1,619,707 px（`csm-only=0` / `vsm-only=0`）；Debug 七组 `errors=0 warnings=0`、stderr 0 字节；全量回归 97 项 ALL PASS（build/validation/20261127-150426）；DocCheck PASS。
+- **本场景量不出像素级阴影差**：方向光只占画面约 4%（清零 83.18 -> 79.46），Sponza 是封闭室内、可见表面 100% 判阴影，所以 `vsm-csm` 恒为 0 是正确结果。基于像素差的判据在这种场景下不适用，替代证据见决策 84。
+- 已知缺口不变：外部实例不进图集（P4-4c）；76.8~90 m 由 CSM 兜底；图集跨帧槽共用。
