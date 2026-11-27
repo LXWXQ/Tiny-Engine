@@ -4,8 +4,8 @@ title: UE 借鉴改造总纲（分层 / 分类 / 分阶段）
 type: roadmap
 scope: 空（跨代码库的改造规划；候选落点覆盖 src/RHI、src/Render、src/Core、src/Scene、shaders、tools）
 read-when: 决定下一项引擎基础改造做什么、判断某个 UE 子系统值不值得引入、或给某个 F 阶段排期之前
-size: ~1130 行
-updated: 2026-11-26
+size: ~1040 行
+updated: 2026-11-27
 ---
 
 # UE 借鉴改造总纲
@@ -805,138 +805,43 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1 -Scenario li
 
 ---
 
-## 7. 第一批工单（可立即开始）
+## 7. 第一批工单（T-10 ~ T-09）
 
-按顺序做，每单独立可验收、独立可回退。T-10 先做，因为没有基线就没有验收。
+T-10 先做：没有基线就没有验收。逐单的过程、偏差与实测数字已随 D-xx 记入
+[milestones-archive](../70-status/milestones-archive.md)，基线数字以 [baseline](../70-status/baseline.md) 为准；
+本节只留**状态与判据**，不再复写每单的实测日志。
 
-| # | 任务 | 落点 | 验收 | 人日 |
-|---|---|---|---|---|
-| T-10（已落地） | 基准脚本 + barrier/state 两个计数器 | `tools/bench.ps1`、`src/RHI/FrameStats.*`、`src/RHI/RenderGraph.cpp` | 三场景跑出 `baseline.md`；计数器逐位可复现 | 1 |
-| T-01（已落地） | `ExternalResourceRegistry`：帧首 acquire / 帧尾 release | `src/RHI/RenderGraph.{h,cpp}` | 图外 buffer 的状态漂移被检出 + compute 写入的内容经图形流搬运后逐字正确 | 3 |
-| T-02（已落地） | `ClusterBuildPass` 改回 `addComputePass` | `src/Render/ClusterBuildPass.*`、`src/RHI/ScratchArena.cpp` | 512 灯 FPS ≥ 65.37；聚簇 dispatch 在 compute 队列（breadcrumbs 验证） | 1 |
-| T-03（已落地） | 图像屏障在 Pass 内按六元组分桶合并（新增 `src/RHI/RenderGraphBarrier.cpp`） | `src/RHI/RenderGraph.{h,cpp}`、`src/RHI/RenderGraphBarrier.cpp` | 调用 45.2→38.0 / 61.2→47.0；`entries` 不变；A/B FPS +0.1% | 2 |
-| T-04 | 跨帧 RT 池 | 新增 `src/RHI/RenderTargetPool.{h,cpp}`，`--rt-pool` 才开 | **已落地（默认关）**：稳态本来就是 0 创建；一次 resize 约 44 张，池只省 13~15% 且要 256 MiB 空闲图 → 判据改成「一次 resize 创建量 44 → ≤25」 | 2 |
-| T-05 | Pass 剔除 + dry-run 校验 | `src/RHI/RenderGraph.cpp` | **已落地（默认关）**：机制正确但本引擎没有「输出无人读」的 Pass，实测 `culled/frame=0.0`；`--no-bloom` 的 21 → 14 是 Pass 自己不进图 | 2 |
-| T-06（已落地） | Blackboard（`type_index` + 类型擦除，生命周期一帧） | `src/RHI/RenderGraphBlackboard.h`、`src/Render/FramePayloads.h` | 八个交接字段搬进图级黑板，`FrameInfo` 字段减少 8 个（≥ 4 达标） | 1 |
-| T-07 | `FramePlan` + 三提交点 `G0 -> C0 -> G1`（**已落地**：队列窗口时间戳 + 拆分提交，默认开，`--no-async-split` 回退） | `src/RHI/Renderer.{h,cpp}:214`、`src/RHI/RenderGraph.{h,cpp}` | compute 与 graphics 有重叠：`[Queue] overlap` 0.00 -> 0.51 ms（100% of compute）；`--no-async-split` 截图在噪声内 | 3 |
-| T-08 | `primitiveBuffer` + `instanceBuffer` 骨架（先只读） | `src/Render/GpuScene.{h,cpp}` | 编号跨帧稳定；一万实例的 `primitives=104 / instances=10103`，稳态上传 0.2 KB/帧 | 3 | **已落地（只读骨架）** |
+| # | 任务 | 落点 | 状态 |
+|---|---|---|---|
+| T-10 | 基准脚本 + barrier/state 计数 | `tools/bench.ps1`、`src/RHI/FrameStats.*` | 已落地（`--stats-frame` 七行读数） |
+| T-01 | 图外资源帧首 acquire / 帧尾 release | `src/RHI/RenderGraph.{h,cpp}`、`src/Render/CrossQueueProbePass.*` | 已落地（三条不变量，违反抛「状态漂移」） |
+| T-02 | `ClusterBuildPass` 改回 `addComputePass` | `src/Render/ClusterBuildPass.*`、`ScratchArena` | 已落地（决策 43） |
+| T-03 | 图像屏障按六元组分桶合并 | `src/RHI/RenderGraphBarrier.cpp` | 已落地（`--stats-frame` 三数逐位不变） |
+| T-04 | 跨帧 RT 池 | `src/RHI/RenderTargetPool.{h,cpp}` | 已落地，默认关（稳态本就 0 创建） |
+| T-05 | Pass 剔除 + dry-run 校验 | `src/RHI/RenderGraph.cpp` | 已落地，默认关（没有「输出无人读」的 Pass） |
+| T-06 | 图级 Blackboard（一帧生命周期） | `RenderGraphBlackboard.h`、`FramePayloads.h` | 已落地（`FrameInfo` 八个交接字段删除） |
+| T-07 | `FramePlan` + 三提交点 `G0 -> C0 -> G1` | `src/RHI/RenderGraph.*` | 已落地，默认开（`--no-async-split` 回退） |
+| T-08 | `primitiveBuffer` / `instanceBuffer` | `src/Render/GpuScene.{h,cpp}` | 只读骨架（编号跨帧稳定，`--gpu-scene-persist` 默认关） |
+| T-09 | `MeshDrawCommand` + `StateCache` | `src/Render/MeshDrawCommandList.{h,cpp}` | 已落地一半（只接 GeometryPass） |
+| — | P0 度量基线 | `FrameStats` / `bench.ps1` | 完成，P0-2 只补了本轮需要的读数 |
+| — | P2 摊平分解与稳态尺子 | `--rebuild-structure <n>`、`mergedBuild=` | 完成前三步，`--gpu-scene-persist` 仍默认关 |
 
-**T-08 只读骨架（2026-11-24）**：`GpuScene` 用内容键给图元与实例分配跨帧稳定编号（图元键 `(模型指针, 子网格)`，实例键再混组内序号），脏区间攒成一帧一次 `vkCmdCopyBuffer`；`SceneGpuBatch::buildInstances` 末尾镜像一份进持久缓冲，`prepare` 里 `beginFrame/flush/endFrame`。实测 cube-field `primitives=104 / instances=10103`、`dirtyFrames=1/40`、`upload=35.6 KB/frame`；Sponza `103/103`、`dirtyFrames=1/120`、`upload=0.2 KB/frame`。骨架阶段没有任何着色器绑定这两条缓冲，剔除仍走 `GroupRecord`，所以**这一步不产生帧时间收益**——它的价值是把「编号不漂移」变成可验收的不变量，供 P2 的实例级剔除直接记账。开关 `--no-gpu-scene-persist`（默认开）。踩坑：`SceneGpuBatch` 在 `GeometryPass::init()` 里才创建，`setEnabled` 必须放在 `renderPipeline.initAll()` 之后，否则启动期空指针 `0xC0000005`（stderr 0 字节、日志停在 `[Tiny] 材质就绪`）。
-| T-09（已落地一半） | `MeshDrawCommand` + `StateCache`（先只接 GeometryPass） | 新增 `src/Render/MeshDrawCommandList.{h,cpp}` | 状态切换次数 -40%；FPS 不低于改造前 -2% | 3 |
+### 本节留下的四条教训（比工单本身更值钱）
 
-**P2 第一步已落地（2026-11-24，决策 53）**：世界 AABB 改中心/半长（对仿射精确），`subMeshBoundsFor` 挪到加载期预热（`SceneGpuBatch::prewarmModelBounds`，启动打 `[SceneGpu] prewarm | models=N`）。`flatten` 从 33.55 / 56.52 / 116.99 ms（default / 10k / 30k）降到 10.94 / 34.31 / 72.05 ms；帧率不变（88.75 → 88.20 FPS，噪声内），省的是首帧 hitch（`max` 90 → 76.5 ms）。
-**P2 的摊平分解（2026-11-24）**：`[SceneGpu] flatten breakdown` 把一次结构重建拆成 collect / merged / entities / external / sort / assemble / mirror 七段。`--cube-field 10000` 实测 total 56.5 ms：`external` 23.3 ms（每实例 ≈ 2.3 µs）、`entities` 17.6 ms（其中 `subMeshBoundsFor` 首次索引扫描 17.3 ms，一次性）、`merged` 8.6 ms、`mirror` 5.6 ms；`30000` 时 total 126.3 ms、`external` 74.6 ms、`mirror` 17.0 ms —— 逐实例部分是线性大头，`sort` + `assemble` 合计 < 2%。**结论：P2 的 −70% 必须打在逐实例构造上（把法线矩阵与 8 角点 AABB 挪到 GPU 或按实例缓存），搬家/排序省不出来；另外 `subMeshBoundsFor` 应该在加载期预热，否则首帧摊平被一次性扫描虚高。**
+- **往无花括号的单语句 `if` 中间插代码会静默切断控制流**：T-06 第一版一次改九个文件，编译过但启动即崩（`0xC0000005`）；
+  根因是 `callbacks` 的声明被插进 `if (!ImGui::CollapsingHeader(...))` 与它的 `return;` 之间，Save/Reload 读到未初始化指针。
+- **改计数器前先确认「尺子」本身没坏**：`default` 场景曾经的基线是「1 draw call / 8192 三角形」，因为
+  `config/engine.json` 的机位在 Sponza 外 100 米看向天空，103 个几何组全在视锥外。修法是给引擎加
+  `--camera <px,py,pz,pitch,yaw>`，`bench.ps1` 三个场景都钉住机位；钉住后 `default` = 104 draw calls / 270459 三角形 /
+  `visibleRatio 0.61`，与旧的 164.80 FPS 不可直接比。
+- **开启验证层会改绝对帧率**：判据要用**同构建内的 A/B 比例**（T-02：旧 GPU 58.61 FPS / 新 56.23，两侧同降，比例仍快约 29%）。
+- **探针要自建资源，不要往公共暂存区里写**：T-01 原计划用 `ScratchArena` 的 buffer，会污染阴影矩阵与聚簇表；
+  改成自建图外 buffer 后同时验了 CONCURRENT 创建、跨队列 timeline 依赖、host 回读三件事。
 
-**P2 第二步（2026-11-24）**：先关掉没消费者的镜像 —— `--gpu-scene-persist` 默认关（`diag::Options::gpuScenePersist = false`），镜像整段包在 `if (gpuScene.isEnabled())` 里，`mirror` 三档归零。再认清剩下 80% 在哪：外部循环新增 `extRecord` / `extPush` 两段计时后，30k 实例下 `external 43.9 ms` 里只认领 6 ms（`extPush 4.9`、`extRecord 0.6`、`extAabb 0.2`、`extNormal 0.3`），其余约 38 ms（每实例 1.27 µs）是循环脚手架 + `std::map` 组查表 + `std::vector<std::vector>` 的 `push_back` 扩容拷贝 + Debug 下 4 次 `steady_clock` 采样。**结论：AABB 上 GPU 不再是 P2 的第一步**（`extAabb` 已 0.2 ms）；−70% 要靠「持久缓冲变权威、逐实例直写映射内存、去掉组查表」，实例级剔除则要先改 `shaders/scene_cull.comp`（现为组级，`GroupRecord` 5 word/组 + `stats[3]`）成 remap + 逐实例两段式。
-
-**P2 第三步（2026-11-24）**：把尺子换成 Release 再判。实测 Release 摊平：30k `14.67 ms`（`external 9.0`、`merged 4.5`）、10k `7.83`、default `4.55`（`merged` 占 98.7%），FPS `100.45 / 119.26 / 198.53`；Debug 的逐实例成本被放大 4 倍（1.27 µs → 0.30 µs）。按本轮结论，**「持久缓冲变权威 + 逐实例直写映射内存」这一刀不做了**：试做「预分配 `instanceScratch` + 逐条写入」在 Debug 30k 上是负收益（`assemble 1.2 → 3.2 ms`、`total 57.60 → 58.78`），因为 `vector::insert` 对 POD 走 `memmove`、且稳态下 `buckets` 容量保留本来就不扩容，已回退。**P2 的下一个大头是 `merged`（合并网格，三档恒为 4.5 ms）**，要动它得改合并策略（按材质合并 / 持久化合并网格），判据统一改成「Release 构建 + 稳态重建帧」。
-
-
-**P2 第四步（2026-11-24）**：先补「稳态」这把尺子再继续。新增 `--rebuild-structure <n>`（每 n 帧强制重建一次）与 `mergedBuild=` 计数后，Release 稳态（40 帧、每 10 帧重建）为：default `0.11 ms/次重建`、10k `3.80`、30k `10.08`，`merged=0.0`、`mergedBuild=0`。上一次「`merged` 占 98.7%」是首重建样本的假象 —— 合并网格按签名复用，只建一次（192496 顶点 / 786801 索引）。**结论：摊平只在结构签名变化时发生；P2 的 −70% 必须按「每次重建」计，且「合并网格持久化」不需要做。真要再压只有按需增量重建（只重建变化的组），那是 P2 之后的独立一单。**
-T-01~T-07 总计 14 人日，完成后 P1 结束；T-08 开始 P2；T-09 开始 P3。
-### 已落地的工单（2026-11-23）
-
-**0a 拆文件（先决条件）**：`src/RHI/RenderGraph.cpp` 由 1534 行降到 1399 行，屏障发射搬到新的
-`src/RHI/RenderGraphBarrier.cpp`（118 行，只放 `emitBarrierIfNeeded` / `emitBufferBarrierIfNeeded`），
-两个翻译单元共用的 `kWriteBits` / `isDepthFormat` / `aspectOf` 收进 `src/RHI/RenderGraphInternal.h`
-的 `namespace rgdetail`。判据是纯搬移：`--stats-frame` 三个数逐位不变（21.0 / 45.2 / 22.5 与 27.0 / 61.2 / 39.5）。
-P1 的 T-03 / T-05 / T-06 都要动这两个文件，先切出屏障是唯一的无风险窗口。
-
-**0b `tools/bench.ps1`**：三场景 × 3 次 × 600 帧，解析 `[SelfTest] performance/telemetry`、`[FrameStats]`、
-`[Validation]` 三类行，输出场景汇总表 + 逐次运行明细。实测基线与波动判定见 [baseline](../70-status/baseline.md)：
-default 160.82 FPS / voxel-world 96.15 / lights-512 88.93，波动 2.78% / 1.18% / 6.42%。
-
-**T-10**：新增 `src/RHI/FrameStats.{h,cpp}`（`namespace tiny::framestats`，带 `selfTest`），
-在 `RenderGraph::beginFrame/endFrame`、`emitBarrierIfNeeded`、`emitBufferBarrierIfNeeded`、
-`Pipeline::bind` / `ComputePipeline::bind` 上挂钩，`--stats-frame` 退出时打三行。
-实测（Debug，RTX 2070，60 帧）：
-- 基线场景 `passes/frame=21.0`、`barriers/frame=45.2 calls 45.2 entries`（每子资源一条，`entries` 恒等于 `calls`）、`skipped: sameState=18.8 crossQueue=0.0`、`pipelineBinds/frame=22.5 redundant=10.5 (46.7%)`、87.59 FPS。
-- 512 灯压力场景 `passes/frame=27.0`、`barriers/frame=61.2`、`sameState=35.8`、`crossQueue=2.0`、`pipelineBinds/frame=39.5 redundant=19.5 (49.4%)`。
-
-**P0 的状态**：P0-1 / P0-3 / P0-4 已落地，P0-2 只补了本轮需要的部分（屏障条数、管线绑定与冗余、draw calls、
-desc binds、三角形数；显存占用与 submitted/visible 组数仍靠 `--stats-clusters` 与编辑器面板人工看）。
-
-**T-06 图级黑板**：新增 `src/RHI/RenderGraphBlackboard.h`（`std::type_index` → `Entry{void*, destroy}`，
-`getOrCreate` / `find` / `set` / `has` / `clear`）与 `src/Render/FramePayloads.h`（曝光覆盖、选中项、
-模拟插值、UI 回调四个载荷）；`beginFrame()` 第一件事 `blackboard.clear()`，载荷严格一帧。
-`FrameInfo` 的八个交接字段全部删除，只留 `tiny::RenderGraphBlackboard* blackboard` 句柄供 `ImGuiSystem` 使用。
-必须同改的一处时序：`imguiSystem->prepareDrawData(frameInfo)` 从 `beginFrame` 之前挪到载荷之后，否则面板读到空黑板。
-
-- 默认 40 帧 + `sync`：`EXIT=0`、`errors=0`、`stderr 0` 字节、`[FrameTime] median=13.12ms p95=41.62ms max=95.70ms`、`[Resources] total=145`。
-- `--cube-field 10000` 120 帧：`85.45 FPS`、`median=8.62ms p95=29.88ms max=132.36ms`、`instances/frame=10063`、`visibleRatio=0.62`、`errors=0`。
-- `--cross-queue-test`：`[TD02]` 两向 + `[T01]` 两条断言全绿。
-- 一次 `0xC0000005` 的代价：第一版一次性改完九个文件，编译过但启动即崩；回退后分四步重做，
-  根因是 `callbacks` 的声明被插进 `if (!ImGui::CollapsingHeader(...))` 与它的 `return;` 之间，
-  后面的 Save/Reload 读到未初始化指针。教训：往无花括号的单语句 `if` 中间插代码会静默切断控制流。
-因此 P0 算**完成但有一处口径偏差**：计划里写的 `cube-field` 场景在引擎里没有生成器，改用 `--voxel-world 1`；
-`editor-default` 改用 `--selftest` 的 `default`。偏差以 [baseline](../70-status/baseline.md) 的场景表为准。
-
-**T-02**：`ClusterBuildPass` 的 dispatch 挂回 `addComputePass`，前面补两块砖：
-`ScratchArena::createSlotBuffer` 在 `hasDedicatedComputeQueue()` 时用 CONCURRENT +
-`{graphics,compute}` 两个队列族；簇表用 `importBuffer` 以 `crossQueue=true` 登记成图内句柄
-（`desc.size` 取四段 `offset+size` 的最大值），读侧由一个只声明不执行的 `Clusters.ReadSync` 表达。
-手写的两条 `VkBufferMemoryBarrier2` 删除。详见[决策 43](../10-architecture/decisions.md)。
-
-**验收偏差（重要）**：
-- 「512 灯 FPS ≥ 65.37」这条门槛来自文档记载的 60 帧、不带截图、不带 `--validation-features sync` 的测量；
-  本次为了同时验证跨队列正确性开着了 sync 验证层，绝对 FPS 掉到 40 上下，与该门槛不可比。
-  因此改用**同构建内的 A/B 比例**当判据：120 帧、`--voxel-world 1 --light-stress 512 --clustered-lighting --screenshot-frame 90` 下，
-  旧代码 GPU 58.61 / CPU 45.80 FPS，新代码 GPU 56.23 / CPU 43.63 FPS —— 两侧同降（运行间噪声），
-  比例仍是 GPU 建簇快约 29%，说明 T-02 没有吃掉决策 40 的收益。
-- 「聚簇 dispatch 在 compute 队列（breadcrumbs 验证）」改用 `--stats-frame` 的 `skipped: crossQueue=2.0`
-  作为判据：那是 ranges / indices 两条缓冲屏障被 timeline 信号接管后跳过的计数，
-  通路不通就不会有这两个数。`--validation-features sync` 下 `errors=0 warnings=0`、stderr 0 字节。
-
-**顺带修掉的既有缺陷**：`src/RHI/ScreenshotCapture.cpp` 转入 `TRANSFER_SRC_OPTIMAL` 的 `dstAccessMask`
-误写成 `TRANSFER_WRITE`，导致任何 `--screenshot` + `sync` 运行报一条 READ-AFTER-WRITE。
-已改为 `TRANSFER_READ`，见 [pitfalls 第 39 条](../60-debug-profiling/pitfalls.md)。
-
-
-**T-01 外部资源的状态声明（`declareExternalTexture` / `declareExternalBuffer`）**
-
-落点：`src/RHI/RenderGraph.{h,cpp}`（`struct ExternalState{layout, stage, access}`、两个声明函数、
-条目上的 `externalDeclared` / `externalUsed` / `externalEnd` / `lastExternalEnd` / `hasLastExternalEnd`、
-`endFrame` 尾部的交回段）、`src/Render/CrossQueueProbePass.{h,cpp}`（图外 buffer + 回读缓冲 + 双向验收）。
-
-三条不变量：每资源每帧最多声明一次、声明早于第一次使用、本帧入口等于上一帧出口。第三条违反时抛
-「状态漂移」。交回屏障在 `endFrame` 尾部发在 graphics 流上（外部持有者就在这一侧消费），不参与
-T-03 的攒批。
-
-验收（`--selftest 40 --cross-queue-test --validation-features sync`）：`errors=0 warnings=0`、
-stderr 0 字节、EXIT 0；负向 `[T01] external buffer drift detection verified`、正向
-`[T01] external buffer verified: entry (COPY, TRANSFER_READ) -> fill (CLEAR, TRANSFER_WRITE) ->
-copy (COPY, TRANSFER_READ), 64 words`。
-
-**验收偏差**：计划里写的是「探针 Pass 写入的 scratch buffer 能被 compute 队列正确读取」。实际改成
-探针**自建的图外 buffer**（VMA 创建、`hasDedicatedComputeQueue()` 时 CONCURRENT）。理由是暂存区是
-`ScratchArena` 管理的整块 buffer，探针往里写会污染同一个 arena 的其它使用者（阴影矩阵、聚簇表都在
-里面），而自建 buffer 能同时验三件事：CONCURRENT 创建、跨队列 timeline 依赖、host 可见回读。
-代价是「暂存区整块 buffer 能否作为图外资源被声明」这条路径没有直接覆盖 —— 聚簇表那条（T-02 的
-`Scratch.ClusterTables`）走的是 `importBuffer` + `writeBuffer` 声明，不经过 T-01 的 `declareExternalBuffer`。
-
-**顺带修掉的两个问题**（细节见 [pitfalls](../60-debug-profiling/pitfalls.md) 第 40、41 条）：
-动态渲染期间录 `vkCmdCopyBuffer` 会被验证层判 `VUID-vkCmdCopyBuffer-renderpass`（20 条错误 → 0，
-搬进零附件 Pass）；用 `frameNumber - kFramesInFlight` 反推写入者会指到不存在的第 0 帧（回读全 0，
-改成每槽位记录排队帧号）。
-**度量批（T-10 的后续，2026-11-23）**：`--stats-frame` 从三行扩到七行，补的正是 T-04 / P2 / P3 各自缺的判据。
-
-| 新增读数 | 决定的判据 | 实现 |
-|---|---|---|
-| `[FrameTime] median/p95/max` | P3「最长帧 ≤ 中位帧 3 倍」 | `FrameStats::recordFrameTime` + 0.25 ms 桶直方图 + `percentile()` |
-| `[Resources] images/frame total peakFrame` | T-04「稳定态每帧 `vkCreateImage` 为 0」 | `ResourceStats`，挂在 `createOwnedTexture` / `createOwnedBuffer` / `createSlotBuffer` 之后 |
-| `[Memory] heapN used/allocs first/last/peak` | T-04「显存不增长」 | `vmaGetMemoryProperties` + `vmaGetHeapBudgets`，10 Hz 采样，退出前补一次 |
-| `[SceneGpu] cull summary visibleRatio` | P2「visible/submitted ≤ 0.6」 | `SceneGpuBatch::readStats` 累计 + `logCullSummary()` 归一化 |
-
-实测（600 帧 × 3 次）：default `115.91 FPS / 8.63 ms / 中位 7.88 / p95 9.12 / 最长 88.02 ms / images 0.27 / heap0 1220.7 MiB / visible 0.61`，
-voxel-world `98.73 / 10.13 / 9.62 / 10.88 / 89.83 / 0.27 / 1220.7 / 1.00`，lights-512 `89.57 / 11.16 / 10.62 / 11.88 / 100.43 / 0.27 / 1220.7 / 1.00`。
-`images/frame` 是全程平均：160 张图在启动期创建，摊到 600 帧就是 0.27，稳态每帧是 0 —— T-04 要压的是启动峰值，不是这个均值。
-
-**顺带发现的基线缺陷**：`default` 场景此前的基线是「1 draw call / 8192 三角形」，因为相机来自
-`config/engine.json`（本机存的是 `(-66.06, 15.92, -76.19)`，站在 Sponza 外 100 米看向天空），
-103 个几何组全部落在视锥外。修法是给引擎加 `--camera <px,py,pz,pitch,yaw>`，`bench.ps1` 三个场景都钉住
-`Scene::init` 的 Sponza 默认机位。钉住之后 `default` 变成 104 draw calls / 270459 三角形 / `visibleRatio 0.61`，
-115.91 FPS 不能和旧版的 164.80 直接比。这条属于「先有尺子」的一部分：没有固定机位，截图金标与剔除读数都不可复现。
----
+顺带修掉的既有缺陷记在 [pitfalls](../60-debug-profiling/pitfalls.md)：第 39 条（`ScreenshotCapture` 转入
+`TRANSFER_SRC_OPTIMAL` 时 `dstAccessMask` 误写 `TRANSFER_WRITE`，任何 `--screenshot` + `sync` 都报 READ-AFTER-WRITE）、
+第 40 条（动态渲染期间录 `vkCmdCopyBuffer` 被判 `VUID-vkCmdCopyBuffer-renderpass`）、
+第 41 条（用 `frameNumber - kFramesInFlight` 反推写入者会指到第 0 帧，回读全 0）。
 
 ## 8. 明确不抄清单
 
